@@ -1,12 +1,40 @@
 # Colony Electron desktop migration
 
-This opt-in entry point runs Colony's existing React application in Electron and
+This entry point runs Colony's existing React application in Electron and
 uses the real Rust command handlers over private parent/child stdio. The Rust
-compatibility host still links Tauri and owns one hidden blank dispatch webview.
-This is a migration stage, not complete Tauri removal or a production installer.
-Ordinary Tauri development and release commands are unchanged. Live runtime
-validation for this phase is macOS only; Windows/Linux shell parity is a later
-gate, separate from portable metadata and cookie-store unit tests.
+compatibility host still links Tauri and owns a hidden dispatch webview. The
+stable macOS publisher packages this shell as Colony; Windows retains its Tauri
+release lane until Electron isolation and packaging are proven there. Tauri
+development remains available. Rust host extraction and broader platform parity
+are separate work from the macOS distribution change.
+
+## Stable macOS distribution
+
+`electron:package --production` requires Developer ID signing and Apple
+notarization credentials. It produces `Colony.app` with the historical bundle
+identifier and `buzz-desktop` executable, preserving the existing signed updater
+feed and native identity, keyring and agent files. There is no ad-hoc fallback.
+See [RELEASING.md](../../RELEASING.md) for the protected promotion, required
+credentials, publication and live verification gates.
+
+Before React starts, an inert page exports durable app state from the original
+WebKit origin into Chromium. Communities, onboarding progress, drafts and
+preferences are copied without modifying the source or overwriting newer
+Electron values. An unsuccessful transfer leaves a recovery page with Retry.
+Candidate and explicit QA profiles use incognito WebKit storage and private
+native namespaces, so tests cannot import an existing installation's data.
+
+`electron:package --production-candidate` exercises the production bundle and
+updater contract in a private, ad-hoc signed Actions artifact. It does not publish
+or receive stable updates. A separate hosted fixture proves nonempty WebKit to
+Chromium transfer with synthetic state. Passing those gates does not establish
+Developer ID signing, publication or a real existing-installation upgrade; those
+remain explicit release proof stages.
+
+Update downloads retain verified bytes in cancellable native resources. Reloading
+the renderer retires those resources, including late check results, before the
+replacement renderer can use the host. Installation targets the outer Electron
+bundle and uses the existing updater signature verifier.
 
 ## Installable macOS beta
 
@@ -29,7 +57,7 @@ archive. Packaged runtime discovery prefers these bundled helpers instead of
 build-time workspace output. Placeholder executables fail packaging.
 
 The beta is ad-hoc signed for local testing, **not Developer ID signed or
-notarized**. It has no update feed and does not replace the Tauri distribution.
+notarized**. It has no update feed and does not replace the stable distribution.
 Native state and the keyring service are scoped to the Electron profile, so a
 temporary test profile cannot reuse a business's normal agent records or keys.
 The development native namespace changes from the initial migration's shared
@@ -120,8 +148,9 @@ browser grants and retires its native sockets,
 event subscriptions and terminal sessions before accepting new native calls.
 Managed agents remain running. An uncertain cleanup requires an app restart.
 
-Automatic managed-agent assignment and owner-facing teammate controls remain a
-subsequent migration gate.
+Managed agents retain their existing lifecycle across renderer reloads. Each
+worker receives an isolated runtime and explicit browser grants; authenticated
+business workflows still require their own live proof.
 
 ## Validation
 
@@ -144,7 +173,9 @@ secrets. It does not prove authentication to Instagram or any external account.
 
 The Electron feature's Rust clippy/protocol tests run alongside Desktop Core in
 CI. The default desktop suite includes Electron transport/import unit tests.
-Release signing, updater, microphone/camera permissions, notifications, auxiliary
-windows, per-site account verification, additional browser import adapters,
-managed-agent browser assignment, real agent helpers and authenticated
-business workflows are additional parity gates before replacing the Tauri release.
+The production candidate and legacy migration jobs add packaged release-contract
+and state-transfer proof. Developer ID signing, notarization, updater delivery
+and an existing-installation upgrade must also pass for a production release.
+Microphone/camera permissions, notifications, auxiliary windows, additional
+browser import adapters and authenticated business workflows remain separate
+capability gates; packaging alone does not prove them.

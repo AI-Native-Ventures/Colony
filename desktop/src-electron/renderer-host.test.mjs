@@ -26,6 +26,84 @@ function fixture(handle = () => undefined) {
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+test("renderer reset cancels native update download before waiting for it", async () => {
+  const downloading = deferred();
+  const { bridge, calls } = fixture((call) => {
+    if (call.payload.command === "electron_check_for_update")
+      return { rid: 41, version: "0.17.0" };
+    if (call.payload.command === "electron_download_update")
+      return downloading.promise;
+    if (
+      call.payload.command === "plugin:resources|close" &&
+      call.payload.args.rid === 41
+    )
+      downloading.reject("Update cancelled");
+  });
+  await bridge.request("invoke", { command: "electron_check_for_update" });
+  const old = bridge.request("invoke", {
+    command: "electron_download_update",
+    args: { rid: 41 },
+  });
+  const rejected = assert.rejects(old, (error) => error === "Update cancelled");
+  await tick();
+  await bridge.reset();
+  await rejected;
+  await bridge.request("invoke", { command: "fresh" });
+  assert.equal(calls.at(-1).payload.command, "fresh");
+  assert.equal(bridge.updates.size, 0);
+});
+
+test("an update check completing after reload is retired before the new view starts", async () => {
+  const checking = deferred();
+  const { bridge, calls } = fixture((call) => {
+    if (call.payload.command === "electron_check_for_update")
+      return checking.promise;
+  });
+  const old = bridge.request("invoke", {
+    command: "electron_check_for_update",
+  });
+  const rejected = assert.rejects(old, /renderer changed/);
+  await tick();
+  const reset = bridge.reset();
+  const fresh = bridge.request("invoke", { command: "fresh" });
+  checking.resolve({ rid: 42, version: "0.17.0" });
+  await Promise.all([reset, fresh, rejected]);
+  const retired = calls.findIndex(
+    (call) =>
+      call.payload.command === "plugin:resources|close" &&
+      call.payload.args.rid === 42,
+  );
+  assert.ok(retired >= 0);
+  assert.ok(
+    retired < calls.findIndex((call) => call.payload.command === "fresh"),
+  );
+});
+
+test("an explicit update close in flight is not repeated during reset", async () => {
+  const closing = deferred();
+  const { bridge, calls } = fixture((call) => {
+    if (call.payload.command === "electron_check_for_update")
+      return { rid: 43, version: "0.17.0" };
+    if (call.payload.command === "plugin:resources|close")
+      return closing.promise;
+  });
+  await bridge.request("invoke", { command: "electron_check_for_update" });
+  const old = bridge.request("invoke", {
+    command: "plugin:resources|close",
+    args: { rid: 43 },
+  });
+  const rejected = assert.rejects(old, /renderer changed/);
+  await tick();
+  const reset = bridge.reset();
+  closing.resolve();
+  await Promise.all([reset, rejected]);
+  assert.equal(
+    calls.filter((call) => call.payload.command === "plugin:resources|close")
+      .length,
+    1,
+  );
+});
+
 test("reload never reuses native channel ids and drops delayed old pushes", async () => {
   const { bridge, host, calls } = fixture();
   const delivered = [];

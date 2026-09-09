@@ -1,7 +1,15 @@
 import path from "node:path";
 
 /** Resolve app-owned resources without depending on the launch directory. */
-export function runtimePaths({ packaged, appPath, resourcesPath, env = {} }) {
+export function runtimePaths({
+  packaged,
+  appPath,
+  resourcesPath,
+  channel,
+  env = {},
+}) {
+  const stable = packaged && channel === "stable";
+  const candidate = packaged && channel === "candidate";
   const devUrl = packaged ? undefined : env.COLONY_ELECTRON_DEV_URL;
   if (devUrl && new URL(devUrl).origin !== "http://127.0.0.1:1425")
     throw new Error("Unexpected development origin");
@@ -19,7 +27,20 @@ export function runtimePaths({ packaged, appPath, resourcesPath, env = {} }) {
       appPath,
       packaged ? "runtime-config.json" : "src-tauri/tauri.conf.json",
     ),
-    name: packaged ? "Colony Electron Beta" : "Colony Electron Development",
-    profile: packaged ? "colony-electron-beta" : "colony-electron-development",
+    stable,
+    name: stable
+      ? "Colony"
+      : candidate
+        ? "Colony Candidate"
+        : packaged
+          ? "Colony Electron Beta"
+          : "Colony Electron Development",
+    profile: stable
+      ? "colony-electron"
+      : candidate
+        ? "colony-electron-candidate"
+        : packaged
+          ? "colony-electron-beta"
+          : "colony-electron-development",
   };
 }

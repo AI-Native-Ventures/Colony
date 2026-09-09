@@ -19,6 +19,10 @@ import {
   ELECTRON_BETA_RELAY,
   electronPackageVariant,
 } from "./electron-package-config.mjs";
+import {
+  productionSigning,
+  stableUpdaterConfig,
+} from "./electron-release-contract.mjs";
 
 const exec = promisify(execFile);
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -27,6 +31,17 @@ const profile = process.argv.includes("--debug") ? "debug" : "release";
 const cargoProfile = profile === "debug" ? "dev" : "release";
 const variant = electronPackageVariant(process.argv);
 const buildEnv = electronBetaBuildEnv(process.env);
+const signing = variant.production ? productionSigning(process.env) : {};
+if (variant.stable) {
+  const updaterConfig = stableUpdaterConfig(process.env);
+  buildEnv.TAURI_CONFIG = JSON.stringify(updaterConfig);
+  buildEnv.BUZZ_UPDATER_ENDPOINT = updaterConfig.plugins.updater.endpoints[0];
+}
+// Build tools need public release metadata, never the signing credentials.
+for (const key of Object.keys(buildEnv)) {
+  if (key.startsWith("COLONY_APPLE_") || key.startsWith("TAURI_SIGNING_"))
+    delete buildEnv[key];
+}
 const helpers = [
   "buzz-acp",
   "buzz-agent",
@@ -47,7 +62,7 @@ const metadata = JSON.parse(
   await readFile(path.join(desktop, "package.json"), "utf8"),
 );
 if (process.platform !== "darwin")
-  throw new Error("This beta package gate currently supports macOS only");
+  throw new Error("The Electron package gate currently supports macOS only");
 const run = async (command, args, cwd = repo) => {
   console.log(`[electron-package] ${command} ${args.join(" ")}`);
   const { stdout, stderr } = await exec(command, args, {
@@ -138,11 +153,13 @@ try {
   await writeFile(
     path.join(appDir, "package.json"),
     JSON.stringify({
-      name: "colony-electron-beta",
+      name: variant.stable ? "colony" : "colony-electron-beta",
       productName: variant.name,
       version: metadata.version,
       type: "module",
       main: "src-electron/main.mjs",
+      colonyReleaseChannel: variant.channel,
+      colonyMigrationFixture: variant.fixture && profile === "release",
     }),
   );
   const binaries = [];
@@ -192,9 +209,12 @@ try {
   const [bundle] = await packager({
     dir: appDir,
     name: variant.name,
-    executableName: variant.name,
+    executableName: variant.executableName,
     appBundleId: variant.bundleId,
     appVersion: metadata.version,
+    protocols: variant.production
+      ? [{ name: "Colony", schemes: ["buzz"] }]
+      : [],
     electronVersion: metadata.devDependencies.electron,
     platform: "darwin",
     arch: process.arch,
@@ -204,12 +224,31 @@ try {
     extraResource: [nativeDir],
     out: output,
     overwrite: true,
+    ...signing,
   });
   const app = path.join(bundle, `${variant.name}.app`);
-  // Local ad-hoc signature enables the relocated beta to run. This is not
-  // Developer ID signing or notarization and is recorded explicitly below.
-  await run("codesign", ["--force", "--deep", "--sign", "-", app]);
+  if (!variant.production) {
+    // Private candidates are explicitly non-distributable, like betas.
+    await run("codesign", ["--force", "--deep", "--sign", "-", app]);
+  }
   await run("codesign", ["--verify", "--deep", "--strict", app]);
+  if (variant.production) {
+    await run("xcrun", ["stapler", "validate", app]);
+    await run("spctl", ["--assess", "--type", "execute", "--verbose=2", app]);
+    const signature = (
+      await exec("codesign", ["--display", "--verbose=4", app])
+    ).stderr;
+    if (
+      !signature.includes(
+        `TeamIdentifier=${process.env.COLONY_APPLE_TEAM_ID}`,
+      ) ||
+      !signature.includes("Authority=Developer ID Application:")
+    ) {
+      throw new Error(
+        "Packaged app does not carry the expected Developer ID signature",
+      );
+    }
+  }
   const zip = path.join(
     output,
     `${variant.name.replaceAll(" ", "-")}-${metadata.version}-${profile}-${process.arch}.zip`,
@@ -223,7 +262,13 @@ try {
         profile,
         arch: process.arch,
         relay: ELECTRON_BETA_RELAY,
-        signing: "ad-hoc; not notarized",
+        signing: variant.production
+          ? "Developer ID; notarized and stapled"
+          : "ad-hoc; not notarized",
+        channel: variant.channel,
+        executableName: variant.executableName,
+        bundleId: variant.bundleId,
+        sourceRevision: process.env.GITHUB_SHA ?? null,
         onboardingFixture: variant.fixture,
         app,
         zip,

@@ -24,21 +24,51 @@ export function electronBetaBuildEnv(env) {
 /** Fixture transports are an explicit, separately named build, never a beta default. */
 export function electronPackageVariant(args) {
   const fixture = args.includes("--onboarding-fixture");
+  const production = args.includes("--production");
+  const candidate = args.includes("--production-candidate");
+  const stable = production || candidate;
+  if (
+    stable &&
+    (fixture || args.includes("--debug") || (production && candidate))
+  )
+    throw new Error(
+      "Production packages cannot use fixture, debug or conflicting release modes",
+    );
+  const name = stable
+    ? "Colony"
+    : fixture
+      ? "Colony Onboarding Fixture"
+      : "Colony Electron Beta";
   return {
     fixture,
-    name: fixture ? "Colony Onboarding Fixture" : "Colony Electron Beta",
-    bundleId: fixture
-      ? "ventures.ainative.colony.onboarding-fixture"
-      : "ventures.ainative.colony.electron-beta",
-    outputSuffix: fixture ? "-onboarding-fixture" : "",
+    production,
+    candidate,
+    stable,
+    channel: production ? "stable" : candidate ? "candidate" : "beta",
+    name,
+    executableName: stable ? "buzz-desktop" : name,
+    bundleId: stable
+      ? "xyz.block.buzz.app"
+      : fixture
+        ? "ventures.ainative.colony.onboarding-fixture"
+        : "ventures.ainative.colony.electron-beta",
+    outputSuffix: stable
+      ? production
+        ? "-stable"
+        : "-candidate"
+      : fixture
+        ? "-onboarding-fixture"
+        : "",
     helperFeatures: fixture
       ? [
           "--features",
           "buzz-acp/onboarding-fixture,buzz-cli/onboarding-fixture",
         ]
       : [],
-    hostFeatures: fixture
-      ? "electron-host,onboarding-fixture"
-      : "electron-host",
+    hostFeatures: stable
+      ? "electron-stable"
+      : fixture
+        ? "electron-host,onboarding-fixture,tauri/custom-protocol"
+        : "electron-host",
   };
 }

@@ -5,6 +5,7 @@ import {
   type NativeEvent,
   type NativeNotificationAction,
 } from "./nativeBridge";
+import { checkElectronUpdate } from "./electronUpdater";
 
 export type ElectronPush = {
   type: string;
@@ -190,9 +191,9 @@ class ElectronNativeBridge implements NativeBridge {
   relaunch() {
     return this.shell("relaunch");
   }
-  async checkForUpdate() {
-    return null;
-  } // Opt-in development shell has no release updater.
+  checkForUpdate(options?: { headers?: Record<string, string> }) {
+    return checkElectronUpdate(this.invoke.bind(this), options);
+  }
   notificationPermissionGranted() {
     return this.shell<boolean>("notificationPermission");
   }

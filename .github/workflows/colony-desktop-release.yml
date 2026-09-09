@@ -1,45 +1,11 @@
 name: Colony desktop release
 
-# Builds and publishes the Colony desktop app to the public
-# AI-Native-Ventures/colony-releases repo, whose /releases/latest/download
-# URL the marketing site's download button points at. Exists because
-# upstream's release.yml is gated to `github.repository == 'block/buzz'` and
-# its signing pipeline needs Block's certificates; this fork ships an
-# ad-hoc-signed Apple Silicon dmg and an unsigned Windows NSIS installer.
-#
-# Two independent jobs, one per platform — no `needs` between them, so the
-# Mac release publishes the moment its build finishes and the Windows job
-# lands whenever its cold build finishes:
-#   publish-macos   — tag push (normal release) or dispatch. Runs on a
-#                     self-hosted Mac runner (labels: self-hosted, macOS,
-#                     colony-builder). Hosted macOS runners would work now
-#                     that the repo is public, but a release rebuilds the
-#                     whole Rust workspace cold every time; the self-hosted
-#                     runner's persistent workspace keeps the cargo cache
-#                     warm, which is the difference between a ~20 minute
-#                     release and an hour.
-#   publish-windows — tag push (every release, in parallel with the Mac) or
-#                     dispatch. Hosted windows-latest (~60-90 min cold
-#                     build; minutes are free because the repo is public).
-#                     The NSIS installer is unsigned, so Windows shows a
-#                     SmartScreen warning until a code-signing cert is added.
-#
-# Auto-update: the app polls latest.json on the rolling colony-desktop-latest
-# release, and each job signs its updater artifact, uploads it, and merges
-# its platform entry into that manifest (see desktop/scripts/
-# merge-latest-json.sh). The endpoint is compiled into each build, so it can
-# never change without stranding installs. The manifest has one top-level
-# version shared by all platforms, so entries are only carried across
-# releases when they were built for the same version.
-#
-# Normal releases arrive through the push:tags trigger. The tag is created
-# by auto-tag-on-release-pr-merge.yml when a merged PR bumps the version in
-# desktop/src-tauri/tauri.conf.json. workflow_dispatch is the manual path
-# for a platform rescue build or a Windows-only release at an existing
-# immutable tag; the run must be dispatched with the v<version> tag as its
-# ref (gh workflow run ... --ref v0.10.8 -f version=0.10.8), because
-# verify-release-ref.sh rejects any run whose ref, checked-out HEAD, and tag
-# do not resolve to one commit, so there is no caller-selected source ref.
+# macOS is the stable Electron app, signed with Developer ID and notarized.
+# Windows retains the established Tauri NSIS lane until Electron isolation is
+# proven there. Both preserve the existing signed updater manifest contract.
+# No public upload happens until the required signing inputs are present.
+# Publish only from the immutable v<version> tag; credential-only dispatches
+# may use a review branch and cannot run any publisher job.
 
 on:
   push:
@@ -57,6 +23,10 @@ on:
           - windows
           - both
         default: macos
+      preflight_only:
+        description: "Check credential availability only; do not build, sign, tag or publish"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -87,10 +57,45 @@ env:
   COLONY_PRODUCTION_RELAY_HTTP_URL: https://relay.colony.ainative.ventures
 
 jobs:
+  preflight:
+    name: Verify production release credentials
+    if: github.repository == 'AI-Native-Ventures/Colony'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require signing and publisher credentials
+        env:
+          RELEASE_MACOS: ${{ github.event_name == 'push' || inputs.platform != 'windows' }}
+          COLONY_APPLE_CERTIFICATE_P12: ${{ secrets.COLONY_APPLE_CERTIFICATE_P12 }}
+          COLONY_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.COLONY_APPLE_CERTIFICATE_PASSWORD }}
+          COLONY_APPLE_API_KEY: ${{ secrets.COLONY_APPLE_API_KEY }}
+          COLONY_APPLE_API_KEY_ID: ${{ vars.COLONY_APPLE_API_KEY_ID }}
+          COLONY_APPLE_API_ISSUER: ${{ vars.COLONY_APPLE_API_ISSUER }}
+          COLONY_APPLE_SIGNING_IDENTITY: ${{ vars.COLONY_APPLE_SIGNING_IDENTITY }}
+          COLONY_APPLE_TEAM_ID: ${{ vars.COLONY_APPLE_TEAM_ID }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          BUZZ_RELEASE_TAGGER_CLIENT_ID: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          BUZZ_RELEASE_TAGGER_PRIVATE_KEY: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          required=(BUZZ_UPDATER_PUBLIC_KEY TAURI_SIGNING_PRIVATE_KEY BUZZ_RELEASE_TAGGER_CLIENT_ID BUZZ_RELEASE_TAGGER_PRIVATE_KEY)
+          if [ "$RELEASE_MACOS" = true ]; then
+            required+=(COLONY_APPLE_CERTIFICATE_P12 COLONY_APPLE_CERTIFICATE_PASSWORD COLONY_APPLE_API_KEY COLONY_APPLE_API_KEY_ID COLONY_APPLE_API_ISSUER COLONY_APPLE_SIGNING_IDENTITY COLONY_APPLE_TEAM_ID)
+          fi
+          missing=0
+          for key in "${required[@]}"; do
+            if [ -z "${!key}" ]; then
+              echo "::error::Production release is blocked: configure $key (see RELEASING.md). No ad-hoc fallback is allowed."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
   publish-macos:
-    name: Publish macOS (Apple Silicon)
-    if: github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'macos' || inputs.platform == 'both')))
-    runs-on: [self-hosted, macOS, colony-builder]
+    name: Publish signed Electron macOS (Apple Silicon)
+    needs: [preflight]
+    if: "!inputs.preflight_only && github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'macos' || inputs.platform == 'both')))"
+    runs-on: macos-15
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -106,237 +111,49 @@ jobs:
           scripts/verify-release-ref.sh v "$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      # Unlike a hosted runner, this one is a real machine whose disk is shared
-      # with development worktrees, so it can already be nearly full when a
-      # release starts. v0.10.9 spent ~20 minutes compiling and then died with
-      #   cp: desktop/src-tauri/binaries/buzz-aarch64-apple-darwin:
-      #   fcopyfile failed: No space left on device
-      # which reads like a build bug rather than a full disk. Check first and
-      # say plainly what filled it.
-      #
-      # The floor covers a cold build: the workspace holds ~8 GiB warm (~5.5
-      # GiB of that in target/ dirs), a cold rebuild transiently needs roughly
-      # double, and bundling copies the .app, dmg and tar.gz on top. The usual
-      # cause of a full disk here is one cargo target/ per git worktree.
-      - name: Check the runner has room to build
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+          shared-key: electron-beta-release
+      - name: Install dependencies
+        run: just desktop-install-ci
+
+      - name: Install temporary Apple signing credentials
         env:
-          MIN_FREE_GIB: "25"
-        run: |
-          set -euo pipefail
-          AVAIL_GIB=$(($(df -Pk . | awk 'NR==2 {print $4}') / 1024 / 1024))
-          echo "Free space on the release volume: ${AVAIL_GIB} GiB (minimum ${MIN_FREE_GIB} GiB)"
-          if [ "$AVAIL_GIB" -ge "$MIN_FREE_GIB" ]; then
-            exit 0
-          fi
-          echo "::error::Only ${AVAIL_GIB} GiB free on the release runner, and a release build needs at least ${MIN_FREE_GIB} GiB. Failing now instead of part way through the build. Free space and re-run this job at the same tag."
-          echo "Largest cargo target directories under ${HOME} (usually one per git worktree):"
-          find "$HOME" -maxdepth 6 -type d -name target -prune 2>/dev/null \
-            | while read -r d; do du -sk "$d" 2>/dev/null; done \
-            | sort -rn | head -10 \
-            | awk '{printf "  %7.1f GiB  %s\n", $1/1024/1024, $2}'
-          exit 1
-
-      # This package list must cover every entry in tauri.conf.json's
-      # externalBin, because scripts/bundle-sidecars.sh refuses to bundle a
-      # sidecar it cannot find and Tauri refuses to package one that is not
-      # bundled. v0.10.16 failed here: buzz-backend-kubernetes was added to
-      # externalBin and to the bundler without being added to this line, and
-      # nothing else in CI runs the macOS bundle step.
-      - name: Build sidecar binaries
-        run: |
-          . ./bin/activate-hermit
-          export PATH="$HOME/.cargo/bin:$PATH"
-          cargo build --release --target aarch64-apple-darwin \
-            -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp \
-            -p git-credential-nostr -p buzz-cli
-          scripts/bundle-sidecars.sh aarch64-apple-darwin
-
-      - name: Check sidecars are real binaries
-        # The build recipe `touch`es sidecar paths, which creates 0-byte stubs
-        # when the staging step above was skipped or failed silently. A dmg
-        # with stub sidecars installs fine and then cannot launch any agent,
-        # so refuse to continue with any suspiciously small sidecar.
-        run: |
-          for bin in buzz-acp buzz-agent buzz-backend-kubernetes buzz-dev-mcp git-credential-nostr buzz; do
-            f="desktop/src-tauri/binaries/${bin}-aarch64-apple-darwin"
-            size=$(stat -f %z "$f" 2>/dev/null || echo 0)
-            if [ "$size" -lt 500000 ]; then
-              echo "::error::Sidecar $f is ${size} bytes — a stub, not a real binary"
-              exit 1
-            fi
-          done
-
-      # Writes desktop/src-tauri/tauri.release.conf.json: the updater pubkey
-      # and endpoint, plus createUpdaterArtifacts so the build emits the
-      # .app.tar.gz and its signature. It is a delta merged over
-      # tauri.conf.json, so the ad-hoc signingIdentity in the base config
-      # still applies. The build also needs the signing key in the
-      # environment: without it Tauri emits the archive unsigned and every
-      # client rejects the update.
-      - name: Write the release config
-        env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
-        run: |
-          . ./bin/activate-hermit
-          cd desktop && node scripts/build-release-config.mjs
+          COLONY_APPLE_CERTIFICATE_P12: ${{ secrets.COLONY_APPLE_CERTIFICATE_P12 }}
+          COLONY_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.COLONY_APPLE_CERTIFICATE_PASSWORD }}
+          COLONY_APPLE_API_KEY_CONTENT: ${{ secrets.COLONY_APPLE_API_KEY }}
+        run: bash desktop/scripts/electron-signing-keychain.sh install
 
       - name: Build desktop app
         env:
-          # build.rs embeds these values in the packaged binary. Without them,
-          # community provisioning falls back to ws://localhost:3000.
           BUZZ_RELAY_URL: ${{ env.COLONY_PRODUCTION_RELAY_WS_URL }}
           BUZZ_RELAY_HTTP: ${{ env.COLONY_PRODUCTION_RELAY_HTTP_URL }}
-          # build.rs reads these two, not just the config generator: it only
-          # emits cfg(buzz_updater_enabled) when both are present, and without
-          # that cfg lib.rs compiles the updater plugin out of the binary
-          # entirely. 0.8.0 and 0.9.0 shipped that way — signed archive,
-          # correct manifest, and an app that answers "plugin updater not
-          # found" — because this step had the signing key but not these.
           BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
           BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          COLONY_APPLE_SIGNING_IDENTITY: ${{ vars.COLONY_APPLE_SIGNING_IDENTITY }}
+          COLONY_APPLE_TEAM_ID: ${{ vars.COLONY_APPLE_TEAM_ID }}
+          COLONY_APPLE_API_KEY_ID: ${{ vars.COLONY_APPLE_API_KEY_ID }}
+          COLONY_APPLE_API_ISSUER: ${{ vars.COLONY_APPLE_API_ISSUER }}
         run: |
-          . ./bin/activate-hermit
-          export PATH="$HOME/.cargo/bin:$PATH"
-          # Presence, never the values: build.rs silently produces an app
-          # without an updater when either is missing, and that is invisible
-          # in every artifact the build emits.
-          echo "updater public key present: ${BUZZ_UPDATER_PUBLIC_KEY:+yes}"
-          echo "updater endpoint present:   ${BUZZ_UPDATER_ENDPOINT:+yes}"
-          # A self-hosted runner may retain ambient environment variables.
-          # Fail-safe the public build into community selection: auto-joining
-          # the root relay sends a fresh identity into its membership gate
-          # before public community creation can run.
+          set -euo pipefail
           unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+          pnpm --dir desktop electron:package --production
 
-          # The canary workflow builds into this same shared target directory
-          # on this same runner, and it renames its updater archive in place to
-          # Colony_Canary_<version>_aarch64.app.tar.gz, which then outlives its
-          # run. v0.11.8 published one of those as the stable macOS update:
-          # every gate passed, because the archive was real and its signature
-          # matched it, and stable clients auto-updated into a canary build
-          # pointed at the canary relay. Delete every updater archive before
-          # building so the only one present afterwards is this build's.
-          PRE_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || echo desktop/src-tauri/target)"
-          PRE_MACOS="$PRE_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos"
-          if [ -d "$PRE_MACOS" ]; then
-            find "$PRE_MACOS" -maxdepth 1 \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -print -delete
-            rm -rf "$PRE_MACOS/Colony Canary.app"
-          fi
+      - name: Verify packaged runtime and prepare signed update archive
+        env:
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash desktop/scripts/electron-release-assets.sh
 
-          just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
-
-          # Publish the resolved target directory for every later step. Those
-          # steps do NOT source hermit, so `cargo` is not on their PATH and a
-          # per-step `cargo metadata` there silently falls back to the wrong
-          # path — which is exactly how v0.11.3 failed at "Verify the bundle"
-          # with the dmg built and correct in the shared directory. Resolve it
-          # once, here, where cargo exists.
-          TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
-          [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
-          echo "TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT" >> "$GITHUB_ENV"
-          echo "resolved TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT"
-
-      - name: Verify the bundle
-        run: |
-          BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
-          APP="$BUNDLE/macos/Colony.app"
-          DMG="$BUNDLE/dmg/Colony_${VERSION}_aarch64.dmg"
-          test -d "$APP" || { echo "::error::Missing $APP"; exit 1; }
-          test -f "$DMG" || { echo "::error::Missing $DMG"; exit 1; }
-          PLIST_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
-          if [ "$PLIST_VERSION" != "$VERSION" ]; then
-            echo "::error::Built app reports version $PLIST_VERSION, expected $VERSION"
-            exit 1
-          fi
-          codesign --verify --deep --strict "$APP"
-          echo "DMG=$DMG" >> "$GITHUB_ENV"
-
-      - name: Check the updater is actually in the binary
-        # The one property no downstream artifact reveals. Everything else
-        # about a release can be correct while the app cannot update itself.
-        run: |
-          set -euo pipefail
-          BIN="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop"
-          # `grep -c`, not `grep -q`: -q exits at the first match, which sends
-          # SIGPIPE to `strings` mid-stream on a 130MB binary, and under
-          # `pipefail` that failure becomes the pipeline's result. The gate
-          # then reports "missing" precisely when the marker IS present.
-          MARKERS=$(strings -a "$BIN" | grep -c "buzz-updater-enabled" || true)
-          echo "updater marker occurrences: ${MARKERS:-0}"
-          if [ "${MARKERS:-0}" -eq 0 ]; then
-            echo "::error::The updater plugin is not compiled into this build. \
-          build.rs needs BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT in \
-          the build step's environment; without them the app ships unable to \
-          update itself while every other release artifact looks correct."
-            exit 1
-          fi
-          echo "Updater plugin present in the shipped binary"
-
-      - name: Check the production relay is actually in the binary
-        # relay_ws_url() falls back to ws://localhost:3000 when build.rs saw no
-        # BUZZ_RELAY_URL, so a release built without it produces a perfectly
-        # signed, perfectly versioned app whose first-run community creation
-        # posts to http://localhost:3000/api/communities and fails with "relay
-        # unreachable" on a machine that never ran a relay. 0.10.11 shipped
-        # that way and beta testers hit it. Nothing else in the release
-        # artifacts reveals the difference, so pin it here.
-        run: |
-          set -euo pipefail
-          BIN="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop"
-          # `grep -c`, not `grep -q` — see the updater gate above for why.
-          FOUND=$(strings -a "$BIN" | grep -c "$COLONY_PRODUCTION_RELAY_WS_URL" || true)
-          LOOPBACK=$(strings -a "$BIN" | grep -c "ws://localhost:3000" || true)
-          echo "production relay occurrences: ${FOUND:-0}"
-          echo "loopback default occurrences: ${LOOPBACK:-0}"
-          if [ "${FOUND:-0}" -eq 0 ]; then
-            echo "::error::This build has no compiled-in relay URL, so the app \
-          defaults to ws://localhost:3000 and first-run community creation \
-          fails for every user. build.rs needs BUZZ_RELAY_URL in the build \
-          step's environment."
-            exit 1
-          fi
-          echo "Production relay compiled into the shipped binary"
-
-      - name: Locate the updater archive
-        # Tauri writes Colony.app.tar.gz next to the .app and signs it with the
-        # updater key. An unsigned or missing archive means the build silently
-        # lost TAURI_SIGNING_PRIVATE_KEY, which would publish a manifest no
-        # client can verify, so fail here rather than ship it.
-        #
-        # Name the archive exactly, never `find | head -1`: the canary
-        # workflow shares this bundle directory and leaves its own renamed
-        # archive behind, and v0.11.8 shipped that one to stable clients.
-        # The build step now purges stale archives, so a wrong name here means
-        # something else went wrong and the run must stop.
-        run: |
-          set -euo pipefail
-          BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
-          ARCHIVE="$BUNDLE/macos/Colony.app.tar.gz"
-          if [ ! -f "$ARCHIVE" ]; then
-            echo "::error::No $ARCHIVE — is createUpdaterArtifacts on? Present instead:"
-            ls -la "$BUNDLE/macos" || true
-            exit 1
-          fi
-          if [ ! -s "${ARCHIVE}.sig" ]; then
-            echo "::error::${ARCHIVE}.sig missing or empty — the build had no signing key"
-            exit 1
-          fi
-          # Prove the bytes about to be published are the stable app. The
-          # signature only proves the archive was signed with the updater key,
-          # which the canary build is signed with too, on purpose.
-          ROOT_ENTRY=$(tar tzf "$ARCHIVE" | head -1)
-          if [ "$ROOT_ENTRY" != "Colony.app/" ]; then
-            echo "::error::Updater archive contains $ROOT_ENTRY, expected Colony.app/. \
-          This archive is not the stable build and must not be published."
-            exit 1
-          fi
-          echo "Updater archive holds $ROOT_ENTRY"
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
-          echo "ARCHIVE_SIG=${ARCHIVE}.sig" >> "$GITHUB_ENV"
+      - name: Remove temporary Apple signing credentials
+        if: always()
+        run: bash desktop/scripts/electron-signing-keychain.sh cleanup
 
       # The token is minted after the long build so its one-hour lifetime
       # cannot expire before the upload. Same App as the release tagger,
@@ -449,7 +266,8 @@ jobs:
 
   publish-windows:
     name: Publish Windows (NSIS, unsigned)
-    if: github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'windows' || inputs.platform == 'both')))
+    needs: [preflight]
+    if: "!inputs.preflight_only && github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'windows' || inputs.platform == 'both')))"
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -699,7 +517,7 @@ jobs:
     # fails, still publishes a manifest for the platform that succeeded —
     # never publishing is how a good build reaches nobody.
     if: |
-      always() && github.repository == 'AI-Native-Ventures/Colony' &&
+      always() && !inputs.preflight_only && github.repository == 'AI-Native-Ventures/Colony' &&
       (needs.publish-macos.result == 'success' || needs.publish-windows.result == 'success')
     runs-on: ubuntu-latest
     steps:

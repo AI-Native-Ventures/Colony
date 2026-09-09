@@ -20,13 +20,18 @@ import { startBroker } from "./browser/broker.mjs";
 import { shellCommand } from "./shell-commands.mjs";
 import { ManagedBrowser, normalizeRelay } from "./browser/managed-workers.mjs";
 import { runtimePaths } from "./runtime-paths.mjs";
+import { DesktopDeepLinks } from "./deep-links.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
+const packageMetadata = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
 const paths = runtimePaths({
   packaged: app.isPackaged,
   appPath: desktop,
   resourcesPath: process.resourcesPath,
   env: process.env,
+  channel: packageMetadata.colonyReleaseChannel,
 });
 const { devUrl } = paths;
 app.setName(paths.name);
@@ -37,6 +42,15 @@ app.setPath(
 );
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
+const deepLinks = new DesktopDeepLinks();
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  deepLinks.enqueue(url);
+});
+app.on("second-instance", (_event, argv) => {
+  for (const value of argv) deepLinks.enqueue(value);
+});
+for (const value of process.argv) deepLinks.enqueue(value);
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "colony",
@@ -90,10 +104,13 @@ async function boot() {
   });
   const runtime = await mkdtemp(path.join(os.tmpdir(), "colony-browser-"));
   resources.add(() => rm(runtime, { recursive: true, force: true }));
-  const profileId = createHash("sha256")
-    .update(app.getPath("userData"))
-    .digest("hex")
-    .slice(0, 16);
+  const profileId =
+    paths.stable && !process.env.COLONY_ELECTRON_USER_DATA
+      ? "stable"
+      : createHash("sha256")
+          .update(app.getPath("userData"))
+          .digest("hex")
+          .slice(0, 16);
   const host = new NativeHost(paths.nativeHost, {
     env: {
       ...process.env,
@@ -107,7 +124,10 @@ async function boot() {
       COLONY_ELECTRON_PROFILE_ID: profileId,
       // Old installed Tauri versions look for a known host basename and its
       // full instance ID in the environment before reaping foreign workers.
-      COLONY_ELECTRON_INSTANCE_ID: `xyz.block.buzz.app.dev-electron.${profileId}`,
+      COLONY_ELECTRON_INSTANCE_ID:
+        profileId === "stable"
+          ? "xyz.block.buzz.app"
+          : `xyz.block.buzz.app.dev-electron.${profileId}`,
     },
   });
   const rendererHost = new RendererHost(host);
@@ -243,6 +263,12 @@ async function boot() {
       businessContext = null;
       views.setBusiness(null);
     }
+    // Only the original WebKit page can supply a migration snapshot.
+    if (
+      type === "invoke" &&
+      payload.command === "electron_export_frontend_state"
+    )
+      throw new Error("The Electron renderer cannot supply legacy app state");
     if (["invoke", "listen", "unlisten", "emit"].includes(type))
       return rendererHost.request(type, payload);
     if (type === "shell") return shellCommand(window, payload);
@@ -306,12 +332,43 @@ async function boot() {
       app.quit();
     });
   });
+  if (
+    paths.stable ||
+    packageMetadata.colonyReleaseChannel === "candidate" ||
+    packageMetadata.colonyMigrationFixture === true
+  ) {
+    // Import before React, community selection, or onboarding can observe an empty store.
+    await window.loadURL("colony://app/electron-migration.html");
+    try {
+      const restored = await window.webContents.executeJavaScript(
+        'window.__COLONY_FRONTEND_MIGRATION__ ?? Promise.reject(new Error("App state migration did not start"))',
+      );
+      if (restored !== true)
+        throw new Error("Saved app state could not be restored");
+      window.webContents.session.flushStorageData();
+    } catch (error) {
+      // Keep the recovery page available; never mount an apparently empty account.
+      console.error(
+        "Colony app state migration failed:",
+        error instanceof Error ? error.message : "App state transfer failed",
+      );
+      window.showInactive();
+      return;
+    }
+  }
   await window.loadURL(devUrl || "colony://app/");
   await window.webContents.insertCSS(
     "[data-tauri-drag-region]{-webkit-app-region:drag} [data-tauri-drag-region] button,[data-tauri-drag-region] input{-webkit-app-region:no-drag}",
   );
   window.showInactive();
   await host.ready;
+  deepLinks.ready((url) => {
+    void host
+      .request("invoke", { command: "electron_open_deep_link", args: { url } })
+      .catch(() => {
+        console.error("Colony could not open the requested app link");
+      });
+  });
 }
 if (primaryInstance)
   void boot().catch(async (error) => {

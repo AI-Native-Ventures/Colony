@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 472,
-    "rust_lines": 178343,
-    "tauri_coupled": 185,
+    "rust_total": 475,
+    "rust_lines": 178965,
+    "tauri_coupled": 188,
     "portable": 287,
-    "portable_lines": 101918,
+    "portable_lines": 101921,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -111,8 +111,11 @@
       "src-tauri/src/discovery_worker/worker_host.rs",
       "src-tauri/src/discovery_worker/worker_host_tests.rs",
       "src-tauri/src/egress_guard_tests.rs",
+      "src-tauri/src/electron_host/deep_links.rs",
+      "src-tauri/src/electron_host/migration.rs",
       "src-tauri/src/electron_host/mod.rs",
       "src-tauri/src/electron_host/runtime.rs",
+      "src-tauri/src/electron_host/updater.rs",
       "src-tauri/src/event_sync.rs",
       "src-tauri/src/huddle/agent_voice.rs",
       "src-tauri/src/huddle/agents.rs",
@@ -486,22 +489,27 @@
     ]
   },
   "commands": {
-    "registered": 359,
-    "defined": 359,
+    "registered": 367,
+    "defined": 367,
     "by_reach": {
-      "frontend": 353,
-      "NO CALLER FOUND": 4,
+      "frontend": 356,
+      "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
     "no_caller": [
       "download_voice_models",
+      "electron_export_frontend_state",
+      "electron_finish_frontend_migration",
+      "electron_frontend_migration_fixture",
+      "electron_open_deep_link",
+      "electron_read_frontend_migration",
       "operator_pubkey",
       "operator_sign_nip98",
       "start_stt_pipeline"
     ]
   },
   "params": {
-    "AppHandle": 375,
+    "AppHandle": 376,
     "State": 265,
     "Window": 7,
     "ipc::Request": 1,
@@ -509,7 +517,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 372,
+      "AppHandle": 373,
       "State": 265,
       "Window": 7,
       "ipc::Request": 1,
@@ -621,10 +629,12 @@
     "src-tauri/src/commands/team_snapshot.rs": 4,
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
+    "src-tauri/src/electron_host/migration.rs": 4,
     "src-tauri/src/commands/canvas.rs": 4,
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
+    "src-tauri/src/electron_host/updater.rs": 3,
     "src-tauri/src/huddle/agent_voice.rs": 3,
     "src-tauri/src/huddle/audio_output.rs": 3,
     "src-tauri/src/huddle/commands.rs": 3,
@@ -660,6 +670,7 @@
     "src-tauri/src/commands/openrouter_connect.rs": 1,
     "src-tauri/src/commands/agent_creation.rs": 1,
     "src-tauri/src/commands/personas/create.rs": 1,
+    "src-tauri/src/electron_host/deep_links.rs": 1,
     "src-tauri/src/commands/agent_proposals.rs": 1,
     "src-tauri/src/commands/block_data.rs": 1,
     "src-tauri/src/commands/join_policy.rs": 1,
@@ -1513,6 +1524,68 @@
         "src/parity/session/script.ts:587",
         "src/shared/api/editMessage.ts:13"
       ]
+    },
+    "electron_check_for_update": {
+      "defining_file": "src-tauri/src/electron_host/updater.rs",
+      "module": "updater",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/electronUpdater.ts:14"
+      ]
+    },
+    "electron_download_update": {
+      "defining_file": "src-tauri/src/electron_host/updater.rs",
+      "module": "updater",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/electronUpdater.ts:30"
+      ]
+    },
+    "electron_export_frontend_state": {
+      "defining_file": "src-tauri/src/electron_host/migration.rs",
+      "module": "migration",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "electron_finish_frontend_migration": {
+      "defining_file": "src-tauri/src/electron_host/migration.rs",
+      "module": "migration",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "electron_frontend_migration_fixture": {
+      "defining_file": "src-tauri/src/electron_host/migration.rs",
+      "module": "migration",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "electron_install_update": {
+      "defining_file": "src-tauri/src/electron_host/updater.rs",
+      "module": "updater",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/electronUpdater.ts:47"
+      ]
+    },
+    "electron_open_deep_link": {
+      "defining_file": "src-tauri/src/electron_host/deep_links.rs",
+      "module": "deep_links",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "electron_read_frontend_migration": {
+      "defining_file": "src-tauri/src/electron_host/migration.rs",
+      "module": "migration",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "encode_agent_snapshot_for_send": {
       "defining_file": "src-tauri/src/commands/personas/snapshot.rs",

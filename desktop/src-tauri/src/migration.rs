@@ -128,7 +128,7 @@ pub fn run_boot_migrations_after_reset(app: &tauri::AppHandle) {
 }
 
 fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
-    if crate::electron_host::enabled() {
+    if crate::electron_host::enabled() && !crate::electron_host::stable_profile() {
         // This opt-in runtime starts with independent data and identity. Never
         // import stable/development agent records, keys or repository pointers.
         crate::managed_agents::init_nest_dir(true);
