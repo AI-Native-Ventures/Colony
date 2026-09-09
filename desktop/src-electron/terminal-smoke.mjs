@@ -208,18 +208,17 @@ export async function verifyTerminal(application, page, { proofDir } = {}) {
 
   // --- Step 5: the session survives a renderer reload ---
   await page.reload();
+  // The terminal bridge is what step 5 exercises, so wait for the preload
+  // surface rather than any screen: by this point the active business has
+  // changed and the post-reload view is not the inbox.
   await page.waitForFunction(
-    () => !!window.colonyDesktop,
+    () =>
+      !!window.colonyDesktop?.terminal && document.readyState === "complete",
     {},
     {
       timeout: 30000,
     },
   );
-  await page
-    .getByText("Inbox", { exact: true })
-    .filter({ visible: true })
-    .first()
-    .waitFor({ timeout: 30000 });
 
   const listed = await page.evaluate(() =>
     window.colonyDesktop.terminal.list(),
