@@ -332,7 +332,7 @@ export function FirstJobSuggestionView({
         ) : null}
 
         {canManage && !fundingActive && phase !== "sent" ? (
-          <div className="flex flex-wrap items-center gap-2 pt-1">
+          <div className="flex flex-wrap items-center gap-2 pt-1 [&_button]:h-auto [&_button]:min-h-9 [&_button]:max-w-full [&_button]:whitespace-normal">
             {phase === "needs-credits" && funding?.phase !== "funded" ? (
               <Button onClick={onAddCredits} type="button">
                 Add credits

@@ -6,6 +6,7 @@ import {
 } from "../helpers/onboarding";
 import { fillFounderBusiness } from "../helpers/simpleFounder";
 import { waitForAnimations } from "../helpers/animations";
+import { expectRetainedBusinessContext } from "../helpers/companyProfile";
 
 const OWNER = TEST_IDENTITIES.tyler.pubkey;
 const BASE_RELAY = "wss://alpha.colony.ainative.ventures";
@@ -17,7 +18,7 @@ const CREDIT_CONFIG = {
   provider: "openai-compat",
 };
 
-async function existingOwner(page: Page) {
+async function existingOwner(page: Page, destinationProfileName?: string) {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await page.addInitScript(
     ({ owner, relay }) => {
@@ -52,6 +53,12 @@ async function existingOwner(page: Page) {
     page,
     {
       globalAgentConfig: CREDIT_CONFIG,
+      // This mock serves one active relay head. Keep the destination's empty
+      // bootstrap profile in the fixture across the two page reloads below;
+      // the real newly created relay retains this signed head independently.
+      ...(destinationProfileName
+        ? { communityProfileHead: { tradingName: destinationProfileName } }
+        : {}),
       colonyCommunities: [
         {
           id: "alpha",
@@ -111,7 +118,7 @@ test("a named owner creates from the real rail, resumes Business and Power, and 
       }),
     }),
   );
-  await existingOwner(page);
+  await existingOwner(page, "Bravo");
   await createFromRail(page, "bravo");
   await fillFounderBusiness(
     page,
@@ -175,6 +182,12 @@ test("a named owner creates from the real rail, resumes Business and Power, and 
   });
   await complete.click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
+  await expectRetainedBusinessContext(page, {
+    ownerPubkey: OWNER,
+    relayUrl: "wss://bravo.colony.ainative.ventures",
+    name: "Bravo Studio",
+    summary: "We design brands for service businesses.",
+  });
   const state = await page.evaluate(
     ({ owner, relay }) => ({
       baseComplete: localStorage.getItem(

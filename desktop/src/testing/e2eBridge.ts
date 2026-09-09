@@ -8,6 +8,11 @@ import {
   type CommunityProfileHeadSeed,
 } from "./e2eCompanyProfile";
 import { prepareFirstJobTeamFixture } from "./e2eFirstJobTeam";
+import {
+  mockEventMatchesFilter,
+  selectMockChannelHistory,
+  type MockFilter,
+} from "./e2eBridgeFilters";
 import { createProfileHandlers, type RawProfile } from "./e2eBridgeProfiles";
 import {
   createMockOpenRouter,
@@ -1182,21 +1187,6 @@ type MockSubscription = {
    *  owner-scoped live subscription (e.g. the observer-archive `24200`
    *  reconciliation gate) independently of channel-scoped ones. */
   ownerPubkeys: string[];
-};
-
-type MockFilter = {
-  "#a"?: string[];
-  "#d"?: string[];
-  "#e"?: string[];
-  "#grant"?: string[];
-  "#h"?: string[];
-  "#p"?: string[];
-  authors?: string[];
-  ids?: string[];
-  kinds?: number[];
-  limit?: number;
-  since?: number;
-  until?: number;
 };
 
 type MockSocket = {
@@ -3830,37 +3820,6 @@ function filterMockDecisionLogEvents(filter: MockFilter): RelayEvent[] {
   });
 }
 
-function mockEventMatchesFilter(
-  event: RelayEvent,
-  filter: MockFilter,
-): boolean {
-  const authors = filter.authors?.map((author) => author.toLowerCase());
-  if (filter.ids && !filter.ids.includes(event.id)) return false;
-  if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
-  if (authors && !authors.includes(event.pubkey.toLowerCase())) return false;
-  if (filter.since !== undefined && event.created_at < filter.since) {
-    return false;
-  }
-  if (filter.until !== undefined && event.created_at > filter.until) {
-    return false;
-  }
-  for (const [tagName, values] of [
-    ["a", filter["#a"]],
-    ["d", filter["#d"]],
-    ["e", filter["#e"]],
-    ["h", filter["#h"]],
-    ["p", filter["#p"]],
-  ] as const) {
-    if (
-      values &&
-      !event.tags.some((tag) => tag[0] === tagName && values.includes(tag[1]))
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function filterMockBlockEvents(filter: MockFilter): RelayEvent[] {
   return mockBlockEvents
     .filter((event) => mockEventMatchesFilter(event, filter))
@@ -5376,35 +5335,10 @@ function emitMockHistory(
   channelId: string,
   filter: MockFilter,
 ) {
-  const events = getMockMessageStore(channelId)
-    .filter((event) => {
-      if (filter.kinds && !filter.kinds.includes(event.kind)) {
-        return false;
-      }
-      if (filter.since !== undefined && event.created_at < filter.since) {
-        return false;
-      }
-      if (filter.until !== undefined && event.created_at > filter.until) {
-        return false;
-      }
-      return true;
-    })
-    // Relay order is `created_at DESC, id ASC` — match it (both the WS history
-    // page and the `get_channel_messages_before` keyset are backed by that one
-    // order in production, so the mock must be self-consistent too, else a
-    // same-second slice returned here won't line up with the keyset's tiebreak
-    // and the dense-second escape hatch can't prove completeness). Bare `until`
-    // still can't advance past a second denser than one page; the composite
-    // keyset is the escape hatch.
-    .sort(
-      (left, right) =>
-        right.created_at - left.created_at || left.id.localeCompare(right.id),
-    )
-    .slice(0, filter.limit ?? 50)
-    .sort(
-      (left, right) =>
-        left.created_at - right.created_at || left.id.localeCompare(right.id),
-    );
+  const events = selectMockChannelHistory(
+    getMockMessageStore(channelId),
+    filter,
+  );
 
   const emit = () => {
     for (const event of events) {

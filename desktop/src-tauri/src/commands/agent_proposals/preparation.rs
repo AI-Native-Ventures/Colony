@@ -122,10 +122,13 @@ impl AgentProposalPreparation {
     }
 
     pub(crate) fn check(&self, state: &AppState) -> Result<(), String> {
-        self.check_pair(
-            &state.signing_keys()?.public_key().to_hex(),
-            &super::super::initiative_scope::current_relay(state)?,
-        )
+        let relay = state
+            .relay_url_override
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clone()
+            .unwrap_or_else(crate::relay::relay_ws_url);
+        self.check_pair(&state.signing_keys()?.public_key().to_hex(), &relay)
     }
 
     /// Caller holds the executor's community read guard; take identity before store locks.

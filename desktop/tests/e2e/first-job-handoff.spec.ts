@@ -11,6 +11,8 @@ import {
 } from "../../src/features/onboarding/firstJobSuggestion";
 import { firstJobStorageKey } from "../../src/features/onboarding/firstJobStorage";
 import type { RelayEvent } from "../../src/shared/api/types";
+import { parseCompanyHead } from "../../src/features/company/contracts";
+import { expectRetainedBusinessContext } from "../helpers/companyProfile";
 
 // This is the actual React app with native/relay/payment fixtures. No hosted
 // payment, process or model call is made. Native worker output is a separate gate.
@@ -764,6 +766,15 @@ test("fresh Scout-only setup saves business details and creates the displayed wo
     funded: true,
     freshProfile: true,
   });
+  const initialHeads = await page.evaluate(
+    () => window.__BUZZ_E2E_MOCK_COMPANY_BROKER__?.().profileHeads ?? [],
+  );
+  expect(initialHeads).toHaveLength(1);
+  const initialProfile = parseCompanyHead(
+    initialHeads[0],
+    initialHeads[0].pubkey,
+  );
+  expect(initialProfile.ok && initialProfile.value.summary).toBe("");
   const card = page.getByTestId("first-job-suggestion");
   await expect(card.getByTestId("first-job-team-proposal")).toContainText(
     "Sarah",
@@ -804,15 +815,14 @@ test("fresh Scout-only setup saves business details and creates the displayed wo
   expect(agreed.action.definition).not.toHaveProperty("model");
   expect(agreed.action.definition).not.toHaveProperty("provider");
   expect(agreed.action.preparation.leaderPubkey).toBe(SCOUT);
-  const profiles = events.filter(
-    (event) =>
-      event.kind === 40013 &&
-      event.tags.some((tag) => tag[0] === "a" && tag[1]?.startsWith("30179:")),
-  );
-  expect(profiles).toHaveLength(1);
-  expect(
-    JSON.parse(profiles[0]?.content ?? "{}").payload.record.summary,
-  ).toContain("websites and manage social media");
+  // Company Actions use the broker transport, not the channel-message log.
+  await expectRetainedBusinessContext(page, {
+    ownerPubkey: OWNER.pubkey,
+    relayUrl: RELAY,
+    name: "Horizon Labs",
+    summary:
+      "We build websites and manage social media for small service businesses.",
+  });
   await waitForAnimations(page);
   await page.getByTestId("message-thread-panel").screenshot({
     path: "test-results/first-job/07-approved-first-worker.png",

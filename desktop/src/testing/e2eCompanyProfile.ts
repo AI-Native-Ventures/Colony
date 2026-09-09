@@ -234,7 +234,16 @@ export function brokerMockCommunityProfileAction(
   if (!target?.startsWith("30179:")) return null;
   const relay = getPublicKey(context.relaySecret);
   const tuple = event.tags.find((tag) => tag[0] === "company-action");
-  let body;
+  let body: {
+    schema: string;
+    operation: string;
+    requestId: string;
+    idempotencyKey: string;
+    target: string;
+    expectedHead: string;
+    expectedReferences: unknown[];
+    payload: { kind: string; record: CompanyProfile };
+  };
   try {
     body = JSON.parse(event.content);
     const fresh = {
@@ -303,7 +312,7 @@ export function brokerMockCommunityProfileAction(
   const current = heads.sort(
     (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
   )[0];
-  const profile = body.payload.record as CompanyProfile;
+  const profile = body.payload.record;
   let outcome = current?.id === body.expectedHead ? "applied" : "conflict";
   if (previousAction && previousAction.id !== event.id) outcome = "conflict";
   let headEventId: string | null = null;
