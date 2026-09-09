@@ -54,7 +54,7 @@ the compiled endpoint before exercising its local fixtures.
 The package stages only the built frontend, Electron runtime modules, CSP and
 version metadata. Native executables live together outside the application
 archive. Packaged runtime discovery prefers these bundled helpers instead of
-build-time workspace output. Placeholder executables fail packaging.
+build-time workspace output. Placeholder executables fail packaging. `node-pty` is staged into the app (`node_modules/node-pty` with `package.json`, `lib/`, and the `darwin-<arch>` prebuild only) and unpacked from `asar` (`asar: { unpack: "**/node_modules/node-pty/**" }`) so the `spawn-helper` binary can execute. The package gate asserts the unpacked helper exists and carries the executable bit; without it the package fails before codesign.
 
 The beta is ad-hoc signed for local testing, **not Developer ID signed or
 notarized**. It has no update feed and does not replace the stable distribution.

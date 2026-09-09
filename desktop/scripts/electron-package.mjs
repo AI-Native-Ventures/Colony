@@ -1,6 +1,7 @@
 import { packager } from "@electron/packager";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { realpath } from "node:fs/promises";
 import {
   cp,
   mkdir,
@@ -23,6 +24,7 @@ import {
   productionSigning,
   stableUpdaterConfig,
 } from "./electron-release-contract.mjs";
+import { stageNodePty } from "./electron-stage-node-pty.mjs";
 
 const exec = promisify(execFile);
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -143,6 +145,10 @@ try {
         path.basename(source) !== "onboarding-fixture",
     },
   );
+  const nodePtyResult = await stageNodePty({
+    source: await realpath(path.join(desktop, "node_modules", "node-pty")),
+    appDir,
+  });
   const config = JSON.parse(
     await readFile(path.join(desktop, "src-tauri/tauri.conf.json"), "utf8"),
   );
@@ -218,7 +224,7 @@ try {
     electronVersion: metadata.devDependencies.electron,
     platform: "darwin",
     arch: process.arch,
-    asar: true,
+    asar: { unpack: "**/node_modules/node-pty/**" },
     prune: false,
     icon: path.join(desktop, "src-tauri/icons/icon.icns"),
     extraResource: [nativeDir],
@@ -227,6 +233,43 @@ try {
     ...signing,
   });
   const app = path.join(bundle, `${variant.name}.app`);
+  // Verify node-pty unpacked from asar with executable helper.
+  const prebuildDirName = `darwin-${process.arch}`;
+  const unpackedBase = path.join(
+    app,
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+    prebuildDirName,
+  );
+  const unpackedSpawnHelper = path.join(unpackedBase, "spawn-helper");
+  const unpackedPtyNode = path.join(unpackedBase, "pty.node");
+  try {
+    const helperStat = await stat(unpackedSpawnHelper);
+    if (!(helperStat.mode & 0o111)) {
+      throw new Error(
+        `Unpacked spawn-helper missing executable bit: ${unpackedSpawnHelper} (mode=${(helperStat.mode & 0o777).toString(8)})`,
+      );
+    }
+  } catch (e) {
+    if (e.code === "ENOENT")
+      throw new Error(
+        `Unpacked node-pty spawn-helper missing at ${unpackedSpawnHelper}; asar unpack failed or prebuild not staged`,
+      );
+    throw e;
+  }
+  try {
+    await stat(unpackedPtyNode);
+  } catch (e) {
+    if (e.code === "ENOENT")
+      throw new Error(
+        `Unpacked node-pty pty.node missing at ${unpackedPtyNode}; asar unpack failed or prebuild not staged`,
+      );
+    throw e;
+  }
   if (!variant.production) {
     // Private candidates are explicitly non-distributable, like betas.
     await run("codesign", ["--force", "--deep", "--sign", "-", app]);
@@ -273,6 +316,7 @@ try {
         app,
         zip,
         binaries,
+        nodePty: nodePtyResult,
       },
       null,
       2,
