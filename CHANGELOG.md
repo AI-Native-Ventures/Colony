@@ -4,6 +4,12 @@
 
 - feat(desktop): view Excel, CSV and PDF files inline, browse images and SVG carousels, play audio, and preview videos with useful posters. Share the same theme-aware viewers across conversations and the Blocks catalog, with original downloads and scoped next-reply model/reasoning requests.
 
+## v0.16.9
+
+- Release the main macOS app through the stable Electron lane with explicit ad-hoc signing, without Apple Developer signing or notarization. Keep existing updater-signature verification and publish Mac checksums.
+- Include the onboarding, provider selection, community recovery and teammate startup fixes from #666.
+
+
 - feat(desktop): share an Electron browser tab with a running Colony Agent using read-only or interaction access. On macOS, each teammate runs with private files and controlled network access; takeover and restart revoke browser access. Other local harnesses remain unavailable in this beta.
 
 - feat(desktop): package the opt-in Electron app as a self-contained macOS beta with real agent helpers, separate profile state, and a relocated-app browser/import smoke test. The local beta is ad-hoc signed; release signing and automatic teammate browser assignment remain separate gates.
