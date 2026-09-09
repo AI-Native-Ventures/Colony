@@ -134,6 +134,7 @@ export function PowerScreen({
     !scope.isFetching &&
     !!scope.data &&
     !!draft &&
+    powerLaneForConfig(draft) === lane &&
     !!runtime &&
     !runtime.localLaunchError &&
     runtime.availability === "available" &&
@@ -144,7 +145,7 @@ export function PowerScreen({
       !draft ||
       !scope.data ||
       !canContinue ||
-      (lane !== "existing" && powerLaneForConfig(draft) !== lane)
+      powerLaneForConfig(draft) !== lane
     )
       throw new Error(
         "Choose a supported connection and model before continuing.",
@@ -223,9 +224,7 @@ export function PowerScreen({
                 <span>Connect OpenRouter. Usage limits apply.</span>
               </button>
             </fieldset>
-            {["existing", "subscription"].includes(
-              powerLaneForConfig(saved.data ?? draft),
-            ) && (
+            {saved.data && powerLaneForConfig(saved.data) === "existing" && (
               <Button
                 variant="outline"
                 onClick={() => {

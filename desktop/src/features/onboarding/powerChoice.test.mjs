@@ -56,3 +56,29 @@ test("subscription is an explicit choice and clears inherited vendor model pins"
   assert.equal(selected.provider, null);
   assert.equal(selected.credential_mode, "byok");
 });
+
+test("only the supported subscription runtimes use connection validation, even with inherited provider fields", () => {
+  for (const runtime of ["claude", "codex"]) {
+    for (const provider of [null, "anthropic", "openrouter"]) {
+      const config = { ...current, preferred_runtime: runtime, provider };
+      assert.equal(powerLaneForConfig(config), "subscription");
+      assert.equal(initialPowerConfig(config), config);
+    }
+  }
+});
+
+test("other runtimes keep their provider, model and credentials as an existing setup", () => {
+  for (const runtime of ["omp", "opencode", "goose", "custom-runtime"]) {
+    for (const provider of [null, "anthropic", "openrouter"]) {
+      const config = {
+        ...current,
+        preferred_runtime: runtime,
+        provider,
+        model: "vendor/model:free",
+      };
+      assert.equal(powerLaneForConfig(config), "existing");
+      assert.equal(initialPowerConfig(config), config);
+      assert.equal(configForPowerLane(config, "existing"), config);
+    }
+  }
+});

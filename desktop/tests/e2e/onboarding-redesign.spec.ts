@@ -186,6 +186,38 @@ test("power offers all three choices and saves the selected defaults", async ({
   );
 });
 
+test("a saved subscription cannot bypass its business connection through the generic setup", async ({
+  page,
+}) => {
+  await reachPower(page, {
+    globalAgentConfig: {
+      credential_mode: "byok",
+      preferred_runtime: "claude",
+      provider: null,
+      model: "claude-test-model",
+      env_vars: {},
+    },
+  });
+  const power = page.getByTestId("onboarding-power");
+  const complete = power.getByRole("button", { name: "Open my Colony" });
+  await expect(power.getByTestId("subscription-power-fields")).toBeVisible();
+  await expect(
+    power.getByRole("button", { name: "Keep my current setup" }),
+  ).toHaveCount(0);
+  // A saved, valid model does not replace this business's native connection.
+  await expect(complete).toBeDisabled();
+  await power
+    .getByRole("button", { name: "Connect Claude", exact: true })
+    .click();
+  await expect(
+    power.getByRole("combobox", { name: "Subscription model" }),
+  ).toHaveValue("claude-test-model");
+  await expect(complete).toBeEnabled();
+  await expect(
+    power.getByRole("button", { name: "Keep my current setup" }),
+  ).toHaveCount(0);
+});
+
 test("subscription account retry recovers detection but an unsupported Electron runtime stays blocked", async ({
   page,
 }) => {
