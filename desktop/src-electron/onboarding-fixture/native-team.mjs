@@ -1,0 +1,241 @@
+// Observe real native staffing and signed relay state. This helper never creates it.
+import assert from "node:assert/strict";
+import { verifyEvent } from "nostr-tools/pure";
+import { readCurrentFixtureTask } from "./task-head.mjs";
+
+export function verifySigned(event, kind, author) {
+  assert.equal(event.kind, kind);
+  assert.equal(event.pubkey, author);
+  const signed = Object.fromEntries(
+    ["id", "pubkey", "created_at", "kind", "tags", "content", "sig"].map(
+      (key) => [key, event[key]],
+    ),
+  );
+  assert.equal(verifyEvent(signed), true, `Real signature for kind ${kind}`);
+  return event;
+}
+const tag = (event, name) => {
+  const values = event.tags.filter((entry) => entry[0] === name);
+  assert.equal(values.length, 1, `Exactly one ${name} tag`);
+  return values[0];
+};
+
+/** Read only this run's public signed records from its isolated database. */
+export function nativeProofReader({ relay, account, invoke, relayPubkey }) {
+  const host = new URL(account.relayUrl).hostname;
+  assert.match(host, /^horizon-labs\.onboarding-[a-f0-9]{16}\.invalid$/);
+  const where = `community_id=(SELECT id FROM communities WHERE host='${host}')`;
+  const events = async (kind) => {
+    assert.ok(
+      [9, 30175, 30177, 30179, 30181, 39002, 40013, 40014].includes(kind),
+    );
+    const raw = await relay.query(
+      `SELECT coalesce(json_agg(e),'[]')::text FROM (SELECT encode(id,'hex') AS id,encode(pubkey,'hex') AS pubkey,extract(epoch FROM created_at)::bigint AS created_at,kind,tags,content,encode(sig,'hex') AS sig FROM events WHERE ${where} AND kind=${kind} AND deleted_at IS NULL ORDER BY created_at DESC,id ASC LIMIT 101) e;`,
+    );
+    const values = JSON.parse(raw);
+    assert.ok(values.length < 101, "No silently truncated proof lookup");
+    for (const event of values) assert.equal(verifyEvent(event), true);
+    return values;
+  };
+  const head = async (kind, author, id) => {
+    const values = (await events(kind)).filter(
+      (event) => event.pubkey === author && tag(event, "d")[1] === id,
+    );
+    assert.ok(values.length > 0, `Missing signed kind ${kind} head`);
+    return verifySigned(values[0], kind, author);
+  };
+  const replies = async (marker) =>
+    (await events(9)).filter(
+      (event) =>
+        event.tags.some((t) => t[0] === "h" && t[1] === account.channelId) &&
+        event.tags.some((t) => t[0] === "e" && t[1] === account.rootEventId) &&
+        event.tags.some((t) => t[0] === "client" && t[1] === marker),
+    );
+  const readTask = async () =>
+    readCurrentFixtureTask(await events(30181), {
+      relayPubkey,
+      channelId: account.channelId,
+      rootId: account.rootEventId,
+    });
+  async function readTeam() {
+    const approvals = await replies("colony:first-job-team-approval:v1");
+    const receipts = await replies("colony:first-job-team-receipt:v1");
+    assert.equal(approvals.length, 1, "Exactly one actual owner approval");
+    assert.equal(receipts.length, 1, "Exactly one actual team receipt");
+    const approval = verifySigned(approvals[0], 9, account.ownerPubkey);
+    const receipt = verifySigned(receipts[0], 9, account.ownerPubkey);
+    const approved = JSON.parse(tag(approval, "first-job-team")[1]);
+    const result = JSON.parse(tag(receipt, "first-job-team")[1]);
+    assert.equal(result.approval, approval.id);
+    assert.equal(approved.brief, account.suggestion.brief);
+    assert.equal(
+      approved.proposal.worker.pubkey,
+      null,
+      "Owner approved a genuinely new worker",
+    );
+    assert.equal(approved.proposal.action.preparation.mode, "first-job-worker");
+    assert.equal(
+      approved.proposal.action.preparation.ownerPubkey,
+      account.ownerPubkey,
+    );
+    assert.equal(
+      approved.proposal.action.preparation.communityRelayUrl,
+      account.relayUrl,
+    );
+    assert.equal(
+      approved.proposal.action.preparation.channelId,
+      account.channelId,
+    );
+    const agents = (await invoke("list_managed_agents")).filter(
+      (agent) => agent.relay_url === account.relayUrl,
+    );
+    assert.equal(
+      agents.length,
+      2,
+      "Only starter Scout and one prepared worker",
+    );
+    const refs = [];
+    for (const [name, rank] of [
+      ["scout", "executive"],
+      ["worker", "worker"],
+    ]) {
+      const pubkey = result.team[`${name}Pubkey`];
+      assert.match(pubkey, /^[a-f0-9]{64}$/);
+      const agent = agents.find((value) => value.pubkey === pubkey);
+      assert.ok(agent);
+      const record = await head(30177, account.ownerPubkey, pubkey);
+      const content = JSON.parse(record.content);
+      assert.equal(content.tier, rank);
+      assert.equal(content.persona_id, agent.persona_id);
+      if (name === "worker") {
+        assert.equal(tag(record, "manager")[1], result.team.scoutPubkey);
+        assert.equal(agent.name, approved.proposal.worker.name);
+        assert.equal(
+          content.role_id,
+          approved.proposal.action.preparation.roleId,
+        );
+        assert.deepEqual(agent.env_vars ?? {}, {});
+        assert.equal(agent.start_on_app_launch, false);
+        const defaults = await invoke("get_global_agent_config");
+        assert.equal(agent.model, defaults.model);
+        assert.equal(agent.provider, defaults.provider);
+        assert.equal(agent.agent_command_override, null);
+      }
+      const personas = await invoke("list_personas");
+      const persona = personas.find((value) => value.id === agent.persona_id);
+      assert.ok(persona);
+      const definition = (await events(30175)).find(
+        (event) =>
+          event.pubkey === account.ownerPubkey &&
+          JSON.parse(event.content).system_prompt === persona.system_prompt,
+      );
+      assert.ok(definition, "Real owner-published persona definition");
+      if (name === "worker")
+        assert.equal(
+          persona.system_prompt,
+          approved.proposal.action.definition.systemPrompt,
+        );
+      refs.push({
+        pubkey,
+        personaId: agent.persona_id,
+        name: agent.name,
+        headEventId: record.id,
+        prompt: persona.system_prompt,
+      });
+    }
+    const membership = await head(39002, relayPubkey, account.channelId);
+    for (const ref of refs)
+      assert.ok(
+        membership.tags.some(
+          (t) => t[0] === "p" && t[1] === ref.pubkey && t[3] === "bot",
+        ),
+        "Native preparation actually enrolled the worker",
+      );
+    return {
+      scout: refs[0],
+      worker: refs[1],
+      approvalId: approval.id,
+      receiptId: receipt.id,
+      membershipId: membership.id,
+    };
+  }
+  async function business() {
+    const profileHead = await head(30179, relayPubkey, "profile");
+    const profile = JSON.parse(profileHead.content);
+    assert.equal(profile.tradingName, account.suggestion.businessName);
+    assert.equal(profile.summary, account.suggestion.business);
+    assert.equal(
+      profile.website ?? null,
+      account.suggestion.website?.trim() || null,
+    );
+    const actions = (await events(40013)).filter(
+      (e) => e.pubkey === account.ownerPubkey,
+    );
+    assert.equal(
+      actions.length,
+      1,
+      "Onboarding retained its business via one canonical action",
+    );
+    const receipts = (await events(40014)).filter(
+      (e) =>
+        e.pubkey === relayPubkey &&
+        e.tags.some((t) => t[0] === "e" && t[1] === actions[0].id),
+    );
+    assert.equal(receipts.length, 1);
+    assert.equal(JSON.parse(receipts[0].content).headEventId, profileHead.id);
+    return profileHead;
+  }
+  return { events, readTask, readTeam, business };
+}
+
+/** Match the actual own persona section to signed definitions, never quoted history. */
+export function nativeRequestActor(messages, team, task) {
+  const system = messages.filter((message) => message.role === "system");
+  assert.equal(system.length, 1);
+  assert.equal(typeof system[0].content, "string");
+  const sections = system[0].content.split(/(?:^|\n\n)\[System\]\n/);
+  assert.equal(sections.length, 2, "One real own-persona system section");
+  const own = sections[1].split(
+    /\n\n\[(?:Company Onboarding|Team Instructions|Agent Memory — core|Channel Canvas|Thread Canvas)\]\n/,
+    1,
+  )[0];
+  const matches = ["scout", "worker"].filter(
+    (actor) => own === team[actor].prompt,
+  );
+  assert.equal(
+    matches.length,
+    1,
+    "Actual own persona exactly matches one signed approved definition",
+  );
+  const actor = matches[0];
+  const text = messages
+    .filter(
+      (message) =>
+        message.role === "user" && typeof message.content === "string",
+    )
+    .map((message) => message.content)
+    .reverse();
+  const source = text.find((content) =>
+    content.includes("<colony-work-context>\n"),
+  );
+  assert.ok(source, "Real ACP turn needs a work context");
+  const blocks = [
+    ...source.matchAll(
+      /<colony-work-context>\n([\s\S]*?)<\/colony-work-context>/g,
+    ),
+  ];
+  assert.equal(blocks.length, 1, "Unambiguous current harness work context");
+  const lines = blocks[0][1].split("\n");
+  assert.ok(lines.includes(`Task id: ${task.id}`));
+  assert.ok(lines.includes(`Owning team: ${task.owningTeamId}`));
+  // Managed first-job agents have signed30177 ranks. ACP only hydrates rank lines
+  // for company employee30190 heads, so absent lines are current product behavior.
+  const ranks = lines.filter((line) => line.startsWith("Your rank: "));
+  assert.ok(ranks.length <= 1);
+  if (ranks.length)
+    assert.equal(
+      ranks[0],
+      `Your rank: ${actor === "scout" ? "executive" : "worker"}`,
+    );
+  return actor;
+}

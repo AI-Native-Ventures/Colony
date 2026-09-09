@@ -1,0 +1,21 @@
+{
+  "postgres": {
+    "version": "17.6",
+    "url": "https://ftp.postgresql.org/pub/source/v17.6/postgresql-17.6.tar.bz2",
+    "sha256": "e0630a3600aea27511715563259ec2111cd5f4353a4b040e0be827f94cd7a8b0"
+  },
+  "redis": {
+    "version": "7.4.2",
+    "url": "https://download.redis.io/releases/redis-7.4.2.tar.gz",
+    "sha256": "4ddebbf09061cbb589011786febdb34f29767dd7f89dbe712d2b68e808af6a1f"
+  },
+  "go": {
+    "version": "1.24.7",
+    "url": "https://go.dev/dl/go1.24.7.darwin-arm64.tar.gz",
+    "sha256": "d06bad763f8820d3e29ee11f2c0c71438903c007e772a159c5760a300298302e"
+  },
+  "minio": {
+    "revision": "07c3a429bfed433e49018cb0f78a52145d4bedeb",
+    "release": "RELEASE.2025-09-07T16-13-09Z"
+  }
+}

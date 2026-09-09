@@ -127,10 +127,11 @@ const proof = {
       "onboarding-fixture/account-diagnostics.mjs",
       "onboarding-fixture/work.mjs",
       "onboarding-fixture/instruction.mjs",
-      "onboarding-fixture/approved-team.mjs",
+      "onboarding-fixture/native-team.mjs",
+      "onboarding-fixture/native-services.mjs",
+      "onboarding-fixture/service-sources.json",
       "onboarding-fixture/diagnostics.mjs",
       "onboarding-fixture/tool-result.mjs",
-      "onboarding-fixture/unstaffed.mjs",
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",
       "onboarding-fixture/relay.mjs",
@@ -393,7 +394,7 @@ try {
     .filter({ visible: true })
     .first();
   await card
-    .getByRole("button", { name: "Start this job", exact: true })
+    .getByRole("button", { name: "Approve team and start", exact: true })
     .click();
   await expect(card.getByTestId("first-job-status")).toHaveText(
     "Add credits before starting this job. Your brief stays here.",
@@ -412,6 +413,7 @@ try {
   });
   const { page: _page, rootEvent: _event, ...identifiers } = result;
   Object.assign(proof, identifiers, {
+    backingServices: relay.backingServices,
     accountCompleted: true,
     zeroCreditStart: "blocked without Task, instruction or model call",
     hostedSignup: "not tested",

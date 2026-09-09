@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFixtureShellResult } from "./tool-result.mjs";
+import { nativeRequestActor } from "./native-team.mjs";
 
 // An independent acceptance literal: the fixture must use the actual default,
 // not replace a different suggestion and claim to have tested the first job.
@@ -94,12 +95,11 @@ export async function createOnboardingFixtureProvider() {
         "No model calls are allowed before explicit staffing and Start",
       );
       const all = JSON.stringify(body.messages);
-      const actor = all.includes(context.workerMarker)
-        ? "worker"
-        : all.includes(context.scoutMarker)
-          ? "scout"
-          : null;
-      assert.ok(actor, "The real runtime carries the fixture persona marker");
+      const team = await context.readTeam();
+      const currentTask = await context.readTask();
+      const actor = nativeRequestActor(body.messages, team, currentTask);
+      assert.equal(currentTask.threadRoot, context.rootId);
+      assert.equal(currentTask.sourceChannelId, context.channelId);
       const last = body.messages.at(-1)?.content;
       const completion =
         typeof last === "string" && last.startsWith("You have stopped.");
@@ -161,10 +161,10 @@ export async function createOnboardingFixtureProvider() {
         assert.equal(task.sourceChannelId, context.channelId);
         const thread = `--channel ${context.channelId} --reply-to ${context.rootId} --task ${quote(task.id)} --team ${quote(task.owningTeamId)}`;
         if (stage === "delegate") {
-          return `buzz messages send ${thread} --mention ${context.workerPubkey} --content ${quote(`${context.brief}\n\nPrepare one distinct caption and matching visual brief for each weekday. Return all five pairs in this thread and mention the Chief of Staff for review.`)}`;
+          return `buzz messages send ${thread} --mention ${team.worker.pubkey} --content ${quote(`${context.brief}\n\nPrepare one distinct caption and matching visual brief for each weekday. Return all five pairs in this thread and mention the Chief of Staff for review.`)}`;
         }
         if (stage === "worker") {
-          return `buzz messages send ${thread} --mention ${context.scoutPubkey} --content ${quote(WORKER_DRAFT)}`;
+          return `buzz messages send ${thread} --mention ${team.scout.pubkey} --content ${quote(WORKER_DRAFT)}`;
         }
         if (index === 0)
           return `buzz messages send ${thread} --content ${quote(SCOUT_REVIEW)}`;
@@ -254,10 +254,11 @@ export async function createOnboardingFixtureProvider() {
         undefined,
         "One approved team per fixture provider",
       );
-      for (const key of ["rootId", "workerPubkey", "scoutPubkey"])
-        assert.match(value[key], /^[a-f0-9]{64}$/);
+      for (const key of ["rootId"]) assert.match(value[key], /^[a-f0-9]{64}$/);
       assert.match(value.channelId, /^[a-f0-9-]{36}$/);
       assert.equal(value.brief, FIRST_JOB_BRIEF);
+      assert.equal(typeof value.readTeam, "function");
+      assert.equal(typeof value.readTask, "function");
       context = Object.freeze({ ...value });
     },
     async close() {
