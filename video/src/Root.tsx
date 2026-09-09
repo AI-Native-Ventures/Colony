@@ -3,9 +3,17 @@ import {
   Composition,
   interpolate,
   useCurrentFrame,
+  delayRender,
+  continueRender,
 } from "remotion";
+import { loadFont } from "@remotion/google-fonts/Inter";
 import { AntMark } from "./brand/AntMark";
 import { t1Schema, type T1Props } from "./t1/schema";
+
+const fontHandle = delayRender("Loading Inter font");
+loadFont("normal", { weights: ["400", "700"], subsets: ["latin"] })
+  .waitUntilDone()
+  .then(() => continueRender(fontHandle));
 
 function fadeIn(frame: number, startFrame: number) {
   if (frame < startFrame) return 0;
@@ -44,8 +52,7 @@ export const Hello: React.FC = () => {
         style={{
           color: "white",
           fontSize: 120,
-          fontFamily:
-            '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+          fontFamily: "Inter",
           textAlign: "center",
           opacity,
         }}
@@ -87,18 +94,13 @@ export const T1: React.FC<T1Props> = (props) => {
   );
 
   const showHook = frame < 60;
-  const showPanel = frame >= 48;
-
-  // Click ring at 480
-  const clickProgress = Math.max(0, Math.min(frame - 480, 10));
-  const ringScale = interpolate(clickProgress, [0, 10], [1.4, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-  const ringOpacity = interpolate(clickProgress, [0, 10], [0.5, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  const panelFadeOut = interpolate(
+    Math.max(0, Math.min(frame - 540, 12)),
+    [0, 12],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+  const showPanel = frame >= 48 && frame < 552;
 
   // Button pulse loop
   const pulseScale =
@@ -142,23 +144,22 @@ export const T1: React.FC<T1Props> = (props) => {
           </div>
         </div>
       </div>
-
       {/* Phone panel */}
       <div
         style={{
           position: "absolute",
-          top: showPanel ? 60 : 0,
+          top: 60,
           left: "50%",
-          transform: `translateX(-50%) translateY(${showPanel ? 0 : -40}px)`,
+          transform: "translateX(-50%)",
           width: 940,
           height: 1560,
           backgroundColor: "#fff",
           borderRadius: 48,
           overflow: "hidden",
           boxShadow: "0 24px 80px rgba(0,0,0,0.35)",
-          opacity: panelFadeIn,
-          fontFamily:
-            '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+          display: showPanel ? "block" : "none",
+          opacity: frame >= 540 ? panelFadeOut : panelFadeIn,
+          fontFamily: "Inter",
         }}
       >
         {/* Header */}
@@ -389,23 +390,50 @@ export const T1: React.FC<T1Props> = (props) => {
                     {approval.fine}
                   </div>
                   <div style={{ display: "flex", gap: 16 }}>
-                    <button
-                      type="button"
-                      style={{
-                        flex: 1,
-                        padding: "18px 0",
-                        backgroundColor: hueColor,
-                        color: "white",
-                        border: "none",
-                        borderRadius: 20,
-                        fontSize: 40,
-                        fontWeight: 700,
-                        cursor: "pointer",
-                        transform: `scale(${pulseScale})`,
-                      }}
-                    >
-                      Approve and send
-                    </button>
+                    <div style={{ flex: 1, position: "relative" }}>
+                      <button
+                        type="button"
+                        style={{
+                          width: "100%",
+                          padding: "18px 0",
+                          backgroundColor: hueColor,
+                          color: "white",
+                          border: "none",
+                          borderRadius: 20,
+                          fontSize: 40,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          transform: `scale(${pulseScale})`,
+                        }}
+                      >
+                        Approve and send
+                      </button>
+                      {/* Click ring centered on the button */}
+                      {frame >= 480 && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "50%",
+                            left: "50%",
+                            width: 140,
+                            height: 140,
+                            borderRadius: 70,
+                            border: `6px solid ${hueColor}`,
+                            opacity: interpolate(
+                              Math.max(0, Math.min(frame - 480, 10)),
+                              [0, 10],
+                              [0.6, 0],
+                              {
+                                extrapolateLeft: "clamp",
+                                extrapolateRight: "clamp",
+                              },
+                            ),
+                            pointerEvents: "none",
+                            transform: `translate(-50%, -50%) scale(${interpolate(Math.max(0, Math.min(frame - 480, 10)), [0, 10], [1.2, 0.6], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })})`,
+                          }}
+                        />
+                      )}
+                    </div>
                     <button
                       type="button"
                       style={{
@@ -422,23 +450,6 @@ export const T1: React.FC<T1Props> = (props) => {
                       Not now
                     </button>
                   </div>
-                  {/* Click ring */}
-                  {frame >= 480 && (
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 166,
-                        left: 54,
-                        width: 200,
-                        height: 96,
-                        borderRadius: 20,
-                        border: `4px solid ${hueColor}`,
-                        opacity: ringOpacity,
-                        pointerEvents: "none",
-                        transform: `scale(${ringScale})`,
-                      }}
-                    />
-                  )}
                 </>
               ) : (
                 <>
