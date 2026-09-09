@@ -26,11 +26,11 @@ export function Hero({
         </h1>
         <p className="hero-description">
           Colony is an app for managing your business with people and AI
-          teammates. Assign jobs, see who is doing what, and check the results
+          employees. Assign jobs, see who is doing what, and check the results
           before deciding what happens next.
         </p>
         <p className="hero-audience">
-          AI teammates are software you can talk to. They use tools to research,
+          AI employees are software you can talk to. They use tools to research,
           write and carry out tasks for your business.
         </p>
         <div className="hero-actions">

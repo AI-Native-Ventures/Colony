@@ -90,7 +90,7 @@ export function BusinessGuide() {
         </div>
         <p className="guide-availability">
           Early access is limited. AI work needs credits and an available
-          teammate with the right tools. We’ll explain what is available before
+          employee with the right tools. We’ll explain what is available before
           you join.
         </p>
       </section>
@@ -106,7 +106,7 @@ export function BusinessGuide() {
             </h2>
             <p>
               Give your team clear instructions and keep the discussion in one
-              place. An AI lead can coordinate a job with other AI teammates.
+              place. An AI lead can coordinate a job with other AI employees.
               You review the work and decide what comes next.
             </p>
           </div>
@@ -126,7 +126,7 @@ export function BusinessGuide() {
                 <AntMark />
               </span>
               <div>
-                <h3>AI teammates carry out the jobs.</h3>
+                <h3>AI employees carry out the jobs.</h3>
                 <p>
                   They research, write and use the tools available for their
                   work. The jobs they can take on depend on those tools and how
