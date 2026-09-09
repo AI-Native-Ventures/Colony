@@ -20,7 +20,7 @@ export async function assertFirstJobScope(
     relayUrl !== scope.relayUrl
   ) {
     throw new Error(
-      "This account or business has changed. Return to the original thread to continue this job.",
+      "This account or business has changed. Return to the original business to continue.",
     );
   }
 }

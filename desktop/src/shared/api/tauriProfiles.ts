@@ -80,13 +80,19 @@ export async function getProfile(): Promise<Profile> {
 
 export async function updateProfile(
   input: UpdateProfileInput,
-  scope?: { pubkey: string; relayUrl: string },
+  scope?: {
+    pubkey: string;
+    relayUrl: string;
+    /** Seed a new business only; native preserves a name saved during setup. */
+    displayNameIfMissing?: boolean;
+  },
 ): Promise<Profile> {
   const profile = await invokeTauri<RawProfile>("update_profile", {
     ...input,
     ...(scope
       ? { expectedPubkey: scope.pubkey, expectedRelayUrl: scope.relayUrl }
       : {}),
+    ...(scope?.displayNameIfMissing ? { displayNameIfMissing: true } : {}),
   });
   return fromRawProfile(profile);
 }

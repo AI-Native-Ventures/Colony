@@ -11,13 +11,20 @@ import {
   type OnboardingV2Draft,
 } from "./onboardingV2";
 
+import {
+  loadPendingBusinessOnboarding,
+  savePendingBusinessOnboarding,
+  removePendingBusinessOnboarding,
+} from "./businessOnboardingStorage";
+
 const STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
 
 /**
  * A transaction parked in "finalizing" is mid-handoff. If it is still there
  * after this long, the handoff died without settling (e.g. the relay never
  * answered) and replaying the curtain on every launch would trap the user
- * out of their own communities. Sweep it on load instead.
+ * out of their own communities. Business creation resumes for retry; legacy
+ * joining curtains retain their existing expiry behavior.
  */
 const FINALIZING_STALE_AFTER_MS = 2 * 60 * 1000;
 
@@ -57,6 +64,10 @@ export type FirstCommunityPage = "join" | "member" | "owned";
 export type CommunityOnboardingTransaction = {
   id: string;
   source: CommunityOnboardingSource;
+  /** Captured creator identity; legacy unbound creation requires ownership verification. */
+  ownerPubkey?: string;
+  /** Existing public owner name carried to a newly created relay, never a private key. */
+  ownerDisplayName?: string;
   /** First-run screen that launched this transaction, restored on cancel. */
   firstCommunityPage?: FirstCommunityPage;
   stage: CommunityOnboardingStage;
@@ -101,6 +112,10 @@ export type CommunityOnboardingTransactionPatch = Partial<
 
 export type StartCommunityOnboardingInput = {
   source: CommunityOnboardingSource;
+  /** Captured creator identity; legacy unbound creation requires ownership verification. */
+  ownerPubkey?: string;
+  /** Existing public owner name carried to a newly created relay, never a private key. */
+  ownerDisplayName?: string;
   firstCommunityPage?: FirstCommunityPage;
   relayUrl: string;
   inviteCode?: string;
@@ -155,12 +170,23 @@ export function loadCommunityOnboardingTransaction(
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!isTransaction(parsed)) return null;
-    if (finalizingTransactionIsStale(parsed)) {
+    if (
+      finalizingTransactionIsStale(parsed) &&
+      parsed.source !== "create-community"
+    ) {
       // The community itself was already added and activated; dropping the
       // transaction lands the user inside the app instead of replaying a
       // dead handoff forever.
       storage.removeItem(STORAGE_KEY);
       return null;
+    }
+    if (
+      parsed.source === "create-community" &&
+      finalizingTransactionIsStale(parsed)
+    ) {
+      parsed.stage = "profile";
+      parsed.error =
+        "Your business setup was interrupted. Continue to retry the saved setup.";
     }
     if (parsed.onboardingV2 !== undefined) {
       // Drafts predate the stage-machine rework sometimes (app upgraded
@@ -188,6 +214,7 @@ export function saveCommunityOnboardingTransaction(
   transaction: CommunityOnboardingTransaction,
   storage: Storage = localStorage,
 ): void {
+  savePendingBusinessOnboarding(transaction, storage);
   if (typeof localStorage !== "undefined" && storage === localStorage) {
     setLocalStorageItemWithRecovery(STORAGE_KEY, JSON.stringify(transaction));
   } else {
@@ -207,10 +234,24 @@ export function startCommunityOnboarding(
   now = new Date(),
 ): CommunityOnboardingTransaction {
   const relayUrl = canonicalRelayUrl(input.relayUrl);
-  const existing = loadCommunityOnboardingTransaction(storage);
-  if (existing?.relayUrl === relayUrl) {
+  const active = loadCommunityOnboardingTransaction(storage);
+  const existing =
+    input.source === "create-community" && input.ownerPubkey
+      ? (loadPendingBusinessOnboarding(input.ownerPubkey, relayUrl, storage) ??
+        active)
+      : active;
+  if (
+    existing?.relayUrl === relayUrl &&
+    (!existing.ownerPubkey || existing.ownerPubkey === input.ownerPubkey) &&
+    (input.source !== "create-community" ||
+      existing.source === "create-community")
+  ) {
     const updated = {
       ...existing,
+      ownerPubkey: existing.ownerPubkey ?? input.ownerPubkey,
+      ownerDisplayName: existing.ownerDisplayName ?? input.ownerDisplayName,
+      stage:
+        existing.stage === "finalizing" ? ("profile" as const) : existing.stage,
       firstCommunityPage:
         input.firstCommunityPage ?? existing.firstCommunityPage,
       inviteCode: input.inviteCode?.trim() || existing.inviteCode,
@@ -232,6 +273,8 @@ export function startCommunityOnboarding(
   const transaction: CommunityOnboardingTransaction = {
     id: crypto.randomUUID(),
     source: input.source,
+    ownerPubkey: input.ownerPubkey,
+    ownerDisplayName: input.ownerDisplayName,
     firstCommunityPage: input.firstCommunityPage,
     stage: input.inviteCode?.trim() ? "claiming" : "connecting",
     relayUrl,
@@ -259,6 +302,12 @@ export function updateCommunityOnboardingTransaction(
   storage: Storage = localStorage,
   now = new Date(),
 ): CommunityOnboardingTransaction {
+  if (
+    transaction.source === "create-community" &&
+    patch.relayUrl &&
+    canonicalRelayUrl(patch.relayUrl) !== transaction.relayUrl
+  )
+    throw new Error("This setup belongs to the business where it started.");
   const updated = { ...transaction, ...patch, updatedAt: now.toISOString() };
   saveCommunityOnboardingTransaction(updated, storage);
   return updated;
@@ -275,12 +324,28 @@ export function updateCurrentCommunityOnboardingTransaction(
   return updateCommunityOnboardingTransaction(current, patch, storage, now);
 }
 
+/** Exact persisted run check for async completion, including another window replacing it. */
+export function isCurrentCommunityOnboardingTransaction(
+  id: string,
+  ownerPubkey: string,
+  relayUrl: string,
+  storage: Storage = localStorage,
+): boolean {
+  const transaction = loadCommunityOnboardingTransaction(storage);
+  return (
+    transaction?.id === id &&
+    transaction.ownerPubkey === ownerPubkey &&
+    transaction.relayUrl === canonicalRelayUrl(relayUrl)
+  );
+}
+
 export function shouldForceFirstCommunityJourney(
   transaction: CommunityOnboardingTransaction,
 ): boolean {
   return (
-    transaction.source === "first-community" &&
-    transaction.onboardingV2 !== undefined
+    transaction.source === "create-community" ||
+    (transaction.source === "first-community" &&
+      transaction.onboardingV2 !== undefined)
   );
 }
 
@@ -414,7 +479,9 @@ type CommunityOnboardingContextValue = {
     patch: CommunityOnboardingTransactionPatch,
     expectedId?: string,
   ) => void;
-  clear: () => void;
+  clear: (expectedId?: string) => void;
+  suspend: (expectedId: string) => void;
+  resume: (ownerPubkey: string, relayUrl: string) => boolean;
 };
 
 const CommunityOnboardingContext =
@@ -433,9 +500,12 @@ export function CommunityOnboardingProvider({
   const start = React.useCallback(
     (input: StartCommunityOnboardingInput) => {
       if (!enabled) return false;
+      if (input.source === "create-community" && !input.ownerPubkey)
+        return false;
       if (
         transaction &&
-        canonicalRelayUrl(input.relayUrl) !== transaction.relayUrl
+        canonicalRelayUrl(input.relayUrl) !== transaction.relayUrl &&
+        transaction.source !== "create-community"
       ) {
         return false;
       }
@@ -453,14 +523,52 @@ export function CommunityOnboardingProvider({
     },
     [enabled],
   );
-  const clear = React.useCallback(() => {
-    if (!enabled) return;
-    clearCommunityOnboardingTransaction();
-    setTransaction(null);
-  }, [enabled]);
+  const clear = React.useCallback(
+    (expectedId?: string) => {
+      if (!enabled) return;
+      setTransaction((current) => {
+        if (!current || (expectedId && current.id !== expectedId))
+          return current;
+        const active = loadCommunityOnboardingTransaction();
+        if (active?.id === current.id) clearCommunityOnboardingTransaction();
+        removePendingBusinessOnboarding(current, localStorage);
+        return null;
+      });
+    },
+    [enabled],
+  );
+  const suspend = React.useCallback(
+    (expectedId: string) => {
+      if (!enabled) return;
+      setTransaction((current) => {
+        if (!current || current.id !== expectedId) return current;
+        savePendingBusinessOnboarding(current, localStorage);
+        if (loadCommunityOnboardingTransaction()?.id === current.id)
+          clearCommunityOnboardingTransaction();
+        return null;
+      });
+    },
+    [enabled],
+  );
+  const resume = React.useCallback(
+    (ownerPubkey: string, relayUrl: string) => {
+      if (!enabled) return false;
+      const saved = loadPendingBusinessOnboarding(ownerPubkey, relayUrl);
+      if (!saved) return false;
+      const next = {
+        ...saved,
+        stage:
+          saved.stage === "finalizing" ? ("profile" as const) : saved.stage,
+      };
+      saveCommunityOnboardingTransaction(next);
+      setTransaction(next);
+      return true;
+    },
+    [enabled],
+  );
   const value = React.useMemo(
-    () => ({ transaction, start, update, clear }),
-    [clear, start, transaction, update],
+    () => ({ transaction, start, update, clear, suspend, resume }),
+    [clear, start, transaction, update, suspend, resume],
   );
   return (
     <CommunityOnboardingContext.Provider value={value}>

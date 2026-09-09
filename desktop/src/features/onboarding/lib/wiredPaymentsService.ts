@@ -60,7 +60,7 @@ export function createWiredPaymentsService(
         expected.toString().replace(/\/+$/, "")
       ) {
         throw new Error(
-          "The business connection changed before checkout. Reopen the original job to continue.",
+          "The business connection changed before checkout. Return to the original business to continue.",
         );
       }
     }

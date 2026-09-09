@@ -56,3 +56,53 @@ test("subscription is an explicit choice and clears inherited vendor model pins"
   assert.equal(selected.provider, null);
   assert.equal(selected.credential_mode, "byok");
 });
+
+test("only the supported subscription runtimes use connection validation, even with inherited provider fields", () => {
+  for (const runtime of ["claude", "codex"]) {
+    for (const provider of [null, "anthropic", "openrouter"]) {
+      const config = { ...current, preferred_runtime: runtime, provider };
+      assert.equal(powerLaneForConfig(config), "subscription");
+      assert.equal(initialPowerConfig(config), config);
+    }
+  }
+});
+
+test("other runtimes keep their provider, model and credentials as an existing setup", () => {
+  for (const runtime of ["omp", "opencode", "goose", "custom-runtime"]) {
+    for (const provider of [null, "anthropic", "openrouter"]) {
+      const config = {
+        ...current,
+        preferred_runtime: runtime,
+        provider,
+        model: "vendor/model:free",
+      };
+      assert.equal(powerLaneForConfig(config), "existing");
+      assert.equal(initialPowerConfig(config), config);
+      assert.equal(configForPowerLane(config, "existing"), config);
+    }
+  }
+});
+
+test("explicit Colony Credits stays authoritative for legacy and unsupported runtime pins", () => {
+  for (const runtime of [
+    "codex",
+    "claude",
+    "omp",
+    "opencode",
+    "custom-runtime",
+    "buzz-agent",
+    null,
+  ]) {
+    const config = {
+      ...current,
+      credential_mode: "colony_credits",
+      preferred_runtime: runtime,
+      provider: "openai-compat",
+      model: "existing-credits-model",
+    };
+    assert.equal(powerLaneForConfig(config), "colony");
+    assert.equal(initialPowerConfig(config), config);
+    assert.equal(config.preferred_runtime, runtime);
+    assert.equal(config.model, "existing-credits-model");
+  }
+});

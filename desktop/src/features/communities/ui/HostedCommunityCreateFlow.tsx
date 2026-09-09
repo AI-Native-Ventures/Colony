@@ -4,10 +4,14 @@ import { AlertCircle, LoaderCircle } from "lucide-react";
 import {
   checkColonyCommunityName,
   createColonyCommunity,
-  hostedCommunityRelayUrl,
   listColonyCommunities,
   VALID_HOSTED_COMMUNITY_NAME,
 } from "@/features/communities/hostedCommunityApi";
+import { useIdentityQuery } from "@/shared/api/hooks";
+import { getProfile } from "@/shared/api/tauriProfiles";
+import { useCommunities } from "@/features/communities/useCommunities";
+import { assertFirstJobScope } from "@/features/onboarding/firstJobScope";
+import { provisionWorkspace } from "@/features/onboarding/flow/provisionWorkspace";
 import { useColonyProvisioning } from "@/features/communities/useColonyProvisioning";
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
 import {
@@ -35,8 +39,28 @@ export function HostedCommunityCreateFlow({
 }: HostedCommunityCreateFlowProps) {
   const onboarding = useCommunityOnboarding();
   const provisioning = useColonyProvisioning();
+  const identity = useIdentityQuery();
+  const { activeCommunity } = useCommunities();
+  const ownerPubkey = identity.data?.pubkey;
+  const sourceRelayUrl = activeCommunity?.relayUrl;
+  const liveScope = React.useRef({ ownerPubkey, sourceRelayUrl });
+  liveScope.current = { ownerPubkey, sourceRelayUrl };
+  const mounted = React.useRef(false);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const candidateKey =
+    ownerPubkey && sourceRelayUrl
+      ? `colony.community-create.v1:${JSON.stringify([ownerPubkey, sourceRelayUrl])}`
+      : null;
   const [ownedCount, setOwnedCount] = React.useState<number | null>(null);
   const [name, setName] = React.useState("");
+  const [rememberedCandidate, setRememberedCandidate] = React.useState<
+    string | null
+  >(null);
   const [availability, setAvailability] = React.useState<boolean | null>(null);
   const [checkingName, setCheckingName] = React.useState(false);
   const [action, setAction] = React.useState<string | null>(null);
@@ -62,7 +86,22 @@ export function HostedCommunityCreateFlow({
     };
   }, []);
 
+  React.useEffect(() => {
+    if (!candidateKey) return;
+    try {
+      const candidate = localStorage.getItem(candidateKey);
+      setRememberedCandidate(candidate);
+      if (candidate && VALID_HOSTED_COMMUNITY_NAME.test(candidate))
+        setName(candidate);
+    } catch {
+      setError(
+        "Could not read saved community creation. Free some storage and try again.",
+      );
+    }
+  }, [candidateKey]);
+
   const normalizedName = name.trim().toLowerCase();
+  const recoveringCreation = rememberedCandidate === normalizedName;
   const validName =
     normalizedName.length <= 63 &&
     VALID_HOSTED_COMMUNITY_NAME.test(normalizedName);
@@ -99,38 +138,89 @@ export function HostedCommunityCreateFlow({
 
   const create = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!canCreate || !validName || atCommunityLimit || action) return;
+    if (
+      !canCreate ||
+      !validName ||
+      (atCommunityLimit && !recoveringCreation) ||
+      action ||
+      !ownerPubkey ||
+      !sourceRelayUrl ||
+      !candidateKey
+    )
+      return;
+    const scope = { ownerPubkey, relayUrl: sourceRelayUrl };
+    const isCurrent = () =>
+      mounted.current &&
+      liveScope.current.ownerPubkey === ownerPubkey &&
+      liveScope.current.sourceRelayUrl === sourceRelayUrl;
     setAction("Creating community…");
     setError(null);
     void (async () => {
       try {
-        const response = await createColonyCommunity(normalizedName);
-        if (!response.community) {
-          throw new Error("Could not create the community.");
-        }
-        const relayUrl = hostedCommunityRelayUrl(response.community);
-        if (!relayUrl) {
-          throw new Error(
-            "The community was created, but the relay did not return its address. Add it from Add community with its URL.",
-          );
-        }
+        await assertFirstJobScope(scope);
+        if (!isCurrent()) return;
+        const ownerProfile = await getProfile();
+        await assertFirstJobScope(scope);
+        if (!isCurrent() || ownerProfile.pubkey !== ownerPubkey) return;
+        const outcome = await provisionWorkspace(
+          normalizedName,
+          normalizedName,
+          {
+            check: checkColonyCommunityName,
+            create: (slug) => createColonyCommunity(slug, scope),
+            listMine: async () => {
+              await assertFirstJobScope(scope);
+              const mine = await listColonyCommunities();
+              await assertFirstJobScope(scope);
+              if (mine.owner_pubkey !== ownerPubkey)
+                throw new Error(
+                  "The account changed while checking this community.",
+                );
+              return mine;
+            },
+          },
+          (candidate) => {
+            if (!isCurrent())
+              throw new Error("This community creation has ended.");
+            if (candidate) {
+              localStorage.setItem(candidateKey, candidate);
+              setRememberedCandidate(candidate);
+              if (localStorage.getItem(candidateKey) !== candidate)
+                throw new Error(
+                  "Could not save this community creation. Try again.",
+                );
+            } else {
+              localStorage.removeItem(candidateKey);
+              setRememberedCandidate(null);
+            }
+          },
+        );
+        if (!isCurrent()) return;
+        await assertFirstJobScope(scope);
+        if (!outcome.ok) throw new Error(outcome.message);
         const started = onboarding.start({
           source: "create-community",
-          relayUrl,
-          communityName: response.community.name ?? response.community.slug,
+          ownerPubkey,
+          ownerDisplayName: ownerProfile.hasProfileEvent
+            ? ownerProfile.displayName?.trim() || undefined
+            : undefined,
+          relayUrl: outcome.relayUrl,
+          communityName: normalizedName,
         });
         if (!started) {
           throw new Error(
             "Finish connecting the community already in progress, then try again.",
           );
         }
+        localStorage.removeItem(candidateKey);
         onComplete();
       } catch (cause) {
+        if (!isCurrent()) return;
         const message = cause instanceof Error ? cause.message : String(cause);
         if (message.startsWith("taken:")) setAvailability(false);
         setError(message);
       } finally {
-        setAction(null);
+        if (isCurrent()) setAction(null);
       }
     })();
   };
@@ -178,7 +268,11 @@ export function HostedCommunityCreateFlow({
               CHANNEL_FORM_FIELD_CONTROL_CLASS,
             )}
             data-testid="hosted-community-create-name"
-            disabled={Boolean(action) || atCommunityLimit || !canCreate}
+            disabled={
+              Boolean(action) ||
+              (atCommunityLimit && !recoveringCreation) ||
+              !canCreate
+            }
             id="hosted-community-create-name"
             maxLength={63}
             onChange={(event) => {
@@ -225,10 +319,12 @@ export function HostedCommunityCreateFlow({
           disabled={
             !canCreate ||
             !validName ||
-            availability === false ||
+            (availability === false && !recoveringCreation) ||
             checkingName ||
             Boolean(action) ||
-            atCommunityLimit
+            (atCommunityLimit && !recoveringCreation) ||
+            !ownerPubkey ||
+            !sourceRelayUrl
           }
           type="submit"
         >

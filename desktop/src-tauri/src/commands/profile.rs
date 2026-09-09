@@ -38,7 +38,9 @@ pub async fn get_profile(state: State<'_, AppState>) -> Result<ProfileInfo, Stri
 
 /// Merge a profile using one pinned signer and relay for the whole operation.
 /// Optional expected identity and relay must be supplied together.
+/// Name seeding preserves the latest named profile and requires an explicit scope.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Preserve the existing flat IPC arguments.
 pub async fn update_profile(
     display_name: Option<String>,
     avatar_url: Option<String>,
@@ -46,8 +48,19 @@ pub async fn update_profile(
     nip05_handle: Option<String>,
     expected_pubkey: Option<String>,
     expected_relay_url: Option<String>,
+    display_name_if_missing: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<ProfileInfo, String> {
+    let seed_name = display_name_if_missing.unwrap_or(false);
+    if seed_name
+        && (expected_pubkey.is_none()
+            || expected_relay_url.is_none()
+            || avatar_url.is_some()
+            || about.is_some()
+            || nip05_handle.is_some())
+    {
+        return Err("Seeding a public name requires its original account and business, without other profile edits.".into());
+    }
     // Read-merge-write: kind 0 is a full profile snapshot.
     let scope = capture_profile_write_scope(
         &state,
@@ -55,6 +68,7 @@ pub async fn update_profile(
         expected_relay_url.as_deref(),
     )
     .await?;
+
     let my_pubkey = scope.signer.public_key().to_hex();
     let filter = serde_json::json!({
         "kinds": [0],
@@ -69,6 +83,13 @@ pub async fn update_profile(
         None,
     )
     .await?;
+
+    // Onboarding's earlier blank-name snapshot may be stale after channel
+    // setup. Preserve the newly fetched profile in full, without publishing
+    // another replaceable event over an owner's intervening edit.
+    if let Some(profile) = existing_profile_for_name_seed(prior_events.first(), seed_name)? {
+        return Ok(profile);
+    }
 
     // Pull the current content as a JSON object so we can merge with
     // the caller's overrides.
@@ -110,6 +131,30 @@ pub async fn update_profile(
         .map(nostr_convert::profile_info_from_event)
         .transpose()?
         .unwrap_or_else(|| empty_profile_info(&my_pubkey)))
+}
+
+fn existing_profile_for_name_seed(
+    prior_event: Option<&nostr::Event>,
+    seed_name: bool,
+) -> Result<Option<ProfileInfo>, String> {
+    if !seed_name {
+        return Ok(None);
+    }
+    let Some(event) = prior_event else {
+        return Ok(None);
+    };
+    let current: Value = serde_json::from_str(&event.content)
+        .map_err(|_| "The existing public profile could not be read.".to_string())?;
+    let has_name = ["display_name", "name"].iter().any(|field| {
+        current[*field]
+            .as_str()
+            .is_some_and(|name| !name.trim().is_empty())
+    });
+    if has_name {
+        nostr_convert::profile_info_from_event(event).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 struct ProfileWriteScope {
@@ -478,6 +523,61 @@ fn empty_profile_info(pubkey: &str) -> ProfileInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named_profile(content: Value) -> nostr::Event {
+        nostr::EventBuilder::new(nostr::Kind::Metadata, content.to_string())
+            .sign_with_keys(&nostr::Keys::generate())
+            .expect("synthetic public profile")
+    }
+
+    #[test]
+    fn stale_onboarding_name_snapshot_preserves_the_new_target_profile() {
+        // The frontend saw no name, then the owner edited the target during
+        // channel setup. The command's fresh read must win over that snapshot.
+        let newer = named_profile(serde_json::json!({
+            "display_name":"Owner at Horizon",
+            "picture":"https://example.test/new-avatar.png",
+            "about":"A newer target profile"
+        }));
+        let preserved = existing_profile_for_name_seed(Some(&newer), true)
+            .expect("read latest target")
+            .expect("return existing profile without publishing the stale seed");
+        assert_eq!(preserved.display_name.as_deref(), Some("Owner at Horizon"));
+        assert_eq!(
+            preserved.avatar_url.as_deref(),
+            Some("https://example.test/new-avatar.png")
+        );
+        assert_eq!(preserved.about.as_deref(), Some("A newer target profile"));
+        assert_eq!(preserved.pubkey, newer.pubkey.to_hex());
+        // Ordinary profile edits still reach the existing read/merge/write.
+        assert!(existing_profile_for_name_seed(Some(&newer), false)
+            .expect("ordinary edit")
+            .is_none());
+    }
+
+    #[test]
+    fn public_name_seeding_accepts_missing_names_and_preserves_legacy_names() {
+        assert!(existing_profile_for_name_seed(None, true)
+            .expect("new target")
+            .is_none());
+        for content in [
+            serde_json::json!({}),
+            serde_json::json!({"display_name":"  ","name":""}),
+        ] {
+            let prior = named_profile(content);
+            assert!(existing_profile_for_name_seed(Some(&prior), true)
+                .expect("nameless target")
+                .is_none());
+        }
+        let legacy = named_profile(serde_json::json!({"name":"Existing legacy name"}));
+        let preserved = existing_profile_for_name_seed(Some(&legacy), true)
+            .expect("legacy target")
+            .expect("legacy public name is already named");
+        assert_eq!(
+            preserved.display_name.as_deref(),
+            Some("Existing legacy name")
+        );
+    }
 
     #[tokio::test]
     async fn profile_write_scope_pins_signer_and_destination_across_context_changes() {

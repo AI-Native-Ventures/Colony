@@ -1,4 +1,8 @@
 import type { SubscriptionScan } from "@/shared/api/tauriSubscriptions";
+import type {
+  SubscriptionAccount,
+  SubscriptionConnection,
+} from "@/shared/api/tauriSubscriptionConnections";
 
 /** Synthetic native-shaped metadata. This fixture never reads local accounts. */
 export const MOCK_SUBSCRIPTION_SCAN: SubscriptionScan = {
@@ -37,4 +41,121 @@ export function createMockSubscriptionScanner(config?: {
     if ("error" in result) throw new Error(result.error);
     return structuredClone(result);
   };
+}
+
+const emptyAccount: SubscriptionAccount = {
+  authentication: "signed_out",
+  planLabel: null,
+  measurementStatus: "unavailable",
+  capturedAt: null,
+  windows: [],
+  models: [],
+  notice: null,
+};
+
+export const MOCK_SUBSCRIPTION_CONNECTIONS: SubscriptionConnection[] = [
+  {
+    runtimeId: "claude",
+    label: "Claude",
+    installed: true,
+    canInstall: true,
+    detected: {
+      ...emptyAccount,
+      authentication: "subscription",
+      planLabel: "Max 20x",
+      measurementStatus: "live",
+      capturedAt: 1788951600,
+      windows: [
+        {
+          id: "seven_day",
+          label: "Weekly allowance",
+          usedPercent: 35,
+          resetsAt: 1893499200,
+          durationMinutes: 10080,
+          accountWide: true,
+        },
+      ],
+      models: [
+        {
+          id: "claude-test-model",
+          label: "Claude test model",
+          isDefault: true,
+        },
+      ],
+    },
+    connected: { ...emptyAccount },
+    launchError: null,
+  },
+  {
+    runtimeId: "codex",
+    label: "ChatGPT / Codex",
+    installed: true,
+    canInstall: true,
+    detected: { ...emptyAccount, authentication: "unknown" },
+    connected: { ...emptyAccount },
+    launchError: null,
+  },
+];
+
+export type MockSubscriptionConnectionsConfig = {
+  subscriptionConnections?: SubscriptionConnection[];
+  subscriptionConnectionsSequence?: (
+    | SubscriptionConnection[]
+    | { error: string }
+  )[];
+};
+
+/** Vendor sign-in and measurements are synthetic; this fixture never launches a CLI. */
+export function createMockSubscriptionConnections(
+  config?: MockSubscriptionConnectionsConfig,
+) {
+  let calls = 0;
+  const connected = new Set<string>();
+  const installed = new Set<string>();
+  return {
+    read(payload: unknown) {
+      const scope = connectionScope(payload);
+      const sequence = config?.subscriptionConnectionsSequence;
+      const result = sequence?.length
+        ? sequence[Math.min(calls++, sequence.length - 1)]
+        : (config?.subscriptionConnections ?? MOCK_SUBSCRIPTION_CONNECTIONS);
+      if ("error" in result) throw new Error(result.error);
+      return structuredClone(result).map((original) => {
+        const entry = installed.has(original.runtimeId)
+          ? { ...original, installed: true, launchError: null }
+          : original;
+        return connected.has(`${scope}:${entry.runtimeId}`)
+          ? { ...entry, connected: structuredClone(entry.detected) }
+          : entry;
+      });
+    },
+    install(payload: unknown) {
+      connectionScope(payload);
+      const runtime = (payload as { runtimeId?: string })?.runtimeId;
+      if (runtime !== "claude" && runtime !== "codex")
+        throw new Error("Unsupported subscription provider");
+      installed.add(runtime);
+      return {
+        success: true,
+        steps: [],
+        restarted_count: 0,
+        failed_restart_count: 0,
+        log_path: null,
+      };
+    },
+    connect(payload: unknown) {
+      const runtime = (payload as { runtimeId?: string })?.runtimeId;
+      if (!runtime) throw new Error("A provider is required");
+      connected.add(`${connectionScope(payload)}:${runtime}`);
+    },
+  };
+}
+
+function connectionScope(payload: unknown) {
+  const scope = (
+    payload as { scope?: { ownerPubkey?: string; relayUrl?: string } }
+  )?.scope;
+  if (!scope?.ownerPubkey || !scope.relayUrl)
+    throw new Error("An account and business are required");
+  return JSON.stringify([scope.ownerPubkey, scope.relayUrl]);
 }

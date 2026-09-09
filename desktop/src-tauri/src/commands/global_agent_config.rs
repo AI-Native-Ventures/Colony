@@ -18,11 +18,14 @@ use crate::{
     managed_agents::{
         agent_readiness, current_instance_id, find_managed_agent_mut, known_acp_runtime,
         load_global_agent_config, load_managed_agents, load_personas, record_agent_command,
-        resolve_effective_agent_env, save_global_agent_config, save_managed_agents,
-        stop_managed_agent_process, sync_managed_agent_processes, validate_global_config,
-        AgentReadiness, BackendKind, CredentialMode, GlobalAgentConfig,
+        resolve_effective_agent_env, save_managed_agents, stop_managed_agent_process,
+        sync_managed_agent_processes, validate_global_config, AgentReadiness, BackendKind,
+        CredentialMode, GlobalAgentConfig,
     },
 };
+
+mod restart_policy;
+mod restart_readiness;
 
 /// Result returned by `set_global_agent_config`.
 ///
@@ -35,7 +38,7 @@ pub struct GlobalAgentConfigSaveResult {
     pub config: GlobalAgentConfig,
     /// Number of local agents successfully stopped and restarted.
     pub restarted_count: u32,
-    /// Number of agents whose stop succeeded but respawn failed.
+    /// Number of agents whose running process could not adopt the saved config.
     pub failed_restart_count: u32,
 }
 
@@ -161,9 +164,9 @@ pub async fn set_global_agent_config(
     let scope = ConfigSaveScope::parse(expected_owner_pubkey, expected_relay_url)?;
     // ── Phase 1: disk write (sync, spawn_blocking) ────────────────────────
     //
-    // Validate, snapshot old config, write new config, collect pre-filter
-    // candidate pubkeys (local backend + recorded PID + old NotReady + new
-    // Ready).  The candidate list is a hint — eligibility is re-checked under
+    // Validate, snapshot old config, write new config, collect live local
+    // candidates with changed Power settings or an unadopted saved choice.
+    // The candidate list is a hint — eligibility is re-checked under
     // lock in Phase 2 after sync_managed_agent_processes.
     let app_for_write = app.clone();
     let scope_for_write = scope.clone();
@@ -176,10 +179,12 @@ pub async fn set_global_agent_config(
 
             let old_global = load_global_agent_config(&app_for_write)?;
 
-            save_global_agent_config(&app_for_write, &config)?;
-
-            // Re-read from disk so the returned value reflects the strip-on-write pass.
-            let new_global = load_global_agent_config(&app_for_write)?;
+            // Return this publication's normalized value, never a later writer's.
+            let new_global =
+                crate::managed_agents::global_config::save_global_agent_config_canonical(
+                    &app_for_write,
+                    &config,
+                )?;
 
             // Pre-filter before the agent store lock. Scoped context guards are
             // already held; definitive runtime eligibility is rechecked in Phase 2.
@@ -188,7 +193,7 @@ pub async fn set_global_agent_config(
                 &old_global,
                 &new_global,
                 scope_for_write.as_ref(),
-            );
+            )?;
 
             Ok::<_, String>((new_global, old_global, candidates, personas_snapshot))
         })
@@ -206,7 +211,7 @@ pub async fn set_global_agent_config(
     // last_error is persisted on failure.
     //
     // Errors are non-fatal; the caller always receives the saved config.
-    // failed_restart_count surfaces stops that succeeded but respawn failed.
+    // failed_restart_count surfaces failed retirement and failed replacement starts.
     let mut restarted_count: u32 = 0;
     let mut failed_restart_count: u32 = 0;
     if !candidates.is_empty() {
@@ -222,10 +227,27 @@ pub async fn set_global_agent_config(
             .await;
             match outcome {
                 RestartOutcome::Restarted => restarted_count += 1,
-                RestartOutcome::FailedAfterStop => failed_restart_count += 1,
-                RestartOutcome::Skipped => {}
+                RestartOutcome::AlreadyAdopted => {}
+                RestartOutcome::Failed => failed_restart_count += 1,
             }
         }
+    }
+
+    if let Some(scope) = &scope {
+        let (app, scope, expected) = (app.clone(), scope.clone(), new_global.clone());
+        tokio::task::spawn_blocking(move || {
+            use tauri::Manager;
+            with_config_save_scope(&app.state::<AppState>(), Some(&scope), || {
+                let _publication =
+                    crate::managed_agents::global_config::publication::lock_expected(
+                        &expected,
+                        || load_global_agent_config(&app),
+                    )?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|_| "Could not confirm the saved Power choice. Try again.".to_string())??;
     }
 
     Ok(GlobalAgentConfigSaveResult {
@@ -240,10 +262,10 @@ pub async fn set_global_agent_config(
 enum RestartOutcome {
     /// Stop succeeded and the agent re-launched with the new config.
     Restarted,
-    /// Stop succeeded but the subsequent spawn failed.
-    FailedAfterStop,
-    /// Eligibility check failed under lock — agent skipped without touching it.
-    Skipped,
+    /// Another save already replaced the process with the requested Power choice.
+    AlreadyAdopted,
+    /// The previous process could not be retired or the replacement could not start.
+    Failed,
 }
 
 /// Collect pubkeys of local agents that should be restarted after a global
@@ -253,37 +275,18 @@ enum RestartOutcome {
 /// re-verified under lock in Phase 2. The personas snapshot is threaded to
 /// `restart_local_agent_on_config_change` so it is not reloaded per agent.
 ///
-/// An agent is a candidate when it is a local backend with a recorded PID, and
-/// either:
-/// - its readiness transitions `NotReady → Ready` (was blocked on missing
-///   provider/model key, now unblocked), OR
-/// - it was already `Ready`, its process is currently alive, and its effective
-///   env changed (provider, model, or env var update that needs a restart to
-///   take effect, since env is baked at spawn time).
+/// Candidates have a live local process whose effective Power selection has
+/// changed, whose stamped launch settings differ from the requested choice, or
+/// whose normal connection has just become ready. The stamped comparison also
+/// catches retrying a save after an earlier process stop failed.
 fn collect_restart_candidates(
     app: &AppHandle,
     old_global: &GlobalAgentConfig,
     new_global: &GlobalAgentConfig,
     scope: Option<&ConfigSaveScope>,
-) -> (Vec<String>, Vec<crate::managed_agents::AgentDefinition>) {
-    let records = match load_managed_agents(app) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!(
-                "buzz-desktop: set_global_agent_config: failed to load agents for restart scan: {e}"
-            );
-            return (Vec::new(), Vec::new());
-        }
-    };
-    let all_personas = match load_personas(app) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!(
-                "buzz-desktop: set_global_agent_config: failed to load personas for restart scan: {e}"
-            );
-            return (Vec::new(), Vec::new());
-        }
-    };
+) -> Result<(Vec<String>, Vec<crate::managed_agents::AgentDefinition>), String> {
+    let records = load_managed_agents(app).map_err(|_| "Power was saved, but running teammates could not be checked. Stop them in Agents before continuing.".to_string())?;
+    let all_personas = load_personas(app).map_err(|_| "Power was saved, but teammate settings could not be checked. Stop running teammates in Agents before continuing.".to_string())?;
     use tauri::Manager;
     let state = app.state::<AppState>();
     let mut runtimes = state
@@ -307,60 +310,38 @@ fn collect_restart_candidates(
             }
             let mut has_live_runtime = false;
             let mut has_provisioned_runtime = false;
+            let mut has_power_drift = false;
             for (key, runtime) in runtimes.iter_mut() {
                 if key.pubkey.eq_ignore_ascii_case(&record.pubkey)
                     && runtime.child.try_wait().ok().flatten().is_none()
                 {
                     has_live_runtime = true;
                     has_provisioned_runtime |= runtime.provisioned_lease.is_some();
+                    has_power_drift |= restart_policy::running_power_differs(
+                        record,
+                        &all_personas,
+                        new_global,
+                        &runtime.spawn_config,
+                        runtime.provisioned_lease.is_some(),
+                    );
                 }
             }
             if !has_live_runtime {
                 return false;
             }
-            let provisioned_supported =
-                provisioned_runtime_supported(record, &all_personas, new_global);
-            // Resolve through the one harness chain against the NEW global so a
-            // preferred-runtime switch is visible: the per-harness env keys and
-            // readiness differ, and the restart scan must see both sides.
-            let effective_cmd =
-                crate::managed_agents::effective_config::resolve_effective_harness_command(
+            has_power_drift
+                || restart_policy::required(
                     record,
                     &all_personas,
+                    old_global,
                     new_global,
+                    has_provisioned_runtime,
                 )
-                .unwrap_or_else(|_| record_agent_command(record, &all_personas));
-            let runtime_meta = known_acp_runtime(&effective_cmd);
-            let old_effective =
-                resolve_effective_agent_env(record, &all_personas, runtime_meta, old_global);
-            let new_effective =
-                resolve_effective_agent_env(record, &all_personas, runtime_meta, new_global);
-            let old_ready = matches!(agent_readiness(&old_effective), AgentReadiness::Ready);
-            let new_ready = matches!(agent_readiness(&new_effective), AgentReadiness::Ready);
-            // For a Ready+running agent: the process must be alive now and the
-            // process-env map must differ.  The alive check avoids queuing a
-            // restart for a process that already exited between the pre-filter
-            // scan and Phase 2.  NotReady→Ready bypasses the alive check
-            // because Phase 2 will stop-then-start unconditionally.
-            let effective_env_changed = old_effective.env != new_effective.env;
-            let mode_changed = old_global.credential_mode != new_global.credential_mode;
-            let mode_restart_allowed = should_restart_for_credential_mode(
-                old_global.credential_mode,
-                new_global.credential_mode,
-                provisioned_supported,
-                has_provisioned_runtime,
-                mode_changed,
-            );
-            should_restart_on_config_change(
-                old_ready,
-                new_ready,
-                old_ready && effective_env_changed,
-            ) || (mode_changed && mode_restart_allowed)
         })
         .map(|r| r.pubkey.clone())
         .collect();
 
-    (candidates, all_personas)
+    Ok((candidates, all_personas))
 }
 
 /// Stop-then-start a local agent whose effective env changed under the new
@@ -383,8 +364,8 @@ fn collect_restart_candidates(
 ///    record, and retains the event for relay sync.  On failure, `last_error` is
 ///    persisted under lock so the UI surfaces a diagnosable stopped state.
 ///
-/// All errors are logged to stderr. Returns `RestartOutcome::FailedAfterStop`
-/// when the stop succeeded but the spawn failed — the caller surfaces this as
+/// All errors are logged to stderr. Returns `RestartOutcome::Failed`
+/// when retirement or replacement fails — the caller surfaces this as
 /// `failed_restart_count` so the UI can prompt the user to check the Agents tab.
 async fn restart_local_agent_on_config_change(
     app: &AppHandle,
@@ -410,6 +391,9 @@ async fn restart_local_agent_on_config_change(
                 .managed_agents_store_lock
                 .lock()
                 .map_err(|e| format!("failed to acquire store lock: {e}"))?;
+            let _publication = crate::managed_agents::global_config::publication::lock_expected(
+                &new_global_clone, || load_global_agent_config(&app_for_stop),
+            )?;
 
             let mut records = load_managed_agents(&app_for_stop)?;
             let mut runtimes = state
@@ -460,91 +444,82 @@ async fn restart_local_agent_on_config_change(
                     .and_then(|runtime| runtime.provisioned_lease.as_ref())
                     .is_some()
             });
-            let provisioned_supported =
-                provisioned_runtime_supported(record, &personas_owned, &new_global_clone);
-            // Re-check the eligibility predicate under lock:
-            //   (old NotReady && new Ready)  OR  (old Ready && env changed)
-            // TODO: busy/mid-turn deferral would slot in here
-            //
-            // Reuse personas_snapshot from Phase 1 — avoids loading personas again
-            // per agent when the save-command personas haven't changed.
-            // One harness chain against the NEW global, so a preferred-runtime
-            // switch resolves each side's env against its own harness.
-            let effective_cmd =
-                crate::managed_agents::effective_config::resolve_effective_harness_command(
-                    record,
-                    &personas_owned,
-                    &new_global_clone,
-                )
-                .unwrap_or_else(|_| record_agent_command(record, &personas_owned));
-            let runtime_meta = known_acp_runtime(&effective_cmd);
-            let old_effective =
-                resolve_effective_agent_env(record, &personas_owned, runtime_meta, &old_global_clone);
-            let new_effective =
-                resolve_effective_agent_env(record, &personas_owned, runtime_meta, &new_global_clone);
-            let old_ready = matches!(agent_readiness(&old_effective), AgentReadiness::Ready);
-            let new_ready = matches!(agent_readiness(&new_effective), AgentReadiness::Ready);
-            // Under lock, the alive check was already done above via process_is_running.
-            let effective_env_changed = old_effective.env != new_effective.env;
-            let mode_changed = old_global_clone.credential_mode != new_global_clone.credential_mode;
-            let mode_restart_allowed = should_restart_for_credential_mode(
-                old_global_clone.credential_mode,
-                new_global_clone.credential_mode,
-                provisioned_supported,
-                has_provisioned_runtime,
-                mode_changed,
-            );
-            if !(should_restart_on_config_change(
-                old_ready,
-                new_ready,
-                old_ready && effective_env_changed,
-            ) || mode_changed && mode_restart_allowed)
-            {
-                return Err(format!(
-                    "agent {pubkey_owned} restart condition no longer valid under lock"
-                ));
+            let has_power_drift = runtime_keys.iter().any(|key| {
+                runtimes.get(key).is_some_and(|runtime| restart_policy::running_power_differs(
+                    record, &personas_owned, &new_global_clone, &runtime.spawn_config,
+                    runtime.provisioned_lease.is_some(),
+                ))
+            });
+            let has_setup_runtime = runtime_keys.iter().any(|key| {
+                runtimes.get(key).is_some_and(|runtime| runtime.setup_mode)
+            });
+            if restart_policy::already_adopted(has_power_drift, has_setup_runtime) {
+                return Ok(None);
             }
-
+            if !has_power_drift && !restart_policy::required(record, &personas_owned, &old_global_clone, &new_global_clone, has_provisioned_runtime) {
+                return Err(format!("agent {pubkey_owned} restart condition no longer valid under lock"));
+            }
             // Stop the process.
             let record_mut = find_managed_agent_mut(&mut records, &pubkey_owned)?;
             stop_managed_agent_process(&app_for_stop, record_mut, &mut runtimes)?;
             save_managed_agents(&app_for_stop, &records)?;
 
-            Ok(runtime_keys)
+            Ok(Some(runtime_keys))
         })
     })
     .await;
 
     let runtime_keys = match stop_result {
-        Ok(Ok(runtime_keys)) => runtime_keys,
+        Ok(Ok(Some(runtime_keys))) => runtime_keys,
+        Ok(Ok(None)) => return RestartOutcome::AlreadyAdopted,
         Ok(Err(e)) => {
-            eprintln!("buzz-desktop: set_global_agent_config: skipping restart of {pubkey}: {e}");
-            return RestartOutcome::Skipped;
+            eprintln!("buzz-desktop: set_global_agent_config: could not retire {pubkey}: {e}");
+            return RestartOutcome::Failed;
         }
         Err(e) => {
             eprintln!(
                 "buzz-desktop: set_global_agent_config: spawn_blocking failed for stop of {pubkey}: {e}"
             );
-            return RestartOutcome::Skipped;
+            return RestartOutcome::Failed;
         }
     };
 
+    // The old process is already stopped. Check the new dedicated connection
+    // without third-party adapter or host-login probes before restarting it.
+    if let Err(error) =
+        restart_readiness::ensure_ready(app, pubkey, new_global, &runtime_keys, scope).await
+    {
+        eprintln!("buzz-desktop: defaults restart is not ready: {error}");
+        if let Err(save_error) = persist_restart_error(app, pubkey, &error, new_global, scope).await
+        {
+            eprintln!("buzz-desktop: defaults restart error could not be saved: {save_error}");
+        }
+        return RestartOutcome::Failed;
+    }
+
     if let Some(scope) = scope {
         let app_for_start = app.clone();
-        let pubkey = pubkey.to_owned();
-        let scope = scope.clone();
+        let pubkey_for_start = pubkey.to_owned();
+        let scope_for_start = scope.clone();
+        let expected_global = new_global.clone();
         let outcome = tokio::task::spawn_blocking(move || {
             use tauri::Manager;
             {
                 let state = app_for_start.state::<AppState>();
-                with_config_save_scope(&state, Some(&scope), || Ok(()))?;
+                with_config_save_scope(&state, Some(&scope_for_start), || {
+                    if load_global_agent_config(&app_for_start)? != expected_global {
+                        return Err("Power settings changed again. Review the saved connection and try again.".into());
+                    }
+                    Ok(())
+                })?;
             }
-            // No identity/community lock spans spawn or lease network I/O.
-            // The expected owner remains enforced by the pair-start guard.
-            crate::managed_agents::start_managed_agent_runtime(
-                pubkey,
-                scope.relay,
-                Some(scope.owner),
+            // The pair-start boundary checks this exact config during spawn
+            // and registration; no identity guard spans lease network I/O.
+            crate::managed_agents::start_managed_agent_runtime_with_config(
+                pubkey_for_start,
+                scope_for_start.relay,
+                scope_for_start.owner,
+                expected_global,
                 app_for_start,
             )
         })
@@ -553,11 +528,12 @@ async fn restart_local_agent_on_config_change(
             Ok(Ok(_)) => RestartOutcome::Restarted,
             Ok(Err(error)) => {
                 eprintln!("buzz-desktop: scoped defaults restart failed: {error}");
-                RestartOutcome::FailedAfterStop
+                let _ = persist_restart_error(app, pubkey, &error, new_global, Some(scope)).await;
+                RestartOutcome::Failed
             }
             Err(error) => {
                 eprintln!("buzz-desktop: scoped defaults restart task failed: {error}");
-                RestartOutcome::FailedAfterStop
+                RestartOutcome::Failed
             }
         };
     }
@@ -578,32 +554,93 @@ async fn restart_local_agent_on_config_change(
             eprintln!(
                 "buzz-desktop: set_global_agent_config: failed to start {pubkey} after restart: {e}"
             );
-            if let Err(save_err) = persist_last_error(app, pubkey, &e) {
+            if let Err(save_err) = persist_restart_error(app, pubkey, &e, new_global, None).await {
                 eprintln!(
                     "buzz-desktop: set_global_agent_config: failed to persist last_error for {pubkey}: {save_err}"
                 );
             }
-            RestartOutcome::FailedAfterStop
+            RestartOutcome::Failed
         }
     }
 }
 
 /// Persist a `last_error` on the agent record under the store lock.
 ///
-/// Best-effort: called only after a failed restart to leave the record
-/// in a diagnosable state rather than a silent "stopped with no error" state.
-fn persist_last_error(app: &AppHandle, pubkey: &str, error: &str) -> Result<(), String> {
-    use tauri::Manager;
-    let state = app.state::<AppState>();
-    let _store_guard = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|e| format!("failed to acquire store lock: {e}"))?;
-    let mut records = load_managed_agents(app)?;
-    let record = find_managed_agent_mut(&mut records, pubkey)?;
-    record.last_error = Some(error.to_string());
+/// Retain only a still-current failure on a stopped teammate. A later settings
+/// save or live generation takes precedence over an older restart failure.
+async fn persist_restart_error(
+    app: &AppHandle,
+    pubkey: &str,
+    error: &str,
+    expected: &GlobalAgentConfig,
+    scope: Option<&ConfigSaveScope>,
+) -> Result<(), String> {
+    let (app, pubkey, error, expected, scope) = (
+        app.clone(),
+        pubkey.to_owned(),
+        error.to_owned(),
+        expected.clone(),
+        scope.cloned(),
+    );
+    tokio::task::spawn_blocking(move || {
+        use tauri::Manager;
+        let state = app.state::<AppState>();
+        with_config_save_scope(&state, scope.as_ref(), || {
+            let _store_guard = state
+                .managed_agents_store_lock
+                .lock()
+                .map_err(|e| e.to_string())?;
+            // Card edits already take store → publication. Keep that order,
+            // and hold publication through the error write so a new Power save
+            // cannot make this failure stale between comparison and persistence.
+            let _publication = crate::managed_agents::global_config::publication::lock()?;
+            let current = load_global_agent_config(&app)?;
+            if current != expected {
+                return Ok(());
+            }
+            let mut runtimes = state
+                .managed_agent_processes
+                .lock()
+                .map_err(|e| e.to_string())?;
+            // last_error is record-wide, so protect every live pair for this
+            // pubkey, even when the failed save targeted only one community.
+            let has_live_runtime = runtimes.iter_mut().any(|(key, runtime)| {
+                key.pubkey.eq_ignore_ascii_case(&pubkey)
+                    && runtime.child.try_wait().ok().flatten().is_none()
+            });
+            let mut records = load_managed_agents(&app)?;
+            let record = find_managed_agent_mut(&mut records, &pubkey)?;
+            if scope.as_ref().is_some_and(|scope| {
+                !scope.owns_agent(
+                    crate::managed_agents::owner_scope::effective_owner_pubkey(record).as_deref(),
+                    &record.relay_url,
+                )
+            }) {
+                return Err("The teammate moved to another business while restarting.".into());
+            }
+            if stamp_restart_error(record, &error, &expected, &current, has_live_runtime) {
+                save_managed_agents(&app, &records)?;
+            }
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|_| "Could not retain the restart error".to_string())?
+}
+
+fn stamp_restart_error(
+    record: &mut crate::managed_agents::ManagedAgentRecord,
+    error: &str,
+    expected: &GlobalAgentConfig,
+    current: &GlobalAgentConfig,
+    has_live_runtime: bool,
+) -> bool {
+    if current != expected || has_live_runtime {
+        return false;
+    }
+    record.last_error = Some(error.to_owned());
     record.updated_at = crate::util::now_iso();
-    save_managed_agents(app, &records)
+    true
 }
 
 /// Whether the effective harness can consume the OpenAI-compatible provisioned
@@ -697,6 +734,9 @@ fn should_restart_for_credential_mode(
     if !mode_changed {
         return true;
     }
+    if has_provisioned_runtime && new_mode == CredentialMode::Byok {
+        return true;
+    }
     if !provisioned_supported {
         return false;
     }
@@ -738,12 +778,56 @@ fn should_restart_on_config_change(old_ready: bool, new_ready: bool, env_changed
 #[cfg(test)]
 mod tests {
     use super::{
-        should_restart_for_credential_mode, should_restart_on_config_change,
+        should_restart_for_credential_mode, should_restart_on_config_change, stamp_restart_error,
         validate_provisioned_mode_eligibility,
     };
     use crate::managed_agents::CredentialMode;
     use crate::managed_agents::GlobalAgentConfig;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn late_restart_failure_preserves_newer_settings_and_live_generation_status() {
+        let expected = GlobalAgentConfig::default();
+        let newer = GlobalAgentConfig {
+            model: Some("newer-model".into()),
+            ..expected.clone()
+        };
+        let original = crate::managed_agents::ManagedAgentRecord {
+            name: "Scout".into(),
+            last_error: Some("current status".into()),
+            updated_at: "newer-generation-time".into(),
+            runtime_pid: Some(42),
+            ..Default::default()
+        };
+        for (current, live) in [(&newer, false), (&expected, true), (&newer, true)] {
+            let mut record = original.clone();
+            assert!(!stamp_restart_error(
+                &mut record,
+                "older failure",
+                &expected,
+                current,
+                live
+            ));
+            assert_eq!(
+                record, original,
+                "a losing restart must not alter any field on the newer generation"
+            );
+        }
+        let mut stopped = crate::managed_agents::ManagedAgentRecord {
+            runtime_pid: None,
+            ..original
+        };
+        assert!(stamp_restart_error(
+            &mut stopped,
+            "current failure",
+            &expected,
+            &expected,
+            false
+        ));
+        assert_eq!(stopped.last_error.as_deref(), Some("current failure"));
+        assert_eq!(stopped.runtime_pid, None);
+        assert_ne!(stopped.updated_at, "newer-generation-time");
+    }
 
     #[test]
     fn mixed_fleet_mode_change_leaves_unsupported_byok_pairs_running() {

@@ -71,11 +71,12 @@ export function WorkspaceSetupFlow({
     (relayUrl: string) => {
       communityOnboarding.start({
         source: "first-community",
+        ownerPubkey: activePubkey,
         firstCommunityPage,
         relayUrl,
       });
     },
-    [communityOnboarding, firstCommunityPage],
+    [communityOnboarding, firstCommunityPage, activePubkey],
   );
 
   /**
@@ -91,6 +92,7 @@ export function WorkspaceSetupFlow({
       setOwnedError(null);
       const started = communityOnboarding.start({
         source: "first-community",
+        ownerPubkey: activePubkey,
         firstCommunityPage: "owned",
         relayUrl: row.relayUrl,
         communityName: row.name,
@@ -101,20 +103,21 @@ export function WorkspaceSetupFlow({
         );
       }
     },
-    [communityOnboarding],
+    [communityOnboarding, activePubkey],
   );
 
   const redeemInvite = React.useCallback(
     (relayUrl: string, code: string, policyReceipt?: string) => {
       communityOnboarding.start({
         source: "first-community",
+        ownerPubkey: activePubkey,
         firstCommunityPage,
         relayUrl,
         inviteCode: code,
         policyReceipt,
       });
     },
-    [communityOnboarding, firstCommunityPage],
+    [communityOnboarding, firstCommunityPage, activePubkey],
   );
 
   return (

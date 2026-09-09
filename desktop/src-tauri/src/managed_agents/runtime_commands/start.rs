@@ -1,5 +1,6 @@
 use super::start_scope::{check_spawned, current_owner, StartOwnerGuard};
 use super::*;
+use crate::managed_agents::config_start::ConfigStartFence;
 use crate::managed_agents::owner_scope::effective_owner_pubkey;
 
 /// Start a captured relay pair, retaining an optional expected owner through spawn.
@@ -11,9 +12,33 @@ pub(super) fn start_pair(
     expected_owner_pubkey: Option<String>,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
+    start_pair_with_config(
+        pubkey,
+        relay_url,
+        lazy,
+        expected_updated_at,
+        expected_owner_pubkey,
+        None,
+        app,
+    )
+}
+
+pub(super) fn start_pair_with_config(
+    pubkey: String,
+    relay_url: String,
+    lazy: bool,
+    expected_updated_at: Option<&str>,
+    expected_owner_pubkey: Option<String>,
+    config_fence: Option<ConfigStartFence>,
+    app: AppHandle,
+) -> Result<ManagedAgentRuntimeStatus, String> {
     let state = app.state::<AppState>();
     let owner_guard = StartOwnerGuard::capture(expected_owner_pubkey, || current_owner(&state))?;
     let (key, spawn_record) = {
+        let _context = config_fence
+            .as_ref()
+            .map(|fence| fence.lock_context(&state))
+            .transpose()?;
         let _transition = state
             .managed_agent_runtime_transition
             .lock()
@@ -46,6 +71,10 @@ pub(super) fn start_pair(
             return Err("managed agent changed while runtime reconciliation was in flight".into());
         }
         let key = ManagedAgentRuntimeKey::new(pubkey, &relay_url)?;
+        let _publication = config_fence
+            .as_ref()
+            .map(|fence| fence.lock_config(&app))
+            .transpose()?;
         let mut runtimes = state
             .managed_agent_processes
             .lock()
@@ -54,6 +83,15 @@ pub(super) fn start_pair(
             .get_mut(&key)
             .is_some_and(|runtime| runtime.child.try_wait().ok().flatten().is_none());
         if pair_running {
+            if let (Some(fence), Some(runtime)) = (&config_fence, runtimes.get(&key)) {
+                fence.check_process(
+                    &app,
+                    record,
+                    &runtime.spawn_config,
+                    runtime.provisioned_lease.is_some(),
+                    runtime.setup_mode,
+                )?;
+            }
             let status = status_for(&app, record, &key, runtimes.get(&key), None);
             return Ok(status);
         }
@@ -73,10 +111,23 @@ pub(super) fn start_pair(
             .ok()
             .map(|keys| keys.public_key().to_hex())
     });
-    let mut process =
-        spawn_agent_child(&app, &spawn_record, &key.relay_url, lazy, owner.as_deref())?;
+    let mut process = super::super::runtime::spawn_agent_child_with_config(
+        &app,
+        &spawn_record,
+        &key.relay_url,
+        lazy,
+        owner.as_deref(),
+        config_fence.as_ref(),
+    )?;
     let process_log_path = process.log_path.clone();
 
+    let _context = check_spawned(
+        config_fence
+            .as_ref()
+            .map(|fence| fence.lock_context(&state))
+            .transpose(),
+        &mut process.child,
+    )?;
     let _transition = check_spawned(
         state
             .managed_agent_runtime_transition
@@ -127,16 +178,45 @@ pub(super) fn start_pair(
         let _ = process.child.wait();
         return Err("managed agent changed while runtime reconciliation was in flight".into());
     }
-    let mut runtimes = state
-        .managed_agent_processes
-        .lock()
-        .map_err(|e| e.to_string())?;
+    let _publication = check_spawned(
+        config_fence
+            .as_ref()
+            .map(|fence| fence.lock_config(&app))
+            .transpose(),
+        &mut process.child,
+    )?;
+    if let Some(fence) = &config_fence {
+        let current = fence.check_process(
+            &app,
+            record,
+            &process.spawn_config,
+            process.provisioned_lease.is_some(),
+            process.setup_mode,
+        );
+        check_spawned(current, &mut process.child)?;
+    }
+    let mut runtimes = check_spawned(
+        state
+            .managed_agent_processes
+            .lock()
+            .map_err(|e| e.to_string()),
+        &mut process.child,
+    )?;
     let pair_running = runtimes
         .get_mut(&key)
         .is_some_and(|runtime| runtime.child.try_wait().ok().flatten().is_none());
     if pair_running {
         let _ = terminate_process(process.child.id());
         let _ = process.child.wait();
+        if let (Some(fence), Some(runtime)) = (&config_fence, runtimes.get(&key)) {
+            fence.check_process(
+                &app,
+                record,
+                &runtime.spawn_config,
+                runtime.provisioned_lease.is_some(),
+                runtime.setup_mode,
+            )?;
+        }
         let status = status_for(&app, record, &key, runtimes.get(&key), None);
         return Ok(status);
     }

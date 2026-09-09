@@ -942,3 +942,6 @@ fn harness_command_override_beats_dangling_id() {
         "explicit override must beat a dangling runtime id"
     );
 }
+
+#[path = "power_inheritance_tests.rs"]
+mod power_inheritance_tests;

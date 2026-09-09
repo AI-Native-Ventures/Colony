@@ -6,14 +6,17 @@ export type PowerLane = "subscription" | "colony" | "openrouter" | "existing";
 
 /** Preserve an existing choice; discovery never chooses a personal subscription. */
 export function powerLaneForConfig(config: GlobalAgentConfig): PowerLane {
+  // Funding remains explicit even for a legacy or unavailable runtime.
   if (config.credential_mode === "colony_credits") return "colony";
+  const runtime = config.preferred_runtime;
+  if (runtime && runtime !== "buzz-agent") {
+    return runtime === "claude" || runtime === "codex"
+      ? "subscription"
+      : "existing";
+  }
   if (config.provider === "openrouter")
     return isFreeOpenRouterModel(config.model) ? "openrouter" : "existing";
-  return config.preferred_runtime && config.preferred_runtime !== "buzz-agent"
-    ? "subscription"
-    : config.provider
-      ? "existing"
-      : "colony";
+  return config.provider ? "existing" : "colony";
 }
 
 /** A free route never inherits a paid model or an alternate model chain. */

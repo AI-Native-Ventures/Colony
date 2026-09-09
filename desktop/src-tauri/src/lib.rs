@@ -483,12 +483,9 @@ pub fn run() {
                 });
             }
 
-            // Defer launch-time agent restoration until `apply_workspace` has
-            // installed the active workspace relay and identity. Starting here
-            // would race React initialization and send agents whose saved record
-            // has no relay override to the localhost fallback. Preserve the
-            // boot-time repos and identity recovery safety gates by only marking
-            // restoration pending when both allow it.
+            // Restore after `apply_workspace` installs the relay and identity, so
+            // agents without relay overrides cannot race initialization into localhost.
+            // Preserve the boot-time repository and identity-recovery gates.
             if restore_agents && !recovery_mode {
                 state
                     .managed_agent_restore_pending
@@ -752,6 +749,9 @@ pub fn run() {
             reconnect_colony_credits,
             connect_openrouter,
             scan_agent_subscriptions,
+            get_subscription_connections,
+            connect_subscription,
+            install_subscription_runtime,
             openrouter_quota,
             mesh_start_node,
             mesh_stop_node,

@@ -6,15 +6,19 @@ import type {
   GlobalAgentConfig,
 } from "@/shared/api/types";
 import { isFreeOpenRouterModel } from "../../../powerChoice";
+import type { PowerCreditsScope } from "../../../powerCredits";
+import { OpenRouterAllowance } from "./OpenRouterAllowance";
 
 /** Native OAuth and the live model catalog; only explicitly free model IDs save. */
 export function FreeOpenRouterFields({
   config,
+  scope,
   runtime,
   onChange,
   onValidityChange,
 }: {
   config: GlobalAgentConfig;
+  scope: PowerCreditsScope;
   runtime: AcpRuntimeCatalogEntry;
   onChange: (config: GlobalAgentConfig) => void;
   onValidityChange: (valid: boolean) => void;
@@ -47,6 +51,12 @@ export function FreeOpenRouterFields({
         connected={connected}
         onConfigChange={onChange}
       />
+      {connected && (
+        <OpenRouterAllowance
+          apiKey={config.env_vars.OPENROUTER_API_KEY ?? ""}
+          scope={scope}
+        />
+      )}
       <div className="onb-simple-field">
         <label htmlFor="onb-free-model">Default model</label>
         <select

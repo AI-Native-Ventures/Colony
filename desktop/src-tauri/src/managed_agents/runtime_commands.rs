@@ -6,10 +6,9 @@ use super::{
     agent_readiness, append_log_marker, current_instance_id, find_managed_agent_mut,
     load_global_agent_config, load_managed_agents, load_personas, managed_agent_runtime_log_path,
     process_is_running, record_agent_command, resolve_effective_agent_env, save_managed_agents,
-    spawn_agent_child, terminate_process, terminate_untracked_pair_runtime,
-    write_agent_runtime_receipt, AgentReadiness, BackendKind, ManagedAgentPairRuntime,
-    ManagedAgentRuntimeKey, ManagedAgentRuntimeLifecycle, ManagedAgentRuntimeReceipt,
-    ManagedAgentRuntimeStatus,
+    terminate_process, terminate_untracked_pair_runtime, write_agent_runtime_receipt,
+    AgentReadiness, BackendKind, ManagedAgentPairRuntime, ManagedAgentRuntimeKey,
+    ManagedAgentRuntimeLifecycle, ManagedAgentRuntimeReceipt, ManagedAgentRuntimeStatus,
 };
 use crate::app_state::AppState;
 use crate::provisioned_credits::{normalized_relay_http_origin, GatewayLease};
@@ -552,6 +551,30 @@ pub fn start_managed_agent_runtime(
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
     start_pair(pubkey, relay_url, true, None, expected_owner_pubkey, app)
+}
+
+/// Adopt a scoped Power choice only if it is still the current saved configuration.
+pub(crate) fn start_managed_agent_runtime_with_config(
+    pubkey: String,
+    relay_url: String,
+    expected_owner_pubkey: String,
+    expected_global: super::GlobalAgentConfig,
+    app: AppHandle,
+) -> Result<ManagedAgentRuntimeStatus, String> {
+    let fence = super::config_start::ConfigStartFence {
+        global: expected_global,
+        owner: expected_owner_pubkey.clone(),
+        relay: buzz_core_pkg::relay::normalize_relay_url(&relay_url).map_err(|e| e.to_string())?,
+    };
+    start::start_pair_with_config(
+        pubkey,
+        relay_url,
+        true,
+        None,
+        Some(expected_owner_pubkey),
+        Some(fence),
+        app,
+    )
 }
 
 #[tauri::command]

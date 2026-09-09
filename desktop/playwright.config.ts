@@ -72,6 +72,7 @@ export default defineConfig({
         "**/workspace-web.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",
+        "**/community-business-onboarding.spec.ts",
         "**/invites-settings-screenshots.spec.ts",
         "**/messaging.spec.ts",
         "**/custom-emoji.spec.ts",

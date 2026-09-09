@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ArrowLeft, ChevronRight, Link2, Plus } from "lucide-react";
 
+import { useIdentityQuery } from "@/shared/api/hooks";
 import type { AddCommunityPrefillRequest } from "@/features/communities/addCommunityPrefill";
 import { HostedCommunityCreateFlow } from "@/features/communities/ui/HostedCommunityCreateFlow";
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
@@ -33,6 +34,7 @@ export function AddCommunityDialog({
   onOpenChange,
 }: AddCommunityDialogProps) {
   const communityOnboarding = useCommunityOnboarding();
+  const ownerPubkey = useIdentityQuery().data?.pubkey;
   const [mode, setMode] = React.useState<AddCommunityMode>("choose");
   const [joinError, setJoinError] = React.useState<string | null>(null);
   const appliedPrefillId = React.useRef<string | null>(null);
@@ -62,6 +64,7 @@ export function AddCommunityDialog({
     }) => {
       const started = communityOnboarding.start({
         source: "add-community",
+        ownerPubkey,
         relayUrl,
         inviteCode,
         communityName: prefill?.name,
@@ -75,7 +78,7 @@ export function AddCommunityDialog({
       }
       handleClose();
     },
-    [communityOnboarding, handleClose, prefill?.name],
+    [communityOnboarding, handleClose, prefill?.name, ownerPubkey],
   );
 
   const title =

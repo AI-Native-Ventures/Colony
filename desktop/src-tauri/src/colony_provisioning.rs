@@ -15,7 +15,10 @@ use serde_json::Value;
 use tauri::State;
 
 use crate::app_state::AppState;
-use crate::relay::{build_nip98_auth_header, relay_api_base_url_with_override};
+use crate::relay::{
+    build_nip98_auth_header, build_nip98_auth_header_for_keys, relay_api_base_url_with_override,
+    relay_ws_url_with_override,
+};
 
 /// Extract a readable message from a relay error body (`{"error": "..."}`
 /// or plain text), falling back to the HTTP status.
@@ -92,14 +95,32 @@ pub async fn colony_check_community_name(
 pub async fn colony_create_community(
     state: State<'_, AppState>,
     name: String,
+    expected_owner_pubkey: Option<String>,
+    expected_relay_url: Option<String>,
 ) -> Result<Value, String> {
-    let base = relay_api_base_url_with_override(&state);
-    let url = format!("{base}/api/communities");
-    #[cfg(feature = "onboarding-fixture")]
-    crate::relay::validate_fixture_url(&url)?;
     let body_bytes = serde_json::to_vec(&serde_json::json!({ "name": name }))
         .map_err(|e| format!("request serialization failed: {e}"))?;
-    let auth = build_nip98_auth_header(&Method::POST, &url, &body_bytes, &state)?;
+    // Capture one signer and destination under the same guards as identity and
+    // workspace changes. A switch during HTTP I/O cannot redirect this create.
+    let (url, auth) = {
+        let _community_guard = state.community_operation_lock.read().await;
+        let _identity_guard = state.identity_mutation.lock().map_err(|e| e.to_string())?;
+        let signer = state.signing_keys()?;
+        validate_creation_scope(
+            expected_owner_pubkey.as_deref(),
+            expected_relay_url.as_deref(),
+            &signer.public_key().to_hex(),
+            &relay_ws_url_with_override(&state),
+        )?;
+        let url = format!(
+            "{}/api/communities",
+            relay_api_base_url_with_override(&state)
+        );
+        #[cfg(feature = "onboarding-fixture")]
+        crate::relay::validate_fixture_url(&url)?;
+        let auth = build_nip98_auth_header_for_keys(&signer, &Method::POST, &url, &body_bytes)?;
+        (url, auth)
+    };
 
     let response = state
         .http_client
@@ -111,6 +132,30 @@ pub async fn colony_create_community(
         .await
         .map_err(|e| format!("relay unreachable: {e}"))?;
     parse_response(response).await
+}
+
+fn validate_creation_scope(
+    expected_owner: Option<&str>,
+    expected_relay: Option<&str>,
+    owner: &str,
+    relay: &str,
+) -> Result<(), String> {
+    match (expected_owner, expected_relay) {
+        (None, None) => Ok(()),
+        (Some(expected_owner), Some(expected_relay)) => {
+            let normalize = buzz_core_pkg::relay::normalize_relay_url;
+            if owner != expected_owner
+                || normalize(relay).map_err(|e| e.to_string())?
+                    != normalize(expected_relay).map_err(|e| e.to_string())?
+            {
+                return Err(
+                    "The account or business changed before creating the community.".into(),
+                );
+            }
+            Ok(())
+        }
+        _ => Err("Creating a community requires both the original account and business.".into()),
+    }
 }
 
 /// `GET /api/communities/mine[?scope=owner|member]` - NIP-98 signed with the
@@ -150,6 +195,34 @@ pub async fn colony_list_my_communities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creation_scope_pins_owner_and_canonical_relay() {
+        let owner = "a".repeat(64);
+        assert!(validate_creation_scope(
+            Some(&owner),
+            Some("wss://one.example/"),
+            &owner,
+            "wss://one.example"
+        )
+        .is_ok());
+        assert!(validate_creation_scope(
+            Some(&owner),
+            Some("wss://one.example"),
+            &"b".repeat(64),
+            "wss://one.example"
+        )
+        .is_err());
+        assert!(validate_creation_scope(
+            Some(&owner),
+            Some("wss://one.example"),
+            &owner,
+            "wss://two.example"
+        )
+        .is_err());
+        assert!(validate_creation_scope(Some(&owner), None, &owner, "wss://one.example").is_err());
+        assert!(validate_creation_scope(None, None, &owner, "wss://one.example").is_ok());
+    }
 
     #[test]
     fn error_message_prefers_error_field() {

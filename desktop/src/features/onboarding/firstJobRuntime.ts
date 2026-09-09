@@ -72,7 +72,10 @@ export function createFirstJobRuntime(inputScope: FirstJobScope) {
   const start = createFirstJobStarter({
     assertCurrent: assertFirstJobScope,
     async ensureConfig(captured) {
-      await ensureBuiltInFounderConfig({}, { mode: "validate-only" });
+      await ensureBuiltInFounderConfig(
+        {},
+        { mode: "validate-only", scope: captured },
+      );
       await assertFirstJobScope(captured);
       const config = await getGlobalAgentConfig();
       await assertFirstJobScope(captured);

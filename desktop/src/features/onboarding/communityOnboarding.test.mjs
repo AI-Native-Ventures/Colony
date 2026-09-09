@@ -87,7 +87,7 @@ test("created communities persist an adapted v2 journey without changing joins",
     createMemoryStorage(),
   );
   assert.equal(createdCommunity.onboardingV2?.stage, "company");
-  assert.equal(shouldForceFirstCommunityJourney(createdCommunity), false);
+  assert.equal(shouldForceFirstCommunityJourney(createdCommunity), true);
 
   const joinedCommunity = startCommunityOnboarding(
     { source: "add-community", relayUrl: "wss://other.example" },
@@ -98,7 +98,7 @@ test("created communities persist an adapted v2 journey without changing joins",
   assert.equal(shouldForceFirstCommunityJourney(joinedCommunity), false);
 });
 
-test("a transaction stuck finalizing past the deadline is swept on load", () => {
+test("an interrupted business finalization retains its draft and resumes for retry", () => {
   const storage = createMemoryStorage();
   const transaction = startCommunityOnboarding(
     { source: "create-community", relayUrl: "wss://created.example" },
@@ -114,8 +114,14 @@ test("a transaction stuck finalizing past the deadline is swept on load", () => 
     new Date(staleUpdatedAt),
   );
   const swept = loadCommunityOnboardingTransaction(storage);
-  assert.equal(swept, null);
+  assert.equal(swept?.id, transaction.id);
+  assert.equal(swept?.stage, "profile");
   assert.equal(
+    swept?.onboardingV2?.firstTask.deliveryMarker,
+    transaction.onboardingV2.firstTask.deliveryMarker,
+  );
+  assert.match(swept?.error ?? "", /interrupted/);
+  assert.notEqual(
     storage.getItem("buzz-community-onboarding-transaction.v1"),
     null,
   );
@@ -452,4 +458,19 @@ test("isTransactionStillConnecting_stagePastConnecting_returnsFalse", () => {
     false,
     "stage advanced past connecting → guard rejects late action",
   );
+});
+
+test("stale join finalization keeps its existing expiry behavior", () => {
+  const db = createMemoryStorage();
+  const joined = startCommunityOnboarding(
+    { source: "add-community", relayUrl: "wss://joined.example" },
+    db,
+  );
+  updateCommunityOnboardingTransaction(
+    joined,
+    { stage: "finalizing" },
+    db,
+    new Date(Date.now() - 3 * 60 * 1000),
+  );
+  assert.equal(loadCommunityOnboardingTransaction(db), null);
 });

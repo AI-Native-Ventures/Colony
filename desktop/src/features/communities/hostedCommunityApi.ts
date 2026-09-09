@@ -46,8 +46,15 @@ export function checkColonyCommunityName(name: string) {
   return invoke<ColonyAvailability>("colony_check_community_name", { name });
 }
 
-export function createColonyCommunity(name: string) {
-  return invoke<ColonyCreateResponse>("colony_create_community", { name });
+export function createColonyCommunity(
+  name: string,
+  scope?: { ownerPubkey: string; relayUrl: string },
+) {
+  return invoke<ColonyCreateResponse>("colony_create_community", {
+    name,
+    expectedOwnerPubkey: scope?.ownerPubkey,
+    expectedRelayUrl: scope?.relayUrl,
+  });
 }
 
 /**

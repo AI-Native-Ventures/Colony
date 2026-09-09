@@ -1073,10 +1073,7 @@ struct PartialEntry {
 }
 
 fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntry {
-    let adapter_result = runtime
-        .commands
-        .iter()
-        .find_map(|command| find_command(command).map(|path| (*command, path)));
+    let adapter_result = super::isolation::subscriptions::catalog_adapter(runtime);
 
     let underlying_cli_found = runtime
         .underlying_cli
@@ -1088,6 +1085,7 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
     // For codex-acp: when the adapter resolves as Available, probe its full
     // version. An adapter below MIN_CODEX_ACP_VERSION is treated as outdated.
     if runtime.id == "codex"
+        && !super::isolation::subscriptions::direct(runtime.id)
         && availability == AcpAvailabilityStatus::Available
         && command.as_deref() == Some("codex-acp")
     {
@@ -1096,9 +1094,7 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
         }
     }
 
-    // Warm the adapter-availability cache for the badge fallback.
-    // The cache is scoped to the codex runtime; other runtimes leave it
-    // unchanged. Invalidated by `clear_resolve_cache`.
+    // Cache the Codex badge fallback until `clear_resolve_cache`.
     if runtime.id == "codex" {
         cache_adapter_availability(availability.clone());
     }
