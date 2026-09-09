@@ -1,7 +1,7 @@
 export const STABLE_UPDATER_ENDPOINT =
   "https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-desktop-latest/latest.json";
 
-/** Production has no ad-hoc fallback. Return only packager options, never log credentials. */
+/** Developer ID mode has no ad-hoc fallback. Never log credentials. */
 export function productionSigning(env) {
   const required = [
     "COLONY_APPLE_SIGNING_IDENTITY",
