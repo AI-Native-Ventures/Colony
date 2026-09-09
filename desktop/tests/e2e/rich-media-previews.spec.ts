@@ -1,12 +1,15 @@
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { mediaFixtureRange } from "../helpers/mediaFixtureRange";
 
 // Match the real relay's SVG headers while exercising Chromium's image loader.
 // The real Rust upload/GET/Range round trip is covered by e2e_media_extended.
-async function installInertSvgFixtures(page: Page) {
+async function installMediaFixtures(page: Page) {
+  const responses: Array<{ filename: string; status: number }> = [];
   await page.route("**/rich-previews/launch-0*.svg", async (route) => {
     const name = new URL(route.request().url()).pathname.split("/").pop() || "";
     if (!/^launch-0[123]\.svg$/.test(name)) return route.continue();
@@ -22,6 +25,25 @@ async function installInertSvgFixtures(page: Page) {
       },
     });
   });
+  // Python's static CI server has no Range support. Use the real fixture bytes
+  // with the same 206/Content-Range contract as the relay/native media proxy.
+  for (const [filename, contentType] of [
+    ["preview-audio.wav", "audio/wav"],
+    ["preview-video.mp4", "video/mp4"],
+  ]) {
+    const bytes = await readFile(
+      new URL(`../../public/rich-previews/${filename}`, import.meta.url),
+    );
+    await page.route(`**/rich-previews/${filename}`, async (route) => {
+      const response = mediaFixtureRange(
+        bytes,
+        route.request().headers().range,
+      );
+      responses.push({ filename, status: response.status });
+      await route.fulfill({ ...response, contentType });
+    });
+  }
+  return responses;
 }
 
 async function seedAppearance(page: Page, theme: "buzz" | "buzz-dark") {
@@ -50,7 +72,7 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     await page.setViewportSize({ width: 1280, height: 1000 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await seedAppearance(page, theme);
-    await installInertSvgFixtures(page);
+    const mediaResponses = await installMediaFixtures(page);
     await installMockBridge(page);
     await page.goto("/");
     const gallery = await openGallery(page);
@@ -122,6 +144,20 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     const video = player.locator("video");
     await expect(video).toHaveJSProperty("paused", true);
     await expect(video).toHaveJSProperty("currentTime", 0);
+    await expect
+      .poll(() =>
+        video.evaluate((element) => {
+          const { seekable } = element as HTMLVideoElement;
+          return seekable.length ? seekable.end(seekable.length - 1) : 0;
+        }),
+      )
+      .toBeGreaterThanOrEqual(3);
+    expect(
+      mediaResponses.some(
+        ({ filename, status }) =>
+          filename === "preview-video.mp4" && status === 206,
+      ),
+    ).toBe(true);
     await expect(
       player.getByTestId("video-review-poster-preview"),
     ).toHaveJSProperty("naturalWidth", 640);
@@ -140,13 +176,14 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
       .poll(() =>
         video.evaluate((element) => (element as HTMLMediaElement).currentTime),
       )
-      .toBeGreaterThan(0);
+      .toBeGreaterThan(0.25);
     await player
       .getByRole("button", { name: "Pause video", exact: true })
       .click();
     const savedTime = await video.evaluate(
       (element) => (element as HTMLMediaElement).currentTime,
     );
+    expect(savedTime).toBeGreaterThan(0.25);
     await player
       .getByRole("button", { name: "Open video review", exact: true })
       .click();
@@ -156,9 +193,13 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
       .poll(() =>
         review
           .locator("video")
-          .evaluate((element) => (element as HTMLMediaElement).currentTime),
+          .evaluate(
+            (element, saved) =>
+              Math.abs((element as HTMLMediaElement).currentTime - saved),
+            savedTime,
+          ),
       )
-      .toBeGreaterThanOrEqual(savedTime - 0.1);
+      .toBeLessThan(0.05);
     await review
       .getByRole("button", { name: "Close video review", exact: true })
       .click();
@@ -168,6 +209,20 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     const audioPlayer = gallery.getByTestId("media-audio-preview");
     const audio = audioPlayer.locator("audio");
     await expect(audio).toHaveJSProperty("paused", true);
+    await expect
+      .poll(() =>
+        audio.evaluate((element) => {
+          const { seekable } = element as HTMLAudioElement;
+          return seekable.length ? seekable.end(seekable.length - 1) : 0;
+        }),
+      )
+      .toBeGreaterThanOrEqual(3);
+    expect(
+      mediaResponses.some(
+        ({ filename, status }) =>
+          filename === "preview-audio.wav" && status === 206,
+      ),
+    ).toBe(true);
     await expect(
       audioPlayer.getByRole("slider", { name: "Seek audio" }),
     ).toBeEnabled();
@@ -192,7 +247,7 @@ test("message carousel fits a narrow native thread and supports touch without lo
 }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await seedAppearance(page, "buzz-dark");
-  await installInertSvgFixtures(page);
+  await installMediaFixtures(page);
   await installMockBridge(page);
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -303,7 +358,7 @@ test("gallery controls change with the selected accent and colour mode", async (
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await seedAppearance(page, "buzz");
-  await installInertSvgFixtures(page);
+  await installMediaFixtures(page);
   await installMockBridge(page);
   await page.goto("/");
   const gallery = await openGallery(page);

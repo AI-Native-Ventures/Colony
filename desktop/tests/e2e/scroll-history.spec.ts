@@ -600,6 +600,7 @@ test("reserves real buzz-bugs imeta image height before image loads", async ({
     return {
       attrHeight: img.getAttribute("height"),
       attrWidth: img.getAttribute("width"),
+      naturalWidth: img.naturalWidth,
       height: box.height,
       offsetHeight: img.offsetHeight,
       offsetWidth: img.offsetWidth,
@@ -609,6 +610,8 @@ test("reserves real buzz-bugs imeta image height before image loads", async ({
   expect(rect.attrWidth).toBe("951");
   expect(rect.attrHeight).toBe("244");
   expect(rect.offsetHeight).toBeGreaterThan(80);
+  expect(rect.naturalWidth).toBe(0);
+  expect(rect.height / rect.width).toBeCloseTo(244 / 951, 2);
 });
 
 // Criterion 3: target-after-backfill via deep-link.

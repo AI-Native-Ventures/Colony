@@ -70,3 +70,33 @@ test("actual document FileCard in a Markdown paragraph receives a block parent",
   assert.match(html, /data-testid="inline-file-preview"/);
   assert.doesNotMatch(html, /<p>Read /);
 });
+
+test("Markdown image metadata reaches the carousel image before the bytes load", () => {
+  const src = "https://relay.example/media/wide.png";
+  const html = renderToStaticMarkup(
+    React.createElement(
+      MarkdownRuntimeContext.Provider,
+      {
+        value: {
+          ...runtime,
+          imetaByUrl: new Map([[src, { m: "image/png", dim: "951x244" }]]),
+        },
+      },
+      React.createElement(
+        ReactMarkdown,
+        {
+          components: {
+            p: MarkdownMediaParagraph,
+            img: ({ node: _node, ...props }) =>
+              React.createElement("img", props),
+          },
+        },
+        `![Wide screenshot](${src})\n![Second](/rich-previews/launch-02.svg)`,
+      ),
+    ),
+  );
+  const image = html.match(/<img [^>]+>/)?.[0] || "";
+  assert.match(image, /width="951"/);
+  assert.match(image, /height="244"/);
+  assert.match(html, /aria-roledescription="carousel"/);
+});

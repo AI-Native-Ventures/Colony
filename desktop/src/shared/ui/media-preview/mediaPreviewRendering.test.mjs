@@ -43,6 +43,25 @@ test("a single portrait reserves its authored ratio without carousel chrome", ()
   assert.match(html, /aspect-ratio:0.75/);
   assert.doesNotMatch(html, /Previous image|Next image/);
 });
+
+test("single-image source dimensions reach the image before decoding without display caps", () => {
+  const html = render(ImagePreview, {
+    items: [
+      {
+        src: "https://relay.test/media/wide.png",
+        alt: "Wide screenshot",
+        width: 951,
+        height: 244,
+      },
+    ],
+  });
+  const image = html.match(/<img [^>]+>/)?.[0] || "";
+  assert.match(image, /width="951"/);
+  assert.match(image, /height="244"/);
+  assert.match(image, /h-full w-full object-contain/);
+  assert.match(html, new RegExp(`aspect-ratio:${951 / 244}`));
+  assert.doesNotMatch(html, /max-h-|max-w-/);
+});
 test("audio remains phrasing content and never starts automatically", () => {
   const html = render(AudioPlayer, {
     src: "/rich-previews/preview-audio.wav",

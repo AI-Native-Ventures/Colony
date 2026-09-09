@@ -57,6 +57,13 @@ export function ImagePreview({
   const item = items[activeIndex];
   if (!item) return null;
   const dimensions = intrinsicSize?.src === item.src ? intrinsicSize : item;
+  const hasDimensions =
+    dimensions.width != null &&
+    dimensions.height != null &&
+    Number.isFinite(dimensions.width) &&
+    Number.isFinite(dimensions.height) &&
+    dimensions.width > 0 &&
+    dimensions.height > 0;
   const label = title ?? item.filename ?? item.alt ?? "Image";
   const filename =
     item.filename ??
@@ -179,6 +186,8 @@ export function ImagePreview({
           className="absolute inset-0 h-full w-full object-contain"
           decoding="async"
           draggable={false}
+          width={hasDimensions ? dimensions.width : undefined}
+          height={hasDimensions ? dimensions.height : undefined}
           animate={{ opacity: 1, x: 0 }}
           initial={
             direction && !reducedMotion

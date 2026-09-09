@@ -31,6 +31,7 @@ import { useVideoContextMenu } from "./useVideoContextMenu";
 import { useRegisterVideoReview } from "./VideoReviewNavigation";
 import { VideoReviewPosterPreview } from "./VideoReviewPosterPreview";
 import { MediaDownloadButton } from "./media-preview/MediaDownloadButton";
+import { applyPendingMediaSeek } from "./media-preview/pendingMediaSeek";
 import {
   formatCommentTimecode,
   formatTimecode,
@@ -1390,8 +1391,7 @@ function VideoReviewDialog({
     if (!open) return;
     if (pendingSeekSeconds === null) return;
     const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = pendingSeekSeconds;
+    if (!video || !applyPendingMediaSeek(video, pendingSeekSeconds)) return;
     syncCurrentTime(pendingSeekSeconds);
     onPendingSeekConsumed();
   }, [
@@ -1696,10 +1696,13 @@ function VideoReviewDialog({
                       }
                       if (
                         pendingSeekSeconds !== null &&
-                        pendingSeekSeconds > 0
+                        applyPendingMediaSeek(
+                          event.currentTarget,
+                          pendingSeekSeconds,
+                        )
                       ) {
-                        event.currentTarget.currentTime = pendingSeekSeconds;
                         syncCurrentTime(pendingSeekSeconds);
+                        onPendingSeekConsumed();
                       }
                     }}
                     onLoadedData={(event) => {

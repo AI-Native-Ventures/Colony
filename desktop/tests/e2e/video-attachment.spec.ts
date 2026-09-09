@@ -155,6 +155,13 @@ async function installVideoReviewHarness(
           return 12.5;
         },
       });
+      // This harness supplies a complete timeline, unlike a cold real decoder.
+      Object.defineProperty(HTMLMediaElement.prototype, "readyState", {
+        configurable: true,
+        get() {
+          return HTMLMediaElement.HAVE_ENOUGH_DATA;
+        },
+      });
     },
     { accentColor, themeName },
   );
@@ -396,7 +403,11 @@ test("video upload previews use poster frames and inline videos open review mode
 
   const reviewDialog = page.getByTestId("video-review-dialog");
   await expect(reviewDialog).toBeVisible();
-  await expect(reviewDialog.getByText("launch-demo.mp4")).toBeVisible();
+  await expect(
+    reviewDialog
+      .locator("header")
+      .getByText("launch-demo.mp4", { exact: true }),
+  ).toBeVisible();
   const reviewBox = await reviewDialog.boundingBox();
   const viewport = page.viewportSize();
   expect(reviewBox?.x).toBeGreaterThan(0);
