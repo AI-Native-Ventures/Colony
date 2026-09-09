@@ -1,9 +1,12 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { createdBusinessOwnerName } from "../createdBusinessOwnerName";
+import { assertFirstJobScope } from "@/features/onboarding/firstJobScope";
 import { ensureBuiltInFounderConfig } from "@/features/onboarding/automaticAgentSetup";
 import {
   isOwnerLedCommunityOnboarding,
+  isCurrentCommunityOnboardingTransaction,
   markCommunityOnboardingComplete,
   useCommunityOnboarding,
 } from "@/features/onboarding/communityOnboarding";
@@ -82,11 +85,36 @@ function LoadingDots({ label }: { label: string }) {
 export function CommunityOnboardingFlow({
   onCancel,
   onConnect,
+  currentPubkey,
 }: {
+  currentPubkey: string | null;
   onCancel: () => void;
   onConnect: () => void;
 }) {
-  const { transaction, update, clear } = useCommunityOnboarding();
+  const {
+    transaction,
+    update: updateTransaction,
+    clear: clearTransaction,
+    suspend,
+  } = useCommunityOnboarding();
+  const transactionId = transaction?.id;
+  const update = React.useCallback(
+    (patch: Parameters<typeof updateTransaction>[0]) =>
+      updateTransaction(patch, transactionId),
+    [updateTransaction, transactionId],
+  );
+  const clear = React.useCallback(
+    () => clearTransaction(transactionId),
+    [clearTransaction, transactionId],
+  );
+  const liveRun = React.useRef({ transactionId, currentPubkey });
+  liveRun.current = { transactionId, currentPubkey };
+  React.useEffect(() => {
+    liveRun.current = { transactionId, currentPubkey };
+    return () => {
+      liveRun.current = { transactionId: undefined, currentPubkey: null };
+    };
+  }, [transactionId, currentPubkey]);
   const queryClient = useQueryClient();
   const [displayName, setDisplayName] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
@@ -205,10 +233,29 @@ export function CommunityOnboardingFlow({
   }, [isOwnerLed, isTeamIntroVisible, startAgentSetup, transaction?.source]);
   const finish = React.useCallback(async () => {
     if (!relayUrl) return;
-    const identity = await getIdentity();
-    markCommunityOnboardingComplete(identity.pubkey, relayUrl);
+    const ownerPubkey = transaction?.ownerPubkey ?? currentPubkey;
+    const isCurrent = () =>
+      liveRun.current.transactionId === transactionId &&
+      liveRun.current.currentPubkey === ownerPubkey &&
+      (transaction?.source !== "create-community" ||
+        isCurrentCommunityOnboardingTransaction(
+          transactionId,
+          ownerPubkey ?? "",
+          relayUrl,
+        ));
+    if (!ownerPubkey || !isCurrent()) return;
+    await assertFirstJobScope({ ownerPubkey, relayUrl });
+    if (!isCurrent()) return;
+    markCommunityOnboardingComplete(ownerPubkey, relayUrl);
     clear();
-  }, [clear, relayUrl]);
+  }, [
+    clear,
+    relayUrl,
+    currentPubkey,
+    transaction?.ownerPubkey,
+    transaction?.source,
+    transactionId,
+  ]);
   /**
    * The one handoff: Scout's brief delivered, the workspace opened, the gate
    * key written. `draft` is what the brief is built from, passed in rather
@@ -219,25 +266,54 @@ export function CommunityOnboardingFlow({
    * shows its own retry from the rejected promise.
    */
   const finalizeWith = React.useCallback(
-    async (draft: OnboardingV2Draft | null) => {
-      if (isPending || !relayUrl) return;
+    async (
+      draft: OnboardingV2Draft | null,
+      isCurrentRun: () => boolean = () => true,
+    ) => {
+      if (isPending || !relayUrl || !transactionId) return;
+      const ownerPubkey = transaction?.ownerPubkey ?? currentPubkey;
+      if (!ownerPubkey) throw new Error("Your account is not ready.");
+      let expired = false;
+      const assertCurrent = () => {
+        if (
+          expired ||
+          !isCurrentRun() ||
+          liveRun.current.transactionId !== transactionId ||
+          liveRun.current.currentPubkey !== ownerPubkey ||
+          (transaction?.source === "create-community" &&
+            !isCurrentCommunityOnboardingTransaction(
+              transactionId,
+              ownerPubkey,
+              relayUrl,
+            ))
+        )
+          throw new Error(
+            "This business setup has ended or the account changed.",
+          );
+      };
+      assertCurrent();
       setIsPending(true);
       update({ stage: "finalizing", error: undefined });
       // The handoff talks to a possibly brand-new relay. Without a deadline a
       // relay that never answers leaves the user on "Bringing Scout online…"
       // forever with no error and no way forward: the exact trap this guard
       // exists for. On timeout the catch below surfaces Retry / Skip for now.
+      let deadlineTimer: number | undefined;
       const deadline = new Promise<never>((_, reject) => {
-        window.setTimeout(
-          () =>
-            reject(
-              new Error("Scout setup timed out. Try again or skip for now."),
+        deadlineTimer = window.setTimeout(() => {
+          expired = true;
+          reject(
+            new Error(
+              "Business setup timed out. Your progress is saved; try again.",
             ),
-          FINALIZE_TIMEOUT_MS,
-        );
+          );
+        }, FINALIZE_TIMEOUT_MS);
       });
       try {
         const work = (async () => {
+          assertCurrent();
+          await assertFirstJobScope({ ownerPubkey, relayUrl });
+          assertCurrent();
           // Before the channels exist, so it is settled before the kickoff
           // runs.
           if (isOwnerLed) {
@@ -247,25 +323,44 @@ export function CommunityOnboardingFlow({
               await startAgentSetup();
             }
           }
-          const identity = await getIdentity();
+          await assertFirstJobScope({ ownerPubkey, relayUrl });
+          assertCurrent();
           // A resumed transaction whose brief already went out keeps its
           // recorded id and must not re-check the marker; passing draft: null
           // preserves that exactly.
           const alreadyDelivered = Boolean(draft?.firstTask.deliveredEventId);
+          let profileDisplayName: string | null = null;
+          if (
+            transaction?.source === "create-community" &&
+            transaction.ownerDisplayName
+          ) {
+            const targetProfile = await getProfile();
+            await assertFirstJobScope({ ownerPubkey, relayUrl });
+            assertCurrent();
+            profileDisplayName = createdBusinessOwnerName(
+              ownerPubkey,
+              transaction.ownerDisplayName,
+              targetProfile,
+            );
+          }
           const completion = await completeFirstRun(
             {
               queryClient,
               relayUrl,
-              pubkey: identity.pubkey,
+              pubkey: ownerPubkey,
+              assertCurrent,
               draft: alreadyDelivered ? null : draft,
-              // The profile is not this handoff's to write: the join walk
+              // Existing names on the target are preserved. A newly created
+              // relay receives the owner's already-public name before its first message.
+              // The join profile is not this handoff's to write: the join walk
               // published kind:0 on its own profile screen, and the
               // second-community walk never asks for a name it already knows.
-              profileDisplayName: null,
+              profileDisplayName,
               profileAvatarUrl: null,
             },
             DEFAULT_COMPLETE_FIRST_RUN_IO,
           );
+          assertCurrent();
           if (completion.focusChannelId) {
             let onboardingV2 = draft ?? undefined;
             if (onboardingV2 && completion.firstTaskEventId) {
@@ -292,12 +387,20 @@ export function CommunityOnboardingFlow({
         })();
         await Promise.race([work, deadline]);
       } catch (error) {
+        if (
+          !isCurrentRun() ||
+          liveRun.current.transactionId !== transactionId ||
+          liveRun.current.currentPubkey !== ownerPubkey
+        )
+          throw error;
         setStarterChannelFailureCount((count) => count + 1);
         update({
           error: error instanceof Error ? error.message : String(error),
         });
         setIsPending(false);
         throw error;
+      } finally {
+        window.clearTimeout(deadlineTimer);
       }
     },
     [
@@ -308,6 +411,10 @@ export function CommunityOnboardingFlow({
       relayUrl,
       startAgentSetup,
       transaction?.source,
+      transaction?.ownerPubkey,
+      transaction?.ownerDisplayName,
+      transactionId,
+      currentPubkey,
       update,
     ],
   );
@@ -463,7 +570,9 @@ export function CommunityOnboardingFlow({
   // "entering" is deliberately not here: the walk is over by then, and what
   // the stage needs is the curtain below rather than the last screen of a
   // finished flow.
-  const isReturningFounderJourney = transaction.source === "create-community";
+  const isReturningFounderJourney =
+    transaction.source === "create-community" &&
+    transaction.ownerPubkey === currentPubkey;
   if (
     isReturningFounderJourney &&
     transaction.stage !== "claiming" &&
@@ -473,13 +582,16 @@ export function CommunityOnboardingFlow({
     return (
       <AdditionalCommunityRun
         initialDraft={transaction.onboardingV2 ?? null}
-        onComplete={async (draft) => {
+        ownerPubkey={transaction.ownerPubkey ?? ""}
+        onComplete={async (draft, isCurrentRun) => {
+          if (!isCurrentRun())
+            throw new Error("This business setup has ended.");
           // Recorded before the handoff so a relaunch mid-handoff resumes with
           // the answers this walk produced rather than an empty draft.
           update({ onboardingV2: draft, error: undefined });
-          await finalizeWith(draft);
+          await finalizeWith(draft, isCurrentRun);
         }}
-        onExit={() => void finish()}
+        onExit={() => suspend(transaction.id)}
         transactionId={transaction.id}
         relayUrl={transaction.relayUrl}
       />

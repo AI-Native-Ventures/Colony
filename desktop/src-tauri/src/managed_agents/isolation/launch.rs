@@ -46,7 +46,7 @@ pub(crate) fn wrap(
     Ok((command, Some(network)))
 }
 
-pub(super) fn private_directory(path: &Path) -> Result<(), String> {
+pub(crate) fn private_directory(path: &Path) -> Result<(), String> {
     match std::fs::create_dir(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}

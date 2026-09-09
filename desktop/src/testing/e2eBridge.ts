@@ -1,3 +1,7 @@
+import {
+  createMockOpenRouter,
+  type MockOpenRouterConfig,
+} from "./e2eBridgeOpenRouter";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { mockWindows } from "@tauri-apps/api/mocks";
 import { decode, npubEncode, nsecEncode } from "nostr-tools/nip19";
@@ -6,6 +10,8 @@ import { parse as yamlParse } from "yaml";
 import type { SubscriptionScan } from "@/shared/api/tauriSubscriptions";
 import {
   createMockSubscriptionScanner,
+  createMockSubscriptionConnections,
+  type MockSubscriptionConnectionsConfig,
   type MockSubscriptionScanResult,
 } from "./e2eBridgeSubscriptions";
 import {
@@ -243,7 +249,7 @@ type MockWorkflowRunSeed = {
 
 type E2eConfig = {
   mode?: "mock" | "relay";
-  mock?: {
+  mock?: MockSubscriptionConnectionsConfig & {
     /** Tauri window label exposed to the app. Defaults to the main window. */
     windowLabel?: string;
     ttsSettings?: {
@@ -337,6 +343,8 @@ type E2eConfig = {
     };
     colonyCreateError?: string;
     /** Native subscription metadata, distinct from runtime launch support. */
+    openRouterConnection?: MockOpenRouterConfig["openRouterConnection"];
+    openRouterQuotaSequence?: MockOpenRouterConfig["openRouterQuotaSequence"];
     subscriptionScan?: SubscriptionScan;
     /** Success/error responses per scan; the last response repeats on retry. */
     subscriptionScanSequence?: MockSubscriptionScanResult[];
@@ -12256,6 +12264,10 @@ export function maybeInstallE2eTauriMocks() {
     };
   }> = [];
   const scanSubscriptions = createMockSubscriptionScanner(config.mock);
+  const openRouter = createMockOpenRouter(config.mock);
+  const subscriptionConnections = createMockSubscriptionConnections(
+    config.mock,
+  );
   const handleMockCommand = async (
     command: string,
     payload: unknown,
@@ -12783,21 +12795,39 @@ export function maybeInstallE2eTauriMocks() {
           available: true,
         };
       case "colony_create_community": {
-        const colonyName = (payload as { name?: string })?.name ?? "community";
-        if (activeConfig?.mock?.colonyCreateError) {
-          throw new Error(activeConfig.mock.colonyCreateError);
-        }
-        return {
-          community: activeConfig?.mock?.colonyCreatedCommunity ?? {
-            id: `colony-${colonyName}`,
-            name: colonyName,
-            slug: colonyName,
-            normalized_host: `${colonyName}.colony.ainative.ventures`,
-          },
+        const request = payload as {
+          name?: string;
+          expectedOwnerPubkey?: string;
+          expectedRelayUrl?: string;
         };
+        const colonyName = request?.name ?? "community";
+        if (
+          request.expectedOwnerPubkey &&
+          request.expectedOwnerPubkey !==
+            (identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey)
+        )
+          throw new Error("The account changed before creating the community.");
+        if (activeConfig?.mock?.colonyCreateError)
+          throw new Error(activeConfig.mock.colonyCreateError);
+        const community = activeConfig?.mock?.colonyCreatedCommunity ?? {
+          id: `colony-${colonyName}`,
+          name: colonyName,
+          slug: colonyName,
+          normalized_host: `${colonyName}.colony.ainative.ventures`,
+        };
+        if (activeConfig) {
+          activeConfig.mock ??= {};
+          const mine = activeConfig.mock.colonyCommunities ?? [];
+          if (!mine.some((entry) => entry.slug === community.slug))
+            activeConfig.mock.colonyCommunities = [...mine, community];
+        }
+        return { community };
       }
       case "colony_list_my_communities":
-        return { communities: activeConfig?.mock?.colonyCommunities ?? [] };
+        return {
+          owner_pubkey: identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey,
+          communities: activeConfig?.mock?.colonyCommunities ?? [],
+        };
       // Money crosses this boundary as decimal strings, exactly as the real
       // command emits it, so the screen's bigint parsing is exercised rather
       // than bypassed by a friendlier fixture.
@@ -13686,13 +13716,19 @@ export function maybeInstallE2eTauriMocks() {
         return true;
       }
       case "get_relay_http_url":
-        return getRelayHttpUrl(activeConfig);
+        return mockAppliedRelayWsUrl
+          ? mockAppliedRelayWsUrl.replace(/^ws/, "http")
+          : getRelayHttpUrl(activeConfig);
       case "relay_requires_membership":
         return activeConfig?.mock?.relayRequiresMembership ?? false;
       case "discover_acp_providers":
         return handleDiscoverAcpRuntimes(activeConfig);
       case "scan_agent_subscriptions":
         return scanSubscriptions();
+      case "get_subscription_connections":
+        return subscriptionConnections.read(payload);
+      case "connect_subscription":
+        return subscriptionConnections.connect(payload);
       case "save_custom_harness":
         return handleSaveCustomHarness(
           payload as Parameters<typeof handleSaveCustomHarness>[0],
@@ -14354,6 +14390,10 @@ export function maybeInstallE2eTauriMocks() {
         if (!runtimeId) return null;
         return config.mock?.runtimeFileConfigs?.[runtimeId] ?? null;
       }
+      case "connect_openrouter":
+        return openRouter.connect();
+      case "openrouter_quota":
+        return openRouter.quota();
       case "get_global_agent_config": {
         // Return the mutable persisted mock value, seeded from the test config.
         return (

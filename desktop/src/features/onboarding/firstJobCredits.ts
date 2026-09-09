@@ -40,35 +40,29 @@ export type FirstJobFundingResult =
   | { kind: "initialization-uncertain"; availableNanousd: bigint };
 
 /** Existing payment/native services plus durable scope-bound attempt adapters. */
-export type FirstJobCreditsDependencies = {
+export type CreditsCheckoutDependencies<Scope> = {
   payments: Pick<
     OnboardingServices["payments"],
     "packs" | "createTransaction" | "verify"
   >;
-  assertCurrent(scope: FirstJobScope): Promise<void>;
-  readAvailableCredits(scope: FirstJobScope): Promise<bigint>;
+  assertCurrent(scope: Scope): Promise<void>;
+  readAvailableCredits(scope: Scope): Promise<bigint>;
   openUrl(url: string): Promise<unknown>;
-  readAttempt(scope: FirstJobScope): Promise<FirstJobCheckoutAttempt | null>;
-  writeAttempt(
-    scope: FirstJobScope,
-    attempt: FirstJobCheckoutAttempt,
-  ): Promise<void>;
+  readAttempt(scope: Scope): Promise<FirstJobCheckoutAttempt | null>;
+  writeAttempt(scope: Scope, attempt: FirstJobCheckoutAttempt): Promise<void>;
   /** Must exclude other windows, not just calls on this controller instance. */
-  withAttemptLock<T>(
-    scope: FirstJobScope,
-    action: () => Promise<T>,
-  ): Promise<T>;
+  withAttemptLock<T>(scope: Scope, action: () => Promise<T>): Promise<T>;
 };
 
 /** The small funding surface used by the in-thread setup suggestion. */
-export type FirstJobCreditsController = {
-  loadPacks(scope: FirstJobScope): Promise<CreditPackList>;
+export type CreditsCheckoutController<Scope> = {
+  loadPacks(scope: Scope): Promise<CreditPackList>;
   begin(
-    scope: FirstJobScope,
+    scope: Scope,
     input: FirstJobCheckoutInput,
   ): Promise<FirstJobCheckoutResult>;
-  reopen(scope: FirstJobScope): Promise<FirstJobCheckoutResult>;
-  check(scope: FirstJobScope): Promise<FirstJobFundingResult>;
+  reopen(scope: Scope): Promise<FirstJobCheckoutResult>;
+  check(scope: Scope): Promise<FirstJobFundingResult>;
 };
 
 function checkoutInput(input: FirstJobCheckoutInput): FirstJobCheckoutInput {
@@ -147,13 +141,16 @@ export function isFirstJobCheckoutAttempt(
  * and browser handoff is guarded after the preceding asynchronous operation.
  * Persistence/locking adapters must also bind the owner and relay internally.
  */
-export function createFirstJobCredits(
-  dependencies: FirstJobCreditsDependencies,
-): FirstJobCreditsController {
+export function createCreditsCheckout<Scope>(
+  dependencies: CreditsCheckoutDependencies<Scope> & {
+    snapshotScope(scope: Scope): Scope;
+    scopeKey(scope: Scope): string;
+  },
+): CreditsCheckoutController<Scope> {
   const inFlight = new Map<string, Promise<unknown>>();
 
   async function current<T>(
-    scope: FirstJobScope,
+    scope: Scope,
     action: () => Promise<T>,
   ): Promise<T> {
     await dependencies.assertCurrent(scope);
@@ -163,17 +160,17 @@ export function createFirstJobCredits(
   }
 
   function locked<T>(
-    inputScope: FirstJobScope,
+    inputScope: Scope,
     operation: string,
-    action: (scope: FirstJobScope) => Promise<T>,
+    action: (scope: Scope) => Promise<T>,
   ): Promise<T> {
-    let scope: FirstJobScope;
+    let scope: Scope;
     try {
-      scope = snapshotFirstJobScope(inputScope);
+      scope = dependencies.snapshotScope(inputScope);
     } catch (error) {
       return Promise.reject(error);
     }
-    const key = `${operation}:${firstJobScopeKey(scope)}`;
+    const key = `${operation}:${dependencies.scopeKey(scope)}`;
     const pending = inFlight.get(key);
     if (pending) return pending as Promise<T>;
     const result = current(scope, () =>
@@ -185,14 +182,14 @@ export function createFirstJobCredits(
     return result;
   }
 
-  async function read(scope: FirstJobScope) {
+  async function read(scope: Scope) {
     return checkedAttempt(
       await current(scope, () => dependencies.readAttempt(scope)),
     );
   }
 
   async function open(
-    scope: FirstJobScope,
+    scope: Scope,
     attempt: Extract<FirstJobCheckoutAttempt, { phase: "ready" }>,
   ): Promise<FirstJobCheckoutResult> {
     await dependencies.assertCurrent(scope);
@@ -213,7 +210,7 @@ export function createFirstJobCredits(
 
   return {
     async loadPacks(inputScope) {
-      const scope = snapshotFirstJobScope(inputScope);
+      const scope = dependencies.snapshotScope(inputScope);
       return current(scope, () => dependencies.payments.packs());
     },
     begin(scope, rawInput) {
@@ -309,4 +306,21 @@ export function createFirstJobCredits(
       });
     },
   };
+}
+
+/** Existing thread funding keeps its original validated request scope. */
+export type FirstJobCreditsDependencies =
+  CreditsCheckoutDependencies<FirstJobScope>;
+export type FirstJobCreditsController =
+  CreditsCheckoutController<FirstJobScope>;
+
+/** Adapt the shared checkout to the existing first-job request identity. */
+export function createFirstJobCredits(
+  dependencies: FirstJobCreditsDependencies,
+): FirstJobCreditsController {
+  return createCreditsCheckout({
+    ...dependencies,
+    snapshotScope: snapshotFirstJobScope,
+    scopeKey: firstJobScopeKey,
+  });
 }

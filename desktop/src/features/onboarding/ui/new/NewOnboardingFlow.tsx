@@ -410,6 +410,7 @@ export function NewOnboardingFlow({
           key={powerScopeKey}
           scopeKey={powerScopeKey}
           expectedOwnerPubkey={currentPubkey}
+          receiptEmail={answers.account?.email}
           expectedRelayUrl={expectedRelayUrl}
           prepareScope={onPreparePower}
           businessOnly={existingIdentity}

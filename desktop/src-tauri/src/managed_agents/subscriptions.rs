@@ -1,4 +1,4 @@
-//! Detecting coding-agent subscriptions the user already pays for.
+//! Subscription detection: legacy cached hints and current vendor control APIs.
 //!
 //! Onboarding used to offer OpenRouter and Colony credits, and probe for harness
 //! binaries only behind an "advanced" disclosure. That buries the best option
@@ -12,12 +12,13 @@
 //! 2. Which of them are signed in to a paid plan, and which plan?
 //! 3. Which one should be recommended?
 //!
-//! # Read from disk, never from the network
+//! # Legacy scanner: cached filesystem hints
 //!
-//! Claude Code writes everything needed to `~/.claude.json`, so detection costs
-//! one file read and no auth prompt. Onboarding runs before the user has agreed
-//! to anything, so a probe that opened a browser or spent a token would be the
-//! wrong shape regardless of what it returned.
+//! The legacy scanner below reads cached `~/.claude.json` metadata without an
+//! auth prompt. It does not establish a currently usable Colony connection.
+//! New Power onboarding uses `codex_account` and `claude_account`: vendor-owned
+//! control APIs return public auth/model/usage facts without executing a prompt.
+//! A separate explicit Connect command runs vendor login in a scoped profile.
 //!
 //! # Detection is uneven, and callers must not paper over it
 //!
@@ -33,6 +34,12 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+pub(crate) mod account;
+pub(crate) mod claude_account;
+pub(crate) mod codex_account;
+mod environment;
+mod rpc;
 
 /// Gap in remaining-percentage below which two plans count as equivalent, and
 /// the better model tier decides.

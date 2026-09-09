@@ -7,7 +7,10 @@ import {
   continueFounderBusiness,
 } from "../helpers/onboarding";
 import { waitForAnimations } from "../helpers/animations";
-import { MOCK_SUBSCRIPTION_SCAN } from "../../src/testing/e2eBridgeSubscriptions";
+import {
+  MOCK_SUBSCRIPTION_SCAN,
+  MOCK_SUBSCRIPTION_CONNECTIONS,
+} from "../../src/testing/e2eBridgeSubscriptions";
 
 async function expectOpaqueFounderSurface(
   page: Page,
@@ -118,9 +121,9 @@ test("power offers all three choices and saves the selected defaults", async ({
 
   await power.getByRole("button", { name: /^Subscriptions/ }).click();
   await expect(
-    power.getByRole("button", { name: "Claude Max 20x", exact: true }),
+    power.getByRole("button", { name: /^Claude · Max 20x/ }),
   ).toBeVisible();
-  await expect(power).toContainText("Choose a detected connection.");
+  await expect(power).toContainText("Found on this Mac");
   await expect(power).toContainText("65% left");
   await expect(power).not.toContainText(
     "Subscription detection could not finish",
@@ -168,15 +171,15 @@ test("power offers all three choices and saves the selected defaults", async ({
   );
 });
 
-test("subscription scan retry recovers detection but an unsupported Electron runtime stays blocked", async ({
+test("subscription account retry recovers detection but an unsupported Electron runtime stays blocked", async ({
   page,
 }) => {
   const launchError =
     "Claude Code cannot run isolated teammates in this Electron beta. Choose Colony Agent.";
   await reachPower(page, {
-    subscriptionScanSequence: [
+    subscriptionConnectionsSequence: [
       { error: "Synthetic subscription scan failed" },
-      MOCK_SUBSCRIPTION_SCAN,
+      MOCK_SUBSCRIPTION_CONNECTIONS.map((entry) => ({ ...entry, launchError })),
     ],
     acpRuntimesCatalog: [
       {
@@ -202,19 +205,17 @@ test("subscription scan retry recovers detection but an unsupported Electron run
   });
   const power = page.getByTestId("onboarding-power");
   await power.getByRole("button", { name: /^Subscriptions/ }).click();
-  await expect(power).toContainText("Subscription detection could not finish");
-  await power.getByRole("button", { name: "Claude Code", exact: true }).click();
-  await expect(power.getByRole("alert")).toContainText(launchError);
+  await expect(power).toContainText("We could not check your subscriptions");
   const complete = power.getByRole("button", { name: "Open my Colony" });
   await expect(complete).toBeDisabled();
-
   await power.getByRole("button", { name: "Check again", exact: true }).click();
-  await expect(power).toContainText("Choose a detected connection.");
+  await power.getByRole("button", { name: /^Claude · Max 20x/ }).click();
+  await expect(power).toContainText("Found on this Mac");
   await expect(power).not.toContainText(
     "Subscription detection could not finish",
   );
   await expect(
-    power.getByRole("button", { name: "Claude Max 20x", exact: true }),
+    power.getByRole("button", { name: /^Claude · Max 20x/ }),
   ).toBeVisible();
   await expect(power).toContainText("65% left");
   await expect(power.getByRole("alert")).toContainText(launchError);
@@ -465,4 +466,127 @@ test("account and business retain readable opaque forms and brand at narrow widt
       () => document.documentElement.scrollWidth > window.innerWidth,
     ),
   ).toBe(false);
+});
+
+test("Power buys credits and resumes the same checkout after changing lanes", async ({
+  page,
+}) => {
+  let initialized = 0;
+  let paid = false;
+  await page.route("**/api/payments/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    let body: unknown;
+    if (path.endsWith("/packs")) {
+      body = {
+        currency: "USD",
+        packs: [
+          {
+            id: "starter",
+            name: "Starter",
+            usdCents: 500,
+            zarCents: 9900,
+            grantNanousd: 5_000_000_000,
+          },
+        ],
+      };
+    } else if (path.endsWith("/initialize")) {
+      initialized += 1;
+      expect(route.request().postDataJSON()).toEqual({
+        packId: "starter",
+        email: "founder@example.test",
+      });
+      body = {
+        reference: "power-checkout-one",
+        authorizationUrl: "https://checkout.example.test/one",
+      };
+    } else {
+      expect(path).toBe("/api/payments/verify");
+      expect(route.request().postDataJSON()).toEqual({
+        reference: "power-checkout-one",
+      });
+      body = { paid, usdCents: paid ? 500 : 0 };
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+  });
+  await reachPower(page);
+  const power = page.getByTestId("onboarding-power");
+  await power.getByLabel("Receipt email").fill("founder@example.test");
+  await power.getByRole("button", { name: "Pay $5", exact: true }).click();
+  await expect(power).toContainText("Your checkout is saved");
+  expect(initialized).toBe(1);
+  await power.getByRole("button", { name: /^Subscriptions/ }).click();
+  await power.getByRole("button", { name: /^Colony Credits/ }).click();
+  await expect(
+    power.getByRole("button", { name: "Open checkout again" }),
+  ).toBeVisible();
+  await expect(power.getByRole("button", { name: /^Pay / })).toHaveCount(0);
+  await expect(power).not.toContainText("Payment confirmed");
+  paid = true;
+  await power
+    .getByRole("button", { name: "Check payment", exact: true })
+    .click();
+  await expect(power).toContainText(
+    "Payment confirmed. Your credits are available.",
+  );
+  expect(initialized).toBe(1);
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-payment-confirmed.png",
+  });
+});
+
+test("Power connects OpenRouter, explains verified allowance and rechecks after top-up", async ({
+  page,
+}) => {
+  await reachPower(page, {
+    openRouterConnection: {
+      status: "connected",
+      key: "synthetic-openrouter-key",
+    },
+    openRouterQuotaSequence: [
+      { status: "unpaid" },
+      {
+        status: "verified",
+        quota: {
+          total_credits_usd: 10,
+          total_usage_usd: 10,
+          threshold_met: true,
+          requests_per_day: 1000,
+          requests_per_minute: 20,
+          usd_to_threshold: null,
+        },
+      },
+    ],
+  });
+  const power = page.getByTestId("onboarding-power");
+  await power.getByRole("button", { name: /^OpenRouter free models/ }).click();
+  await page.getByTestId("openrouter-connect-button").click();
+  const allowance = power.getByTestId("openrouter-allowance");
+  await expect(allowance).toContainText("50 free-model requests a day");
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-openrouter-topup.png",
+  });
+  await allowance
+    .getByRole("button", { name: "Add credits on OpenRouter" })
+    .click();
+  const urls = await page.evaluate(() =>
+    window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_e2e_opened_external_urls"),
+  );
+  expect(urls).toContain("https://openrouter.ai/settings/credits");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(allowance).toContainText(
+    "Eligible for 1,000 free-model requests a day",
+  );
+  await expect(
+    allowance.getByRole("button", { name: "Add credits on OpenRouter" }),
+  ).toHaveCount(0);
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-openrouter-eligible.png",
+  });
 });

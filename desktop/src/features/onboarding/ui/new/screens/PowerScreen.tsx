@@ -14,30 +14,29 @@ import {
   getColonyCreditsAccount,
   formatNanousdAsUsd,
 } from "@/shared/api/tauriProvisionedCredits";
-import { scanAgentSubscriptions } from "@/shared/api/tauriSubscriptions";
 import type { GlobalAgentConfig } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { getRelayWsUrl } from "@/shared/api/tauri";
 import { assertFirstJobScope } from "../../../firstJobScope";
-import { brainsFromRuntimes } from "../../../flow/track";
 import {
   configForPowerLane,
   initialPowerConfig,
   powerLaneForConfig,
   type PowerLane,
 } from "../../../powerChoice";
-import { resolveAgentReadiness } from "../../agentReadiness";
 import { effectiveOnboardingRuntimeId } from "../../onboardingRuntimeSelection";
 import { FounderLayout } from "../FounderLayout";
-import { subscriptionTiles } from "./brainLanes";
 import { CreditsModelFields } from "./CreditsModelFields";
 import { FreeOpenRouterFields } from "./FreeOpenRouterFields";
+import { PowerCreditsPurchase } from "./PowerCreditsPurchase";
+import { SubscriptionPowerFields } from "./SubscriptionPowerFields";
 
 /** Third founder step. Credentials live only in this mounted draft and native storage. */
 export function PowerScreen({
   scopeKey,
   expectedOwnerPubkey,
+  receiptEmail,
   expectedRelayUrl,
   prepareScope,
   businessOnly,
@@ -48,6 +47,7 @@ export function PowerScreen({
 }: {
   scopeKey: string;
   expectedOwnerPubkey?: string;
+  receiptEmail?: string;
   expectedRelayUrl?: string;
   prepareScope?: (assertCurrent: () => void) => Promise<string>;
   businessOnly: boolean;
@@ -84,11 +84,6 @@ export function PowerScreen({
     queryKey: globalAgentConfigQueryKey,
     queryFn: getGlobalAgentConfig,
   });
-  const scan = useQuery({
-    queryKey: ["onboarding-subscriptions"],
-    queryFn: scanAgentSubscriptions,
-    retry: false,
-  });
   const [draft, setDraft] = useState<GlobalAgentConfig | null>(null);
   const [lane, setLane] = useState<PowerLane | null>(null);
   const [valid, setValid] = useState(false);
@@ -112,15 +107,18 @@ export function PowerScreen({
   const runtimeFile = useRuntimeFileConfigQuery(runtime?.id ?? "");
   const credits = useQuery({
     queryKey: ["onboarding-credits-account", scopeKey],
-    queryFn: getColonyCreditsAccount,
+    queryFn: async () => {
+      if (!scope.data)
+        throw new Error("Your business connection is not ready.");
+      await assertFirstJobScope(scope.data);
+      const account = await getColonyCreditsAccount();
+      await assertFirstJobScope(scope.data);
+      return account;
+    },
     enabled: lane === "colony" && scope.isSuccess && !scope.isFetching,
     retry: false,
     staleTime: 0,
   });
-  const subscriptions = subscriptionTiles(
-    scan.data ?? null,
-    brainsFromRuntimes(runtimes.data ?? []),
-  );
   function selectLane(next: PowerLane, runtimeId?: string) {
     if (!draft) return;
     if (next === lane && (!runtimeId || runtimeId === draft.preferred_runtime))
@@ -131,9 +129,6 @@ export function PowerScreen({
     setLane(next);
     setDraft(configForPowerLane(draft, next, runtimeId));
   }
-  const subscriptionReady =
-    !!draft &&
-    resolveAgentReadiness(runtimes.data ?? [], draft, "preferred").ready;
   const canContinue =
     scope.isSuccess &&
     !scope.isFetching &&
@@ -142,7 +137,7 @@ export function PowerScreen({
     !!runtime &&
     !runtime.localLaunchError &&
     runtime.availability === "available" &&
-    (lane === "subscription" ? subscriptionReady && valid : valid) &&
+    valid &&
     (lane !== "colony" || credits.isSuccess);
   async function save() {
     if (
@@ -228,7 +223,9 @@ export function PowerScreen({
                 <span>Connect OpenRouter. Usage limits apply.</span>
               </button>
             </fieldset>
-            {powerLaneForConfig(saved.data ?? draft) === "existing" && (
+            {["existing", "subscription"].includes(
+              powerLaneForConfig(saved.data ?? draft),
+            ) && (
               <Button
                 variant="outline"
                 onClick={() => {
@@ -247,53 +244,22 @@ export function PowerScreen({
                 different way to power agents above.
               </p>
             )}
-            {lane === "subscription" && (
-              <div className="space-y-3">
-                <p className="onb-simple-note">
-                  {scan.isPending
-                    ? "Looking for subscriptions on this computer…"
-                    : scan.isError
-                      ? "Subscription detection could not finish. Available connections are shown below."
-                      : "Choose a detected connection. Being installed does not always mean it is signed in."}
-                </p>
-                {subscriptions.map((entry) => {
-                  const native = runtimes.data?.find(
-                    (item) => item.id === entry.id,
-                  );
-                  return (
-                    <div key={entry.id} className="onb-power-subscription">
-                      <Button
-                        variant="outline"
-                        aria-pressed={draft.preferred_runtime === entry.id}
-                        onClick={() => selectLane("subscription", entry.id)}
-                      >
-                        {entry.label}
-                      </Button>
-                      <p className="onb-simple-note">
-                        {entry.pill}
-                        {native?.localLaunchError
-                          ? ` · ${native.localLaunchError}`
-                          : ""}
-                      </p>
-                    </div>
-                  );
-                })}
-                {!scan.isPending && subscriptions.length === 0 && (
-                  <p>
-                    No subscriptions found. Choose Colony Credits or connect
-                    OpenRouter.
-                  </p>
-                )}
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    void scan.refetch();
-                    void runtimes.refetch();
-                  }}
-                >
-                  Check again
-                </Button>
-              </div>
+            {lane === "subscription" && scope.data && (
+              <SubscriptionPowerFields
+                key={scopeKey}
+                scope={scope.data}
+                selectedRuntimeId={draft.preferred_runtime}
+                selectedModel={draft.model}
+                disabled={busy}
+                onSelect={(runtimeId, model) => {
+                  setValid(false);
+                  setDraft({
+                    ...configForPowerLane(draft, "subscription", runtimeId),
+                    model,
+                  });
+                }}
+                onValidityChange={setValid}
+              />
             )}
             {lane === "colony" && (
               <div role="status" className="onb-simple-note">
@@ -302,7 +268,7 @@ export function PowerScreen({
                   : credits.isError
                     ? "Colony Credits is unavailable for this workspace. Choose another connection, or check again after the service is restored."
                     : credits.data
-                      ? `${formatNanousdAsUsd(credits.data.available_balance_nanousd)} available. You can add credits before starting a job.`
+                      ? `${formatNanousdAsUsd(credits.data.available_balance_nanousd)} available for your agents.`
                       : null}
                 {credits.isError && (
                   <Button
@@ -314,50 +280,60 @@ export function PowerScreen({
                 )}
               </div>
             )}
-            {runtime?.localLaunchError ? (
-              <p role="alert" className="onb-simple-error">
-                {runtime.localLaunchError}
-              </p>
-            ) : (
-              scope.isSuccess &&
-              !scope.isFetching &&
-              runtime &&
-              (lane === "openrouter" ? (
-                <FreeOpenRouterFields
-                  key={`${lane}:${runtime.id}`}
-                  config={draft}
-                  runtime={runtime}
-                  onChange={setDraft}
-                  onValidityChange={setValid}
-                />
-              ) : lane === "colony" ? (
-                credits.isSuccess && (
-                  <CreditsModelFields
-                    key={`${lane}:${runtime.id}:${credits.dataUpdatedAt}:${modelAttempt}`}
-                    onRetry={() => setModelAttempt((value) => value + 1)}
+            {lane === "colony" && scope.data && (
+              <PowerCreditsPurchase
+                key={scopeKey}
+                scope={scope.data}
+                receiptEmail={receiptEmail}
+                onBalanceChanged={() => void credits.refetch()}
+              />
+            )}
+            {lane !== "subscription" &&
+              (runtime?.localLaunchError ? (
+                <p role="alert" className="onb-simple-error">
+                  {runtime.localLaunchError}
+                </p>
+              ) : (
+                scope.isSuccess &&
+                !scope.isFetching &&
+                runtime &&
+                (lane === "openrouter" ? (
+                  <FreeOpenRouterFields
+                    scope={scope.data}
+                    key={`${lane}:${runtime.id}`}
                     config={draft}
                     runtime={runtime}
                     onChange={setDraft}
                     onValidityChange={setValid}
                   />
-                )
-              ) : (
-                <AgentConfigFields
-                  key={`${lane}:${runtime.id}`}
-                  bakedEnv={[]}
-                  config={draft}
-                  selectedRuntime={runtime}
-                  runtimeFileConfig={runtimeFile.data}
-                  disclosure="onboarding-essential"
-                  isCustomModelEditing={customModel}
-                  isCustomProvider={customProvider}
-                  onConfigChange={setDraft}
-                  onCustomModelEditingChange={setCustomModel}
-                  onIsCustomProviderChange={setCustomProvider}
-                  onValidityChange={setValid}
-                />
-              ))
-            )}
+                ) : lane === "colony" ? (
+                  credits.isSuccess && (
+                    <CreditsModelFields
+                      key={`${lane}:${runtime.id}:${credits.dataUpdatedAt}:${modelAttempt}`}
+                      onRetry={() => setModelAttempt((value) => value + 1)}
+                      config={draft}
+                      runtime={runtime}
+                      onChange={setDraft}
+                      onValidityChange={setValid}
+                    />
+                  )
+                ) : (
+                  <AgentConfigFields
+                    key={`${lane}:${runtime.id}`}
+                    bakedEnv={[]}
+                    config={draft}
+                    selectedRuntime={runtime}
+                    runtimeFileConfig={runtimeFile.data}
+                    disclosure="onboarding-essential"
+                    isCustomModelEditing={customModel}
+                    isCustomProvider={customProvider}
+                    onConfigChange={setDraft}
+                    onCustomModelEditingChange={setCustomModel}
+                    onIsCustomProviderChange={setCustomProvider}
+                    onValidityChange={setValid}
+                  />
+                ))
+              ))}
             {error && (
               <p className="onb-simple-error" role="alert">
                 {error}

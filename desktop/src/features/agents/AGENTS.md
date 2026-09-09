@@ -78,6 +78,19 @@ with a TypeScript lookup table or an id comparison in a component.
    the expected owner and relay during native persistence and limit immediate
    restarts to that captured pair. Defaults still apply device-wide to future
    launches; this is not separate billing configuration per business.
+   **Power completion and evidence:** Created businesses repeat Business and
+   Power even when their owner's profile already exists. Pending setup and
+   checkout recovery bind the owner and relay; joining does not adopt owner
+   onboarding. Exit preserves progress and never marks setup complete.
+   Subscription detection and Colony connection are separate facts. Public
+   metadata comes from vendor control APIs; unknown usage is not zero, and a
+   successful sign-in does not bypass native launch/isolation support.
+   Credit checkout is explicit inside Power and reuses its persisted reference
+   across remounts. A positive pre-existing balance is not a paid receipt.
+   OpenRouter eligibility uses lifetime purchases only when the provider
+   exposes them. Management-only history denial and "has paid before" are
+   unknown threshold evidence; never solicit an administrative key or tell
+   these accounts they must buy again.
    **Legacy founder fallback:**
    The approved public founder journey collects account and business details.
    `ensureBuiltInFounderConfig` preserves an existing ready configuration;
