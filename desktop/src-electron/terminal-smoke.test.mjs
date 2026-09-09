@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parsePidCols } from "./terminal-smoke.mjs";
+import {
+  countChunkBytes,
+  decodeChunkArrays,
+  parsePidCols,
+} from "./terminal-smoke.mjs";
 
 test("parsePidCols parses <pid> <cols>", () => {
   assert.deepStrictEqual(parsePidCols("123 80\n"), { pid: 123, cols: 80 });
@@ -25,4 +29,42 @@ test("parsePidCols rejects empty or invalid input", () => {
 test("parsePidCols handles whitespace-only strings", () => {
   assert.strictEqual(parsePidCols("   "), null);
   assert.strictEqual(parsePidCols("\n\t"), null);
+});
+
+test("decodeChunkArrays joins chunks before decoding utf8", () => {
+  assert.strictEqual(decodeChunkArrays([[104, 105]]), "hi");
+  assert.strictEqual(
+    decodeChunkArrays([
+      [104, 105],
+      [33, 10],
+    ]),
+    "hi!\n",
+  );
+  // A multi-byte sequence split across two chunks must still decode.
+  assert.strictEqual(
+    decodeChunkArrays([
+      [240, 159],
+      [154, 128],
+    ]),
+    "🚀",
+  );
+});
+
+test("decodeChunkArrays tolerates missing or malformed input", () => {
+  assert.strictEqual(decodeChunkArrays([]), "");
+  assert.strictEqual(decodeChunkArrays(undefined), "");
+  assert.strictEqual(decodeChunkArrays([null, [97]]), "a");
+});
+
+test("countChunkBytes totals the collected chunk lengths", () => {
+  assert.strictEqual(countChunkBytes([]), 0);
+  assert.strictEqual(countChunkBytes(undefined), 0);
+  assert.strictEqual(
+    countChunkBytes([
+      [1, 2, 3],
+      [4, 5],
+    ]),
+    5,
+  );
+  assert.strictEqual(countChunkBytes([null, [1, 2]]), 2);
 });

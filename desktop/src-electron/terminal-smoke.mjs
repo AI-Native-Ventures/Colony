@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+
+// The shell prints this, but no command line typed into the PTY contains it, so
+// the echo of the command cannot satisfy the check on its own.
+const MARKER = "__COLONY_TERM_OK__";
+const MARKER_COMMAND = `printf '%s_%s\\n' __COLONY TERM_OK__\n`;
 
 /** Parse a `<pid> <cols>` or `<pid>` line from a file; return null if absent/invalid. */
 export function parsePidCols(text) {
@@ -16,28 +22,21 @@ export function parsePidCols(text) {
   return { pid, cols: cols ?? null };
 }
 
-/** Open workspace, create terminal, return first body locator and original pid file path. */
-async function openTerminal(page) {
-  // Navigate to workspace entry from wherever the smoke is.
-  await page.goto("/");
-  try {
-    await page.getByTestId("channel-general").click({ timeout: 30000 });
-  } catch {
-    // Workspace already open or different state; continue.
-  }
-  try {
-    await page
-      .getByTestId("channel-workspace-toggle")
-      .click({ timeout: 30000 });
-  } catch {
-    // Already in workspace mode; continue.
-  }
-  await page.getByTestId("channel-workspace").waitFor({ timeout: 30000 });
-  await page.getByTestId("workspace-new-tab").click();
-  await page.getByTestId("workspace-create-terminal").click();
-  const body = page.getByTestId("workspace-terminal-body");
-  await body.waitFor({ timeout: 60000 });
-  return body;
+/** Decode PTY chunks collected in the renderer as arrays of byte values. */
+export function decodeChunkArrays(chunks) {
+  if (!Array.isArray(chunks)) return "";
+  const buffers = chunks
+    .filter((chunk) => Array.isArray(chunk))
+    .map((chunk) => Buffer.from(chunk));
+  return Buffer.concat(buffers).toString("utf8");
+}
+
+/** Total byte count of chunks collected in the renderer; used to ack backpressure. */
+export function countChunkBytes(chunks) {
+  if (!Array.isArray(chunks)) return 0;
+  let total = 0;
+  for (const chunk of chunks) if (Array.isArray(chunk)) total += chunk.length;
+  return total;
 }
 
 /** Poll a file until it exists and parses; timeout in ms. */
@@ -51,9 +50,15 @@ async function pollFileParse(filePath, parser, timeoutMs = 30000) {
     } catch {
       // Not yet present.
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await delay(200);
   }
   return null;
+}
+
+/** Parse a file holding a single positive integer. */
+function parsePositiveInteger(text) {
+  const value = Number(text.trim());
+  return Number.isInteger(value) && value > 0 ? value : null;
 }
 
 /** Check if a pid is alive using the Electron main process. */
@@ -76,327 +81,218 @@ async function isLivePid(application, pid) {
   }
 }
 
-/** Rebuild workspace/terminal after reload when persistence fails. */
-async function rebuildTerminal(page, _tmpDir) {
-  await page.goto("/");
-  try {
-    await page.getByTestId("channel-general").click({ timeout: 30000 });
-  } catch {
-    // Ignore.
-  }
-  try {
-    await page
-      .getByTestId("channel-workspace-toggle")
-      .click({ timeout: 30000 });
-  } catch {
-    // Ignore.
-  }
-  await page.getByTestId("channel-workspace").waitFor({ timeout: 30000 });
-  await page.getByTestId("workspace-new-tab").click();
-  await page.getByTestId("workspace-create-terminal").click();
-  const body = page.getByTestId("workspace-terminal-body");
-  await body.waitFor({ timeout: 60000 });
-  return body;
+/** Write into the packaged PTY through the preload bridge. */
+function writeToTerminal(page, sessionId, data) {
+  return page.evaluate(
+    ({ sessionId, data }) =>
+      window.colonyDesktop.terminal.write({ sessionId, data }),
+    { sessionId, data },
+  );
 }
 
+/**
+ * Prove the packaged bundle's node-pty, spawn-helper and preload IPC path.
+ *
+ * This drives `window.colonyDesktop.terminal` directly: the smoke app runs with
+ * an unreachable relay, so it has no channel and no workspace tab strip to
+ * click. The terminal UI itself is covered by the mock-mode Playwright spec in
+ * normal CI; what only the packaged, signed bundle can prove is that a real PTY
+ * spawns, resizes, streams to the renderer, survives a reload and is reaped.
+ */
 export async function verifyTerminal(application, page, { proofDir } = {}) {
   const tmpDir = await mkdtemp(
     path.join(os.tmpdir(), "colony-terminal-smoke-"),
   );
-  let originalPid = null;
+  const home = os.homedir();
 
-  // --- Step 1: open workspace and terminal, prove shell starts ---
-  const body = await openTerminal(page);
-  try {
-    await page.waitForFunction(
-      () => {
-        const el = document.querySelector(
-          '[data-testid="workspace-terminal-body"]',
-        );
-        return el?.getAttribute("data-status") === "running";
-      },
-      {},
-      { timeout: 60000, polling: "raf" },
-    );
-  } catch {
-    const errorText = await body.getAttribute("data-status");
-    const errorBody = await page
-      .locator('[data-testid="workspace-terminal-error"]')
-      .textContent()
-      .catch(() => null);
-    const msg = `Terminal never reached running status; data-status=${String(errorText)}; error=${String(errorBody)}`;
-    throw new Error(msg);
-  }
-
-  const statusOne = await body.getAttribute("data-status");
-  assert.equal(statusOne, "running", "terminal must reach running status");
-  console.log("PASS: terminal reached running status");
-
-  // Screenshot for PR evidence.
-  if (proofDir) {
-    await mkdir(proofDir, { recursive: true });
-    await page.screenshot({ path: path.join(proofDir, "terminal.png") });
-  }
-
-  // --- Step 2: focus terminal, type a file-writing command ---
-  await body.click();
-  const firstFile = path.join(tmpDir, "one");
-  await page.keyboard.type(
-    `printf '%s %s\n' "$$" "$(tput cols)" > "${firstFile}"`,
-  );
-  await page.keyboard.press("Enter");
-
-  const parsedOne = await pollFileParse(
-    firstFile,
-    (text) => parsePidCols(text),
-    30000,
+  // --- Step 1: start a real PTY in the packaged app ---
+  const session = await page.evaluate(
+    (cwd) => window.colonyDesktop.terminal.start({ cwd, cols: 100, rows: 30 }),
+    home,
   );
   assert.ok(
-    parsedOne !== null,
-    `first file never parsed as <pid> <cols>: ${firstFile}`,
+    typeof session?.sessionId === "string" && session.sessionId.length > 0,
+    "terminal.start must return a session id",
   );
+  assert.ok(
+    Number.isInteger(session.pid) && session.pid > 0,
+    `terminal.start must return a positive pid: ${session.pid}`,
+  );
+  assert.equal(
+    session.cwd,
+    home,
+    "terminal.start must report the requested working directory",
+  );
+  const { sessionId } = session;
+  const originalPid = session.pid;
+  console.log(`PASS: packaged PTY started (pid=${originalPid}, cols=100)`);
+
+  // --- Step 2: keystrokes reach a real shell ---
+  const firstFile = path.join(tmpDir, "one");
+  await writeToTerminal(
+    page,
+    sessionId,
+    `printf '%s %s\\n' "$$" "$(tput cols)" > "${firstFile}"\n`,
+  );
+  const parsedOne = await pollFileParse(firstFile, parsePidCols, 30000);
+  assert.ok(parsedOne !== null, "first file never parsed as <pid> <cols>");
   assert.ok(
     Number.isInteger(parsedOne.pid) && parsedOne.pid > 0,
     `first pid must be positive: ${parsedOne.pid}`,
   );
-  assert.ok(
-    parsedOne.cols === null ||
-      (Number.isInteger(parsedOne.cols) && parsedOne.cols >= 20),
-    `cols must be >= 20 or null: ${parsedOne.cols}`,
-  );
-  const cols1 = parsedOne.cols !== null ? parsedOne.cols : 0;
-  originalPid = parsedOne.pid;
-
-  const liveOne = await isLivePid(application, originalPid);
   assert.equal(
-    liveOne,
+    parsedOne.cols,
+    100,
+    "shell must see the requested column count",
+  );
+  assert.equal(
+    await isLivePid(application, parsedOne.pid),
     true,
-    `shell pid ${originalPid} from first file must be a live process`,
+    `shell pid ${parsedOne.pid} must be a live process`,
   );
   console.log(
-    `PASS: keystrokes reached real shell (pid=${originalPid}, cols=${cols1})`,
+    `PASS: writes reached a real shell (pid=${parsedOne.pid}, cols=${parsedOne.cols})`,
   );
 
-  // --- Step 3: resize wider, prove resize propagates to PTY ---
-  const resizeResult = await application.evaluate(() => {
-    // Access BrowserWindow through Electron's main module.
-    try {
-      const { BrowserWindow } = require("electron");
-      const windows = BrowserWindow.getAllWindows();
-      if (!windows.length) return { resized: false, reason: "no windows" };
-      const win = windows[0];
-      const bounds = win.getBounds();
-      win.setBounds({ ...bounds, width: bounds.width + 400 });
-      return {
-        resized: true,
-        oldWidth: bounds.width,
-        newWidth: bounds.width + 400,
-      };
-    } catch (e) {
-      return { resized: false, reason: String(e) };
-    }
-  });
-  // Resize may fail in headless or non-packaged runs; do not fail the gate on it alone,
-  // but log the outcome clearly.
-  if (resizeResult?.resized !== true) {
-    console.log(`PASS: resize attempted (${JSON.stringify(resizeResult)})`);
-  } else {
-    console.log(`PASS: window resized (${JSON.stringify(resizeResult)})`);
-  }
-  // Give resize time to propagate through xterm's ResizeObserver.
-  await new Promise((resolve) => setTimeout(resolve, 500));
-
+  // --- Step 3: resize propagates to the PTY ---
+  await page.evaluate(
+    ({ sessionId }) =>
+      window.colonyDesktop.terminal.resize({ sessionId, cols: 140, rows: 30 }),
+    { sessionId },
+  );
   const secondFile = path.join(tmpDir, "two");
-  await body.click();
-  await page.keyboard.type(`tput cols > "${secondFile}"`);
-  await page.keyboard.press("Enter");
+  await writeToTerminal(page, sessionId, `tput cols > "${secondFile}"\n`);
+  const cols2 = await pollFileParse(secondFile, parsePositiveInteger, 30000);
+  assert.equal(cols2, 140, "resize must propagate to the PTY");
+  console.log(`PASS: resize propagated to the PTY (cols=${cols2})`);
 
-  const parsedTwoText = await pollFileParse(
-    secondFile,
-    (text) => {
-      const trimmed = text.trim();
-      const num = Number(trimmed);
-      return Number.isInteger(num) && num > 0 ? num : null;
+  // --- Step 4: PTY output reaches the renderer over the preload bridge ---
+  await page.evaluate(
+    ({ sessionId }) => {
+      window.__smokeTermChunks = [];
+      window.__smokeTermOff = window.colonyDesktop.terminal.onData(
+        (incomingSessionId, chunk) => {
+          if (incomingSessionId !== sessionId) return;
+          window.__smokeTermChunks.push(Array.from(chunk));
+        },
+      );
     },
-    30000,
+    { sessionId },
   );
-  assert.ok(
-    Number.isInteger(parsedTwoText) && parsedTwoText > 0,
-    `second file must contain positive column count: ${secondFile}`,
-  );
-  const cols2 = parsedTwoText;
-  // Resize is best-effort; only assert growth when we have a prior cols value.
-  if (cols1 > 0 && cols2 > 0) {
-    assert.ok(
-      cols2 > cols1,
-      `resize must propagate to PTY: cols2=${cols2} > cols1=${cols1}`,
-    );
-    console.log(
-      `PASS: resize propagated to PTY (cols1=${cols1}, cols2=${cols2})`,
-    );
-  } else {
-    console.log(
-      `PASS: resize file produced cols2=${cols2} (cols1=${cols1}, best-effort)`,
-    );
+  await writeToTerminal(page, sessionId, MARKER_COMMAND);
+  const deadline = Date.now() + 30000;
+  let received = null;
+  while (Date.now() < deadline) {
+    const chunks = await page.evaluate(() => window.__smokeTermChunks ?? []);
+    if (decodeChunkArrays(chunks).includes(MARKER)) {
+      received = chunks;
+      break;
+    }
+    await delay(200);
   }
+  assert.ok(received !== null, "PTY output must reach the renderer");
+  const receivedBytes = countChunkBytes(received);
+  // Release the PTY's backpressure for everything the renderer took.
+  await page.evaluate(
+    ({ sessionId, bytes }) =>
+      window.colonyDesktop.terminal.ack({ sessionId, bytes }),
+    { sessionId, bytes: receivedBytes },
+  );
+  await page.evaluate(() => {
+    window.__smokeTermOff?.();
+    window.__smokeTermOff = undefined;
+  });
+  console.log(
+    `PASS: renderer received PTY output (chunks=${received.length}, bytes=${receivedBytes})`,
+  );
 
-  // --- Step 4: reload survival ---
+  // --- Step 5: the session survives a renderer reload ---
   await page.reload();
+  await page.waitForFunction(
+    () => !!window.colonyDesktop,
+    {},
+    {
+      timeout: 30000,
+    },
+  );
   await page
     .getByText("Inbox", { exact: true })
     .filter({ visible: true })
     .first()
     .waitFor({ timeout: 30000 });
 
-  const bodyAfterReload = page.locator(
-    '[data-testid="workspace-terminal-body"]',
+  const listed = await page.evaluate(() =>
+    window.colonyDesktop.terminal.list(),
   );
-  const hasBodyAfterReload = (await bodyAfterReload.count()) > 0;
-  let pidAfterReloadAttr = null;
-  let statusAfterReload = null;
-
-  if (hasBodyAfterReload) {
-    statusAfterReload = await bodyAfterReload.getAttribute("data-status");
-    pidAfterReloadAttr = await bodyAfterReload.getAttribute("data-pid");
-  }
-
-  // If the workspace tab persisted and the terminal is running, prove it is the
-  // same session or a fresh one and report accordingly.
-  if (hasBodyAfterReload && statusAfterReload === "running") {
-    await bodyAfterReload.click();
-    const thirdFile = path.join(tmpDir, "three");
-    await page.keyboard.type(`printf '%s\n' "$$" > "${thirdFile}"`);
-    await page.keyboard.press("Enter");
-
-    const parsedThree = await pollFileParse(
-      thirdFile,
-      (text) => {
-        const trimmed = text.trim();
-        const pidNum = Number(trimmed);
-        return Number.isInteger(pidNum) && pidNum > 0 ? pidNum : null;
-      },
-      30000,
-    );
-    assert.ok(
-      Number.isInteger(parsedThree) && parsedThree > 0,
-      `third file must contain a positive pid: ${thirdFile}`,
-    );
-
-    const originalStr = String(originalPid);
-    const reloadStr = String(parsedThree);
-    const attrStr = String(pidAfterReloadAttr ?? "");
-
-    const isSame = originalStr === reloadStr && originalStr === attrStr;
-    if (isSame) {
-      assert.equal(
-        parsedThree,
-        originalPid,
-        `same shell must survive reload (pid=${parsedThree})`,
-      );
-      console.log(
-        `PASS: terminal survived reload with same pid (${originalPid})`,
-      );
-    } else {
-      // Workspace state may have been lost; a fresh shell started.
-      assert.ok(
-        parsedThree > 0,
-        "fresh shell after reload must have positive pid",
-      );
-      console.log(
-        `PASS: reload started fresh shell (pid=${parsedThree}) - limitation: workspace tab did not persist across reload (original=${originalStr}, attr=${attrStr})`,
-      );
-    }
-  } else {
-    // Workspace tab did not persist across reload. Rebuild and prove fresh start.
-    const rebuiltBody = await rebuildTerminal(page, tmpDir);
-    await page.waitForFunction(
-      () => {
-        const el = document.querySelector(
-          '[data-testid="workspace-terminal-body"]',
-        );
-        return el?.getAttribute("data-status") === "running";
-      },
-      {},
-      { timeout: 60000, polling: "raf" },
-    );
-    await rebuiltBody.click();
-    const thirdFile = path.join(tmpDir, "three");
-    await page.keyboard.type(`printf '%s\n' "$$" > "${thirdFile}"`);
-    await page.keyboard.press("Enter");
-
-    const parsedThree = await pollFileParse(
-      thirdFile,
-      (text) => {
-        const trimmed = text.trim();
-        const pidNum = Number(trimmed);
-        return Number.isInteger(pidNum) && pidNum > 0 ? pidNum : null;
-      },
-      30000,
-    );
-    assert.ok(
-      Number.isInteger(parsedThree) && parsedThree > 0,
-      `fresh shell after reload must have positive pid: ${thirdFile}`,
-    );
-    const rebuiltAttr = await rebuiltBody.getAttribute("data-pid");
-    const rebuiltPid = rebuiltAttr ? Number(rebuiltAttr) : null;
-    if (rebuiltPid !== null && rebuiltPid > 0 && rebuiltPid !== originalPid) {
-      console.log(
-        `PASS: reload required fresh shell (pid=${rebuiltPid}) - limitation: workspace tab did not persist across reload`,
-      );
-    } else if (rebuiltPid !== null && rebuiltPid > 0) {
-      // Unlikely but possible; treat as fresh shell note.
-      console.log(
-        `PASS: reload produced shell pid=${rebuiltPid} (original=${originalPid}) - limitation: workspace tab persistence unclear`,
-      );
-    }
-  }
-
-  // --- Step 5: close the terminal tab and verify cleanup ---
-  // The close button inside the terminal tab has aria-label "Close Terminal".
-  try {
-    await page
-      .getByRole("button", { name: "Close Terminal" })
-      .click({ timeout: 10000 });
-  } catch {
-    // Fallback: close by finding the tab's close control via its data-testid container.
-    const tabStrip = page.locator('[data-testid="workspace-tab-strip"]');
-    await tabStrip.waitFor({ timeout: 5000 });
-    const closeBtn = tabStrip.locator('button[aria-label*="Close"]');
-    await closeBtn.first().click({ timeout: 10000 });
-  }
-
-  // Wait for the terminal tab to disappear from the tab strip.
-  await page.waitForFunction(
-    () => {
-      const tabs = document.querySelectorAll('[data-testid^="workspace-tab-"]');
-      return ![...tabs].some((t) => {
-        const titleBtn = t.querySelector('button[role="tab"]');
-        return titleBtn?.textContent?.includes("Terminal");
-      });
-    },
-    {},
-    { timeout: 15000, polling: "raf" },
+  const survivor = listed.find((entry) => entry.sessionId === sessionId);
+  assert.ok(survivor, "the session must still be listed after a reload");
+  assert.equal(survivor.alive, true, "the surviving session must be alive");
+  assert.equal(
+    survivor.pid,
+    originalPid,
+    "the surviving session keeps its pid",
   );
 
-  // Poll ps -p <originalPid> until the shell pid is gone (10 s max).
-  const pidGone = await (async () => {
-    const deadline = Date.now() + 10000;
-    while (Date.now() < deadline) {
-      const alive = await isLivePid(application, originalPid);
-      if (!alive) return true;
-      await new Promise((resolve) => setTimeout(resolve, 300));
+  const replay = await page.evaluate(
+    ({ sessionId }) =>
+      window.colonyDesktop.terminal
+        .attach({ sessionId })
+        .then((result) => Array.from(result.replay)),
+    { sessionId },
+  );
+  assert.ok(
+    decodeChunkArrays([replay]).includes(MARKER),
+    "attach must replay the output produced before the reload",
+  );
+  console.log(
+    `PASS: session survived reload (pid=${originalPid}, replay bytes=${replay.length})`,
+  );
+
+  const thirdFile = path.join(tmpDir, "three");
+  await writeToTerminal(
+    page,
+    sessionId,
+    `printf '%s\\n' "$$" > "${thirdFile}"\n`,
+  );
+  const pidAfterReload = await pollFileParse(
+    thirdFile,
+    parsePositiveInteger,
+    30000,
+  );
+  assert.equal(
+    pidAfterReload,
+    originalPid,
+    "the same shell must still be driving the PTY after a reload",
+  );
+  console.log(`PASS: same shell answers after reload (pid=${pidAfterReload})`);
+
+  // There is no terminal UI in this gate; the shot is the app window itself,
+  // captured so the packaged run leaves the same proof artefact as before.
+  if (proofDir) {
+    await mkdir(proofDir, { recursive: true });
+    await page.screenshot({ path: path.join(proofDir, "terminal.png") });
+  }
+
+  // --- Step 6: closing the session reaps the shell and its children ---
+  await page.evaluate(
+    ({ sessionId }) => window.colonyDesktop.terminal.close({ sessionId }),
+    { sessionId },
+  );
+  const closeDeadline = Date.now() + 10000;
+  let pidGone = false;
+  while (Date.now() < closeDeadline) {
+    if (!(await isLivePid(application, originalPid))) {
+      pidGone = true;
+      break;
     }
-    return false;
-  })();
+    await delay(300);
+  }
   assert.equal(
     pidGone,
     true,
-    `shell pid ${originalPid} must be reaped within 10 s of tab close`,
+    `shell pid ${originalPid} must be reaped within 10 s of close`,
   );
-  console.log(`PASS: shell pid ${originalPid} cleaned up after tab close`);
 
-  // The user asked: assert no process in the app's tree has that pid as parent.
-  // That means: among all running processes, none should have ppid == originalPid.
   const treeCheck = await application.evaluate(
     ({ rootPid }) => {
       try {
@@ -423,9 +319,16 @@ export async function verifyTerminal(application, page, { proofDir } = {}) {
   assert.equal(
     treeCheck?.hasChildWithParent !== true,
     true,
-    `no process in app tree should have pid ${originalPid} as parent after close`,
+    `no process may have pid ${originalPid} as parent after close`,
   );
   console.log(
-    `PASS: app process tree has no child with parent pid=${originalPid}`,
+    `PASS: shell pid ${originalPid} reaped with no orphaned children`,
   );
+
+  await page.evaluate(() => window.colonyDesktop.terminal.closeAll());
+  const remaining = await page.evaluate(() =>
+    window.colonyDesktop.terminal.list(),
+  );
+  assert.equal(remaining.length, 0, "closeAll must leave no live sessions");
+  console.log(`PASS: closeAll left ${remaining.length} sessions`);
 }
