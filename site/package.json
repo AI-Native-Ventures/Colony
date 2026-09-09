@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
-    "check": "biome check src tests && node --experimental-strip-types --test tests/*.test.ts",
+    "check": "biome check src tests && node scripts/check-copy.mjs && node --experimental-strip-types --test tests/*.test.ts",
     "preview": "vite preview",
     "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
