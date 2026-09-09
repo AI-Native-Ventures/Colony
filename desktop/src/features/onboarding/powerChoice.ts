@@ -21,6 +21,15 @@ export function isFreeOpenRouterModel(model: string | null): boolean {
   return model === "openrouter/free" || !!model?.endsWith(":free");
 }
 
+/** Existing provider choices stay intact even when they inherit the default runtime. */
+export function initialPowerConfig(
+  current: GlobalAgentConfig,
+): GlobalAgentConfig {
+  return current.preferred_runtime || current.provider
+    ? current
+    : configForPowerLane(current, powerLaneForConfig(current));
+}
+
 /** Build an explicit lane change without exposing secrets to onboarding storage. */
 export function configForPowerLane(
   current: GlobalAgentConfig,

@@ -15,6 +15,7 @@ import { isColonyCreditsEligible } from "@/features/agents/ui/colonyCreditsEligi
 import { provisioningFromConfig } from "@/features/communities/colonyProvisioning";
 import { fetchColonyProvisioningConfig } from "@/features/communities/hostedCommunityApi";
 import { resolveAgentReadiness } from "@/features/onboarding/ui/agentReadiness";
+import { effectiveOnboardingRuntimeId } from "./ui/onboardingRuntimeSelection";
 import { discoverAcpRuntimes, installAcpRuntime } from "@/shared/api/tauri";
 import {
   getGlobalAgentConfig,
@@ -208,7 +209,8 @@ export async function ensureBuiltInFounderConfig(
     io.loadConfig(),
   ]);
   const currentRuntime = runtimes.find(
-    (entry) => entry.id === current.preferred_runtime,
+    (entry) =>
+      entry.id === effectiveOnboardingRuntimeId(current.preferred_runtime),
   );
   if (currentRuntime?.localLaunchError)
     throw new Error(

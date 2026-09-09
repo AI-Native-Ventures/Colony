@@ -23,10 +23,12 @@ import { assertFirstJobScope } from "../../../firstJobScope";
 import { brainsFromRuntimes } from "../../../flow/track";
 import {
   configForPowerLane,
+  initialPowerConfig,
   powerLaneForConfig,
   type PowerLane,
 } from "../../../powerChoice";
 import { resolveAgentReadiness } from "../../agentReadiness";
+import { effectiveOnboardingRuntimeId } from "../../onboardingRuntimeSelection";
 import { FounderLayout } from "../FounderLayout";
 import { subscriptionTiles } from "./brainLanes";
 import { CreditsModelFields } from "./CreditsModelFields";
@@ -97,14 +99,15 @@ export function PowerScreen({
     if (!saved.data || draft) return;
     const initialLane = powerLaneForConfig(saved.data);
     setLane(initialLane);
-    setDraft(
-      saved.data.preferred_runtime
-        ? saved.data
-        : configForPowerLane(saved.data, initialLane),
-    );
+    setDraft(initialPowerConfig(saved.data));
   }, [saved.data, draft]);
   const runtime = runtimes.data?.find(
-    (entry) => entry.id === draft?.preferred_runtime,
+    (entry) =>
+      !!draft &&
+      entry.id ===
+        (lane === "subscription"
+          ? draft.preferred_runtime
+          : effectiveOnboardingRuntimeId(draft.preferred_runtime)),
   );
   const runtimeFile = useRuntimeFileConfigQuery(runtime?.id ?? "");
   const credits = useQuery({

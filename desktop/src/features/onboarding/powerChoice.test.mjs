@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   configForPowerLane,
+  initialPowerConfig,
   isFreeOpenRouterModel,
   powerLaneForConfig,
 } from "./powerChoice.ts";
@@ -19,6 +20,20 @@ const current = {
 test("existing paid or API-key setup is not silently moved to a different payment route", () => {
   assert.equal(powerLaneForConfig(current), "existing");
   assert.equal(configForPowerLane(current, "existing"), current);
+});
+test("opening power preserves configured defaults without a runtime pin", () => {
+  for (const config of [
+    { ...current, preferred_runtime: null },
+    {
+      ...current,
+      preferred_runtime: null,
+      credential_mode: "colony_credits",
+      provider: "openai-compat",
+      model: "already-selected-model",
+    },
+  ]) {
+    assert.equal(initialPowerConfig(config), config);
+  }
 });
 test("explicit free choice clears a paid model and vendor endpoint override", () => {
   const selected = configForPowerLane(current, "openrouter");

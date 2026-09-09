@@ -257,6 +257,47 @@ test("an existing Credits model survives opening the power step and going back",
   );
 });
 
+for (const provider of ["anthropic", "openrouter"] as const) {
+  test(`existing ${provider} defaults without a runtime pin can complete power unchanged`, async ({
+    page,
+  }) => {
+    const config = {
+      credential_mode: "byok" as const,
+      preferred_runtime: null,
+      provider,
+      model: "existing-paid-model",
+      env_vars: {
+        [provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENROUTER_API_KEY"]:
+          "synthetic-existing-credential",
+      },
+    };
+    await reachPower(page, {
+      globalAgentConfig: config,
+      discoverAgentModels: {
+        models: [{ id: config.model, name: "Existing paid model" }],
+        supportsSwitching: true,
+      },
+    });
+    const power = page.getByTestId("onboarding-power");
+    const complete = power.getByRole("button", { name: "Open my Colony" });
+    await expect(power).toContainText(
+      "Your existing provider settings are preserved",
+    );
+    await expect(complete).toBeEnabled();
+    await power.getByRole("button", { name: "Keep my current setup" }).click();
+    await expect(complete).toBeEnabled();
+    await page.getByRole("button", { name: "Back to business" }).click();
+    await continueFounderBusiness(page);
+    await expect(complete).toBeEnabled();
+    await complete.click();
+    await expect(page.getByTestId("app-top-chrome")).toBeVisible();
+    const saved = await page.evaluate(() =>
+      window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_global_agent_config"),
+    );
+    expect(saved).toEqual(config);
+  });
+}
+
 test("Credits failure blocks completion and offers a retry without claiming zero balance", async ({
   page,
 }) => {

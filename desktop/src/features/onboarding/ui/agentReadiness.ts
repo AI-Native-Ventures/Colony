@@ -4,6 +4,7 @@ import type {
   AcpRuntimeCatalogEntry,
   GlobalAgentConfig,
 } from "@/shared/api/types";
+import { effectiveOnboardingRuntimeId } from "./onboardingRuntimeSelection";
 
 export type AgentReadinessResult =
   | { ready: true; reason: "cli"; runtimeLabel: string }
@@ -43,7 +44,9 @@ export function resolveAgentReadiness(
   const preferredRuntime =
     scope === "preferred"
       ? runtimes.find(
-          (runtime) => runtime.id === globalConfig.preferred_runtime,
+          (runtime) =>
+            runtime.id ===
+            effectiveOnboardingRuntimeId(globalConfig.preferred_runtime),
         )
       : runtimes.find((runtime) => runtime.id === "buzz-agent");
   if (
