@@ -176,14 +176,18 @@ test.describe("relay connectivity", () => {
     await waitForAnimations(page);
   });
 
-  test("05 — no-cache npub fallback when offline", async ({ page }) => {
-    // No cache seeded — profile card falls back to the mock identity npub name.
+  test("05 — friendly profile fallback without a cached name when offline", async ({
+    page,
+  }) => {
+    // No cache seeded: keep the profile entry readable while the relay is down.
     await installMockBridge(page, { profileReadError: RELAY_UNREACHABLE });
     await page.goto("/");
 
     const profileCard = page.getByTestId("sidebar-profile-card");
-    // Default mock identity display name is "npub1mock...".
-    await expect(profileCard).toContainText("npub1mock");
+    await expect(page.getByTestId("sidebar-profile-name")).toHaveText(
+      "Your profile",
+    );
+    await expect(profileCard).not.toContainText("npub1mock");
     await waitForAnimations(page);
   });
 
