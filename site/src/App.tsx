@@ -3,6 +3,7 @@ import { AntMark } from "@/brand/AntMark";
 import { BrandField } from "@/brand/BrandField";
 import { getBrandScene } from "@/brand/brandScene";
 import { BusinessGuide } from "@/sections/BusinessGuide";
+import { TrustStrip } from "@/sections/TrustStrip";
 import { ComingSoon } from "@/sections/ComingSoon";
 import { FAQ } from "@/sections/FAQ";
 import { Hero } from "@/sections/Hero";
@@ -51,6 +52,7 @@ export function App() {
             toggleMotion={() => setMotionPaused((paused) => !paused)}
           />
           <div className="page-content">
+            <TrustStrip />
             <BusinessGuide />
             <FAQ />
             <ComingSoon />
