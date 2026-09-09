@@ -263,6 +263,12 @@ async function boot() {
       businessContext = null;
       views.setBusiness(null);
     }
+    // Only the original WebKit page can supply a migration snapshot.
+    if (
+      type === "invoke" &&
+      payload.command === "electron_export_frontend_state"
+    )
+      throw new Error("The Electron renderer cannot supply legacy app state");
     if (["invoke", "listen", "unlisten", "emit"].includes(type))
       return rendererHost.request(type, payload);
     if (type === "shell") return shellCommand(window, payload);
@@ -326,6 +332,26 @@ async function boot() {
       app.quit();
     });
   });
+  if (
+    paths.stable ||
+    packageMetadata.colonyReleaseChannel === "candidate" ||
+    packageMetadata.colonyMigrationFixture === true
+  ) {
+    // Import before React, community selection, or onboarding can observe an empty store.
+    await window.loadURL("colony://app/electron-migration.html");
+    try {
+      const restored = await window.webContents.executeJavaScript(
+        'window.__COLONY_FRONTEND_MIGRATION__ ?? Promise.reject(new Error("App state migration did not start"))',
+      );
+      if (restored !== true)
+        throw new Error("Saved app state could not be restored");
+      window.webContents.session.flushStorageData();
+    } catch {
+      // Keep the recovery page available; never mount an apparently empty account.
+      window.showInactive();
+      return;
+    }
+  }
   await window.loadURL(devUrl || "colony://app/");
   await window.webContents.insertCSS(
     "[data-tauri-drag-region]{-webkit-app-region:drag} [data-tauri-drag-region] button,[data-tauri-drag-region] input{-webkit-app-region:no-drag}",

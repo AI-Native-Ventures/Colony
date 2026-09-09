@@ -191,7 +191,7 @@ class ElectronNativeBridge implements NativeBridge {
   relaunch() {
     return this.shell("relaunch");
   }
-  checkForUpdate(options?: { timeout?: number }) {
+  checkForUpdate(options?: { headers?: Record<string, string> }) {
     return checkElectronUpdate(this.invoke.bind(this), options);
   }
   notificationPermissionGranted() {

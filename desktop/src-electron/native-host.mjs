@@ -7,9 +7,9 @@ const MAX_FRAME = 16 * 1024 * 1024;
 /** Updates may transfer a full application; ordinary native calls stay bounded. */
 export function nativeRequestTimeout(type, command, fallback) {
   if (type !== "invoke") return fallback;
-  if (command === "plugin:updater|download")
+  if (command === "electron_download_update")
     return Math.max(fallback, 16 * 60_000);
-  if (command === "plugin:updater|install")
+  if (command === "electron_install_update")
     return Math.max(fallback, 5 * 60_000);
   if (command === "electron_check_for_update")
     return Math.max(fallback, 130_000);

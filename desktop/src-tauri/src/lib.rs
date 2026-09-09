@@ -566,7 +566,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             electron_host::updater::electron_check_for_update,
+            electron_host::updater::electron_download_update,
+            electron_host::updater::electron_install_update,
             electron_host::deep_links::electron_open_deep_link,
+            electron_host::migration::electron_export_frontend_state,
+            electron_host::migration::electron_read_frontend_migration,
+            electron_host::migration::electron_finish_frontend_migration,
+            electron_host::migration::electron_frontend_migration_fixture,
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
             colony_check_community_name,

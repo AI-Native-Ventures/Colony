@@ -159,6 +159,7 @@ try {
       type: "module",
       main: "src-electron/main.mjs",
       colonyReleaseChannel: variant.channel,
+      colonyMigrationFixture: variant.fixture && profile === "release",
     }),
   );
   const binaries = [];

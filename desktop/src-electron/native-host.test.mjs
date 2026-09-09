@@ -6,12 +6,12 @@ import { NativeHost, nativeRequestTimeout } from "./native-host.mjs";
 
 test("only the bounded native updater commands receive transfer time", () => {
   assert.equal(
-    nativeRequestTimeout("invoke", "plugin:updater|download", 60_000),
+    nativeRequestTimeout("invoke", "electron_download_update", 60_000),
     16 * 60_000,
   );
   assert.equal(nativeRequestTimeout("invoke", "sign_out", 60_000), 60_000);
   assert.equal(
-    nativeRequestTimeout("emit", "plugin:updater|download", 60_000),
+    nativeRequestTimeout("emit", "electron_download_update", 60_000),
     60_000,
   );
 });

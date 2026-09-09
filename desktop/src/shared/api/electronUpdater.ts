@@ -1,60 +1,52 @@
-import { NativeChannel, type NativeUpdate } from "./nativeBridge";
+import type { NativeUpdate } from "./nativeBridge";
 
 type Invoke = <T>(
   command: string,
   args?: Record<string, unknown>,
 ) => Promise<T>;
 
-/** Use the existing signature-verifying native updater with the outer app target. */
+/** The native resource owns verified bytes and cancels downloads when closed. */
 export async function checkElectronUpdate(
   invoke: Invoke,
-  options?: { timeout?: number },
+  options?: { headers?: Record<string, string> },
 ): Promise<NativeUpdate | null> {
   const metadata = await invoke<{ rid: number; version: string } | null>(
     "electron_check_for_update",
     options,
   );
   if (!metadata) return null;
-  let bytes: number | undefined;
+  let downloaded = false;
   let closed = false;
   let operation: Promise<void> | undefined;
   const assertOpen = () => {
     if (closed) throw new Error("Update handle has been closed");
   };
-  const closeResource = (rid: number) =>
-    invoke<void>("plugin:resources|close", { rid });
   return {
     version: metadata.version,
     download() {
       assertOpen();
       if (operation) return operation;
-      if (bytes !== undefined) return Promise.resolve();
-      operation = (async () => {
-        const rid = await invoke<number>("plugin:updater|download", {
-          rid: metadata.rid,
-          onEvent: new NativeChannel(),
-          timeout: 15 * 60_000,
+      if (downloaded) return Promise.resolve();
+      operation = invoke<void>("electron_download_update", {
+        rid: metadata.rid,
+      })
+        .then(() => {
+          if (!closed) downloaded = true;
+        })
+        .finally(() => {
+          operation = undefined;
         });
-        if (closed) await closeResource(rid);
-        else bytes = rid;
-      })().finally(() => {
-        operation = undefined;
-      });
       return operation;
     },
     async install() {
       assertOpen();
       while (operation) await operation;
       assertOpen();
-      if (bytes === undefined)
+      if (!downloaded)
         throw new Error("Download and verify this update before installing");
-      const rid = bytes;
-      operation = invoke<void>("plugin:updater|install", {
-        updateRid: metadata.rid,
-        bytesRid: rid,
-      })
+      operation = invoke<void>("electron_install_update", { rid: metadata.rid })
         .then(() => {
-          bytes = undefined; // The native install command closes its bytes resource.
+          downloaded = false;
         })
         .finally(() => {
           operation = undefined;
@@ -64,19 +56,9 @@ export async function checkElectronUpdate(
     async close() {
       if (closed) return;
       closed = true;
-      try {
-        await operation;
-      } finally {
-        try {
-          if (bytes !== undefined) {
-            const rid = bytes;
-            bytes = undefined;
-            await closeResource(rid);
-          }
-        } finally {
-          await closeResource(metadata.rid);
-        }
-      }
+      // Closing first aborts any native download; waiting first would strand it.
+      await invoke<void>("plugin:resources|close", { rid: metadata.rid });
+      await operation?.catch(() => {});
     },
   };
 }

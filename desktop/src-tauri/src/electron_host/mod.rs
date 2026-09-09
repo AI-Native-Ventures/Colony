@@ -5,6 +5,7 @@
 //! Rust service. Ordinary Tauri builds never open this transport.
 
 pub(crate) mod deep_links;
+pub(crate) mod migration;
 #[cfg(feature = "electron-host")]
 mod runtime;
 pub(crate) mod updater;
@@ -75,7 +76,12 @@ pub(crate) fn context(mut context: tauri::Context<tauri::Wry>) -> tauri::Context
             window.visible = false;
             window.focus = false;
             window.maximized = false;
-            if let Ok(url) = url::Url::parse("about:blank") {
+            // WKWebView default storage follows the outer macOS bundle. A
+            // candidate or explicit QA profile must not read stable WebKit data.
+            window.incognito = !stable_profile();
+            if migration::enabled() {
+                window.url = tauri::WebviewUrl::App("electron-migration.html".into());
+            } else if let Ok(url) = url::Url::parse("about:blank") {
                 window.url = tauri::WebviewUrl::External(url);
             }
         }

@@ -18,15 +18,14 @@ test("install requires verified native bytes and releases the update handle", as
     calls.push([command, args]);
     if (command === "electron_check_for_update")
       return { rid: 7, version: "0.17.0" };
-    if (command === "plugin:updater|download") return 9;
   });
   await assert.rejects(update.install(), /Download and verify/);
   await update.download();
   await update.install();
   await update.close();
   assert.deepEqual(
-    calls.filter(([name]) => name === "plugin:updater|install"),
-    [["plugin:updater|install", { updateRid: 7, bytesRid: 9 }]],
+    calls.filter(([name]) => name === "electron_install_update"),
+    [["electron_install_update", { rid: 7 }]],
   );
   assert.deepEqual(
     calls.filter(([name]) => name === "plugin:resources|close"),
@@ -35,30 +34,35 @@ test("install requires verified native bytes and releases the update handle", as
   await assert.rejects(update.install(), /closed/);
 });
 
-test("closing during download disposes arriving bytes without permitting installation", async () => {
-  let resolveDownload;
+test("closing aborts a pending native download before waiting on it", async () => {
+  let rejectDownload;
   const calls = [];
   const update = await checkElectronUpdate(async (command, args) => {
     calls.push([command, args]);
     if (command === "electron_check_for_update")
       return { rid: 1, version: "0.17.0" };
-    if (command === "plugin:updater|download")
-      return new Promise((resolve) => {
-        resolveDownload = resolve;
+    if (command === "electron_download_update")
+      return new Promise((_resolve, reject) => {
+        rejectDownload = reject;
       });
+    if (command === "plugin:resources|close")
+      rejectDownload("Update cancelled");
   });
   const downloading = update.download();
-  const closing = update.close();
-  resolveDownload(2);
-  await Promise.all([downloading, closing]);
+  const rejected = assert.rejects(
+    downloading,
+    (error) => error === "Update cancelled",
+  );
+  await update.close();
+  await rejected;
   assert.deepEqual(
     calls
       .filter(([name]) => name === "plugin:resources|close")
       .map(([, args]) => args.rid),
-    [2, 1],
+    [1],
   );
   assert.equal(
-    calls.some(([name]) => name === "plugin:updater|install"),
+    calls.some(([name]) => name === "electron_install_update"),
     false,
   );
 });
@@ -68,7 +72,7 @@ test("a rejected signature cannot produce installable bytes and still closes the
   const update = await checkElectronUpdate(async (command, args) => {
     if (command === "electron_check_for_update")
       return { rid: 3, version: "0.17.0" };
-    if (command === "plugin:updater|download")
+    if (command === "electron_download_update")
       throw new Error("Signature verification failed");
     if (command === "plugin:resources|close") closed.push(args.rid);
   });

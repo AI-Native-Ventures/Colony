@@ -29,3 +29,26 @@
 ## Known external prerequisite
 
 The accessible repository secret names currently include the Tauri updater key and release GitHub App, but no Apple Developer ID/notarization credentials. The local keychain reports only `FlowVoice Dev`, not a Developer ID identity. Organization-secret visibility is unavailable to this token. The publisher must validate actual credential availability in Actions and report missing names; it must never fall back to ad-hoc signing.
+
+
+### Frontend state migration gate
+
+The first stable Electron launch now loads an inert bundled page in the original
+`tauri://localhost` WebKit origin, transfers application-owned durable localStorage
+through the private native bridge, and imports it at `colony://app` before React.
+Disposable relay snapshots are excluded. Source state is never deleted or edited;
+existing Electron values win, and the completion marker is written only after
+verified destination writes. Failures keep the recovery page visible and retryable.
+Native identity, provider credentials and agent files continue through the existing
+native namespace rather than being recopied by this frontend migration.
+
+Candidate and explicit QA profiles use an incognito hidden WebKit store, even
+though their outer application bundle may have the stable bundle identifier. The
+production native feature cannot be combined with the onboarding fixture feature.
+The separately compiled hosted fixture can seed only fixed synthetic state in its
+incognito origin. GitHub's migration job proves nonempty actual WebKit-to-Chromium
+transfer, two communities, an owner marker, an unsent draft, appearance and relaunch
+non-overwrite. Pure fault-injection tests cover untouched source, malformed state,
+storage failure and retry. The exact signed Tauri-to-Electron upgrade of an existing
+default WebKit store remains unproven until the signing and packaged upgrade gate
+runs; passing the private fixture must not be described as that proof.

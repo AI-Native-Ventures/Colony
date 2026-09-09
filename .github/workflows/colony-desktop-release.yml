@@ -60,22 +60,22 @@ jobs:
       - name: Require signing and publisher credentials
         env:
           RELEASE_MACOS: ${{ github.event_name == 'push' || inputs.platform != 'windows' }}
-          APPLE_CERTIFICATE_P12: ${{ secrets.COLONY_APPLE_CERTIFICATE_P12 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.COLONY_APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.COLONY_APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ vars.COLONY_APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ vars.COLONY_APPLE_API_ISSUER }}
-          APPLE_SIGNING_IDENTITY: ${{ vars.COLONY_APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.COLONY_APPLE_TEAM_ID }}
-          UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
-          UPDATER_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          PUBLISHER_CLIENT_ID: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
-          PUBLISHER_PRIVATE_KEY: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
+          COLONY_APPLE_CERTIFICATE_P12: ${{ secrets.COLONY_APPLE_CERTIFICATE_P12 }}
+          COLONY_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.COLONY_APPLE_CERTIFICATE_PASSWORD }}
+          COLONY_APPLE_API_KEY: ${{ secrets.COLONY_APPLE_API_KEY }}
+          COLONY_APPLE_API_KEY_ID: ${{ vars.COLONY_APPLE_API_KEY_ID }}
+          COLONY_APPLE_API_ISSUER: ${{ vars.COLONY_APPLE_API_ISSUER }}
+          COLONY_APPLE_SIGNING_IDENTITY: ${{ vars.COLONY_APPLE_SIGNING_IDENTITY }}
+          COLONY_APPLE_TEAM_ID: ${{ vars.COLONY_APPLE_TEAM_ID }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          BUZZ_RELEASE_TAGGER_CLIENT_ID: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          BUZZ_RELEASE_TAGGER_PRIVATE_KEY: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          required=(UPDATER_PUBLIC_KEY UPDATER_PRIVATE_KEY PUBLISHER_CLIENT_ID PUBLISHER_PRIVATE_KEY)
+          required=(BUZZ_UPDATER_PUBLIC_KEY TAURI_SIGNING_PRIVATE_KEY BUZZ_RELEASE_TAGGER_CLIENT_ID BUZZ_RELEASE_TAGGER_PRIVATE_KEY)
           if [ "$RELEASE_MACOS" = true ]; then
-            required+=(APPLE_CERTIFICATE_P12 APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_SIGNING_IDENTITY APPLE_TEAM_ID)
+            required+=(COLONY_APPLE_CERTIFICATE_P12 COLONY_APPLE_CERTIFICATE_PASSWORD COLONY_APPLE_API_KEY COLONY_APPLE_API_KEY_ID COLONY_APPLE_API_ISSUER COLONY_APPLE_SIGNING_IDENTITY COLONY_APPLE_TEAM_ID)
           fi
           missing=0
           for key in "${required[@]}"; do
@@ -112,7 +112,7 @@ jobs:
           workspaces: |
             .
             desktop/src-tauri
-          shared-key: electron-production-release
+          shared-key: electron-beta-release
       - name: Install dependencies
         run: just desktop-install-ci
 

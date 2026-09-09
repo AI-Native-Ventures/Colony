@@ -68,7 +68,7 @@ export function electronPackageVariant(args) {
     hostFeatures: stable
       ? "electron-stable"
       : fixture
-        ? "electron-host,onboarding-fixture"
+        ? "electron-host,onboarding-fixture,tauri/custom-protocol"
         : "electron-host",
   };
 }
