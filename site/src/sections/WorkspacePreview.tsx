@@ -143,7 +143,7 @@ export function WorkspacePreview() {
           </h2>
         </div>
         <p>
-          Give a job to your AI teammate in a shared conversation. Open its
+          Give a job to your AI employee in a shared conversation. Open its
           replies to discuss the details and review the result, all in the same
           place.
         </p>
@@ -391,14 +391,14 @@ export function WorkspacePreview() {
           <span>01</span>
           <p>
             <strong>A place for your business.</strong>Find your conversations,
-            jobs and AI teammates in the sidebar.
+            jobs and AI employees in the sidebar.
           </p>
         </div>
         <div>
           <span>02</span>
           <p>
             <strong>A shared conversation.</strong>Give instructions and keep
-            your people and AI teammates in the loop.
+            your people and AI employees in the loop.
           </p>
         </div>
         <div>

@@ -1,6 +1,6 @@
 // site/src/sections/MeetScout.tsx
 // Who you talk to, in one line. Colony provisions a single Chief of Staff at
-// onboarding and no teammates exist until a blueprint is approved
+// onboarding and no employees exist until a blueprint is approved
 // (desktop/src/features/onboarding/welcomeGuide.ts); the four words below are
 // that behaviour, not a feature list.
 import scoutArt from "@/assets/scout.png";

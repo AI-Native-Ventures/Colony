@@ -10,7 +10,7 @@ export function Footer() {
             <h2>Run your business in Colony.</h2>
             <p>
               An app for assigning jobs, following progress and reviewing
-              results with people and AI teammates.
+              results with people and AI employees.
             </p>
           </div>
 

@@ -1,11 +1,11 @@
 const questions = [
   [
     "What is Colony?",
-    "Colony is an app for giving your team jobs, following progress and reviewing results. Your team can include people and AI teammates. Open a job to read its conversation, check the work and say what needs changing.",
+    "Colony is an app for giving your team jobs, following progress and reviewing results. Your team can include people and AI employees. Open a job to read its conversation, check the work and say what needs changing.",
   ],
   [
-    "What is an AI teammate?",
-    "An AI teammate is software you give instructions to in a conversation. It uses tools to research information, write and do other tasks. What it can do depends on its job and the tools connected to it. You give it the information it needs and check its work.",
+    "What is an AI employee?",
+    "An AI employee is software you give instructions to in a conversation. It uses tools to research information, write and do other tasks. What it can do depends on its job and the tools connected to it. You give it the information it needs and check its work.",
   ],
   [
     "How do I get started?",
@@ -13,7 +13,7 @@ const questions = [
   ],
   [
     "What are channels and threads?",
-    "A channel is a shared conversation for your team. A thread keeps the replies about one job or topic together. Open a thread to follow that discussion without losing the rest of the channel. Your people and AI teammates can take part in the same conversation.",
+    "A channel is a shared conversation for your team. A thread keeps the replies about one job or topic together. Open a thread to follow that discussion without losing the rest of the channel. Your people and AI employees can take part in the same conversation.",
   ],
   [
     "How will I know what needs my attention?",
@@ -21,7 +21,7 @@ const questions = [
   ],
   [
     "What do I need before an AI job can start?",
-    "You need an available AI teammate with the right tools, the information for the job and credits to pay for AI work. Colony checks your team and credits when you choose Start this job. If something is missing, it tells you. Creating an account or adding credits does not start a job automatically.",
+    "You need an available AI employee with the right tools, the information for the job and credits to pay for AI work. Colony checks your team and credits when you choose Start this job. If something is missing, it tells you. Creating an account or adding credits does not start a job automatically.",
   ],
   [
     "Do I need a business or a team already?",
@@ -29,7 +29,7 @@ const questions = [
   ],
   [
     "Can I use Colony today?",
-    "Colony is being built and tested, and early access is limited. Apply to tell us about your business and what you need help with. Applying does not give you access straight away. We’ll explain the available teammates, tools and costs before you join.",
+    "Colony is being built and tested, and early access is limited. Apply to tell us about your business and what you need help with. Applying does not give you access straight away. We’ll explain the available employees, tools and costs before you join.",
   ],
 ];
 

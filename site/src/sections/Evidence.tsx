@@ -133,7 +133,7 @@ export function WorkDelivered() {
       heading={<>Work arrives finished, not promised.</>}
       body="Pages, posts, shortlists. Done, in the thread."
       image={shots.delivered}
-      alt="An agent reports a finished website update in a Colony channel and a teammate replies, publish it."
+      alt="An agent reports a finished website update in a Colony channel and an employee replies, publish it."
     />
   );
 }
