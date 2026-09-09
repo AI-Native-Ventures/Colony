@@ -115,10 +115,10 @@ impl Config {
             if name.is_empty()
                 || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 || server.get("command").and_then(Value::as_str) != Some("/usr/bin/sandbox-exec")
-                || !server
+                || server
                     .get("args")
                     .and_then(Value::as_array)
-                    .is_some_and(|args| !args.is_empty())
+                    .is_none_or(|args| args.is_empty())
             {
                 bail!("Subscription work tools require the native process sandbox");
             }

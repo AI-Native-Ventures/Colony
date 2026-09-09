@@ -116,11 +116,12 @@ impl AccountRpc {
     pub(super) async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
+        let claude_request_id = id.to_string();
         if self.claude {
             let mut request = params;
             request["subtype"] = Value::String(method.to_owned());
             self.send(
-                &json!({"type":"control_request","request_id":id.to_string(),"request":request}),
+                &json!({"type":"control_request","request_id":claude_request_id,"request":request}),
             )
             .await?;
         } else {
@@ -130,7 +131,7 @@ impl AccountRpc {
         timeout(Duration::from_secs(15), async {
             for _ in 0..128 {
                 let message = self.read().await?;
-                if self.claude && message["type"] == "control_response" && message["response"]["request_id"] == id.to_string() {
+                if self.claude && message["type"] == "control_response" && message["response"]["request_id"].as_str() == Some(claude_request_id.as_str()) {
                     return (message["response"]["subtype"] == "success")
                         .then(|| message["response"]["response"].clone())
                         .ok_or_else(|| "Claude did not provide this account information. Update Claude Code or try again.".to_string());

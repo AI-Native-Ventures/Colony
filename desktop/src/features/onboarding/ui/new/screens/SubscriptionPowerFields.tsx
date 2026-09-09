@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { acpRuntimesQueryKey } from "@/features/agents/hooks";
+import { useInstallOutputLine } from "@/features/agents/lib/useInstallOutputLine";
 import {
   connectSubscription,
   getSubscriptionConnections,
+  installSubscriptionRuntime,
   type SubscriptionAccount,
   type SubscriptionScope,
 } from "@/shared/api/tauriSubscriptionConnections";
@@ -31,6 +33,8 @@ export function SubscriptionPowerFields({
   disabled?: boolean;
 }) {
   const queryClient = useQueryClient();
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef<SubscriptionScope | null>(null);
@@ -40,6 +44,8 @@ export function SubscriptionPowerFields({
       relayUrl: scope.relayUrl,
     };
     setConnecting(null);
+    setInstalling(null);
+    setNotice(null);
     setError(null);
     return () => {
       generation.current = null;
@@ -60,11 +66,13 @@ export function SubscriptionPowerFields({
     !query.isFetching &&
     !query.isError &&
     !connecting &&
+    !installing &&
     subscriptionConnectionReady(selected, selectedModel, Date.now() / 1000);
   useEffect(() => {
     onValidityChange(!!valid);
   }, [valid, onValidityChange]);
-  const locked = disabled || query.isFetching || connecting !== null;
+  const locked =
+    disabled || query.isFetching || connecting !== null || installing !== null;
 
   async function connect(runtimeId: string) {
     const started = generation.current;
@@ -88,6 +96,45 @@ export function SubscriptionPowerFields({
         );
     } finally {
       if (generation.current === started) setConnecting(null);
+    }
+  }
+
+  async function install(runtimeId: string) {
+    const started = generation.current;
+    if (!started) return;
+    setInstalling(runtimeId);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await installSubscriptionRuntime(runtimeId, started);
+      if (generation.current !== started) return;
+      await Promise.all([
+        query.refetch(),
+        queryClient.invalidateQueries({ queryKey: acpRuntimesQueryKey }),
+      ]);
+      if (generation.current !== started) return;
+      if (result.success) {
+        setNotice(
+          "Installed. Select the provider above to connect your subscription.",
+        );
+      } else {
+        const failure = result.steps.find((step) => !step.success);
+        setError(
+          [failure?.stderr, failure?.hint].filter(Boolean).join(" ") ||
+            "Installation did not finish. Try again or open the official guide.",
+        );
+      }
+    } catch (cause) {
+      if (generation.current === started)
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : typeof cause === "string"
+              ? cause
+              : "Installation did not finish. Try again.",
+        );
+    } finally {
+      if (generation.current === started) setInstalling(null);
     }
   }
 
@@ -124,6 +171,7 @@ export function SubscriptionPowerFields({
       {query.isError && (
         <p role="alert">We could not check your subscriptions. Try again.</p>
       )}
+      {notice && <p role="status">{notice}</p>}
       {error && (
         <p role="alert" className="onb-simple-error">
           {error}
@@ -167,9 +215,24 @@ export function SubscriptionPowerFields({
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
                     {!entry.installed
-                      ? "Install the provider’s command-line app using its official guide, then check again here."
+                      ? entry.canInstall
+                        ? "Downloads the provider’s app onto this Mac. You’ll sign in separately; no teammates will start."
+                        : "Install the provider’s command-line app using its official guide, then check again here."
                       : "If this provider needs an update, follow its official guide and check again here."}
                   </p>
+                  {!entry.installed && entry.canInstall && (
+                    <Button
+                      type="button"
+                      disabled={locked}
+                      onClick={() => void install(entry.runtimeId)}
+                    >
+                      {installing === entry.runtimeId
+                        ? "Installing…"
+                        : entry.runtimeId === "claude"
+                          ? "Install Claude Code"
+                          : "Install Codex"}
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="outline"
@@ -182,6 +245,10 @@ export function SubscriptionPowerFields({
                   </Button>
                 </div>
               )}
+              <SubscriptionInstallProgress
+                runtimeId={entry.runtimeId}
+                active={installing === entry.runtimeId}
+              />
               {entry.installed && <SubscriptionUsage account={account} />}
               {account.notice && (
                 <p className="text-sm text-muted-foreground">
@@ -314,4 +381,19 @@ function SubscriptionUsage({ account }: { account: SubscriptionAccount }) {
 function formatWindow(minutes: number) {
   if (minutes >= 1440 && minutes % 1440 === 0) return `${minutes / 1440} days`;
   return minutes % 60 === 0 ? `${minutes / 60} hours` : `${minutes} minutes`;
+}
+
+function SubscriptionInstallProgress({
+  runtimeId,
+  active,
+}: {
+  runtimeId: string;
+  active: boolean;
+}) {
+  const line = useInstallOutputLine(runtimeId, active);
+  return active ? (
+    <p role="status" className="text-sm text-muted-foreground">
+      {line || "Downloading and installing the provider app…"}
+    </p>
+  ) : null;
 }

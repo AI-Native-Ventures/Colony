@@ -90,6 +90,7 @@ pub struct SubscriptionConnection {
     pub runtime_id: String,
     pub label: String,
     pub installed: bool,
+    pub can_install: bool,
     pub detected: SubscriptionAccount,
     pub connected: SubscriptionAccount,
     pub launch_error: Option<String>,
@@ -162,6 +163,7 @@ pub async fn get_subscription_connections(
             runtime_id: runtime.into(),
             label: label.into(),
             installed: binary.is_some(),
+            can_install: crate::managed_agents::isolation::subscriptions::direct(runtime),
             detected,
             connected,
             launch_error,
@@ -212,4 +214,50 @@ pub async fn connect_subscription(
         _ => return Err("Unsupported subscription provider".into()),
     }
     scope.check(&state)
+}
+
+/// Explicit owner action: installs a vendor CLI, never signs in or starts teammates.
+#[tauri::command]
+pub async fn install_subscription_runtime(
+    runtime_id: String,
+    scope: SubscriptionScope,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::managed_agents::InstallRuntimeResult, String> {
+    scope.check(&state)?;
+    if !crate::managed_agents::isolation::subscriptions::direct(&runtime_id) {
+        return Err("Subscription installation is available in the Electron app on macOS.".into());
+    }
+    let captured_scope = scope.clone();
+    let captured_runtime = runtime_id.clone();
+    let captured_app = app.clone();
+    let mut result = tokio::task::spawn_blocking(move || {
+        captured_scope.check(&captured_app.state::<AppState>())?;
+        super::agent_discovery::install_vendor_cli(&captured_runtime, &captured_app)
+    })
+    .await
+    .map_err(|_| "The provider installation could not finish")??;
+    // Software installation is local to the Mac. A completed download must never
+    // continue onboarding, sign in, or change defaults for a newly selected owner.
+    scope.check(&state)?;
+    if result.success {
+        let error = match find_command(&runtime_id) {
+            Some(binary) => capability::launch_error(&runtime_id, &binary).await,
+            None => Some("Colony cannot find the installed provider app. Check its official installation guide and try again.".into()),
+        };
+        if let Some(reason) = error {
+            result.success = false;
+            result.steps.push(crate::managed_agents::InstallStepResult {
+                step: "verify".into(),
+                command: format!("check {runtime_id} compatibility"),
+                success: false,
+                stdout: String::new(),
+                stderr: reason,
+                exit_code: None,
+                hint: Some("The provider app needs a compatible installation. See its official guide and check again.".into()),
+            });
+        }
+    }
+    scope.check(&state)?;
+    Ok(result)
 }

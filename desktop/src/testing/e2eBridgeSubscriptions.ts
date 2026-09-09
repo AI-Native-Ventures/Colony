@@ -58,6 +58,7 @@ export const MOCK_SUBSCRIPTION_CONNECTIONS: SubscriptionConnection[] = [
     runtimeId: "claude",
     label: "Claude",
     installed: true,
+    canInstall: true,
     detected: {
       ...emptyAccount,
       authentication: "subscription",
@@ -89,6 +90,7 @@ export const MOCK_SUBSCRIPTION_CONNECTIONS: SubscriptionConnection[] = [
     runtimeId: "codex",
     label: "ChatGPT / Codex",
     installed: true,
+    canInstall: true,
     detected: { ...emptyAccount, authentication: "unknown" },
     connected: { ...emptyAccount },
     launchError: null,
@@ -109,6 +111,7 @@ export function createMockSubscriptionConnections(
 ) {
   let calls = 0;
   const connected = new Set<string>();
+  const installed = new Set<string>();
   return {
     read(payload: unknown) {
       const scope = connectionScope(payload);
@@ -117,11 +120,28 @@ export function createMockSubscriptionConnections(
         ? sequence[Math.min(calls++, sequence.length - 1)]
         : (config?.subscriptionConnections ?? MOCK_SUBSCRIPTION_CONNECTIONS);
       if ("error" in result) throw new Error(result.error);
-      return structuredClone(result).map((entry) =>
-        connected.has(`${scope}:${entry.runtimeId}`)
+      return structuredClone(result).map((original) => {
+        const entry = installed.has(original.runtimeId)
+          ? { ...original, installed: true, launchError: null }
+          : original;
+        return connected.has(`${scope}:${entry.runtimeId}`)
           ? { ...entry, connected: structuredClone(entry.detected) }
-          : entry,
-      );
+          : entry;
+      });
+    },
+    install(payload: unknown) {
+      connectionScope(payload);
+      const runtime = (payload as { runtimeId?: string })?.runtimeId;
+      if (runtime !== "claude" && runtime !== "codex")
+        throw new Error("Unsupported subscription provider");
+      installed.add(runtime);
+      return {
+        success: true,
+        steps: [],
+        restarted_count: 0,
+        failed_restart_count: 0,
+        log_path: null,
+      };
     },
     connect(payload: unknown) {
       const runtime = (payload as { runtimeId?: string })?.runtimeId;

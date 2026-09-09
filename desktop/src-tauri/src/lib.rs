@@ -748,6 +748,7 @@ pub fn run() {
             scan_agent_subscriptions,
             get_subscription_connections,
             connect_subscription,
+            install_subscription_runtime,
             openrouter_quota,
             mesh_start_node,
             mesh_stop_node,

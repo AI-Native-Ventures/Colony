@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 480,
-    "rust_lines": 180128,
-    "tauri_coupled": 188,
+    "rust_total": 481,
+    "rust_lines": 180283,
+    "tauri_coupled": 189,
     "portable": 292,
-    "portable_lines": 102589,
+    "portable_lines": 102587,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -17,6 +17,7 @@
       "src-tauri/src/commands/agent_discovery.rs",
       "src-tauri/src/commands/agent_discovery/install_capture.rs",
       "src-tauri/src/commands/agent_discovery/install_report.rs",
+      "src-tauri/src/commands/agent_discovery/vendor_cli_install.rs",
       "src-tauri/src/commands/agent_logs.rs",
       "src-tauri/src/commands/agent_metric_archive.rs",
       "src-tauri/src/commands/agent_models.rs",
@@ -494,10 +495,10 @@
     ]
   },
   "commands": {
-    "registered": 361,
-    "defined": 361,
+    "registered": 362,
+    "defined": 362,
     "by_reach": {
-      "frontend": 355,
+      "frontend": 356,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -509,16 +510,16 @@
     ]
   },
   "params": {
-    "AppHandle": 381,
-    "State": 267,
+    "AppHandle": 383,
+    "State": 268,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 378,
-      "State": 267,
+      "AppHandle": 380,
+      "State": 268,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -536,7 +537,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 121,
+    ".state::<": 122,
     ".emit(": 48,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -630,6 +631,7 @@
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
     "src-tauri/src/commands/canvas.rs": 4,
+    "src-tauri/src/commands/subscription_power.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
@@ -647,7 +649,6 @@
     "src-tauri/src/commands/company_blueprint.rs": 2,
     "src-tauri/src/commands/personas/snapshot/import.rs": 2,
     "src-tauri/src/commands/agent_auth.rs": 2,
-    "src-tauri/src/commands/subscription_power.rs": 2,
     "src-tauri/src/commands/project_git_branches.rs": 2,
     "src-tauri/src/commands/agent_providers.rs": 2,
     "src-tauri/src/commands/personas/snapshot.rs": 2,
@@ -1115,7 +1116,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriSubscriptionConnections.ts:43"
+        "src/shared/api/tauriSubscriptionConnections.ts:48"
       ]
     },
     "copy_image_to_clipboard": {
@@ -2259,7 +2260,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriSubscriptionConnections.ts:33"
+        "src/shared/api/tauriSubscriptionConnections.ts:38"
       ]
     },
     "get_task_artifact_event": {
@@ -2434,6 +2435,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1518",
         "src/shared/api/tauri.ts:855"
+      ]
+    },
+    "install_subscription_runtime": {
+      "defining_file": "src-tauri/src/commands/subscription_power.rs",
+      "module": "subscription_power",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriSubscriptionConnections.ts:57"
       ]
     },
     "interrupt_huddle_speech": {

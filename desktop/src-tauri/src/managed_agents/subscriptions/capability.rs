@@ -15,10 +15,7 @@ pub(crate) async fn launch_error(runtime: &str, binary: &Path) -> Option<String>
     if !crate::electron_host::enabled() || !cfg!(target_os = "macos") {
         return Some("Subscription teammates require the Electron desktop app on macOS.".into());
     }
-    match check(runtime, binary).await {
-        Ok(()) => None,
-        Err(error) => Some(error),
-    }
+    check(runtime, binary).await.err()
 }
 
 async fn check(runtime: &str, binary: &Path) -> Result<(), String> {

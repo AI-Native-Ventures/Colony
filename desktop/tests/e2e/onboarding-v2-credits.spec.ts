@@ -1,7 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
-import { seedActiveIdentity } from "../helpers/onboarding";
+import {
+  seedActiveIdentity,
+  continueFounderBusiness,
+} from "../helpers/onboarding";
 import {
   fillFounderBusiness,
   openFounderBusiness,
@@ -23,10 +26,18 @@ const ZERO_BALANCE = {
  * the walk.
  */
 async function seedCreatedCommunity(page: Page, transactionId: string) {
-  const identity = { ...TEST_IDENTITIES.tyler, username: "" };
+  const identity = TEST_IDENTITIES.tyler;
   await seedActiveIdentity(page, identity);
   await page.addInitScript(
     ({ pubkey, storageKey, id }) => {
+      const seededKey = `e2e-created-business-seeded:${id}`;
+      if (window.localStorage.getItem(seededKey)) return;
+      window.localStorage.setItem(seededKey, "true");
+      // The account is already set up; only this business remains unfinished.
+      window.localStorage.setItem(
+        `buzz-onboarding-complete.v1:${pubkey}`,
+        "true",
+      );
       window.localStorage.setItem(
         `buzz-machine-onboarding-complete.v2:${pubkey}`,
         "true",
@@ -69,7 +80,7 @@ async function fillSecondBusiness(page: Page) {
   await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
 }
 
-test("a created community confirms business and its saved agent connection with a way out", async ({
+test("a created community connects its detected subscription and chooses a model", async ({
   page,
 }) => {
   await seedCreatedCommunity(page, "additional-community-canvas");
@@ -98,8 +109,24 @@ test("a created community confirms business and its saved agent connection with 
   await expect(steps).toContainText("2 · Power");
   await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
   await fillSecondBusiness(page);
-  await openFounderBusiness(page);
+  await continueFounderBusiness(page);
+  const openColony = page.getByRole("button", {
+    name: "Open my Colony",
+    exact: true,
+  });
+  // Finding a local account does not establish this business's connection.
+  await expect(openColony).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Connect Claude", exact: true })
+    .click();
+  const model = page.getByRole("combobox", { name: "Subscription model" });
+  await expect(model).toBeVisible();
+  await expect(openColony).toBeDisabled();
+  await model.selectOption("claude-test-model");
+  await expect(openColony).toBeEnabled();
+  await openColony.click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
+  await expect(page.getByTestId("app-top-chrome")).toBeVisible();
 });
 
 test("leaving an unfinished business preserves its answers and resumes on reload", async ({

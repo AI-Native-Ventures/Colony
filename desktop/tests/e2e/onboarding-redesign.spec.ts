@@ -128,9 +128,24 @@ test("power offers all three choices and saves the selected defaults", async ({
   await expect(power).not.toContainText(
     "Subscription detection could not finish",
   );
+  await power.getByRole("button", { name: /^Claude · Max 20x/ }).click();
+  await power
+    .getByRole("button", { name: "Connect Claude", exact: true })
+    .click();
+  const subscriptionModel = power.getByRole("combobox", {
+    name: "Subscription model",
+  });
+  await subscriptionModel.selectOption("claude-test-model");
+  await expect(subscriptionModel).toHaveValue("claude-test-model");
+  await expect(power).toContainText("Max 20x");
+  await expect(power).toContainText("65% left");
+  await expect(
+    power.getByRole("button", { name: "Open my Colony" }),
+  ).toBeEnabled();
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-power-subscriptions-1440.png",
+    fullPage: true,
   });
 
   await power.getByRole("button", { name: /^OpenRouter free models/ }).click();
@@ -471,6 +486,7 @@ test("account and business retain readable opaque forms and brand at narrow widt
 test("Power buys credits and resumes the same checkout after changing lanes", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   let initialized = 0;
   let paid = false;
   await page.route("**/api/payments/**", async (route) => {
@@ -515,6 +531,14 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
   await reachPower(page);
   const power = page.getByTestId("onboarding-power");
   await power.getByLabel("Receipt email").fill("founder@example.test");
+  await expect(
+    power.getByRole("button", { name: "Pay $5", exact: true }),
+  ).toBeEnabled();
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-credits-purchase-1440.png",
+    fullPage: true,
+  });
   await power.getByRole("button", { name: "Pay $5", exact: true }).click();
   await expect(power).toContainText("Your checkout is saved");
   expect(initialized).toBe(1);
@@ -525,6 +549,11 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
   ).toBeVisible();
   await expect(power.getByRole("button", { name: /^Pay / })).toHaveCount(0);
   await expect(power).not.toContainText("Payment confirmed");
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-checkout-saved-1440.png",
+    fullPage: true,
+  });
   paid = true;
   await power
     .getByRole("button", { name: "Check payment", exact: true })
@@ -542,6 +571,7 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
 test("Power connects OpenRouter, explains verified allowance and rechecks after top-up", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await reachPower(page, {
     openRouterConnection: {
       status: "connected",
@@ -567,9 +597,14 @@ test("Power connects OpenRouter, explains verified allowance and rechecks after 
   await page.getByTestId("openrouter-connect-button").click();
   const allowance = power.getByTestId("openrouter-allowance");
   await expect(allowance).toContainText("50 free-model requests a day");
+  await expect(allowance).toHaveAttribute("aria-busy", "false");
+  await expect(
+    allowance.getByRole("button", { name: "Add credits on OpenRouter" }),
+  ).toBeVisible();
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-power-openrouter-topup.png",
+    fullPage: true,
   });
   await allowance
     .getByRole("button", { name: "Add credits on OpenRouter" })
@@ -589,4 +624,39 @@ test("Power connects OpenRouter, explains verified allowance and rechecks after 
   await page.screenshot({
     path: "test-results/simple-founder-power-openrouter-eligible.png",
   });
+});
+
+test("subscription installation is an explicit step before vendor sign-in", async ({
+  page,
+}) => {
+  await reachPower(page, {
+    subscriptionConnections: MOCK_SUBSCRIPTION_CONNECTIONS.map((entry) => ({
+      ...entry,
+      installed: false,
+      canInstall: true,
+      launchError: "Install the provider app first.",
+    })),
+  });
+  const power = page.getByTestId("onboarding-power");
+  await power.getByRole("button", { name: /^Subscriptions/ }).click();
+  await expect(
+    power.getByRole("button", { name: "Install Claude Code", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    power.getByRole("button", { name: "Install Codex", exact: true }),
+  ).toBeEnabled();
+  await power
+    .getByRole("button", { name: "Install Claude Code", exact: true })
+    .click();
+  await expect(power).toContainText("Installed. Select the provider above");
+  await expect(
+    power.getByRole("button", { name: "Install Claude Code", exact: true }),
+  ).toHaveCount(0);
+  await power.getByRole("button", { name: /^Claude · Max 20x/ }).click();
+  await expect(
+    power.getByRole("button", { name: "Connect Claude", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    power.getByRole("button", { name: "Open my Colony" }),
+  ).toBeDisabled();
 });

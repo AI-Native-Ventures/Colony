@@ -1,4 +1,8 @@
 import { invokeTauri } from "./tauri";
+import {
+  fromRawInstallRuntimeResult,
+  type RawInstallRuntimeResult,
+} from "./installTypes";
 
 export type SubscriptionScope = { ownerPubkey: string; relayUrl: string };
 
@@ -23,6 +27,7 @@ export type SubscriptionConnection = {
   runtimeId: string;
   label: string;
   installed: boolean;
+  canInstall?: boolean;
   detected: SubscriptionAccount;
   connected: SubscriptionAccount;
   launchError: string | null;
@@ -41,4 +46,16 @@ export function connectSubscription(
   scope: SubscriptionScope,
 ) {
   return invokeTauri<void>("connect_subscription", { runtimeId, scope });
+}
+
+/** Explicit software installation only; sign-in and teammate launch are separate actions. */
+export async function installSubscriptionRuntime(
+  runtimeId: string,
+  scope: SubscriptionScope,
+) {
+  const result = await invokeTauri<RawInstallRuntimeResult>(
+    "install_subscription_runtime",
+    { runtimeId, scope },
+  );
+  return fromRawInstallRuntimeResult(result);
 }
