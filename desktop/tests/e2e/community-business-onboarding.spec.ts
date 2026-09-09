@@ -92,6 +92,25 @@ async function createFromRail(page: Page, slug: string) {
 test("a named owner creates from the real rail, resumes Business and Power, and completes only this business", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.route("**/api/payments/packs", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        currency: "USD",
+        packs: [
+          {
+            id: "starter",
+            name: "Starter",
+            usdCents: 500,
+            zarCents: 9900,
+            grantNanousd: 5_000_000_000,
+          },
+        ],
+      }),
+    }),
+  );
   await existingOwner(page);
   await createFromRail(page, "bravo");
   await fillFounderBusiness(
@@ -134,11 +153,27 @@ test("a named owner creates from the real rail, resumes Business and Power, and 
       displayName: "",
     }),
   );
+  const power = page.getByTestId("onboarding-power");
+  const complete = power.getByRole("button", {
+    name: "Open my Colony",
+    exact: true,
+  });
+  await expect(power.getByLabel("Default model")).toHaveValue(
+    CREDIT_CONFIG.model,
+  );
+  await expect(power.getByTestId("power-credits-purchase")).toHaveAttribute(
+    "aria-busy",
+    "false",
+  );
+  await expect(complete).toBeEnabled();
   await waitForAnimations(page);
   await page.screenshot({ path: "test-results/community-business-power.png" });
-  await page
-    .getByRole("button", { name: "Open my Colony", exact: true })
-    .click();
+  await complete.scrollIntoViewIfNeeded();
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/community-business-power-controls.png",
+  });
+  await complete.click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   const state = await page.evaluate(
     ({ owner, relay }) => ({

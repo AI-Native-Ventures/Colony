@@ -147,6 +147,13 @@ test("power offers all three choices and saves the selected defaults", async ({
     path: "test-results/simple-founder-power-subscriptions-1440.png",
     fullPage: true,
   });
+  await power
+    .getByRole("button", { name: "Open my Colony" })
+    .scrollIntoViewIfNeeded();
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-subscriptions-1440-controls.png",
+  });
 
   await power.getByRole("button", { name: /^OpenRouter free models/ }).click();
   await expect(page.getByTestId("openrouter-connect-button")).toBeVisible();
@@ -216,6 +223,49 @@ test("a saved subscription cannot bypass its business connection through the gen
   await expect(
     power.getByRole("button", { name: "Keep my current setup" }),
   ).toHaveCount(0);
+});
+
+test("legacy Credits keeps its funding choice until the owner updates the connection", async ({
+  page,
+}) => {
+  const legacyConfig = {
+    credential_mode: "colony_credits" as const,
+    preferred_runtime: "codex",
+    provider: "openai-compat",
+    model: "legacy-credits-model",
+    env_vars: {},
+  };
+  await reachPower(page, { globalAgentConfig: legacyConfig });
+  const power = page.getByTestId("onboarding-power");
+  const complete = power.getByRole("button", { name: "Open my Colony" });
+  await expect(
+    power.getByRole("button", { name: /^Colony Credits/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(power.getByTestId("subscription-power-fields")).toHaveCount(0);
+  await expect(power.getByLabel("Default model")).toHaveCount(0);
+  await expect(complete).toBeDisabled();
+  const readSavedConfig = () =>
+    page.evaluate(() =>
+      window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_global_agent_config"),
+    );
+  expect(await readSavedConfig()).toEqual(legacyConfig);
+  await power
+    .getByRole("button", { name: "Use Colony Credits", exact: true })
+    .click();
+  await expect(power.getByLabel("Default model")).toHaveValue(
+    "deepseek-v4-flash",
+  );
+  await expect(complete).toBeEnabled();
+  // Updating the draft is explicit; it still does not save before completion.
+  expect(await readSavedConfig()).toEqual(legacyConfig);
+  await complete.click();
+  await expect(page.getByTestId("app-top-chrome")).toBeVisible();
+  expect(await readSavedConfig()).toMatchObject({
+    credential_mode: "colony_credits",
+    preferred_runtime: "buzz-agent",
+    provider: "openai-compat",
+    model: "deepseek-v4-flash",
+  });
 });
 
 test("subscription account retry recovers detection but an unsupported Electron runtime stays blocked", async ({
@@ -571,6 +621,13 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
     path: "test-results/simple-founder-power-credits-purchase-1440.png",
     fullPage: true,
   });
+  await power
+    .getByRole("button", { name: "Open my Colony" })
+    .scrollIntoViewIfNeeded();
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-credits-purchase-1440-controls.png",
+  });
   await power.getByRole("button", { name: "Pay $5", exact: true }).click();
   await expect(power).toContainText("Your checkout is saved");
   expect(initialized).toBe(1);
@@ -591,8 +648,29 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
     .getByRole("button", { name: "Check payment", exact: true })
     .click();
   await expect(power).toContainText(
+    "Payment confirmed. No credits are currently available to spend.",
+  );
+  await expect(power).not.toContainText("Your credits are available.");
+  await expect(power.getByRole("button", { name: /^Pay / })).toHaveCount(0);
+  expect(initialized).toBe(1);
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-payment-awaiting-balance.png",
+  });
+  // Provider confirmation does not manufacture a spendable ledger balance.
+  await page.waitForFunction(() => !!window.__BUZZ_E2E_SET_COLONY_CREDITS__);
+  await page.evaluate(() =>
+    window.__BUZZ_E2E_SET_COLONY_CREDITS__?.({
+      availableNanousd: "5000000000",
+    }),
+  );
+  await power
+    .getByRole("button", { name: "Check balance", exact: true })
+    .click();
+  await expect(power).toContainText(
     "Payment confirmed. Your credits are available.",
   );
+  await expect(power).toContainText("$5.00 available for your agents.");
   expect(initialized).toBe(1);
   await waitForAnimations(page);
   await page.screenshot({
@@ -637,6 +715,13 @@ test("Power connects OpenRouter, explains verified allowance and rechecks after 
   await page.screenshot({
     path: "test-results/simple-founder-power-openrouter-topup.png",
     fullPage: true,
+  });
+  await power
+    .getByRole("button", { name: "Open my Colony" })
+    .scrollIntoViewIfNeeded();
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/simple-founder-power-openrouter-topup-controls.png",
   });
   await allowance
     .getByRole("button", { name: "Add credits on OpenRouter" })

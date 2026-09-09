@@ -119,9 +119,17 @@ export function PowerScreen({
     retry: false,
     staleTime: 0,
   });
+  const creditsNeedsUpdate =
+    lane === "colony" &&
+    !!draft?.preferred_runtime &&
+    draft.preferred_runtime !== "buzz-agent";
   function selectLane(next: PowerLane, runtimeId?: string) {
     if (!draft) return;
-    if (next === lane && (!runtimeId || runtimeId === draft.preferred_runtime))
+    if (
+      next === lane &&
+      !creditsNeedsUpdate &&
+      (!runtimeId || runtimeId === draft.preferred_runtime)
+    )
       return;
     setValid(false);
     setCustomModel(false);
@@ -135,6 +143,7 @@ export function PowerScreen({
     !!scope.data &&
     !!draft &&
     powerLaneForConfig(draft) === lane &&
+    !creditsNeedsUpdate &&
     !!runtime &&
     !runtime.localLaunchError &&
     runtime.availability === "available" &&
@@ -279,6 +288,21 @@ export function PowerScreen({
                 )}
               </div>
             )}
+            {creditsNeedsUpdate && (
+              <div className="space-y-2" role="status">
+                <p>
+                  Your saved setup uses an older connection. Update it to use
+                  Colony Credits here; your balance stays with this business.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => selectLane("colony")}
+                >
+                  Use Colony Credits
+                </Button>
+              </div>
+            )}
             {lane === "colony" && scope.data && (
               <PowerCreditsPurchase
                 key={scopeKey}
@@ -306,6 +330,7 @@ export function PowerScreen({
                     onValidityChange={setValid}
                   />
                 ) : lane === "colony" ? (
+                  !creditsNeedsUpdate &&
                   credits.isSuccess && (
                     <CreditsModelFields
                       key={`${lane}:${runtime.id}:${credits.dataUpdatedAt}:${modelAttempt}`}

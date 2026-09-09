@@ -82,3 +82,27 @@ test("other runtimes keep their provider, model and credentials as an existing s
     }
   }
 });
+
+test("explicit Colony Credits stays authoritative for legacy and unsupported runtime pins", () => {
+  for (const runtime of [
+    "codex",
+    "claude",
+    "omp",
+    "opencode",
+    "custom-runtime",
+    "buzz-agent",
+    null,
+  ]) {
+    const config = {
+      ...current,
+      credential_mode: "colony_credits",
+      preferred_runtime: runtime,
+      provider: "openai-compat",
+      model: "existing-credits-model",
+    };
+    assert.equal(powerLaneForConfig(config), "colony");
+    assert.equal(initialPowerConfig(config), config);
+    assert.equal(config.preferred_runtime, runtime);
+    assert.equal(config.model, "existing-credits-model");
+  }
+});
