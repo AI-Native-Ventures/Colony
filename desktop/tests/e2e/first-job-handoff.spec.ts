@@ -762,6 +762,8 @@ for (const dark of [false, true]) {
 test("fresh Scout-only setup saves business details and creates the displayed worker only after approval", async ({
   page,
 }) => {
+  // Keep the whole reviewed card between the fixed header and composer.
+  await page.setViewportSize({ width: 1440, height: 1200 });
   const { root, errors } = await setup(page, {
     funded: true,
     freshProfile: true,
@@ -784,6 +786,13 @@ test("fresh Scout-only setup saves business details and creates the displayed wo
   );
   expect(await commandCount(page, "execute_agent_proposal")).toBe(0);
   expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
+  await card.scrollIntoViewIfNeeded();
+  await expect(
+    card.getByRole("heading", { name: "A first job for Horizon Labs" }),
+  ).toBeInViewport({ ratio: 1 });
+  await expect(
+    card.getByRole("button", { name: "Approve team and start" }),
+  ).toBeInViewport({ ratio: 1 });
   await waitForAnimations(page);
   await card.screenshot({
     path: "test-results/first-job/07-team-before-approval.png",

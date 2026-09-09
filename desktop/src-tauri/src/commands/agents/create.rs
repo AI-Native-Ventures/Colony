@@ -397,7 +397,6 @@ pub(crate) async fn create_managed_agent_with_preparation(
             } else {
                 relay_mesh.clone()
             },
-            ..Default::default()
         };
 
         records.push(record);

@@ -34,6 +34,8 @@ if [ "$#" -eq 0 ]; then
   exit 1
 fi
 
+"$HERE/ci-prepare-apt-sources.sh"
+
 apt_opts=(
   -o Acquire::Retries=3
   -o Acquire::http::Timeout=30
