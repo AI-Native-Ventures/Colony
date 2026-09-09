@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
+import type { SubscriptionScan } from "../../src/shared/api/tauriSubscriptions";
+import type { MockSubscriptionScanResult } from "../../src/testing/e2eBridgeSubscriptions";
 import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
@@ -310,6 +312,10 @@ type MockBridgeOptions = {
     age_attestation_required: boolean;
     version: string;
   } | null;
+  /** Native subscription metadata, distinct from runtime launch support. */
+  subscriptionScan?: SubscriptionScan;
+  /** Success/error responses per scan; the last response repeats on retry. */
+  subscriptionScanSequence?: MockSubscriptionScanResult[];
   acpRuntimesCatalog?: Record<string, unknown>[];
   /** Catalog returned after a successful mocked install. */
   acpRuntimesCatalogAfterInstall?: Record<string, unknown>[];

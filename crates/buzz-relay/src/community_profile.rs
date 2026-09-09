@@ -18,10 +18,10 @@
 //! defaults, and the interview's job becomes filling it in rather than
 //! bringing it into being.
 //!
-//! This sweep is the mechanism, and it is deliberately idempotent and
-//! self-healing rather than a hook on community creation: it repairs the
-//! communities that already exist and predate this, and it covers any future
-//! path that creates a community without knowing it owes one a profile.
+//! Provisioning ensures the profile before returning a newly created
+//! community, so owners can start work without waiting for a relay restart.
+//! The startup sweep remains an idempotent repair for older communities or a
+//! previous provisioning attempt whose profile write failed.
 
 use std::sync::Arc;
 

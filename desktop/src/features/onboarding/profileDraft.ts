@@ -15,7 +15,8 @@ export function isFallbackDisplayName(value?: string | null): boolean {
   const normalizedValue = value?.trim().toLowerCase() ?? "";
   return (
     normalizedValue.startsWith("npub1") ||
-    normalizedValue.startsWith("nostr:npub1")
+    normalizedValue.startsWith("nostr:npub1") ||
+    /^[a-f0-9]{64}$/.test(normalizedValue)
   );
 }
 

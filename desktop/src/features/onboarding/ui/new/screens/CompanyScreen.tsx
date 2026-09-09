@@ -197,7 +197,7 @@ export function CompanyScreen({
           type="submit"
           disabled={!companyReady(values) || isSubmitting}
         >
-          {isSubmitting ? "Opening your Colony…" : "Open my Colony"}
+          {isSubmitting ? "Preparing your business…" : "Continue"}
           {!isSubmitting && <ArrowRight aria-hidden="true" />}
         </Button>
         <p className="onb-simple-note">

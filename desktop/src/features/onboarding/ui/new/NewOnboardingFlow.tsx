@@ -36,6 +36,12 @@ import { AccountSetup } from "./AccountSetup";
 import { OnboardingCanvas } from "./OnboardingCanvas";
 import { RecoveryScreen } from "./screens/RecoveryScreen";
 import { CompanyScreen } from "./screens/CompanyScreen";
+import { PowerScreen } from "./screens/PowerScreen";
+import {
+  clearAccountNameDraft,
+  founderWithName,
+  readAccountNameDraft,
+} from "../../accountNameDraft";
 
 export const answerStorage: AnswerStorage = {
   get: getStorageItem,
@@ -102,6 +108,8 @@ type Props = {
   answersKey?: string;
   currentPubkey?: string;
   canvasOverlay?: ReactNode;
+  onPreparePower?: (assertCurrent: () => void) => Promise<string>;
+  expectedRelayUrl?: string;
 };
 
 export function NewOnboardingFlow({
@@ -114,6 +122,8 @@ export function NewOnboardingFlow({
   answersKey,
   currentPubkey,
   canvasOverlay,
+  onPreparePower,
+  expectedRelayUrl,
 }: Props) {
   const [effectiveServices] = useState(() =>
     resolveAuthServices(import.meta.env, services),
@@ -188,13 +198,24 @@ export function NewOnboardingFlow({
         }
       }
       if (restored?.phase === "registered") {
+        // This effect can resume directly into recovery before AccountSetup's
+        // pending-signup callback runs. Carry its public name across that race.
+        const recoveredName = readAccountNameDraft(
+          answerStorage,
+          restored.email,
+        );
         next = {
           ...next,
           account: { email: restored.email },
+          founder: founderWithName(
+            next.founder,
+            next.founder?.fullName.trim() || recoveredName,
+          ),
           signupAttemptId: restored.attemptId,
           identityPubkey: restored.pubkey,
         };
         persist(next);
+        clearAccountNameDraft(answerStorage, restored.email);
         if (next.recoveryAcknowledged)
           await effectiveServices.auth.acknowledgeRecovery(restored.attemptId);
       }
@@ -210,10 +231,17 @@ export function NewOnboardingFlow({
     void restoreRecovery();
   }, [restoreRecovery]);
 
-  async function accountCreated(result: SignUpResult, email: string) {
+  async function accountCreated(
+    result: SignUpResult,
+    email: string,
+    fullName: string,
+  ) {
+    if (currentPubkey && currentPubkey !== result.pubkey)
+      throw new Error("The account changed during signup. Reopen setup.");
     persist({
       ...answersRef.current,
       account: { email },
+      founder: founderWithName(answersRef.current.founder, fullName),
       signupAttemptId: result.attemptId,
       identityPubkey: currentPubkey ?? result.pubkey,
     });
@@ -274,8 +302,11 @@ export function NewOnboardingFlow({
         provisioning.onProvisioned(result, next.company ?? "");
       }
       if (!isCurrentRun()) return;
-      await onComplete(next, isCurrentRun);
-      clearAnswers(answerStorage, answersKey);
+      await onPreparePower?.(() => {
+        if (!isCurrentRun()) throw new Error("This setup run has ended");
+      });
+      if (!isCurrentRun()) return;
+      persist({ ...next, businessConfirmed: true });
     } catch (cause) {
       if (!isCurrentRun()) return;
       setError(
@@ -291,12 +322,56 @@ export function NewOnboardingFlow({
       }
     }
   }
+  async function finishPower(save: () => Promise<void>) {
+    if (running.current) return;
+    running.current = true;
+    const run = Symbol("onboarding-power");
+    activeRun.current = run;
+    const isCurrentRun = () =>
+      mounted.current &&
+      activeRun.current === run &&
+      scopeRef.current.answersKey === answersKey &&
+      scopeRef.current.currentPubkey === currentPubkey;
+    setBusy(true);
+    setError(null);
+    try {
+      if (!isCurrentRun()) return;
+      await save();
+      if (!isCurrentRun()) return;
+      await onComplete(answersRef.current, isCurrentRun);
+      // Completion may unmount this flow. Its successful handoff has already
+      // checked the run; remove only this run's captured storage key.
+      clearAnswers(answerStorage, answersKey);
+    } catch (cause) {
+      if (isCurrentRun())
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : typeof cause === "string"
+              ? cause
+              : "We could not finish setting up your agents. Try again.",
+        );
+    } finally {
+      if (isCurrentRun()) {
+        activeRun.current = null;
+        running.current = false;
+        setBusy(false);
+      }
+    }
+  }
   const step = resumeStep(answers);
+  const powerScopeKey = JSON.stringify([
+    answersKey,
+    currentPubkey,
+    answers.communitySlug,
+  ]);
   const basePosition = stepPosition(step, {
     invitesEnabled: false,
     creditsNeeded: false,
   });
-  const position = existingIdentity ? { index: 0, total: 1 } : basePosition;
+  const position = existingIdentity
+    ? { index: step === "brain" ? 1 : 0, total: 2 }
+    : basePosition;
   return (
     <OnboardingCanvas
       step={step}
@@ -329,6 +404,22 @@ export function NewOnboardingFlow({
               : Promise.reject(new Error("Recovery unavailable"))
           }
           onContinue={acknowledgeRecovery}
+        />
+      ) : step === "brain" ? (
+        <PowerScreen
+          key={powerScopeKey}
+          scopeKey={powerScopeKey}
+          expectedOwnerPubkey={currentPubkey}
+          expectedRelayUrl={expectedRelayUrl}
+          prepareScope={onPreparePower}
+          businessOnly={existingIdentity}
+          busy={busy}
+          error={error}
+          onBack={() => {
+            persist({ ...answersRef.current, businessConfirmed: false });
+            setError(null);
+          }}
+          onContinue={finishPower}
         />
       ) : (
         <CompanyScreen

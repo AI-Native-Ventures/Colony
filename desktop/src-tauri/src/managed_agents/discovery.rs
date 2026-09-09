@@ -19,16 +19,12 @@ mod nvm;
 mod presets;
 mod runtime_metadata;
 
-// Re-exported so every existing path to these keeps working: `runtime.rs`
-// reaches `find_nvm_default_bin` through `managed_agents`, and the tests reach
-// all three through `discovery`.
 pub use nvm::find_nvm_default_bin;
 #[cfg(test)]
 pub(crate) use nvm::{is_safe_nvm_tag, parse_semver_tag};
 
 pub(crate) use runtime_metadata::KnownAcpRuntime;
 
-// Split out for the file-size ratchet; every existing path keeps working.
 #[cfg(test)]
 pub(crate) use codex_probe::codex_adapter_is_outdated;
 #[allow(unused_imports)]
@@ -1164,6 +1160,7 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             label: runtime.label.to_string(),
             avatar_url: runtime.avatar_url.to_string(),
             availability,
+            local_launch_error: super::isolation::launch::ensure_supported(Some(runtime.id)).err(),
             command,
             binary_path,
             default_args,
@@ -1335,6 +1332,7 @@ pub fn discover_acp_runtimes_from(
                 // All icons are bundled assets; customs fall back to TerminalSquare in the UI.
                 avatar_url: String::new(),
                 availability,
+                local_launch_error: super::isolation::launch::ensure_supported(Some(&def.id)).err(),
                 command,
                 binary_path,
                 default_args,

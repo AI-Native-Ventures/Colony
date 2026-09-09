@@ -47,7 +47,11 @@ export function ColonyCreditsCredentialChoice({
       setBalanceNanousd(account.balance_nanousd);
     } catch (error) {
       setAccountError(
-        typeof error === "string" ? error : "Couldn't read Colony Credits.",
+        typeof error === "string" && error.includes("unavailable on this relay")
+          ? "Colony Credits is unavailable for this business. Choose another way to power your agents or contact Colony support."
+          : typeof error === "string"
+            ? error
+            : "Couldn't read Colony Credits. Try again.",
       );
     } finally {
       setIsLoading(false);
@@ -136,34 +140,36 @@ export function ColonyCreditsCredentialChoice({
           </span>
         </button>
       </div>
-      <div className="flex flex-wrap items-center gap-3 text-sm">
-        <span className="text-muted-foreground">Current balance</span>
-        {isLoading && <Loader className="size-3.5 animate-spin" />}
-        {!isLoading && balanceNanousd !== null && (
-          <span
-            className={cn(
-              "font-medium",
-              status === "depleted" && "text-destructive",
-            )}
-            data-testid="colony-credits-balance"
+      {provisionedSelected && (
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span className="text-muted-foreground">Current balance</span>
+          {isLoading && <Loader className="size-3.5 animate-spin" />}
+          {!isLoading && balanceNanousd !== null && (
+            <span
+              className={cn(
+                "font-medium",
+                status === "depleted" && "text-destructive",
+              )}
+              data-testid="colony-credits-balance"
+            >
+              {formatNanousdAsUsd(balanceNanousd)}
+            </span>
+          )}
+          {accountError && (
+            <span className="text-xs text-destructive">{accountError}</span>
+          )}
+          <Button
+            className="ml-auto"
+            disabled={isReconnecting || !supported || !provisionedSelected}
+            onClick={() => void handleReconnect()}
+            size="sm"
+            variant="ghost"
           >
-            {formatNanousdAsUsd(balanceNanousd)}
-          </span>
-        )}
-        {accountError && (
-          <span className="text-xs text-destructive">{accountError}</span>
-        )}
-        <Button
-          className="ml-auto"
-          disabled={isReconnecting || !supported || !provisionedSelected}
-          onClick={() => void handleReconnect()}
-          size="sm"
-          variant="ghost"
-        >
-          <RefreshCw className="mr-1.5 size-3.5" />
-          {isReconnecting ? "Reconnecting…" : "Reconnect"}
-        </Button>
-      </div>
+            <RefreshCw className="mr-1.5 size-3.5" />
+            {isReconnecting ? "Reconnecting…" : "Reconnect"}
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

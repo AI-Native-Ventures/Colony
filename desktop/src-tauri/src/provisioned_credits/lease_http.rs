@@ -42,12 +42,13 @@ fn stable_http_error(kind: GatewayHttpErrorKind) -> String {
 }
 
 fn blocking_client() -> Result<reqwest::blocking::Client, String> {
-    let builder = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none());
+    let builder = reqwest::blocking::Client::builder().redirect(reqwest::redirect::Policy::none());
     #[cfg(feature = "onboarding-fixture")]
     let builder = buzz_ws_client::onboarding_fixture::FixtureTransport::from_env()
-        .map_err(|error| error.to_string())?.configure_blocking_http(builder);
-    builder.build()
+        .map_err(|error| error.to_string())?
+        .configure_blocking_http(builder);
+    builder
+        .build()
         .map_err(|error| format!("gateway client setup failed: {error}"))
 }
 
@@ -90,7 +91,8 @@ fn mint_lease_with_client(
     }
     let url = format!("{}/api/gateway/tokens", key.relay_origin);
     #[cfg(feature = "onboarding-fixture")]
-    buzz_ws_client::onboarding_fixture::validate_process_url(&url).map_err(|error| error.to_string())?;
+    buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+        .map_err(|error| error.to_string())?;
     let body = serde_json::to_vec(&serde_json::json!({
         "ttl_secs": GATEWAY_TOKEN_TTL_SECS,
     }))
@@ -145,15 +147,13 @@ fn validate_lease_expiry(expires_at: DateTime<Utc>) -> Result<(), String> {
 }
 
 fn lease_refresh_at(issued_at: DateTime<Utc>, expires_at: DateTime<Utc>) -> DateTime<Utc> {
-    let t_minus_lead = expires_at - chrono::Duration::seconds(GATEWAY_REFRESH_LEAD_SECS);
-    if t_minus_lead > issued_at {
-        return t_minus_lead;
-    }
-    // Phase 1 leases are bounded to 24h, so `expires_at - 24h` would be at or
-    // before mint time and cause an immediate refresh loop. Refresh at the
-    // midpoint instead; an overdue lease is rotated immediately on ensure.
-    let lifetime_secs = (expires_at - issued_at).num_seconds().max(1);
-    issued_at + chrono::Duration::seconds(lifetime_secs / 2)
+    // A slightly faster relay clock can make a 24h token appear a few seconds
+    // longer lived. Subtracting the full 24h lead would then rotate its worker
+    // immediately, over and over. Cap the lead at half the remaining lifetime
+    // even when expiry is just above the nominal TTL; retain subsecond precision.
+    let lifetime = (expires_at - issued_at).max(chrono::Duration::zero());
+    let lead = chrono::Duration::seconds(GATEWAY_REFRESH_LEAD_SECS).min(lifetime / 2);
+    expires_at - lead
 }
 
 fn revoke_lease(_app: &AppHandle, lease: &GatewayLease) -> Result<(), String> {
@@ -174,7 +174,8 @@ fn revoke_lease_with_client(
     }
     let url = format!("{}/api/gateway/tokens", lease.key.relay_origin);
     #[cfg(feature = "onboarding-fixture")]
-    buzz_ws_client::onboarding_fixture::validate_process_url(&url).map_err(|error| error.to_string())?;
+    buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+        .map_err(|error| error.to_string())?;
     let body = serde_json::to_vec(&serde_json::json!({"token": lease.token.as_str()}))
         .map_err(|error| format!("gateway request serialization failed: {error}"))?;
     let auth = build_nip98_auth_header_for_keys(&lease.signer, &Method::DELETE, &url, &body)?;

@@ -214,10 +214,6 @@ test("the company screen fits the window it is given", async ({ page }) => {
     page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible();
 
-  await assertFitsLaptopWindow(page, "company", "Open my Colony");
-  await assertColumnsAndScrollsAtMinimumWindow(
-    page,
-    "company",
-    "Open my Colony",
-  );
+  await assertFitsLaptopWindow(page, "company", "Continue");
+  await assertColumnsAndScrollsAtMinimumWindow(page, "company", "Continue");
 });

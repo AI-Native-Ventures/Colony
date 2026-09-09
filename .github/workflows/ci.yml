@@ -1196,6 +1196,17 @@ jobs:
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: New-community work profile bootstrap
+        # The archive already includes the relay lib. Run both post-startup
+        # provisioning regressions and the default-profile contract tests.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and (test(/community_provisioning::profile_tests/) or test(/community_profile::tests/))' \
+            --run-ignored all
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          REDIS_URL: redis://localhost:6379
       - name: NIP-ER reminder e2e
         # Feature e2e for NIP-ER (Event Reminders, kind:30300): write-path
         # validation, author-only read filtering, and scheduler delivery against

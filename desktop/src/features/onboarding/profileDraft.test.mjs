@@ -10,6 +10,7 @@ import {
 test("profile_draft_treats_an_npub_as_no_name", () => {
   assert.equal(sanitizeDisplayName("npub1abc"), "");
   assert.equal(sanitizeDisplayName("nostr:npub1abc"), "");
+  assert.equal(sanitizeDisplayName("a".repeat(64)), "");
   assert.equal(sanitizeDisplayName("  Aisha Bello "), "Aisha Bello");
 });
 

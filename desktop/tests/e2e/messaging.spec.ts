@@ -374,9 +374,8 @@ test("send a message and see it in timeline", async ({ page }) => {
   await page.getByTestId("send-message").click();
 
   await expect(page.getByTestId("message-timeline")).toContainText(message);
-  await expect(page.getByTestId("message-row").last()).toContainText(
-    "npub1mock...",
-  );
+  const sentRow = page.getByTestId("message-row").filter({ hasText: message });
+  await expect(sentRow.getByTestId("message-author")).toHaveText("You");
 });
 
 test("long autolink wraps without widening the timeline", async ({ page }) => {
@@ -2047,9 +2046,7 @@ test("sends a thread message to its parent channel with a root-thread link", asy
       return false;
     })
     .toBe(true);
-  await expect(sharedRow.getByTestId("message-author")).toHaveText(
-    "npub1mock...",
-  );
+  await expect(sharedRow.getByTestId("message-author")).toHaveText("You");
   await expect(sharedRow.getByTestId("message-avatar-fallback")).toBeVisible();
   await expect(sharedRow.locator('[data-mention=""]')).toContainText("alice");
   await expect(sharedRow.locator("img[data-custom-emoji]")).toHaveAttribute(

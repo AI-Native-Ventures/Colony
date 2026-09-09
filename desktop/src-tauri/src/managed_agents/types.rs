@@ -691,6 +691,9 @@ pub struct AcpRuntimeCatalogEntry {
     pub label: String,
     pub avatar_url: String,
     pub availability: AcpAvailabilityStatus,
+    /// Why this host cannot launch the runtime locally; installation/auth remain separate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_launch_error: Option<String>,
     pub command: Option<String>,
     pub binary_path: Option<String>,
     pub default_args: Vec<String>,

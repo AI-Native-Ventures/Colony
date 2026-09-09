@@ -4,6 +4,10 @@ import test from "node:test";
 
 import { resolveAuthServices } from "./NewOnboardingFlow.tsx";
 import { createFakeServices } from "../../contracts.fake.ts";
+import {
+  createIdentityBoundFakeServices,
+  resolveMachineAuthService,
+} from "../../lib/wiredAuthService.ts";
 
 const FAKE = createFakeServices();
 
@@ -31,4 +35,28 @@ test("the e2e build keeps its fakes so specs stay hermetic", () => {
   assert.equal(resolved.auth, FAKE.auth);
   assert.equal(resolved.scrape, FAKE.scrape);
   assert.equal(resolved.payments, FAKE.payments);
+});
+
+test("both E2E entry paths return the mock native identity at signup", async () => {
+  const pubkey = "e".repeat(64);
+  const getPubkey = async () => pubkey;
+  const canvas = resolveAuthServices(
+    { MODE: "e2e" },
+    createIdentityBoundFakeServices(getPubkey),
+  ).auth;
+  const machine = resolveMachineAuthService({ MODE: "e2e" }, getPubkey);
+  const result = await machine.signUp(
+    "owner@example.test",
+    "synthetic-password",
+  );
+  assert.equal(result.pubkey, pubkey);
+  assert.equal((await canvas.pendingSignup()).pubkey, pubkey);
+  await canvas.acknowledgeRecovery(result.attemptId);
+
+  const directCanvasResult = await canvas.signUp(
+    "other@example.test",
+    "synthetic-password",
+  );
+  assert.equal(directCanvasResult.pubkey, pubkey);
+  await canvas.acknowledgeRecovery(directCanvasResult.attemptId);
 });

@@ -41,13 +41,15 @@ test("canvas_ink_never_changes", () => {
 
 test("canvas_neighbouring_screens_never_repeat_a_hue", () => {
   // Colour marks where you are, so two screens in a row must not look alike.
-  const hues = ONBOARDING_STEPS.map((step) => canvasFor(step, "colony").hue);
-  for (let i = 1; i < hues.length; i += 1) {
-    assert.notEqual(
-      hues[i],
-      hues[i - 1],
-      `${ONBOARDING_STEPS[i]} repeats the hue before it`,
-    );
+  for (const track of ["colony", "byo"]) {
+    const hues = ONBOARDING_STEPS.map((step) => canvasFor(step, track).hue);
+    for (let i = 1; i < hues.length; i += 1) {
+      assert.notEqual(
+        hues[i],
+        hues[i - 1],
+        `${ONBOARDING_STEPS[i]} repeats the hue before it on ${track}`,
+      );
+    }
   }
 });
 

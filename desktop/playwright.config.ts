@@ -172,6 +172,7 @@ export default defineConfig({
         "**/onboarding-backup.spec.ts",
         "**/onboarding-agent-defaults.spec.ts",
         "**/onboarding-redesign.spec.ts",
+        "**/browser-import.spec.ts",
         "**/onboarding-fit.spec.ts",
         "**/onboarding-first-run-public.spec.ts",
         "**/onboarding-second-identity-canvas.spec.ts",

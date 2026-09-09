@@ -208,9 +208,10 @@ test("native emoji-only messages leave space below the author metadata", async (
     .last();
   await expect(row).toBeVisible();
 
-  const author = row.getByText("npub1mock...", { exact: true });
+  const author = row.getByTestId("message-author");
   const emojiBody = row.locator(".text-4xl").last();
   await expect(author).toBeVisible();
+  await expect(author).toHaveText("You");
   await expect(emojiBody).toContainText(nativeEmoji);
   await expect(emojiBody).toBeVisible();
 

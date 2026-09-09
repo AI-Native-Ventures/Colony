@@ -310,7 +310,7 @@
     outline: 2px solid #7851b7;
     outline-offset: 2px;
   }
-  .onb-simple-card > .onb-simple-button {
+  .onb-simple-card .onb-simple-button {
     min-height: 3rem;
     height: auto;
     padding: 0.75rem 1.25rem;
@@ -320,14 +320,17 @@
     border-radius: 0.5rem !important;
     gap: 0.625rem;
   }
-  .onb-simple-card > .onb-simple-primary {
+  .onb-simple-card > fieldset > .onb-simple-button {
+    width: 100%;
+  }
+  .onb-simple-card .onb-simple-primary {
     background: #171717 !important;
     color: #ffffff !important;
   }
-  .onb-simple-card > .onb-simple-primary:hover:not(:disabled) {
+  .onb-simple-card .onb-simple-primary:hover:not(:disabled) {
     background: #333333 !important;
   }
-  .onb-simple-card > .onb-simple-primary:disabled {
+  .onb-simple-card .onb-simple-primary:disabled {
     background: #59545f !important;
     opacity: 1 !important;
     box-shadow: none;
@@ -494,14 +497,17 @@
     color: var(--onb-founder-text);
   }
   @media (min-width: 47.5rem) and (max-height: 45rem) {
+    .onb-simple[data-founder-step="account"] .onb-founder-intro,
     .onb-simple[data-founder-step="company"] .onb-founder-intro {
       padding-top: 1.25rem;
       padding-bottom: 1.25rem;
     }
+    .onb-simple[data-founder-step="account"] .onb-simple-card,
     .onb-simple[data-founder-step="company"] .onb-simple-card {
       gap: 0.875rem;
       padding: 1.375rem;
     }
+    .onb-simple[data-founder-step="account"] .onb-founder-ant:nth-child(1),
     .onb-simple[data-founder-step="company"] .onb-founder-ant:nth-child(1) {
       top: 0.3%;
     }
@@ -586,4 +592,47 @@
       display: none;
     }
   }
+}
+
+/* Payment choices share the founder form's quiet, readable surface. */
+.onb-power-lanes {
+  display: grid;
+  gap: 0.65rem;
+}
+.onb-power-lanes button {
+  display: grid;
+  gap: 0.2rem;
+  text-align: left;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--onb-founder-field-line);
+  border-radius: 12px;
+  background: var(--onb-founder-input);
+  color: var(--onb-founder-text);
+}
+.onb-power-lanes button[aria-pressed="true"] {
+  border-color: var(--onb-founder-avatar-ink);
+  box-shadow: 0 0 0 1px var(--onb-founder-avatar-ink);
+}
+.onb-power-lanes button:focus-visible,
+.onb-simple-field select:focus-visible {
+  outline: 2px solid var(--onb-founder-avatar-ink);
+  outline-offset: 2px;
+}
+.onb-power-lanes span {
+  font-size: 0.85rem;
+  color: var(--onb-founder-muted);
+}
+.onb-power-subscription {
+  display: grid;
+  gap: 0.35rem;
+}
+.onb-simple-field select {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.75rem 0.8125rem;
+  border: 1px solid var(--onb-founder-field-line);
+  border-radius: 0.5rem;
+  background: var(--onb-founder-input);
+  color: var(--onb-founder-text);
+  font: inherit;
 }

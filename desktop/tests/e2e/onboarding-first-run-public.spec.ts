@@ -5,10 +5,11 @@ import {
   seedActiveIdentity,
   createFounderAccount,
   describeFounderBusiness,
+  continueFounderBusiness,
 } from "../helpers/onboarding";
 
 /** Real entry routing and renderer with synthetic account/native fixtures. */
-test("public first run: account and business forms reach the existing Welcome channel", async ({
+test("public first run: account, business and power reach Welcome with the owner's name", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -21,7 +22,7 @@ test("public first run: account and business forms reach the existing Welcome ch
   await expect(
     page.getByRole("heading", { name: "Create your account" }),
   ).toBeVisible();
-  await expect(page.getByLabel("Your name", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Your name", { exact: true })).toBeVisible();
   const originalDefaultRelay = await page.evaluate(async () => {
     const native = (
       window as unknown as {
@@ -49,10 +50,28 @@ test("public first run: account and business forms reach the existing Welcome ch
   await page.screenshot({
     path: "test-results/simple-founder-business-1440.png",
   });
+  await continueFounderBusiness(page);
+  await expect(
+    page.getByRole("button", { name: /^Subscriptions/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /^Colony Credits/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /^OpenRouter free models/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open my Colony" }),
+  ).toBeEnabled();
+  await waitForAnimations(page);
+  await page.screenshot({ path: "test-results/simple-founder-power-1440.png" });
   await page.getByRole("button", { name: "Open my Colony" }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
   await expect(page).toHaveURL(/channels/);
+  await expect(page.getByTestId("sidebar-profile-name")).toHaveText(
+    "Horizon Owner",
+  );
   const nativeRelays = await page.evaluate(async () => {
     const native = (
       window as unknown as {

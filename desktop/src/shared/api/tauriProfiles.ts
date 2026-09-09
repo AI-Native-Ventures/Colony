@@ -80,8 +80,14 @@ export async function getProfile(): Promise<Profile> {
 
 export async function updateProfile(
   input: UpdateProfileInput,
+  scope?: { pubkey: string; relayUrl: string },
 ): Promise<Profile> {
-  const profile = await invokeTauri<RawProfile>("update_profile", input);
+  const profile = await invokeTauri<RawProfile>("update_profile", {
+    ...input,
+    ...(scope
+      ? { expectedPubkey: scope.pubkey, expectedRelayUrl: scope.relayUrl }
+      : {}),
+  });
   return fromRawProfile(profile);
 }
 

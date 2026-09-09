@@ -263,3 +263,15 @@ test("teardown — restore Date.now", () => {
   Date.now = origDateNow;
   assert.ok(true);
 });
+
+test("native launch restrictions remain separate from installed and signed-in status", () => {
+  const entry = fromRawAcpRuntimeCatalogEntry({
+    id: "claude",
+    availability: "available",
+    auth_status: { status: "logged_in" },
+    local_launch_error: "Use Colony Agent in this beta",
+  });
+  assert.equal(entry.localLaunchError, "Use Colony Agent in this beta");
+  assert.equal(entry.availability, "available");
+  assert.deepEqual(entry.authStatus, { status: "logged_in" });
+});

@@ -58,3 +58,30 @@ test("global defaults accept a provider key set in runtime config", () => {
   assert.equal(state.apiKeyInherited, true);
   assert.equal(state.credentialsValid, true);
 });
+
+test("Colony Credits requires no local OpenAI key and renders no key control", () => {
+  const state = getGlobalAgentCredentialState({
+    bakedEnvKeys: [],
+    credentialMode: "colony_credits",
+    envVars: {},
+    provider: "openai-compat",
+    runtimeFileConfig: null,
+    runtimeId: "buzz-agent",
+  });
+  assert.equal(state.credentialsValid, true);
+  assert.equal(state.apiKeyEnvVar, null);
+  assert.deepEqual(state.advancedRequiredEnvKeys, []);
+});
+
+test("Credits cannot satisfy credentials for an ineligible provider", () => {
+  const state = getGlobalAgentCredentialState({
+    bakedEnvKeys: [],
+    credentialMode: "colony_credits",
+    envVars: {},
+    provider: "anthropic",
+    runtimeFileConfig: null,
+    runtimeId: "buzz-agent",
+  });
+  assert.equal(state.credentialsValid, false);
+  assert.equal(state.apiKeyEnvVar, "ANTHROPIC_API_KEY");
+});

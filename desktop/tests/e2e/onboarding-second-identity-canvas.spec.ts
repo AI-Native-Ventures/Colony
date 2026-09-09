@@ -34,7 +34,7 @@ async function walkCanvasFlow(
   companyName: string,
 ) {
   await expect(page.getByTestId("onboarding-account")).toBeVisible();
-  await expect(page.getByLabel("Your name", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Your name", { exact: true })).toBeVisible();
   await shot("account");
   await createFounderAccount(page, founderEmail);
   await shot("recovery-code");

@@ -5,6 +5,7 @@ import { ArrowRight } from "lucide-react";
 import { FounderLayout } from "../FounderLayout";
 import type { AuthFailure } from "../../../authService";
 import type { FounderGender } from "../../../onboardingV2";
+import { sanitizeDisplayName } from "../../../profileDraft";
 import {
   PASSWORD_MIN,
   isEmail,
@@ -23,7 +24,11 @@ export type AccountValues = {
 };
 
 export function accountReady(values: AccountValues): boolean {
-  return isEmail(values.email) && passwordShortfall(values.password) === 0;
+  return (
+    sanitizeDisplayName(values.name).length > 0 &&
+    isEmail(values.email) &&
+    passwordShortfall(values.password) === 0
+  );
 }
 
 export function accountFailureMessage(failure: AuthFailure): string {
@@ -96,6 +101,18 @@ export function AccountScreen({
           <p>Start with your account. Then tell us about your business.</p>
         </div>
         <div className="onb-simple-field">
+          <label htmlFor="onb-account-name">Your name</label>
+          <Input
+            id="onb-account-name"
+            autoComplete="name"
+            value={values.name ?? ""}
+            placeholder="The name your team will see"
+            required
+            maxLength={100}
+            onChange={(event) => onChange({ name: event.target.value })}
+          />
+        </div>
+        <div className="onb-simple-field">
           <label htmlFor="onb-account-email">Email</label>
           <Input
             id="onb-account-email"
@@ -150,7 +167,7 @@ export function AccountScreen({
           </details>
         )}
         <p className="onb-simple-note">
-          Agent work uses credits. You can explore before adding any.
+          You’ll choose how to power your team after setting up your business.
         </p>
       </form>
     </FounderLayout>

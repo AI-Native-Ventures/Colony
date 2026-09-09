@@ -18,6 +18,7 @@ export const ONBOARDING_STEPS = [
   "account",
   "recovery",
   "company",
+  "brain",
   "invite",
 ] as const;
 
@@ -26,7 +27,6 @@ export const ONBOARDING_STEPS = [
 export type OnboardingStep =
   | (typeof ONBOARDING_STEPS)[number]
   | "building"
-  | "brain"
   | "credits";
 
 export type OnboardingTrack = "byo" | "colony";
@@ -75,6 +75,8 @@ export type OnboardingAnswers = {
   signupAttemptId?: string | null;
   identityPubkey?: string | null;
   firstTaskMarker?: string | null;
+  /** Public resume marker; provider credentials never enter this record. */
+  businessConfirmed?: boolean;
 };
 
 /** Funding is handled by the existing workspace, never by account setup. */
@@ -88,6 +90,7 @@ export function nextStep(
 ): OnboardingStep | "done" {
   if (current === "account") return "recovery";
   if (current === "recovery") return "company";
+  if (current === "company") return "brain";
   return "done";
 }
 
@@ -96,13 +99,17 @@ export type StepVisibility = {
   creditsNeeded: boolean;
 };
 export function visibleSteps(_state: StepVisibility): OnboardingStep[] {
-  return ["account", "company"];
+  return ["account", "company", "brain"];
 }
 export function stepPosition(
   step: OnboardingStep,
   _state: StepVisibility,
 ): { index: number; total: number } {
-  return { index: step === "account" || step === "recovery" ? 0 : 1, total: 2 };
+  return {
+    index:
+      step === "account" || step === "recovery" ? 0 : step === "brain" ? 2 : 1,
+    total: 3,
+  };
 }
 export function backStep(
   _current: OnboardingStep,
@@ -113,9 +120,9 @@ export function backStep(
 export function resumeStep(answers: OnboardingAnswers): OnboardingStep {
   if (!answers.account) return "account";
   if (!answers.recoveryAcknowledged) return "recovery";
-  // Business context always remains editable; removed runtime, stage and
-  // payment questions must never return when an old draft is resumed.
-  return "company";
+  // Only an explicit confirmation in this flow advances to power selection.
+  // Older drafts stay editable and never infer consent from a stored runtime.
+  return answers.businessConfirmed ? "brain" : "company";
 }
 export function isWorkingStep(_step: OnboardingStep): boolean {
   return false;

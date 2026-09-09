@@ -1,10 +1,7 @@
 import { verifyEvent } from "nostr-tools/pure";
 import { openUrl } from "@/shared/api/nativeBridge";
 import { relayClient } from "@/shared/api/relayClient";
-import {
-  getGlobalAgentConfig,
-  setGlobalAgentConfig,
-} from "@/shared/api/tauriGlobalAgentConfig";
+import { getGlobalAgentConfig } from "@/shared/api/tauriGlobalAgentConfig";
 import { getColonyCreditsAccount } from "@/shared/api/tauriProvisionedCredits";
 import { ensureBuiltInFounderConfig } from "./automaticAgentSetup";
 import { createFirstJobBrowserStore } from "./firstJobBrowserStore";
@@ -75,14 +72,7 @@ export function createFirstJobRuntime(inputScope: FirstJobScope) {
   const start = createFirstJobStarter({
     assertCurrent: assertFirstJobScope,
     async ensureConfig(captured) {
-      await ensureBuiltInFounderConfig({
-        saveConfig: async (config) => {
-          await assertFirstJobScope(captured);
-          const saved = await setGlobalAgentConfig(config);
-          await assertFirstJobScope(captured);
-          return saved;
-        },
-      });
+      await ensureBuiltInFounderConfig({}, { mode: "validate-only" });
       await assertFirstJobScope(captured);
       const config = await getGlobalAgentConfig();
       await assertFirstJobScope(captured);

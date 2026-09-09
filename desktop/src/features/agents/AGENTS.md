@@ -64,7 +64,21 @@ with a TypeScript lookup table or an id comparison in a component.
    via `synthesizeEmptyDiscoveryStatus()` and is intentionally **not cached**
    so that closing → reopening the dialog re-runs discovery after the user
    installs or signs into the CLI (`isCacheableDiscoveryResponse()`).
-7. **Founder onboarding awaits the built-in setup; existing choices survive.**
+7. **Founder onboarding makes payment explicit; existing choices survive.**
+   The owner chooses subscriptions, Colony Credits or OpenRouter in the power
+   step. Catalog `localLaunchError` comes from the same native isolation guard
+   used at spawn, independently of installed/auth status; readiness never calls
+   a blocked local runtime ready. A preserved unsupported choice asks the owner
+   to choose again rather than switching their payment route. Credits account
+   reads are allowed before saving a choice; reconnect still requires saved
+   Credits mode. Credits configuration has no local provider-key requirement,
+   and model discovery uses a native gateway lease and the served gateway
+   catalog, never the user's API key. Gateway availability and a selected served
+   model are separate from a structurally valid default. Onboarding saves fence
+   the expected owner and relay during native persistence and limit immediate
+   restarts to that captured pair. Defaults still apply device-wide to future
+   launches; this is not separate billing configuration per business.
+   **Legacy founder fallback:**
    The approved public founder journey collects account and business details.
    `ensureBuiltInFounderConfig` preserves an existing ready configuration;
    otherwise it configures the bundled Colony teammate and awaits both the

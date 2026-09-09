@@ -66,16 +66,24 @@ export function createWiredAuthService() {
   });
 }
 
+/** Synthetic services keep the native mock's public identity across entry paths. */
+export function createIdentityBoundFakeServices(
+  getPubkey: () => Promise<string> = async () => (await getIdentity()).pubkey,
+): OnboardingServices {
+  return createFakeServices({ getPubkey });
+}
+
 /**
  * Which auth service the machine onboarding pages run on, decided the same
  * way `NewOnboardingFlow.resolveAuthServices` decides for the canvas flow:
  * the e2e build keeps fakes so its specs stay hermetic, everything else gets
  * the real service.
  */
-export function resolveMachineAuthService(env: {
-  MODE?: string;
-}): OnboardingServices["auth"] {
+export function resolveMachineAuthService(
+  env: { MODE?: string },
+  getPubkey?: () => Promise<string>,
+): OnboardingServices["auth"] {
   return env.MODE === "e2e"
-    ? createFakeServices().auth
+    ? createIdentityBoundFakeServices(getPubkey).auth
     : createWiredAuthService();
 }

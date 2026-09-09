@@ -25,6 +25,7 @@ export const EMPTY_ANSWERS: OnboardingAnswers = {
   signupAttemptId: null,
   identityPubkey: null,
   firstTaskMarker: null,
+  businessConfirmed: false,
 };
 
 /**
@@ -66,6 +67,7 @@ function coerce(raw: unknown): OnboardingAnswers {
     signupAttemptId: value.signupAttemptId ?? null,
     identityPubkey: value.identityPubkey ?? null,
     firstTaskMarker: value.firstTaskMarker ?? null,
+    businessConfirmed: value.businessConfirmed === true,
   };
 }
 

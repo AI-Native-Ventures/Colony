@@ -122,6 +122,7 @@ try {
     timeout: 20_000,
   });
   await page.locator("#onb-account-email").fill(email);
+  await page.locator("#onb-account-name").fill("Signup Owner");
   await page.locator("#onb-account-password").fill(password);
   if (proofDirectory) {
     await mkdir(proofDirectory, { recursive: true });

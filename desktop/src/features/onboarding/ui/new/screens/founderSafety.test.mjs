@@ -188,7 +188,10 @@ for (const outcome of ["unreachable", "timeout", "throw"]) {
     assert.equal(screen.getByLabelText("Business name").value, "Horizon Labs");
     assert.equal(screen.getByLabelText(/Website/).value, "horizon.example/");
     assert.equal(screen.getByLabelText("Business summary").value, "");
-    const submit = screen.getByRole("button", { name: "Open my Colony" });
+    const submit = screen.getByRole("button", {
+      name: "Continue",
+      exact: true,
+    });
     assert.equal(submit.disabled, true);
     assert.equal(screen.submitted.length, 0);
     await screen.act(async () =>
@@ -231,7 +234,7 @@ test("manual business context can continue while a website read is still pending
       target: { value: "My business description while the site is pending." },
     }),
   );
-  const submit = screen.getByRole("button", { name: "Open my Colony" });
+  const submit = screen.getByRole("button", { name: "Continue", exact: true });
   assert.equal(submit.disabled, false);
   await screen.act(async () => screen.fireEvent.click(submit));
   assert.deepEqual(screen.submitted, [

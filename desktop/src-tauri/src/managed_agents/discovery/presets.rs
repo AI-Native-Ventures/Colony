@@ -62,6 +62,10 @@ pub(crate) fn preset_catalog_entry(
         // No remote URL — all preset icons are bundled assets.
         avatar_url: String::new(),
         availability,
+        local_launch_error: crate::managed_agents::isolation::launch::ensure_supported(Some(
+            def.id,
+        ))
+        .err(),
         command,
         binary_path,
         default_args: normalize_agent_args(

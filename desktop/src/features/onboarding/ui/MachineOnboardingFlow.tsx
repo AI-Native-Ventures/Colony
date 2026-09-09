@@ -22,6 +22,7 @@ import {
 } from "../freshFounder";
 import { resolveMachineAuthService } from "../lib/wiredAuthService";
 import { AccountSetup } from "./new/AccountSetup";
+import { founderWithName } from "../accountNameDraft";
 import { answerStorage } from "./new/NewOnboardingFlow";
 import {
   firstRunAnswersKey,
@@ -313,14 +314,19 @@ export function MachineOnboardingFlow({
                 auth={auth}
                 onSignIn={openAccountSignin}
                 onUsePrivateKey={() => setPage("key-import")}
-                onCreated={async (result, email) => {
+                onCreated={async (result, email, fullName) => {
                   const identity = await getIdentity();
+                  if (identity.pubkey !== result.pubkey) {
+                    throw new Error("The active account changed. Retry setup.");
+                  }
                   const key = firstRunAnswersKey(identity.pubkey);
+                  const previous = loadAnswers(answerStorage, key);
                   saveAnswers(
                     answerStorage,
                     {
-                      ...loadAnswers(answerStorage, key),
+                      ...previous,
                       account: { email },
+                      founder: founderWithName(previous.founder, fullName),
                       signupAttemptId: result.attemptId,
                       identityPubkey: identity.pubkey,
                     },

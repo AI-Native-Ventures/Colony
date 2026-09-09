@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
 import { getStorageItem } from "@/shared/lib/safeStorage";
@@ -12,6 +12,13 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/shared/ui/dialog";
+import {
+  describeBrowserImport,
+  filterImportSites,
+  importSelectedSites,
+  selectImportSites,
+  type BrowserImportResult,
+} from "./browserImportModel";
 
 type Profile = {
   id: string;
@@ -19,13 +26,7 @@ type Profile = {
   profileName: string;
   supported: boolean;
 };
-type Result = {
-  imported: number;
-  skipped: number;
-  preserved: number;
-  failed: number;
-  status: string;
-};
+
 function ImportForm({ business }: { business: string }) {
   const api = electronDesktop();
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -36,7 +37,24 @@ function ImportForm({ business }: { business: string }) {
   const [replaceExisting, setReplaceExisting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<Result | null>(null);
+  const [result, setResult] = useState<BrowserImportResult | null>(null);
+  const [progress, setProgress] = useState("");
+  const mounted = useRef(false);
+  const resultElement = useRef<HTMLDivElement>(null);
+  const visibleSites = filterImportSites(sites, filter);
+  const allVisibleSelected = visibleSites.every((site) =>
+    selected.includes(site),
+  );
+  const outcome = result ? describeBrowserImport(result) : null;
+  useEffect(() => {
+    if (result) resultElement.current?.scrollIntoView({ block: "nearest" });
+  }, [result]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   useEffect(() => {
     let current = true;
     setBusy(true);
@@ -59,13 +77,39 @@ function ImportForm({ business }: { business: string }) {
     };
   }, [api]);
   return (
-    <div className="space-y-4" data-testid="browser-import">
+    <div className="space-y-4" data-testid="browser-import" aria-busy={busy}>
       <p className="text-sm text-muted-foreground">
         Bring signed-in accounts from a browser on this computer into this
         business. Choose the sites to copy. Existing Colony sign-ins are
         preserved unless you choose to replace them below. Some sites will ask
         you to sign in again.
       </p>
+      {result && outcome && (
+        <div
+          ref={resultElement}
+          role="status"
+          aria-live="polite"
+          className="space-y-2 rounded-xl border bg-muted/40 p-4 text-sm"
+          data-testid="browser-import-result"
+        >
+          <p className="font-semibold">{outcome.title}</p>
+          <p>{outcome.detail}</p>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 py-1">
+            {[
+              ["Cookies copied", result.imported],
+              ["Existing cookies kept", result.preserved],
+              ["Expired or unsupported", result.skipped],
+              ["Could not be copied", result.failed],
+            ].map(([label, count]) => (
+              <div key={label}>
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className="font-semibold tabular-nums">{count}</dd>
+              </div>
+            ))}
+          </dl>
+          <p>{outcome.nextStep}</p>
+        </div>
+      )}
       <label className="block space-y-2 text-sm">
         Browser profile
         <select
@@ -78,6 +122,8 @@ function ImportForm({ business }: { business: string }) {
             setProfileId(id);
             setSites([]);
             setSelected([]);
+            setFilter("");
+            setReplaceExisting(false);
             setResult(null);
             setError(null);
             if (!id) return;
@@ -114,29 +160,63 @@ function ImportForm({ business }: { business: string }) {
             aria-label="Filter sites"
             placeholder="Find a site, e.g. instagram"
             value={filter}
+            disabled={busy}
             onChange={(event) => setFilter(event.target.value)}
             className="w-full rounded border bg-background p-2 text-sm"
           />
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span aria-live="polite">
+              {selected.length} of {sites.length} sites selected
+              {filter.trim() && ` · ${visibleSites.length} matches`}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={
+                  busy || visibleSites.length === 0 || allVisibleSelected
+                }
+                onClick={() =>
+                  setSelected((previous) =>
+                    selectImportSites(previous, visibleSites),
+                  )
+                }
+              >
+                {filter.trim() ? "Select matches" : "Select all"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy || selected.length === 0}
+                onClick={() => setSelected([])}
+              >
+                Clear selection
+              </Button>
+            </div>
+          </div>
           <div className="max-h-56 space-y-2 overflow-auto rounded border p-3">
-            {sites
-              .filter((site) => site.includes(filter.toLowerCase()))
-              .map((site) => (
-                <label key={site} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    disabled={busy}
-                    checked={selected.includes(site)}
-                    onChange={(event) =>
-                      setSelected((previous) =>
-                        event.target.checked
-                          ? [...previous, site]
-                          : previous.filter((value) => value !== site),
-                      )
-                    }
-                  />
-                  {site}
-                </label>
-              ))}
+            {visibleSites.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No sites match your search.
+              </p>
+            )}
+            {visibleSites.map((site) => (
+              <label key={site} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  disabled={busy}
+                  checked={selected.includes(site)}
+                  onChange={(event) =>
+                    setSelected((previous) =>
+                      event.target.checked
+                        ? selectImportSites(previous, [site])
+                        : previous.filter((value) => value !== site),
+                    )
+                  }
+                />
+                {site}
+              </label>
+            ))}
           </div>
         </>
       )}
@@ -156,47 +236,59 @@ function ImportForm({ business }: { business: string }) {
         verified by opening each site afterward.
       </p>
       <Button
-        disabled={busy || selected.length === 0 || selected.length > 100}
+        disabled={busy || selected.length === 0}
         onClick={() => {
           setBusy(true);
           setError(null);
           setResult(null);
-          void api
-            ?.request<Result>("import:run", {
-              business,
-              profileId,
-              hosts: selected,
-              confirmed: true,
-              replaceExisting,
+          setProgress(`Importing ${selected.length} sites…`);
+          void importSelectedSites({
+            hosts: selected,
+            isCurrent: () => mounted.current,
+            onProgress: (completed, total) => {
+              if (mounted.current)
+                setProgress(
+                  `Processed ${completed} of ${total} selected sites…`,
+                );
+            },
+            run: (hosts) => {
+              if (!api)
+                return Promise.reject(
+                  new Error(
+                    "The browser connection is unavailable. Try opening Colony again.",
+                  ),
+                );
+              return api.request<BrowserImportResult>("import:run", {
+                business,
+                profileId,
+                hosts,
+                confirmed: true,
+                replaceExisting,
+              });
+            },
+          })
+            .then((value) => {
+              if (mounted.current) setResult(value);
             })
-            .then(setResult)
-            .catch((reason) => setError(String(reason)))
-            .finally(() => setBusy(false));
+            .catch((reason) => {
+              if (mounted.current) setError(String(reason));
+            })
+            .finally(() => {
+              if (mounted.current) {
+                setBusy(false);
+                setProgress("");
+              }
+            });
         }}
       >
         {busy
-          ? "Working…"
-          : `Import sign-ins${selected.length ? ` (${selected.length} sites)` : ""}`}
+          ? progress || "Working…"
+          : `Import sign-ins${selected.length ? ` (${selected.length} ${selected.length === 1 ? "site" : "sites"})` : ""}`}
       </Button>
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
-      )}
-      {result && (
-        <div role="status" className="space-y-2 text-sm">
-          <p>
-            {result.status === "interrupted"
-              ? "Import interrupted. Some sign-ins may have been copied."
-              : "Import finished. Open the selected sites to check your accounts."}
-          </p>
-          <p>
-            {result.imported} cookies copied · {result.preserved} existing
-            cookies preserved · {result.skipped} unsupported or expired ·{" "}
-            {result.failed} could not be copied.
-          </p>
-          <p>Copied cookies do not guarantee an active login.</p>
-        </div>
       )}
     </div>
   );

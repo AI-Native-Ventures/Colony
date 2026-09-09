@@ -264,6 +264,33 @@ async fn seed_core_blocks_warning(
     }
 }
 
+// Profile creation is a separate attempt from optional catalog seeding. Once
+// the community row commits, report a warning on failure instead of returning a
+// false creation failure that a create-only retry cannot repair.
+async fn seed_company_profile_warning(
+    state: &Arc<AppState>,
+    community: buzz_core::CommunityId,
+    host: &str,
+) -> Option<String> {
+    let tenant = TenantContext::resolved(community, host);
+    match crate::community_profile::ensure_profile(state, &tenant, host).await {
+        Ok(_) => None,
+        Err(error) => {
+            warn!(
+                community = %community,
+                host,
+                error = %error,
+                "community provisioned but operating profile could not be initialized"
+            );
+            Some(
+                "Your business was created, but its initial setup could not be completed. \
+                 Contact support before starting a job."
+                    .to_owned(),
+            )
+        }
+    }
+}
+
 /// Create-only community creation with atomic owner bootstrap.
 ///
 /// Shared by the operator API's `create_only` mode and the member self-serve
@@ -305,6 +332,7 @@ pub(crate) async fn create_community_for_owner(
         "community created via provisioning endpoint"
     );
     publish_membership_snapshot_if_required(state, record.id, &record.host).await;
+    let profile_warning = seed_company_profile_warning(state, record.id, &record.host).await;
     let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
     let warning = match warning {
         // A Block-catalog failure is the more serious of the two, so it keeps
@@ -317,7 +345,7 @@ pub(crate) async fn create_community_for_owner(
         host: record.host,
         status: "created",
         owner_pubkey: Some(owner_hex.to_string()),
-        warning,
+        warning: profile_warning.or(warning),
     })
 }
 
@@ -403,6 +431,7 @@ pub async fn provision_community(
         "community provisioned via operator endpoint"
     );
 
+    let profile_warning = seed_company_profile_warning(state, record.id, &record.host).await;
     let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
     let warning = match warning {
         // A Block-catalog failure is the more serious of the two, so it keeps
@@ -415,7 +444,7 @@ pub async fn provision_community(
         host: record.host,
         status: if record.created { "created" } else { "existed" },
         owner_pubkey: initial_owner,
-        warning,
+        warning: profile_warning.or(warning),
     })
 }
 
@@ -529,3 +558,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "community_provisioning_profile_tests.rs"]
+mod profile_tests;

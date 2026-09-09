@@ -1692,16 +1692,39 @@ test("clicking author name opens user profile panel", async ({ page }) => {
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
-  // The seed message in general is from the mock identity (npub1mock...)
+  // The seed message belongs to the active identity, which has no real name.
   const firstMessage = page.getByTestId("message-row").first();
-  const authorButton = firstMessage.locator("button", {
-    hasText: "npub1mock...",
-  });
-  await authorButton.click();
+  const author = firstMessage.getByTestId("message-author");
+  await expect(author).toHaveText("You");
+  await author.click();
 
   // Click now opens the full profile panel instead of the popover
   const panel = page.getByTestId("user-profile-panel");
   await expect(panel).toBeVisible();
+  await expect(panel).toContainText("deadbeef");
+});
+
+test("a named owner's author keeps the real name and opens the same profile", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    searchProfiles: [
+      { pubkey: MOCK_VIEWER_PUBKEY, displayName: "Aisha Bello" },
+    ],
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const author = page
+    .getByTestId("message-row")
+    .first()
+    .getByTestId("message-author");
+  await expect(author).toHaveText("Aisha Bello");
+  await author.click();
+  const panel = page.getByTestId("user-profile-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("Aisha Bello");
   await expect(panel).toContainText("deadbeef");
 });
 

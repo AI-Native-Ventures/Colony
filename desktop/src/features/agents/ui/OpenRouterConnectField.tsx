@@ -79,6 +79,18 @@ export function OpenRouterConnectField({
   const configRef = React.useRef(config);
   configRef.current = config;
 
+  const mountedRef = React.useRef(false);
+  const operationRef = React.useRef<symbol | null>(null);
+  React.useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      operationRef.current = null;
+    };
+  }, []);
+  const isCurrent = (operation: symbol) =>
+    mountedRef.current && operationRef.current === operation;
+
   async function persist(next: GlobalAgentConfig) {
     if (onAutoSaveConfig) {
       await onAutoSaveConfig(next);
@@ -88,63 +100,66 @@ export function OpenRouterConnectField({
   }
 
   async function handleConnect() {
-    if (phase !== "idle") return;
+    if (!mountedRef.current || operationRef.current) return;
+    const operation = Symbol("openrouter-connect");
+    operationRef.current = operation;
     setPhase("connecting");
     setNotice(null);
     try {
       const outcome = await connectOpenRouter();
+      if (!isCurrent(operation)) return;
       if (outcome.status === "connected") {
         setPhase("saving");
-        try {
-          await persist(withOpenRouterKey(configRef.current, outcome.key));
-          setNotice({
-            kind: "info",
-            text: "Connected. The OpenRouter key is stored in agent defaults.",
-          });
-        } catch (err) {
-          setNotice({
-            kind: "error",
-            text:
-              err instanceof Error
-                ? err.message
-                : "The key was received but could not be saved. Try again.",
-          });
-        } finally {
-          setPhase("idle");
-        }
+        await persist(withOpenRouterKey(configRef.current, outcome.key));
+        if (!isCurrent(operation)) return;
+        setNotice({
+          kind: "info",
+          text: onAutoSaveConfig
+            ? "Connected. The OpenRouter key is stored in agent defaults."
+            : "Connected. Continue setup to save this connection.",
+        });
       } else if (outcome.status === "cancelled") {
         setNotice({
           kind: "info",
           text: "Connection cancelled. Your existing credentials were left unchanged.",
         });
-        setPhase("idle");
       } else {
         setNotice({ kind: "error", text: outcome.message });
-        setPhase("idle");
       }
     } catch (err) {
+      if (!isCurrent(operation)) return;
       setNotice({
         kind: "error",
         text:
           err instanceof Error
             ? err.message
-            : "Couldn't start the connection. Try again.",
+            : "Couldn't connect OpenRouter. Try again.",
       });
-      setPhase("idle");
+    } finally {
+      if (isCurrent(operation)) {
+        operationRef.current = null;
+        setPhase("idle");
+      }
     }
   }
 
   async function handleDisconnect() {
-    if (phase !== "idle") return;
+    if (!mountedRef.current || operationRef.current) return;
+    const operation = Symbol("openrouter-disconnect");
+    operationRef.current = operation;
     setPhase("saving");
     setNotice(null);
     try {
       await persist(withoutOpenRouterKey(configRef.current));
+      if (!isCurrent(operation)) return;
       setNotice({
         kind: "info",
-        text: "Disconnected. The stored OpenRouter key was removed.",
+        text: onAutoSaveConfig
+          ? "Disconnected. The stored OpenRouter key was removed."
+          : "Disconnected in this setup. Continue to save the change.",
       });
     } catch (err) {
+      if (!isCurrent(operation)) return;
       setNotice({
         kind: "error",
         text:
@@ -153,7 +168,10 @@ export function OpenRouterConnectField({
             : "Couldn't disconnect. Try again.",
       });
     } finally {
-      setPhase("idle");
+      if (isCurrent(operation)) {
+        operationRef.current = null;
+        setPhase("idle");
+      }
     }
   }
 

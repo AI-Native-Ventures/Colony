@@ -10,6 +10,8 @@ import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import { rememberFounderBrief } from "../founderBriefSummary";
 import { hasManagedAgentChannelMessageMarker } from "@/shared/api/tauriManagedAgentMessageMarkers";
 import { updateProfile } from "@/shared/api/tauriProfiles";
+import { refreshProfileCaches } from "@/features/profile/profileCacheSync";
+import type { QueryClient } from "@tanstack/react-query";
 
 import { markCommunityOnboardingComplete } from "../communityOnboarding";
 import { initializeStarterChannels } from "../hooks";
@@ -59,7 +61,27 @@ export const DEFAULT_COMPLETE_FIRST_RUN_IO: CompleteFirstRunIo = {
       queryClient as Parameters<typeof initializeStarterChannels>[0],
       args,
     ),
-  updateProfile: (input) => updateProfile(input),
+  updateProfile: async (input, context) => {
+    context.assertCurrent?.();
+    await assertFirstJobScope({
+      ownerPubkey: context.pubkey,
+      relayUrl: context.relayUrl,
+    });
+    const profile = await updateProfile(input, {
+      pubkey: context.pubkey,
+      relayUrl: context.relayUrl,
+    });
+    context.assertCurrent?.();
+    if (profile.pubkey.toLowerCase() !== context.pubkey.toLowerCase()) {
+      throw new Error("The active account changed. Retry setup.");
+    }
+    await refreshProfileCaches(
+      context.queryClient as QueryClient,
+      profile,
+      context.relayUrl,
+    );
+    return profile;
+  },
   hasMarker: (args) => hasManagedAgentChannelMessageMarker(args),
   // The marker travels as a client tag, not a Block reference: `welcomeKickoff`
   // and `has_managed_agent_channel_message_marker` both look for

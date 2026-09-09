@@ -55,11 +55,28 @@ const server = createServer(async (request, response) => {
       );
       return;
     }
+    if (request.method === "GET" && request.url === "/inference/key") {
+      assert.equal(request.headers.authorization, "Bearer synthetic-assigned");
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          data: { is_management_key: false, is_free_tier: true },
+        }),
+      );
+      return;
+    }
     if (request.method === "GET") {
       response.setHeader("content-type", "application/json");
       response.end(
         JSON.stringify({
-          data: [{ id: "fixture", object: "model", owned_by: "test" }],
+          data: [
+            {
+              id: "fixture",
+              object: "model",
+              owned_by: "test",
+              supported_parameters: ["tools"],
+            },
+          ],
         }),
       );
       return;
