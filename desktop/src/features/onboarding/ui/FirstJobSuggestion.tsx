@@ -1,5 +1,5 @@
 import { type ReactNode, useId } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useTask } from "@/features/company/hooks";
@@ -12,7 +12,11 @@ import {
   parseFirstJobSuggestion,
   type FirstJobSuggestion as SuggestionPayload,
 } from "../firstJobSuggestion";
-import type { FirstJobScope } from "../firstJobStart";
+import { firstJobScopeKey, type FirstJobScope } from "../firstJobStart";
+import {
+  firstJobWorkerRole,
+  previewFirstJobTeam,
+} from "../firstJobTeamPreparation";
 import { useFirstJobSuggestion } from "../useFirstJobSuggestion";
 import { useFirstJobTaskUpdates } from "../useFirstJobTaskUpdates";
 import { useFirstJobDiscovery } from "../useFirstJobDiscovery";
@@ -44,7 +48,20 @@ function ReadySuggestion({
   const id = useId();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { session, snapshot } = useFirstJobSuggestion(scope, payload.brief);
+  const { session, snapshot } = useFirstJobSuggestion(scope, payload);
+  const workerRole = firstJobWorkerRole(payload.businessName, snapshot.brief);
+  const teamQuery = useQuery({
+    queryKey: [
+      "firstJobTeamPreview",
+      firstJobScopeKey(scope),
+      workerRole.roleId,
+    ],
+    queryFn: () =>
+      previewFirstJobTeam(scope, payload.businessName, snapshot.brief),
+    enabled: snapshot.phase !== "sent",
+    staleTime: 15_000,
+    retry: false,
+  });
   const discoveryAvailable = useFirstJobDiscovery(
     scope,
     communityId,
@@ -88,15 +105,34 @@ function ReadySuggestion({
       brief={snapshot.brief}
       briefLocked={snapshot.briefLocked}
       phase={snapshot.phase}
-      error={snapshot.error}
+      error={
+        snapshot.error ??
+        (teamQuery.error instanceof Error ? teamQuery.error.message : null)
+      }
+      teamProposal={teamQuery.data}
+      teamLoading={teamQuery.isPending}
+      teamRequired
+      onCheckTeam={() => {
+        void teamQuery.refetch();
+      }}
+      onReviewBusiness={
+        snapshot.businessRepair
+          ? () => {
+              void navigate({
+                to: "/settings",
+                search: { section: "company" },
+              });
+            }
+          : undefined
+      }
       canManage
       taskState={taskState}
       onBriefChange={session.edit}
       onStart={() => {
-        void session.start();
+        void session.start(teamQuery.data);
       }}
       onRetry={() => {
-        void session.start();
+        void session.start(teamQuery.data);
       }}
       onAddCredits={() => {
         void session.showFunding();

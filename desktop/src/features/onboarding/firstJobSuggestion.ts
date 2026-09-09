@@ -1,3 +1,5 @@
+import { businessTextLength } from "./businessContextLimits";
+
 export const FIRST_JOB_SUGGESTION_MARKER = "colony:first-job-suggestion:v1";
 
 /** Setup data owned by the founder. Reading this tag never starts agent work. */
@@ -59,7 +61,8 @@ function isSuggestion(value: unknown): value is FirstJobSuggestion {
     typeof item.requestId === "string" &&
     SAFE_ID.test(item.requestId) &&
     text(item.businessName, 200) &&
-    text(item.business, 6000, false) &&
+    text(item.business, 12000, false) &&
+    businessTextLength(item.business) <= 6000 &&
     text(item.website, 2048, false) &&
     (!item.website || safeUrl(item.website, ["https:", "http:"])) &&
     text(item.brief, 4000)

@@ -24,3 +24,27 @@ test("an optional website is validated when supplied", () => {
   );
   assert.equal(companyBlockedReason(business), null);
 });
+
+test("business descriptions respect the canonical 4000-character limit, including restored website summaries", () => {
+  assert.equal(
+    companyReady({ ...business, description: "x".repeat(4000) }),
+    true,
+  );
+  assert.equal(
+    companyReady({ ...business, description: "x".repeat(4001) }),
+    false,
+  );
+  assert.match(
+    companyBlockedReason({ ...business, description: "x".repeat(4001) }),
+    /4,000 characters/,
+  );
+  assert.equal(
+    companyReady({ ...business, description: "é".repeat(4000) }),
+    true,
+  );
+  assert.equal(
+    companyReady({ ...business, description: "🦋".repeat(4000) }),
+    true,
+  );
+  assert.equal(companyReady({ ...business, company: "x".repeat(201) }), false);
+});

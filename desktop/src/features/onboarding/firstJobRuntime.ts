@@ -27,6 +27,13 @@ import {
 } from "./firstJobStart";
 import { ensureFirstJobTeam, startFirstJobTeam } from "./firstJobTeam";
 import { createWiredPaymentsService } from "./lib/wiredPaymentsService";
+import type { FirstJobSuggestion } from "./firstJobSuggestion";
+import type { FirstJobTeamProposal } from "./firstJobTeamApproval";
+import { ensureFirstJobBusinessContext } from "./firstJobBusinessContext";
+import {
+  firstJobTeamPreparer,
+  firstJobTeamPreparationStore,
+} from "./firstJobTeamPreparation";
 
 const draftStore = createFirstJobBrowserStore(
   "draft",
@@ -59,8 +66,13 @@ export async function readFirstJobAvailableCredits(
 }
 
 /** Connect the small onboarding controls to existing native, payment and task services. */
-export function createFirstJobRuntime(inputScope: FirstJobScope) {
+export function createFirstJobRuntime(
+  inputScope: FirstJobScope,
+  inputPayload: FirstJobSuggestion,
+) {
   const scope = snapshotFirstJobScope(inputScope);
+  const payload = Object.freeze(structuredClone(inputPayload));
+  const prepareTeam = firstJobTeamPreparer(payload);
   const dispatch = createFirstJobDispatcher({
     ...firstJobNativeActions,
     assertCurrent: assertFirstJobScope,
@@ -82,9 +94,17 @@ export function createFirstJobRuntime(inputScope: FirstJobScope) {
       return { credentialMode: config.credential_mode };
     },
     readAvailableCredits: readFirstJobAvailableCredits,
-    checkBusiness: checkFirstJobBusiness,
-    ensureTeam: (captured) =>
-      ensureFirstJobTeam(captured, attemptStore.read(captured)?.team),
+    async checkBusiness(captured) {
+      const block = await checkFirstJobBusiness(captured);
+      if (block) return block;
+      await ensureFirstJobBusinessContext(captured, payload);
+      return null;
+    },
+    async ensureTeam(captured, content, proposal) {
+      const retained = attemptStore.read(captured)?.team;
+      if (retained) return ensureFirstJobTeam(captured, retained);
+      return prepareTeam(captured, content, proposal);
+    },
     dispatchOnce: dispatch,
   });
   const credits = createFirstJobCredits({
@@ -103,6 +123,7 @@ export function createFirstJobRuntime(inputScope: FirstJobScope) {
     draftStore,
     attemptStore,
     checkoutStore,
+    preparationStore: firstJobTeamPreparationStore,
     credits,
     /** Confirm a lost receipt before requesting more credits or invoking a worker. */
     async checkExistingRequest(): Promise<{
@@ -150,7 +171,7 @@ export function createFirstJobRuntime(inputScope: FirstJobScope) {
         return { eventId: message.id, taskId: work.taskId };
       });
     },
-    async start(content: string) {
+    async start(content: string, proposal?: FirstJobTeamProposal) {
       await assertFirstJobScope(scope);
       const attempt = attemptStore.read(scope);
       if (!attempt?.acknowledged)
@@ -158,7 +179,7 @@ export function createFirstJobRuntime(inputScope: FirstJobScope) {
           attempt?.message,
           Math.floor(Date.now() / 1000),
         );
-      return start(scope, content);
+      return start(scope, content, proposal);
     },
   };
 }

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import { expectRetainedBusinessContext } from "../helpers/companyProfile";
 import {
   seedActiveIdentity,
   continueFounderBusiness,
@@ -87,6 +88,9 @@ test("a created community connects its detected subscription and chooses a model
   await installMockBridge(
     page,
     {
+      // The transaction starts after provisioning. Mirror that relay's empty,
+      // signed bootstrap profile rather than a relay with no identity/head.
+      communityProfileHead: { tradingName: "Default" },
       globalAgentConfig: {
         credential_mode: "byok",
         env_vars: {},
@@ -126,6 +130,12 @@ test("a created community connects its detected subscription and chooses a model
   await expect(openColony).toBeEnabled();
   await openColony.click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
+  await expectRetainedBusinessContext(page, {
+    ownerPubkey: TEST_IDENTITIES.tyler.pubkey,
+    relayUrl: RELAY_URL,
+    name: "Second Company",
+    summary: "A second company with its own operating context.",
+  });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
 });
 
@@ -182,6 +192,7 @@ test("a zero balance never stands between a second company and its workspace", a
   await installMockBridge(
     page,
     {
+      communityProfileHead: { tradingName: "Default" },
       colonyCreditsAccount: ZERO_BALANCE,
       globalAgentConfig: {
         credential_mode: "colony_credits",
@@ -198,6 +209,12 @@ test("a zero balance never stands between a second company and its workspace", a
 
   await fillSecondBusiness(page);
   await openFounderBusiness(page);
+  await expectRetainedBusinessContext(page, {
+    ownerPubkey: TEST_IDENTITIES.tyler.pubkey,
+    relayUrl: RELAY_URL,
+    name: "Second Company",
+    summary: "A second company with its own operating context.",
+  });
   // Zero credits do not insert a payment step between context and Welcome.
   await expect(page.getByTestId("onboarding-credits-later")).toHaveCount(0);
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);

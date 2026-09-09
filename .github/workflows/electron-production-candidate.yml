@@ -93,6 +93,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - name: Validate hosted legacy diagnostics and persistence contract
+        run: node --test desktop/src-electron/legacy-diagnostics.test.mjs desktop/src-electron/legacy-persistence.test.mjs
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: |

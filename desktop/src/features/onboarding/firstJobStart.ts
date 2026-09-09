@@ -1,3 +1,5 @@
+import type { FirstJobTeamProposal } from "./firstJobTeamApproval";
+
 /** Maximum owner-authored brief retained for the first-job handoff. */
 export const FIRST_JOB_BRIEF_MAX_LENGTH = 4_000;
 
@@ -26,9 +28,13 @@ export type FirstJobStartDependencies = {
     credentialMode: "colony_credits" | "byok";
   }>;
   readAvailableCredits(scope: FirstJobScope): Promise<bigint>;
-  /** Read the existing approved setup; never create a profile as a side effect. */
+  /** Check the existing business and retain its already-reviewed onboarding context. */
   checkBusiness?(scope: FirstJobScope): Promise<string | null>;
-  ensureTeam(scope: FirstJobScope): Promise<FirstJobTeam | null>;
+  ensureTeam(
+    scope: FirstJobScope,
+    content: string,
+    proposal?: FirstJobTeamProposal,
+  ): Promise<FirstJobTeam | null>;
   dispatchOnce(input: {
     scope: FirstJobScope;
     content: string;
@@ -72,6 +78,7 @@ export function createFirstJobStarter(dependencies: FirstJobStartDependencies) {
   async function run(
     scope: FirstJobScope,
     content: string,
+    proposal?: FirstJobTeamProposal,
   ): Promise<FirstJobStartResult> {
     await dependencies.assertCurrent(scope);
     const config = await dependencies.ensureConfig(scope);
@@ -88,7 +95,7 @@ export function createFirstJobStarter(dependencies: FirstJobStartDependencies) {
     const businessBlock = await dependencies.checkBusiness?.(scope);
     await dependencies.assertCurrent(scope);
     if (businessBlock) return { kind: "blocked", message: businessBlock };
-    const team = await dependencies.ensureTeam(scope);
+    const team = await dependencies.ensureTeam(scope, content, proposal);
     await dependencies.assertCurrent(scope);
     if (!team) {
       return {
@@ -120,6 +127,7 @@ export function createFirstJobStarter(dependencies: FirstJobStartDependencies) {
   return function start(
     inputScope: FirstJobScope,
     inputContent: string,
+    proposal?: FirstJobTeamProposal,
   ): Promise<FirstJobStartResult> {
     let scope: FirstJobScope;
     let content: string;
@@ -136,7 +144,11 @@ export function createFirstJobStarter(dependencies: FirstJobStartDependencies) {
     const key = firstJobScopeKey(scope);
     const existing = inFlight.get(key);
     if (existing) return existing;
-    const operation = run(scope, content).finally(() => inFlight.delete(key));
+    const operation = run(
+      scope,
+      content,
+      proposal ? structuredClone(proposal) : undefined,
+    ).finally(() => inFlight.delete(key));
     inFlight.set(key, operation);
     return operation;
   };
