@@ -28,7 +28,7 @@
 
 ## Known external prerequisite
 
-The accessible repository secret names currently include the Tauri updater key and release GitHub App, but no Apple Developer ID/notarization credentials. The local keychain reports only `FlowVoice Dev`, not a Developer ID identity. Organization-secret visibility is unavailable to this token. The publisher must validate actual credential availability in Actions and report missing names; it must never fall back to ad-hoc signing.
+The credential-only Actions run `34353192821` verified that all seven Apple inputs listed in `RELEASING.md` are unavailable to the workflow. Existing updater and GitHub App inputs were present; every publisher was skipped. Public local keychain metadata reports only `FlowVoice Dev`, not a usable Developer ID Application identity. This does not establish whether an Apple account or certificate exists elsewhere. Publication requires the authorized signing/notarization configuration; there is no ad-hoc fallback.
 
 
 ### Frontend state migration gate
@@ -44,6 +44,12 @@ native namespace rather than being recopied by this frontend migration.
 Migration also requires the nested native process to resolve the expected macOS
 bundle identifier. An absent or unrelated process bundle fails closed instead of
 marking an unrelated empty WebKit store as a successful migration.
+The hosted candidate and fixture both initially failed this guard as `unbundled`.
+The release helper now embeds the standard macOS command-line tool Info.plist
+section with an immutable build-specific identifier. Before loading the WebKit
+page, it separately validates the canonical containing app, its Info.plist ID,
+and its expected outer executable. The embedded identity alone cannot authorize
+a standalone helper or a different app.
 
 Candidate and explicit QA profiles use an incognito hidden WebKit store, even
 though their outer application bundle may have the stable bundle identifier. The

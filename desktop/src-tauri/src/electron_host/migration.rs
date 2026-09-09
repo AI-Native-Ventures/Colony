@@ -32,15 +32,78 @@ fn source_bundle_matches(identifier: Option<&str>, fixture: bool) -> bool {
         })
 }
 
-fn verify_source_bundle() -> Result<(), String> {
+#[cfg(any(target_os = "macos", test))]
+fn containing_app(host: &std::path::Path) -> Result<&std::path::Path, &'static str> {
+    if !host.ends_with("Contents/Resources/native/buzz-desktop") {
+        return Err("Native helper is outside its installed app layout");
+    }
+    let app = host
+        .ancestors()
+        .nth(4)
+        .ok_or("Native app path is incomplete")?;
+    if app.extension().and_then(|value| value.to_str()) != Some("app") {
+        return Err("Native helper requires its containing application");
+    }
+    Ok(app)
+}
+
+pub(super) fn verify_source_bundle() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        // The nested native child must resolve the original bundle association;
-        // matching Tauri's configured data directory alone does not prove this.
+        // Embedded helper metadata cannot authorize a standalone binary.
+        // Independently validate its real containing app first. Production
+        // signing and notarization remain separate release gates.
+        let host = std::env::current_exe().map_err(|_| "Native app path unavailable")?;
+        let app = containing_app(&host)?;
+        let info = app.join("Contents/Info.plist");
+        if host
+            .canonicalize()
+            .map_err(|_| "Native app path unavailable")?
+            != host
+            || info
+                .canonicalize()
+                .map_err(|_| "Native app metadata unavailable")?
+                != info
+        {
+            return Err("Native app storage cannot be selected through a symlink".into());
+        }
+        let metadata: plist::Dictionary =
+            plist::from_file(&info).map_err(|_| "Native app metadata could not be read")?;
+        let fixture = cfg!(feature = "onboarding-fixture");
+        if !source_bundle_matches(
+            metadata
+                .get("CFBundleIdentifier")
+                .and_then(plist::Value::as_string),
+            fixture,
+        ) {
+            return Err("Native helper and containing app identities do not match".into());
+        }
+        let executable = if fixture {
+            "Colony Onboarding Fixture"
+        } else {
+            "buzz-desktop"
+        };
+        if metadata
+            .get("CFBundleExecutable")
+            .and_then(plist::Value::as_string)
+            != Some(executable)
+        {
+            return Err("Native helper is not inside the expected Colony app".into());
+        }
+        let outer = app.join("Contents/MacOS").join(executable);
+        if outer
+            .canonicalize()
+            .map_err(|_| "Colony executable unavailable")?
+            != outer
+        {
+            return Err("Colony executable must remain inside its application".into());
+        }
+        // Matching Tauri's configured data directory alone does not establish
+        // WebKit's process identity. Require NSBundle to resolve the same ID.
         let identifier = objc2_foundation::NSBundle::mainBundle()
             .bundleIdentifier()
             .map(|value| value.to_string());
-        if source_bundle_matches(identifier.as_deref(), cfg!(feature = "onboarding-fixture")) {
+        if source_bundle_matches(identifier.as_deref(), fixture) {
             Ok(())
         } else {
             Err(format!(
@@ -174,6 +237,25 @@ pub(crate) fn electron_frontend_migration_fixture() -> Option<Entries> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn helper_metadata_cannot_authorize_a_standalone_or_wrong_layout_binary() {
+        use std::path::Path;
+        assert_eq!(
+            containing_app(Path::new(
+                "/Applications/Colony.app/Contents/Resources/native/buzz-desktop"
+            ))
+            .unwrap(),
+            Path::new("/Applications/Colony.app")
+        );
+        for path in [
+            "/tmp/buzz-desktop",
+            "/tmp/Colony/Contents/Resources/native/buzz-desktop",
+            "/tmp/Colony.app/Contents/MacOS/buzz-desktop",
+            "/tmp/Colony.app/Contents/Resources/native/other",
+        ] {
+            assert!(containing_app(Path::new(path)).is_err());
+        }
+    }
     #[test]
     fn migration_requires_the_expected_process_bundle_not_only_the_data_identifier() {
         assert!(source_bundle_matches(Some("xyz.block.buzz.app"), false));

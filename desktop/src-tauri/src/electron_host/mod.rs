@@ -79,7 +79,7 @@ pub(crate) fn context(mut context: tauri::Context<tauri::Wry>) -> tauri::Context
             // WKWebView default storage follows the outer macOS bundle. A
             // candidate or explicit QA profile must not read stable WebKit data.
             window.incognito = !stable_profile();
-            if migration::enabled() {
+            if migration::enabled() && migration::verify_source_bundle().is_ok() {
                 window.url = tauri::WebviewUrl::App("electron-migration.html".into());
             } else if let Ok(url) = url::Url::parse("about:blank") {
                 window.url = tauri::WebviewUrl::External(url);
