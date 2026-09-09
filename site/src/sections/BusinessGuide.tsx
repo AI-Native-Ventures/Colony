@@ -104,53 +104,113 @@ export function BusinessGuide() {
           costs before you join.
         </p>
       </section>
+      <section id="team" className="business-team" aria-labelledby="team-title">
+        <div className="section-heading">
+          <p className="eyebrow">What they can do</p>
+          <h2 id="team-title">The jobs your AI employees can do today.</h2>
+        </div>
+        <div className="team-grid">
+          <article>
+            <h3>Find customers</h3>
+            <p>
+              Tell it who buys from you. It searches the web, finds real
+              businesses and the people who run them, and hands you a list with
+              names, contact details and why each one is a good fit.
+            </p>
+          </article>
+          <article>
+            <h3>Write for you</h3>
+            <p>
+              Website pages, emails to customers, quotes, social media posts.
+              You read it, change what you like, and approve it.
+            </p>
+          </article>
+          <article>
+            <h3>Manage the team</h3>
+            <p>
+              Your first employee is a manager. It learns your business,
+              suggests who to hire next, and tells you only what needs your
+              attention, so you do not have to read everything.
+            </p>
+          </article>
+        </div>
+        <p className="guide-availability">
+          More jobs are added over time. Every new employee joins the same team
+          and the same chat.
+        </p>
+      </section>
       <section className="business-control" aria-labelledby="control-title">
         <div className="section-wrap control-layout">
           <div>
             <AntParade />
-            <p className="eyebrow">Your role in the business</p>
+            <p className="eyebrow">You stay in charge</p>
             <h2 id="control-title">
-              You set the direction.
-              <br />
-              Your team handles the work.
+              You are the boss. They ask before they act.
             </h2>
             <p>
-              Give your team clear instructions and keep the discussion in one
-              place. An AI lead can coordinate a job with other AI employees.
-              You review the work and decide what comes next.
+              Your employees do the work. Every decision that matters comes back
+              to you first.
             </p>
+            <div
+              className="approval-card"
+              role="img"
+              aria-label="Example: an email waits for your approval"
+            >
+              <span className="approval-tag">WAITING FOR YOUR OK</span>
+              <p className="approval-question">
+                <strong>
+                  Send an intro email to the 5 car repair shops on the list?
+                </strong>
+              </p>
+              <p className="approval-fine">
+                It would be sent from your email address. You can read each
+                email before it goes.
+              </p>
+              <div className="approval-row">
+                <span className="approval-pill approval-yes">
+                  Approve and send
+                </span>
+                <span className="approval-pill">Read them first</span>
+                <span className="approval-pill">Not now</span>
+              </div>
+            </div>
           </div>
           <div className="control-responsibilities">
             <article>
-              <span className="control-number">You</span>
+              <span className="control-number">1</span>
               <div>
-                <h3>Choose what matters.</h3>
+                <h3>Nothing goes out without your OK.</h3>
                 <p>
-                  Set priorities, explain what a good result looks like and make
-                  the decisions your team needs.
+                  Every email, post or message sent in your name shows up first
+                  with an Approve button.
                 </p>
               </div>
             </article>
             <article>
-              <span className="control-number">
-                <AntMark />
-              </span>
+              <span className="control-number">2</span>
               <div>
-                <h3>AI employees carry out the jobs.</h3>
+                <h3>Each employee has its own login, not yours.</h3>
                 <p>
-                  They research, write and use the tools available for their
-                  work. The jobs they can take on depend on those tools and how
-                  your team is set up.
+                  If one makes a mistake, it cannot touch the others’ work or
+                  your accounts.
                 </p>
               </div>
             </article>
             <article>
-              <span className="control-number">+</span>
+              <span className="control-number">3</span>
               <div>
-                <h3>Your people can work here too.</h3>
+                <h3>You see what every job cost.</h3>
                 <p>
-                  Invite colleagues, share the same information and follow jobs
-                  together. You can also start on your own.
+                  In rands or dollars, per employee, per job. No surprise bills.
+                </p>
+              </div>
+            </article>
+            <article>
+              <span className="control-number">4</span>
+              <div>
+                <h3>Hire or let go any time.</h3>
+                <p>
+                  Add a new employee or remove one in a click. No notice period.
                 </p>
               </div>
             </article>
