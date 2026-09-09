@@ -1,56 +1,47 @@
-import { invoke, listen, type NativeUnlisten } from "@/shared/api/nativeBridge";
+import type { NativeUnlisten } from "@/shared/api/nativeBridge";
+import {
+  selectTerminalBackend,
+  type TerminalBackend,
+  type TerminalChunk,
+  type TerminalStartRequest,
+} from "./terminalBackend";
 
-type TerminalOutputEvent = {
-  sessionId: string;
-  data: string;
-};
-
-type TerminalExitEvent = {
-  sessionId: string;
-  code?: number | null;
-  signal?: string | null;
-};
+export type { TerminalChunk, TerminalStartRequest };
 
 export type TerminalSessionState = {
   status: "starting" | "running" | "exited" | "error";
   sessionId: string | null;
   cwd: string | null;
   pid: number | null;
-  output: string;
   error: string | null;
 };
 
-export type TerminalStartRequest = {
-  channelId: string;
-  projectDtag: string | null;
-  cloneUrl: string | null;
-  reposDir: string | null;
-  cols: number;
-  rows: number;
-  pixelWidth: number;
-  pixelHeight: number;
-};
+/**
+ * Output never lands in React state: bytes go straight to xterm through
+ * `subscribeTerminalOutput`. What is kept here is a replay ring, so a chunk
+ * that arrives before a body mounts is not lost and a remount repaints.
+ */
+const MAX_REPLAY_BYTES = 1024 * 1024;
+const SESSION_KEY_PREFIX = "colony.terminal.session.";
 
-type TerminalStartResult = {
-  sessionId: string;
-  cwd: string;
-  pid: number | null;
-};
-
-const MAX_OUTPUT_CHARS = 256 * 1024;
 const sessions = new Map<string, TerminalSessionState>();
 const nativeToTab = new Map<string, string>();
-const pendingOutput = new Map<string, string>();
+const pendingOutput = new Map<string, TerminalChunk[]>();
 type PendingStart = {
   lifecycleEpoch: number;
   tabEpoch: number;
   promise: Promise<void>;
 };
 
+type ReplayBuffer = { chunks: TerminalChunk[]; bytes: number };
+
 const starts = new Map<string, PendingStart>();
 const tabEpochs = new Map<string, number>();
 const listeners = new Map<string, Set<() => void>>();
-let nativeListeners: Promise<NativeUnlisten[]> | null = null;
+const outputListeners = new Map<string, Set<(chunk: TerminalChunk) => void>>();
+const replay = new Map<string, ReplayBuffer>();
+let nativeListeners: Promise<NativeUnlisten> | null = null;
+let subscribedBackend: TerminalBackend | null = null;
 let lifecycleEpoch = 0;
 let resetInFlight: Promise<void> | null = null;
 
@@ -59,7 +50,6 @@ const EMPTY_SESSION: TerminalSessionState = Object.freeze({
   sessionId: null,
   cwd: null,
   pid: null,
-  output: "",
   error: null,
 });
 
@@ -68,44 +58,102 @@ const emptyState = (): TerminalSessionState => ({
   sessionId: null,
   cwd: null,
   pid: null,
-  output: "",
   error: null,
 });
+
+function backend() {
+  return selectTerminalBackend();
+}
+
+function chunkLength(chunk: TerminalChunk): number {
+  return typeof chunk === "string" ? chunk.length : chunk.byteLength;
+}
+
+function sessionStore(): Storage | null {
+  try {
+    return globalThis.sessionStorage ?? null;
+  } catch {
+    // A hardened webview may refuse storage access; reattach is then optional.
+    return null;
+  }
+}
+
+function rememberSession(tabId: string, sessionId: string): void {
+  try {
+    sessionStore()?.setItem(`${SESSION_KEY_PREFIX}${tabId}`, sessionId);
+  } catch {
+    // Quota or privacy mode: the session simply will not be reattached.
+  }
+}
+
+function forgetSession(tabId: string): void {
+  try {
+    sessionStore()?.removeItem(`${SESSION_KEY_PREFIX}${tabId}`);
+  } catch {
+    // Same as above: losing the hint only costs a reattach.
+  }
+}
+
+function rememberedSession(tabId: string): string | null {
+  try {
+    return sessionStore()?.getItem(`${SESSION_KEY_PREFIX}${tabId}`) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function forgetEverySession(): void {
+  const store = sessionStore();
+  if (!store) return;
+  try {
+    const keys: string[] = [];
+    for (let index = 0; index < store.length; index += 1) {
+      const key = store.key(index);
+      if (key?.startsWith(SESSION_KEY_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) store.removeItem(key);
+  } catch {
+    // Nothing to clean up if the store is unavailable.
+  }
+}
 
 function emit(tabId: string): void {
   for (const listener of listeners.get(tabId) ?? []) listener();
 }
 
-function appendOutput(tabId: string, data: string): void {
-  const current = sessions.get(tabId) ?? emptyState();
-  const output = `${current.output}${data}`;
-  sessions.set(tabId, {
-    ...current,
-    output:
-      output.length > MAX_OUTPUT_CHARS
-        ? output.slice(output.length - MAX_OUTPUT_CHARS)
-        : output,
-  });
-  emit(tabId);
+function deliverOutput(tabId: string, chunk: TerminalChunk): void {
+  if (chunkLength(chunk) === 0) return;
+  const buffer = replay.get(tabId) ?? { chunks: [], bytes: 0 };
+  buffer.chunks.push(chunk);
+  buffer.bytes += chunkLength(chunk);
+  while (buffer.bytes > MAX_REPLAY_BYTES && buffer.chunks.length > 1) {
+    const dropped = buffer.chunks.shift();
+    if (dropped) buffer.bytes -= chunkLength(dropped);
+  }
+  replay.set(tabId, buffer);
+  for (const listener of outputListeners.get(tabId) ?? []) listener(chunk);
 }
 
 async function ensureNativeListeners(): Promise<void> {
-  if (!nativeListeners) {
-    nativeListeners = Promise.all([
-      listen<TerminalOutputEvent>("workspace-terminal-output", (event) => {
-        const tabId = nativeToTab.get(event.payload.sessionId);
+  const current = backend();
+  // One subscription per host. The host only ever changes under a test that
+  // injects a different one, so the swap drops the previous subscription.
+  if (subscribedBackend !== current) {
+    const previous = nativeListeners;
+    subscribedBackend = current;
+    nativeListeners = current.subscribe({
+      onData: (sessionId, chunk) => {
+        const tabId = nativeToTab.get(sessionId);
         if (!tabId) {
-          const prior = pendingOutput.get(event.payload.sessionId) ?? "";
-          pendingOutput.set(
-            event.payload.sessionId,
-            `${prior}${event.payload.data}`,
-          );
+          const queued = pendingOutput.get(sessionId) ?? [];
+          queued.push(chunk);
+          pendingOutput.set(sessionId, queued);
           return;
         }
-        appendOutput(tabId, event.payload.data);
-      }),
-      listen<TerminalExitEvent>("workspace-terminal-exit", (event) => {
-        const tabId = nativeToTab.get(event.payload.sessionId);
+        deliverOutput(tabId, chunk);
+      },
+      onExit: (sessionId, info) => {
+        const tabId = nativeToTab.get(sessionId);
         if (!tabId) return;
         const current = sessions.get(tabId);
         if (!current) return;
@@ -113,13 +161,16 @@ async function ensureNativeListeners(): Promise<void> {
           ...current,
           status: "exited",
           error:
-            event.payload.signal && event.payload.signal !== "SIGHUP"
-              ? `Terminal exited with ${event.payload.signal}`
+            info.signal && info.signal !== "SIGHUP"
+              ? `Terminal exited with ${info.signal}`
               : null,
         });
         emit(tabId);
-      }),
-    ]);
+      },
+    });
+    if (previous) {
+      void previous.then((remove) => remove()).catch(() => {});
+    }
   }
   await nativeListeners;
 }
@@ -143,6 +194,39 @@ export function subscribeTerminalSession(
   };
 }
 
+/**
+ * Stream a tab's PTY output. Whatever arrived before this listener existed is
+ * replayed first, in order, so a late mount still shows the shell prompt.
+ */
+export function subscribeTerminalOutput(
+  tabId: string,
+  listener: (chunk: TerminalChunk) => void,
+): () => void {
+  const tabListeners =
+    outputListeners.get(tabId) ?? new Set<(chunk: TerminalChunk) => void>();
+  tabListeners.add(listener);
+  outputListeners.set(tabId, tabListeners);
+  for (const chunk of replay.get(tabId)?.chunks ?? []) listener(chunk);
+  return () => {
+    tabListeners.delete(listener);
+    if (tabListeners.size === 0) outputListeners.delete(tabId);
+  };
+}
+
+/** Report rendered bytes so the host can release its backpressure. */
+export async function ackTerminalOutput(
+  tabId: string,
+  bytes: number,
+): Promise<void> {
+  const sessionId = sessions.get(tabId)?.sessionId;
+  if (!sessionId || bytes <= 0) return;
+  try {
+    await backend().ack(sessionId, bytes);
+  } catch {
+    // A closed session cannot be acked; the PTY is already gone.
+  }
+}
+
 function nextTabEpoch(tabId: string): number {
   const epoch = (tabEpochs.get(tabId) ?? 0) + 1;
   tabEpochs.set(tabId, epoch);
@@ -159,11 +243,69 @@ function isCurrentStart(tabId: string, pending: PendingStart): boolean {
 
 async function closeLateNativeSession(sessionId: string): Promise<void> {
   try {
-    await invoke("workspace_terminal_close", { sessionId });
+    await backend().close(sessionId);
   } catch {
     // A concurrent close_all may have already reaped this stale session.
   }
   pendingOutput.delete(sessionId);
+}
+
+function adoptSession(
+  tabId: string,
+  session: { sessionId: string; cwd: string; pid: number | null },
+): void {
+  nativeToTab.set(session.sessionId, tabId);
+  rememberSession(tabId, session.sessionId);
+  sessions.set(tabId, {
+    ...(sessions.get(tabId) ?? emptyState()),
+    status: "running",
+    sessionId: session.sessionId,
+    cwd: session.cwd,
+    pid: session.pid,
+    error: null,
+  });
+  const pending = pendingOutput.get(session.sessionId);
+  if (pending) {
+    pendingOutput.delete(session.sessionId);
+    emit(tabId);
+    for (const chunk of pending) deliverOutput(tabId, chunk);
+  } else {
+    emit(tabId);
+  }
+}
+
+/**
+ * Pick a shell back up after a renderer reload. Electron keeps the PTY in its
+ * main process, so a remembered id that is still alive is reattached and its
+ * ring buffer replayed instead of starting a second shell.
+ */
+async function reattachRememberedSession(
+  tabId: string,
+  pendingStart: PendingStart,
+): Promise<boolean> {
+  const sessionId = rememberedSession(tabId);
+  if (!sessionId) return false;
+  try {
+    const live = (await backend().list()).find(
+      (candidate) => candidate.sessionId === sessionId && candidate.alive,
+    );
+    if (!live) {
+      forgetSession(tabId);
+      return false;
+    }
+    const { replay: buffer } = await backend().attach(sessionId);
+    if (!isCurrentStart(tabId, pendingStart)) return true;
+    adoptSession(tabId, {
+      sessionId,
+      cwd: live.cwd,
+      pid: live.pid ?? null,
+    });
+    if (buffer && buffer.byteLength > 0) deliverOutput(tabId, buffer);
+    return true;
+  } catch {
+    forgetSession(tabId);
+    return false;
+  }
 }
 
 /** Start the native session once for a tab; remounts reuse the same PTY. */
@@ -209,30 +351,17 @@ export async function ensureTerminalSession(
     emit(tabId);
     try {
       await ensureNativeListeners();
-      const result = await invoke<TerminalStartResult>(
-        "workspace_terminal_start",
-        { request },
-      );
+      if (await reattachRememberedSession(tabId, pendingStart)) return;
+      const result = await backend().start(request);
       if (!isCurrentStart(tabId, pendingStart)) {
         await closeLateNativeSession(result.sessionId);
         return;
       }
-      nativeToTab.set(result.sessionId, tabId);
-      sessions.set(tabId, {
-        ...(sessions.get(tabId) ?? emptyState()),
-        status: "running",
+      adoptSession(tabId, {
         sessionId: result.sessionId,
         cwd: result.cwd,
         pid: result.pid ?? null,
-        error: null,
       });
-      const pending = pendingOutput.get(result.sessionId);
-      if (pending) {
-        pendingOutput.delete(result.sessionId);
-        appendOutput(tabId, pending);
-      } else {
-        emit(tabId);
-      }
     } catch (cause: unknown) {
       if (!isCurrentStart(tabId, pendingStart)) return;
       sessions.set(tabId, {
@@ -258,7 +387,7 @@ export async function writeTerminalInput(
   const sessionId = sessions.get(tabId)?.sessionId;
   if (!sessionId) return;
   try {
-    await invoke("workspace_terminal_write", { sessionId, data });
+    await backend().write(sessionId, data);
   } catch (cause: unknown) {
     const current = sessions.get(tabId);
     sessions.set(tabId, {
@@ -280,13 +409,7 @@ export async function resizeTerminal(
 ): Promise<void> {
   const sessionId = sessions.get(tabId)?.sessionId;
   if (!sessionId || cols < 2 || rows < 2) return;
-  await invoke("workspace_terminal_resize", {
-    sessionId,
-    cols,
-    rows,
-    pixelWidth,
-    pixelHeight,
-  });
+  await backend().resize(sessionId, cols, rows, pixelWidth, pixelHeight);
 }
 
 /** Close one session when its tab is closed. */
@@ -295,11 +418,10 @@ export async function disposeTerminalSession(tabId: string): Promise<void> {
   const session = sessions.get(tabId);
   const pending = starts.get(tabId);
   let failure: unknown = null;
+  forgetSession(tabId);
   if (session?.sessionId) {
     try {
-      await invoke("workspace_terminal_close", {
-        sessionId: session.sessionId,
-      });
+      await backend().close(session.sessionId);
     } catch (cause: unknown) {
       failure = cause;
     }
@@ -317,7 +439,7 @@ export async function disposeTerminalSession(tabId: string): Promise<void> {
     const lateSession = sessions.get(tabId)?.sessionId;
     if (lateSession && lateSession !== session?.sessionId) {
       try {
-        await invoke("workspace_terminal_close", { sessionId: lateSession });
+        await backend().close(lateSession);
       } catch (cause: unknown) {
         failure ??= cause;
       }
@@ -325,6 +447,8 @@ export async function disposeTerminalSession(tabId: string): Promise<void> {
       pendingOutput.delete(lateSession);
     }
     sessions.delete(tabId);
+    replay.delete(tabId);
+    forgetSession(tabId);
   }
   emit(tabId);
   if (failure) throw failure;
@@ -338,7 +462,7 @@ export function resetTerminalSessions(): Promise<void> {
   const reset = (async () => {
     let failure: unknown = null;
     try {
-      await invoke("workspace_terminal_close_all");
+      await backend().closeAll();
     } catch (cause: unknown) {
       failure = cause;
     }
@@ -354,6 +478,8 @@ export function resetTerminalSessions(): Promise<void> {
     pendingOutput.clear();
     starts.clear();
     tabEpochs.clear();
+    replay.clear();
+    forgetEverySession();
     for (const tabId of listeners.keys()) emit(tabId);
     if (failure) throw failure;
   })();

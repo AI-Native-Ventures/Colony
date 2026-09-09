@@ -71,6 +71,54 @@ export interface NativeNotificationActionListener {
   unregister(): Promise<void>;
 }
 
+/** One live PTY as the shell reports it (`list`, for reattach after reload). */
+export interface NativeTerminalSession {
+  sessionId: string;
+  pid: number | null;
+  cwd: string;
+  alive: boolean;
+}
+
+/** How a PTY ended (`onExit`). */
+export interface NativeTerminalExit {
+  code: number | null;
+  signal: string | null;
+}
+
+/**
+ * PTY surface owned by the shell process, not by the renderer: sessions
+ * survive a renderer reload and are reattached by `list` + `attach`. Only the
+ * Electron shell implements it (preload `window.colonyDesktop.terminal`); the
+ * Tauri lane keeps the Rust `workspace_terminal_*` commands instead, so this
+ * member is optional and feature code must handle it being absent.
+ */
+export interface NativeTerminalApi {
+  start(payload: {
+    cwd: string;
+    cols: number;
+    rows: number;
+  }): Promise<{ sessionId: string; pid: number | null; cwd: string }>;
+  write(payload: { sessionId: string; data: string }): Promise<void>;
+  resize(payload: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+  }): Promise<void>;
+  /** Bytes the renderer actually rendered, releasing the PTY's backpressure. */
+  ack(payload: { sessionId: string; bytes: number }): Promise<void>;
+  close(payload: { sessionId: string }): Promise<void>;
+  closeAll(): Promise<void>;
+  list(): Promise<NativeTerminalSession[]>;
+  /** Last 1 MB of output for a session the renderer is picking back up. */
+  attach(payload: { sessionId: string }): Promise<{ replay: Uint8Array }>;
+  onData(
+    callback: (sessionId: string, chunk: Uint8Array) => void,
+  ): NativeUnlisten;
+  onExit(
+    callback: (sessionId: string, info: NativeTerminalExit) => void,
+  ): NativeUnlisten;
+}
+
 /**
  * The shell surface the frontend may touch. One implementation is installed
  * per runtime: `tauriNativeBridge.ts` in the Tauri app, the e2e mock in
@@ -142,6 +190,8 @@ export interface NativeBridge {
   onWindowResized(handler: () => void): Promise<NativeUnlisten>;
   /** plugin:webview — set the webview zoom factor. */
   setWebviewZoom(value: number): Promise<void>;
+  /** Shell-owned PTYs. Present only where the shell hosts them (Electron). */
+  terminal?: NativeTerminalApi;
 }
 
 let installed: NativeBridge | null = null;
@@ -291,4 +341,9 @@ export function onWindowResized(handler: () => void): Promise<NativeUnlisten> {
 
 export function setWebviewZoom(value: number): Promise<void> {
   return getNativeBridge().setWebviewZoom(value);
+}
+
+/** The shell-owned PTY surface, or undefined when the shell has none. */
+export function nativeTerminal(): NativeTerminalApi | undefined {
+  return getNativeBridge().terminal;
 }
