@@ -65,7 +65,7 @@ function parsePositiveInteger(text) {
 async function isLivePid(application, pid) {
   try {
     const alive = await application.evaluate(
-      ({ targetPid }) => {
+      (_electron, { targetPid }) => {
         try {
           process.kill(targetPid, 0);
           return true;
@@ -294,7 +294,7 @@ export async function verifyTerminal(application, page, { proofDir } = {}) {
   );
 
   const treeCheck = await application.evaluate(
-    ({ rootPid }) => {
+    (_electron, { rootPid }) => {
       try {
         const { execFileSync } = require("node:child_process");
         const rows = execFileSync("ps", ["-axo", "pid=,ppid="], {
