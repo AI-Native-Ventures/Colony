@@ -90,13 +90,15 @@ calls persona, worker, rank, membership or company-writing APIs to pre-staff the
 business. Old manual preparation helpers are not part of this gate.
 
 The actual signed approval and receipt identify the newly created worker.
-Assertions check the signed definitions and managed heads, manager, role,
+Assertions check the owner-signed worker definition and managed heads, manager, role,
 inherited provider/model, real channel membership, isolated live ACP processes,
 signed owner instruction, worker output and Scout review. The canonical Task
 must complete in both live panes and stay completed after reload, with one
 logical Task, instruction, worker and approval receipt and no extra model turn.
-The provider matches the exact own persona section against signed definitions;
-it never guesses from names or quoted message history. ACP presently derives
+The provider matches the exact own persona section against Scout’s unchanged
+native built-in definition and the worker’s owner-signed definition. Both identities
+are bound by their signed managed heads; no nonexistent built-in persona head is
+fabricated. It never guesses from names or quoted message history. ACP presently derives
 rank context only from employee30190, so absent model rank lines for this
 managed-agent30177 path remain a documented product limitation.
 

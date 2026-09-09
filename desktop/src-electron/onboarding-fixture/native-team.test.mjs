@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { finalizeEvent } from "nostr-tools/pure";
-import { nativeRequestActor, verifySigned } from "./native-team.mjs";
+import {
+  nativeRequestActor,
+  personaAuthority,
+  verifySigned,
+} from "./native-team.mjs";
 import { bucketRequest } from "./native-services.mjs";
 
 const team = {
@@ -19,7 +23,7 @@ const messages = (actor, content) => [
   { role: "user", content },
 ];
 
-test("exact own signed persona identifies actor without inventing absent employee rank", () => {
+test("exact own verified persona identifies actor without inventing absent employee rank", () => {
   const input = messages("scout", work());
   input.splice(1, 0, {
     role: "assistant",
@@ -100,4 +104,108 @@ test("bucket initialization signs only a local real S3 request", () => {
   );
   assert.throws(() => bucketRequest("https://example.com"));
   assert.throws(() => bucketRequest("http://example.com"));
+});
+
+test("built-in Scout authority stays local while a new worker requires its signed definition", () => {
+  const keys = Uint8Array.from({ length: 32 }, (_, i) => (i === 31 ? 1 : 0));
+  const sign = (kind, id, content) =>
+    finalizeEvent(
+      {
+        kind,
+        created_at: 1,
+        tags: [["d", id]],
+        content: JSON.stringify(content),
+      },
+      keys,
+    );
+  const scout = {
+    id: "builtin:fizz",
+    is_builtin: true,
+    is_active: true,
+    role_id: "chief-of-staff",
+    role_title: "Chief of Staff",
+    system_prompt: "Coordinate.",
+  };
+  const scoutRecord = sign(30177, "a".repeat(64), {
+    persona_id: scout.id,
+    role_id: scout.role_id,
+  });
+  const common = {
+    ownerPubkey: scoutRecord.pubkey,
+    starterScout: { pubkey: "a".repeat(64), persona: scout },
+  };
+  const scoutArgs = {
+    ...common,
+    name: "scout",
+    persona: { ...scout },
+    record: scoutRecord,
+    definition: null,
+  };
+  assert.equal(
+    personaAuthority(scoutArgs).source,
+    "unchanged native bundled builtin",
+  );
+  for (const change of [
+    { id: "custom-scout" },
+    { is_builtin: false },
+    { is_active: false },
+    { role_title: "Other" },
+    { system_prompt: "Changed after approval." },
+  ])
+    assert.throws(() =>
+      personaAuthority({ ...scoutArgs, persona: { ...scout, ...change } }),
+    );
+  assert.throws(() =>
+    personaAuthority({
+      ...scoutArgs,
+      starterScout: { ...common.starterScout, pubkey: "b".repeat(64) },
+    }),
+  );
+  const worker = {
+    id: "approved-worker",
+    is_builtin: false,
+    system_prompt: "Write.",
+  };
+  const definition = sign(30175, worker.id, {
+    system_prompt: worker.system_prompt,
+  });
+  const workerArgs = {
+    ...common,
+    name: "worker",
+    persona: worker,
+    record: sign(30177, "b".repeat(64), { persona_id: worker.id }),
+    definition,
+    action: {
+      requestId: worker.id,
+      definition: { systemPrompt: worker.system_prompt },
+    },
+  };
+  assert.equal(personaAuthority(workerArgs).eventId, definition.id);
+  assert.throws(() => personaAuthority({ ...workerArgs, definition: null }));
+  assert.throws(() =>
+    personaAuthority({
+      ...workerArgs,
+      definition: sign(30175, "other-worker", {
+        system_prompt: worker.system_prompt,
+      }),
+    }),
+  );
+  assert.throws(() =>
+    personaAuthority({
+      ...workerArgs,
+      definition: {
+        ...definition,
+        content: JSON.stringify({ system_prompt: "Changed." }),
+      },
+    }),
+  );
+  assert.throws(() =>
+    personaAuthority({
+      ...workerArgs,
+      action: {
+        ...workerArgs.action,
+        definition: { systemPrompt: "Unapproved." },
+      },
+    }),
+  );
 });

@@ -80,8 +80,6 @@ export async function completeFixtureWork({
   };
   onEvidence({ defaultBrief });
   const relayPubkey = await invoke("get_relay_self");
-  const reader = nativeProofReader({ relay, account, invoke, relayPubkey });
-  const profileHead = await reader.business();
   const originalAgents = await invoke("list_managed_agents");
   assert.equal(
     originalAgents.length,
@@ -90,11 +88,35 @@ export async function completeFixtureWork({
   );
   assert.equal(originalAgents[0].persona_id, "builtin:fizz");
   assert.equal(originalAgents[0].pid, null);
+  assert.equal(originalAgents[0].relay_url, account.relayUrl);
+  assert.equal(originalAgents[0].owner_identified, true);
+  const starterPersona = (await invoke("list_personas")).find(
+    (persona) => persona.id === "builtin:fizz",
+  );
+  assert.ok(starterPersona);
+  assert.equal(starterPersona.is_builtin, true);
+  assert.equal(starterPersona.role_id, "chief-of-staff");
+  assert.equal(starterPersona.role_title, "Chief of Staff");
+  assert.equal(starterPersona.is_active, true);
+  assert.ok(starterPersona.system_prompt.length > 0);
+  const starterScout = {
+    pubkey: originalAgents[0].pubkey,
+    persona: starterPersona,
+  };
+  const reader = nativeProofReader({
+    relay,
+    account,
+    invoke,
+    relayPubkey,
+    starterScout,
+  });
+  const profileHead = await reader.business();
   assert.equal(
     (await reader.events(30175)).filter(
       (event) => event.pubkey === account.ownerPubkey,
     ).length,
-    1,
+    0,
+    "The packaged builtin is local; no custom worker definition exists before approval",
   );
   assert.equal((await reader.events(30181)).length, 0);
   assert.equal(provider.requests.length, 0);
@@ -621,7 +643,7 @@ export async function completeFixtureWork({
     signedReplies,
     approval: await approved.readApprovalEvidence(),
     actorAuthority:
-      "Exact own System persona against signed30175 definitions; signed30177 tier and manager; signed reply pubkeys",
+      "Exact own System persona against unchanged native builtin Scout and owner-signed30175 worker; signed30177 tier and manager; signed reply pubkeys",
     rankContextLimitation:
       "ACP rank lines read employee30190, so managed-agent30177 ranks may be absent from model work context",
     toolResults: provider.toolResults,

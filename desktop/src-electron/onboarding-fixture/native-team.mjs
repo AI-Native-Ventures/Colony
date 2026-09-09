@@ -1,5 +1,6 @@
 // Observe real native staffing and signed relay state. This helper never creates it.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { verifyEvent } from "nostr-tools/pure";
 import { readCurrentFixtureTask } from "./task-head.mjs";
 
@@ -20,8 +21,78 @@ const tag = (event, name) => {
   return values[0];
 };
 
+/** Bind Scout to the unchanged packaged builtin and workers to owner-signed definitions. */
+export function personaAuthority({
+  name,
+  persona,
+  record,
+  starterScout,
+  definition,
+  ownerPubkey,
+  action,
+}) {
+  verifySigned(record, 30177, ownerPubkey);
+  const content = JSON.parse(record.content);
+  assert.equal(content.persona_id, persona.id);
+  if (name === "scout") {
+    assert.equal(tag(record, "d")[1], starterScout.pubkey);
+    assert.equal(persona.id, "builtin:fizz");
+    assert.equal(persona.is_builtin, true);
+    assert.equal(persona.role_id, "chief-of-staff");
+    assert.equal(persona.role_title, "Chief of Staff");
+    assert.equal(persona.is_active, true);
+    for (const field of [
+      "id",
+      "is_builtin",
+      "is_active",
+      "role_id",
+      "role_title",
+      "system_prompt",
+    ])
+      assert.equal(
+        persona[field],
+        starterScout.persona[field],
+        `Starter Scout ${field} stayed unchanged`,
+      );
+    assert.equal(content.role_id, "chief-of-staff");
+    assert.ok(persona.system_prompt.length > 0);
+    return {
+      source: "unchanged native bundled builtin",
+      personaId: persona.id,
+      promptSha256: createHash("sha256")
+        .update(persona.system_prompt)
+        .digest("hex"),
+    };
+  }
+  assert.equal(name, "worker");
+  assert.equal(persona.is_builtin, false);
+  assert.equal(persona.id, action.requestId);
+  assert.ok(
+    definition,
+    "New worker needs a real owner-published persona definition",
+  );
+  verifySigned(definition, 30175, ownerPubkey);
+  assert.equal(tag(definition, "d")[1], persona.id);
+  assert.equal(
+    JSON.parse(definition.content).system_prompt,
+    persona.system_prompt,
+  );
+  assert.equal(persona.system_prompt, action.definition.systemPrompt);
+  return {
+    source: "owner-signed persona head",
+    eventId: definition.id,
+    personaId: persona.id,
+  };
+}
+
 /** Read only this run's public signed records from its isolated database. */
-export function nativeProofReader({ relay, account, invoke, relayPubkey }) {
+export function nativeProofReader({
+  relay,
+  account,
+  invoke,
+  relayPubkey,
+  starterScout,
+}) {
   const host = new URL(account.relayUrl).hostname;
   assert.match(host, /^horizon-labs\.onboarding-[a-f0-9]{16}\.invalid$/);
   const where = `community_id=(SELECT id FROM communities WHERE host='${host}')`;
@@ -67,6 +138,11 @@ export function nativeProofReader({ relay, account, invoke, relayPubkey }) {
     const approved = JSON.parse(tag(approval, "first-job-team")[1]);
     const result = JSON.parse(tag(receipt, "first-job-team")[1]);
     assert.equal(result.approval, approval.id);
+    assert.equal(result.team.scoutPubkey, starterScout.pubkey);
+    assert.equal(
+      approved.proposal.action.preparation.leaderPubkey,
+      starterScout.pubkey,
+    );
     assert.equal(approved.brief, account.suggestion.brief);
     assert.equal(
       approved.proposal.worker.pubkey,
@@ -124,22 +200,25 @@ export function nativeProofReader({ relay, account, invoke, relayPubkey }) {
       const personas = await invoke("list_personas");
       const persona = personas.find((value) => value.id === agent.persona_id);
       assert.ok(persona);
-      const definition = (await events(30175)).find(
-        (event) =>
-          event.pubkey === account.ownerPubkey &&
-          JSON.parse(event.content).system_prompt === persona.system_prompt,
-      );
-      assert.ok(definition, "Real owner-published persona definition");
-      if (name === "worker")
-        assert.equal(
-          persona.system_prompt,
-          approved.proposal.action.definition.systemPrompt,
-        );
+      const definition =
+        name === "worker"
+          ? await head(30175, account.ownerPubkey, persona.id)
+          : null;
+      const definitionAuthority = personaAuthority({
+        name,
+        persona,
+        record,
+        starterScout,
+        definition,
+        ownerPubkey: account.ownerPubkey,
+        action: approved.proposal.action,
+      });
       refs.push({
         pubkey,
         personaId: agent.persona_id,
         name: agent.name,
         headEventId: record.id,
+        definitionAuthority,
         prompt: persona.system_prompt,
       });
     }
@@ -188,7 +267,7 @@ export function nativeProofReader({ relay, account, invoke, relayPubkey }) {
   return { events, readTask, readTeam, business };
 }
 
-/** Match the actual own persona section to signed definitions, never quoted history. */
+/** Match the actual own persona section to verified team definitions, never quoted history. */
 export function nativeRequestActor(messages, team, task) {
   const system = messages.filter((message) => message.role === "system");
   assert.equal(system.length, 1);
@@ -205,7 +284,7 @@ export function nativeRequestActor(messages, team, task) {
   assert.equal(
     matches.length,
     1,
-    "Actual own persona exactly matches one signed approved definition",
+    "Actual own persona exactly matches one verified team definition",
   );
   const actor = matches[0];
   const text = messages

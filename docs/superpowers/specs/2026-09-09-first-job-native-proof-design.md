@@ -25,9 +25,10 @@ All execution is on GitHub; unavailable backing services fail the gate rather
 than converting it to a successful skip. This follow-up must not merge before
 its first-job feature dependency (#669) and its own applicable checks pass.
 
-The actor check uses the exact own `[System]` persona section against the actual
-signed kind30175 definitions, then verifies signed30177 ranks/manager and the
-returned signed message pubkeys. No marker is inserted into agent prompts.
+The actor check uses the exact own `[System]` persona section against Scout’s
+unchanged native built-in definition and the worker’s owner-signed kind30175
+definition, then verifies signed30177 identity links/ranks/manager and returned
+signed message pubkeys. No marker or nonexistent built-in head is inserted.
 ACP currently hydrates rank context from employee30190 only; managed-agent30177
 ranks therefore need not appear in the model work context. The proof records
 this limitation and never fabricates employee heads to make the assertion pass.
