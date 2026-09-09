@@ -55,7 +55,7 @@ export function MarkdownImageSurface({
   spoilerImage: React.ReactNode;
 }) {
   const holder = React.useRef<HTMLSpanElement>(null);
-  const [inSpoiler, setInSpoiler] = React.useState(false);
+  const [inSpoiler, setInSpoiler] = React.useState<boolean | null>(null);
   const { imetaByUrl, relayOrigin } = useMarkdownRuntime();
   React.useLayoutEffect(() => {
     setInSpoiler(
@@ -66,13 +66,17 @@ export function MarkdownImageSurface({
   const entry = src ? imetaByUrl?.get(src) : undefined;
   return (
     <span className="block w-full min-w-0" ref={holder}>
-      {inSpoiler ? (
+      {inSpoiler == null ? null : inSpoiler ? (
         spoilerImage
       ) : resolvedSrc ? (
         <ImagePreview
           items={[
             {
               src: resolvedSrc,
+              originalUrl: src,
+              thumbnailSrc: entry?.thumb
+                ? rewriteRelayUrl(entry.thumb)
+                : undefined,
               alt: alt ?? "Image",
               filename: entry?.filename,
               downloadUrl:
@@ -105,6 +109,8 @@ export function ImageMosaic({ children }: { children: React.ReactNode[] }) {
       return <div className="space-y-2">{children}</div>;
     items.push({
       src: rewriteRelayUrl(src),
+      originalUrl: src,
+      thumbnailSrc: entry?.thumb ? rewriteRelayUrl(entry.thumb) : undefined,
       alt: alt ?? "Image",
       filename: entry?.filename,
       downloadUrl: isRelayDownloadable(src, relayOrigin ?? undefined)

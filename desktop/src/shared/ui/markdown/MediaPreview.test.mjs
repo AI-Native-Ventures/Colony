@@ -100,3 +100,40 @@ test("Markdown image metadata reaches the carousel image before the bytes load",
   assert.match(image, /height="244"/);
   assert.match(html, /aria-roledescription="carousel"/);
 });
+
+test("message preview requests the imeta thumbnail before mounting its original", () => {
+  const src = "https://relay.example/media/full.png";
+  const thumb = "https://relay.example/media/thumb.jpg";
+  const html = renderToStaticMarkup(
+    React.createElement(
+      MarkdownRuntimeContext.Provider,
+      {
+        value: {
+          ...runtime,
+          imetaByUrl: new Map([
+            [src, { m: "image/png", dim: "320x200", thumb }],
+          ]),
+        },
+      },
+      React.createElement(
+        ReactMarkdown,
+        {
+          components: {
+            p: MarkdownMediaParagraph,
+            img: ({ node: _node, ...props }) =>
+              React.createElement("img", props),
+          },
+        },
+        `![First](${src})\n![Second](https://relay.example/media/second.png)`,
+      ),
+    ),
+  );
+  assert.match(
+    html,
+    /<img [^>]*src="https:\/\/relay.example\/media\/thumb.jpg"/,
+  );
+  assert.doesNotMatch(
+    html,
+    /<img [^>]*src="https:\/\/relay.example\/media\/full.png"/,
+  );
+});

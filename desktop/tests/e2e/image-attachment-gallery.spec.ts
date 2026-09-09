@@ -1,8 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 
 import { installMockBridge } from "../helpers/bridge";
 import { waitForAnimations } from "../helpers/animations";
-import { expectCornerRadiusPx, expectSmoothCorners } from "../helpers/css";
 
 const IMAGE_SHAS = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
 const SPOILER_VISIBLE_SHA = "d".repeat(64);
@@ -61,18 +61,21 @@ function imageImetaTag({
 }
 
 async function installNoDimImageRoutes(page: Page) {
-  await page.route("https://example.com/e2e/gallery-*.png", (route) => {
-    const requestedUrl = route.request().url();
-    const isPortrait = requestedUrl.includes("portrait");
-    const isSecond = requestedUrl.includes("second");
-    const width = isPortrait ? 120 : 320;
-    const height = isPortrait ? 320 : 120;
-    const fill = isSecond ? "#a78bfa" : isPortrait ? "#f4b860" : "#4aa3df";
-    route.fulfill({
-      body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="${fill}"/></svg>`,
-      contentType: "image/svg+xml",
-    });
-  });
+  await page.route(
+    /^https:\/\/example\.com\/e2e\/gallery-[^/]+\.png(?:\?.*)?$/,
+    (route) => {
+      const requestedUrl = route.request().url();
+      const isPortrait = requestedUrl.includes("portrait");
+      const isSecond = requestedUrl.includes("second");
+      const width = isPortrait ? 120 : 320;
+      const height = isPortrait ? 320 : 120;
+      const fill = isSecond ? "#a78bfa" : isPortrait ? "#f4b860" : "#4aa3df";
+      route.fulfill({
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="${fill}"/></svg>`,
+        contentType: "image/svg+xml",
+      });
+    },
+  );
 }
 
 async function getLightboxFrameBox(page: Page) {
@@ -84,6 +87,29 @@ async function getLightboxFrameBox(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // Real image bytes keep loading/click/copy proof distinct from broken-image boxes.
+  const fixtures = new Map([
+    [IMAGE_SHAS[0], "first"],
+    [IMAGE_SHAS[1], "second"],
+    [IMAGE_SHAS[2], "third"],
+    [SPOILER_VISIBLE_SHA, "visible"],
+    [SPOILER_HIDDEN_SHA, "hidden"],
+  ]);
+  await page.route("**/media/*.png", async (route) => {
+    const sha =
+      new URL(route.request().url()).pathname
+        .split("/")
+        .pop()
+        ?.replace(/\.png$/, "") ?? "";
+    const fixture = fixtures.get(sha);
+    if (!fixture) return route.continue();
+    await route.fulfill({
+      path: fileURLToPath(
+        new URL(`../fixtures/image-gallery/${fixture}.png`, import.meta.url),
+      ),
+      contentType: "image/png",
+    });
+  });
   await installMockBridge(page, {
     uploadDescriptors: [
       {
@@ -133,127 +159,48 @@ test("image bundle lightbox navigates as a gallery", async ({ page }) => {
     .last();
   await expect(row).toBeVisible();
 
-  const triggers = row.getByTestId("message-image-lightbox-trigger");
-  await expect(triggers).toHaveCount(3);
-
-  const mosaic = row.locator("[data-image-mosaic]");
-  await expect(mosaic).toHaveAttribute("data-image-mosaic-count", "3");
-  await expectSmoothCorners(mosaic);
-  const mosaicCornerRadius = await mosaic.evaluate(
-    (element) => window.getComputedStyle(element).borderTopLeftRadius,
-  );
-  const mosaicBox = await mosaic.boundingBox();
-  const firstBox = await triggers.first().boundingBox();
-  const secondBox = await triggers.nth(1).boundingBox();
-  const thirdBox = await triggers.nth(2).boundingBox();
-  if (!mosaicBox || !firstBox || !secondBox || !thirdBox) {
-    throw new Error("Expected image mosaic tiles to have layout boxes");
-  }
-  expect(mosaicBox.width).toBeCloseTo(512, 0);
-  expect(firstBox.height).toBeGreaterThan(secondBox.height * 1.8);
-  expect(firstBox.height).toBeCloseTo(
-    thirdBox.y + thirdBox.height - secondBox.y,
-    0,
-  );
-  expect(secondBox.x).toBeCloseTo(thirdBox.x, 0);
-  expect(secondBox.y).toBeLessThan(thirdBox.y);
-
-  await expectCornerRadiusPx(mosaic, 16);
-  await expectCornerRadiusPx(triggers.first(), 0);
-  await expect(triggers.first().locator("img")).toHaveCSS(
-    "object-fit",
-    "cover",
-  );
-  await expectCornerRadiusPx(triggers.first().locator("img"), 0);
-  await triggers.first().click();
+  const carousel = row.getByRole("region", { name: "Image carousel" });
+  const trigger = carousel.getByTestId("message-image-lightbox-trigger");
+  await expect(trigger).toHaveCount(1);
+  await expect(carousel.getByTestId("media-preview-count")).toHaveText("1 / 3");
+  await expect(trigger.locator("img")).toHaveJSProperty("naturalWidth", 160);
+  await expect(trigger.locator("img")).toHaveCSS("object-fit", "contain");
+  const inlineBox = await trigger.boundingBox();
+  const carouselBox = await carousel.boundingBox();
+  if (!inlineBox || !carouselBox) throw new Error("Expected carousel layout");
+  expect(Math.abs(inlineBox.width - carouselBox.width)).toBeLessThanOrEqual(2);
+  await trigger.click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator(`img[src*="${IMAGE_SHAS[0]}"]`)).toBeVisible();
-  const lightboxSurface = page
-    .locator("[data-image-lightbox-frame] > div > div")
-    .first();
-  await expectCornerRadiusPx(lightboxSurface, 16);
-  await expectSmoothCorners(lightboxSurface);
+  await expect(dialog.locator(`img[src*="${IMAGE_SHAS[0]}"]`)).toHaveJSProperty(
+    "naturalWidth",
+    160,
+  );
   await expect(
-    page.getByRole("button", { name: "Previous image" }),
-  ).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Next image" }).click();
-  await expect(dialog.locator(`img[src*="${IMAGE_SHAS[1]}"]`)).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Previous image" }),
-  ).toBeVisible();
-
+    dialog.getByRole("button", { name: "Previous image" }),
+  ).toBeDisabled();
+  await dialog.getByRole("button", { name: "Next image" }).click();
+  await expect(dialog.locator(`img[src*="${IMAGE_SHAS[1]}"]`)).toHaveJSProperty(
+    "naturalHeight",
+    160,
+  );
   await page.keyboard.press("ArrowRight");
-  const currentLightboxImage = dialog.locator(`img[src*="${IMAGE_SHAS[2]}"]`);
-  const lightboxFrame = page.locator("[data-image-lightbox-frame]");
-  await expect(currentLightboxImage).toBeVisible();
-  await expect(currentLightboxImage).toHaveCSS("object-fit", "contain");
-  await expect(page.getByRole("button", { name: "Next image" })).toHaveCount(0);
-
-  const currentThumbnailBox = await triggers
-    .nth(2)
-    .locator("img")
-    .boundingBox();
-  if (!currentThumbnailBox) {
-    throw new Error("Expected current gallery thumbnail to have a layout box");
-  }
-
-  await page.waitForTimeout(500);
-  await page.mouse.click(20, 20);
-  await expect(currentLightboxImage).toHaveCSS("object-fit", "cover");
-  const closingFrameStyle = await lightboxFrame.evaluate((element) => {
-    if (!(element instanceof HTMLElement)) {
-      throw new Error("Expected HTML lightbox frame");
-    }
-    return {
-      borderBottomLeftRadius: element.style.borderBottomLeftRadius,
-      borderBottomRightRadius: element.style.borderBottomRightRadius,
-      borderTopLeftRadius: element.style.borderTopLeftRadius,
-      borderTopRightRadius: element.style.borderTopRightRadius,
-      height: Number.parseFloat(element.style.height),
-      left: Number.parseFloat(element.style.left),
-      top: Number.parseFloat(element.style.top),
-      transitionProperty: element.style.transitionProperty,
-      width: Number.parseFloat(element.style.width),
-    };
-  });
-  expect(closingFrameStyle.borderTopLeftRadius).toBe("0px");
-  expect(closingFrameStyle.borderTopRightRadius).toBe("0px");
-  expect(closingFrameStyle.borderBottomLeftRadius).toBe("0px");
-  expect(closingFrameStyle.borderBottomRightRadius).toBe(mosaicCornerRadius);
-  expect(closingFrameStyle.transitionProperty).toContain("border-radius");
-
-  const lightboxSurfaceStyle = await page
-    .locator("[data-image-lightbox-frame] > div > div")
-    .first()
-    .evaluate((element) => {
-      if (!(element instanceof HTMLElement)) {
-        throw new Error("Expected HTML lightbox surface");
-      }
-      return {
-        borderBottomRightRadius: element.style.borderBottomRightRadius,
-        borderTopLeftRadius: element.style.borderTopLeftRadius,
-        transitionProperty: element.style.transitionProperty,
-      };
-    });
-  expect(lightboxSurfaceStyle.borderTopLeftRadius).toBe("0px");
-  expect(lightboxSurfaceStyle.borderBottomRightRadius).toBe(mosaicCornerRadius);
-  expect(lightboxSurfaceStyle.transitionProperty).toBe("border-radius");
-
-  expect(Math.abs(closingFrameStyle.left - currentThumbnailBox.x)).toBeLessThan(
-    2,
+  await expect(dialog.getByTestId("media-preview-count")).toHaveText("3 / 3");
+  await expect(dialog.locator(`img[src*="${IMAGE_SHAS[2]}"]`)).toHaveCSS(
+    "object-fit",
+    "contain",
   );
-  expect(Math.abs(closingFrameStyle.top - currentThumbnailBox.y)).toBeLessThan(
-    2,
-  );
-  expect(
-    Math.abs(closingFrameStyle.width - currentThumbnailBox.width),
-  ).toBeLessThan(2);
-  expect(
-    Math.abs(closingFrameStyle.height - currentThumbnailBox.height),
-  ).toBeLessThan(2);
+  await expect(
+    dialog.getByRole("button", { name: "Next image" }),
+  ).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(carousel.getByTestId("media-preview-count")).toHaveText("3 / 3");
+  await expect(trigger).toBeFocused();
+  const returnedBox = await trigger.boundingBox();
+  expect(returnedBox?.width).toBeCloseTo(inlineBox.width, 0);
+  expect(returnedBox?.height).toBeCloseTo(inlineBox.height, 0);
 });
 
 test("hidden spoiler images are excluded from gallery navigation until revealed", async ({
@@ -312,7 +259,9 @@ test("hidden spoiler images are excluded from gallery navigation until revealed"
   await row.locator(`img[src*="${SPOILER_VISIBLE_SHA}"]`).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(page.getByRole("button", { name: "Next image" })).toHaveCount(0);
+  await expect(
+    page.getByRole("dialog").getByRole("button", { name: "Next image" }),
+  ).toHaveCount(0);
 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
@@ -324,7 +273,9 @@ test("hidden spoiler images are excluded from gallery navigation until revealed"
 
   await row.locator(`img[src*="${SPOILER_VISIBLE_SHA}"]`).click();
   await expect(dialog).toBeVisible();
-  await expect(page.getByRole("button", { name: "Next image" })).toBeVisible();
+  await expect(
+    page.getByRole("dialog").getByRole("button", { name: "Next image" }),
+  ).toBeVisible();
 });
 
 // Regression guard for the CI-only flake where the gallery froze at one image
@@ -404,7 +355,9 @@ test("a just-revealed spoiler image joins the gallery before its fade-in paints"
 
   await row.locator(`img[src*="${SPOILER_VISIBLE_SHA}"]`).click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Next image" })).toBeVisible();
+  await expect(
+    page.getByRole("dialog").getByRole("button", { name: "Next image" }),
+  ).toBeVisible();
 });
 
 test("message images load a thumbnail before requesting the original", async ({
@@ -490,7 +443,7 @@ test("message images load a thumbnail before requesting the original", async ({
   expect(await row.boundingBox()).toEqual(rowBefore);
 });
 
-test("gallery items without imeta dimensions keep their thumbnail aspect ratio", async ({
+test("carousel images without imeta retain their intrinsic geometry without cropping", async ({
   page,
 }) => {
   await installNoDimImageRoutes(page);
@@ -528,7 +481,7 @@ test("gallery items without imeta dimensions keep their thumbnail aspect ratio",
     .last();
   await expect(row).toBeVisible();
   await expect(row.locator(`img[src="${NO_DIM_WIDE_URL}"]`)).toBeVisible();
-  await expect(row.locator(`img[src="${NO_DIM_PORTRAIT_URL}"]`)).toBeVisible();
+  await expect(row.locator(`img[src="${NO_DIM_PORTRAIT_URL}"]`)).toHaveCount(0);
 
   await row.locator(`img[src="${NO_DIM_WIDE_URL}"]`).click();
   const dialog = page.getByRole("dialog");
@@ -536,15 +489,26 @@ test("gallery items without imeta dimensions keep their thumbnail aspect ratio",
   await expect(dialog.locator(`img[src="${NO_DIM_WIDE_URL}"]`)).toBeVisible();
   await page.waitForTimeout(350);
   const wideFrameBox = await getLightboxFrameBox(page);
-  expect(wideFrameBox.width / wideFrameBox.height).toBeGreaterThan(2);
+  await expect(
+    dialog.locator(`img[src="${NO_DIM_WIDE_URL}"]`),
+  ).toHaveJSProperty("naturalWidth", 320);
+  await expect(dialog.locator("img")).toHaveCSS("object-fit", "contain");
 
-  await page.getByRole("button", { name: "Next image" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Next image" })
+    .click();
   await expect(
     dialog.locator(`img[src="${NO_DIM_PORTRAIT_URL}"]`),
   ).toBeVisible();
   await page.waitForTimeout(350);
   const portraitFrameBox = await getLightboxFrameBox(page);
-  expect(portraitFrameBox.width / portraitFrameBox.height).toBeLessThan(0.6);
+  await expect(
+    dialog.locator(`img[src="${NO_DIM_PORTRAIT_URL}"]`),
+  ).toHaveJSProperty("naturalHeight", 320);
+  await expect(dialog.locator("img")).toHaveCSS("object-fit", "contain");
+  expect(portraitFrameBox.width).toBeCloseTo(wideFrameBox.width, 0);
+  expect(portraitFrameBox.height).toBeCloseTo(wideFrameBox.height, 0);
 });
 
 test("forum markdown images use the markdown root as their gallery scope", async ({
@@ -606,7 +570,7 @@ test("forum markdown images use the markdown root as their gallery scope", async
   const threadPost = page.locator(`[data-forum-event-id="${postId}"]`);
   await expect(threadPost).toBeVisible();
   const triggers = threadPost.getByTestId("message-image-lightbox-trigger");
-  await expect(triggers).toHaveCount(2);
+  await expect(triggers).toHaveCount(1);
   await expect
     .poll(() =>
       triggers.first().evaluate((trigger) => {
@@ -620,20 +584,25 @@ test("forum markdown images use the markdown root as their gallery scope", async
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(`img[src="${NO_DIM_WIDE_URL}"]`)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Previous image" }),
-  ).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Next image" })).toBeVisible();
+    page.getByRole("dialog").getByRole("button", { name: "Previous image" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("dialog").getByRole("button", { name: "Next image" }),
+  ).toBeVisible();
 
-  await page.getByRole("button", { name: "Next image" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Next image" })
+    .click();
   await expect(
     dialog.locator(`img[src="${NO_DIM_PORTRAIT_URL}"]`),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Previous image" }),
+    page.getByRole("dialog").getByRole("button", { name: "Previous image" }),
   ).toBeVisible();
 });
 
-test("multi-image mosaics keep a fixed width and grow by rows", async ({
+test("multi-image carousels fill the message width with stable contained stages", async ({
   page,
 }) => {
   await installNoDimImageRoutes(page);
@@ -662,52 +631,45 @@ test("multi-image mosaics keep a fixed width and grow by rows", async ({
       emit?.({
         channelName: "general",
         content: [
-          `${count} image mosaic`,
+          `${count} image carousel`,
           ...imageUrls.slice(0, count).map((url) => `![image](${url})`),
         ].join("\n"),
       });
     }
   }, urls);
 
-  const mosaics: Array<{ count: number; height: number; width: number }> = [];
+  const carousels: Array<{ count: number; height: number; width: number }> = [];
   for (const count of [2, 4, 5]) {
     const row = page
       .getByTestId("message-row")
-      .filter({ hasText: `${count} image mosaic` })
+      .filter({ hasText: `${count} image carousel` })
       .last();
-    const mosaic = row.locator("[data-image-mosaic]");
-    await expect(mosaic).toHaveAttribute(
-      "data-image-mosaic-count",
-      String(count),
+    const carousel = row.getByTestId("media-image-preview");
+    await expect(carousel.getByTestId("media-preview-count")).toHaveText(
+      `1 / ${count}`,
     );
-    // The mosaic's box is only measurable once it has laid out. A message that
-    // just arrived can still be a zero-height node for a frame or two while its
-    // images resolve, and `boundingBox()` reports null for that, which read as
-    // "Expected 2-image mosaic layout box" on CI (run 32146143774, shard 4)
-    // even though the count attribute above had already matched. Poll for a
-    // real box instead of sampling once.
-    let box: Awaited<ReturnType<typeof mosaic.boundingBox>> = null;
+    await expect(carousel.locator("img")).toHaveCount(1);
+    await expect(carousel.locator("img")).toHaveCSS("object-fit", "contain");
+    await expect(carousel.locator("img")).toHaveJSProperty("naturalWidth", 320);
+    // Wait for an actual layout, then compare equal stages across item counts.
+    let box: Awaited<ReturnType<typeof carousel.boundingBox>> = null;
     await expect
       .poll(async () => {
-        box = await mosaic.boundingBox();
+        box = await carousel.boundingBox();
         return box !== null && box.height > 0 && box.width > 0;
       })
       .toBe(true);
-    if (!box) throw new Error(`Expected ${count}-image mosaic layout box`);
-    mosaics.push({ count, height: box.height, width: box.width });
+    if (!box) throw new Error(`Expected ${count}-image carousel layout box`);
+    carousels.push({ count, height: box.height, width: box.width });
   }
 
-  expect(mosaics[0].width).toBeCloseTo(mosaics[1].width, 0);
-  expect(mosaics[1].width).toBeCloseTo(mosaics[2].width, 0);
-  expect(mosaics[1].height).toBeGreaterThan(mosaics[0].height);
-  expect(mosaics[2].height).toBeGreaterThan(mosaics[1].height);
-  expect(mosaics[2].height - mosaics[1].height).toBeCloseTo(
-    mosaics[0].height + 6,
-    0,
-  );
+  expect(carousels[0].width).toBeCloseTo(carousels[1].width, 0);
+  expect(carousels[1].width).toBeCloseTo(carousels[2].width, 0);
+  expect(carousels[1].height).toBeCloseTo(carousels[0].height, 0);
+  expect(carousels[2].height).toBeCloseTo(carousels[1].height, 0);
 });
 
-test("image mosaic screenshot", async ({ page }) => {
+test("image carousel screenshot", async ({ page }) => {
   await installNoDimImageRoutes(page);
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -744,33 +706,41 @@ test("image mosaic screenshot", async ({ page }) => {
     .getByTestId("message-row")
     .filter({ hasText: "Weekend photo dump" })
     .last();
-  await expect(row.locator("[data-image-mosaic] img")).toHaveCount(3);
+  await expect(
+    row.getByTestId("media-image-preview").locator("img"),
+  ).toHaveCount(1);
+  await expect(row.getByTestId("media-preview-count")).toHaveText("1 / 3");
   await waitForAnimations(page);
   await row.screenshot({
-    path: "test-results/image-mosaic/three-image-mosaic.png",
+    path: "test-results/image-carousel/three-image-carousel.png",
   });
 });
 
-test("mosaic image context menu is portaled outside the clipped gallery", async ({
+test("carousel image context menu is portaled outside the clipped gallery", async ({
   page,
 }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
-  await page.getByTestId("message-input").fill("mosaic context menu");
+  await page.getByTestId("message-input").fill("carousel context menu");
   await page.getByRole("button", { name: "Attach file" }).click();
   await page.getByTestId("send-message").click();
   await expect(page.getByText("Sending")).toHaveCount(0);
 
   const row = page
     .getByTestId("message-row")
-    .filter({ hasText: "mosaic context menu" })
+    .filter({ hasText: "carousel context menu" })
     .last();
-  const mosaic = row.locator("[data-image-mosaic]");
+  const carousel = row.getByTestId("media-image-preview");
   const trigger = row.getByTestId("message-image-lightbox-trigger").last();
-  await expect(mosaic).toBeVisible();
-  await trigger.click({ button: "right" });
+  await expect(carousel).toBeVisible();
+  const triggerBox = await trigger.boundingBox();
+  if (!triggerBox) throw new Error("Expected image trigger layout");
+  await trigger.click({
+    button: "right",
+    position: { x: triggerBox.width - 8, y: triggerBox.height / 2 },
+  });
 
   const menu = page.locator("[data-image-context-menu]");
   await expect(menu).toBeVisible();
@@ -778,18 +748,18 @@ test("mosaic image context menu is portaled outside the clipped gallery", async 
   await expect(
     page.getByRole("button", { name: "Download image" }),
   ).toBeVisible();
-  await expect(mosaic.locator("[data-image-context-menu]")).toHaveCount(0);
+  await expect(carousel.locator("[data-image-context-menu]")).toHaveCount(0);
   expect(
     await menu.evaluate((element) => element.parentElement === document.body),
   ).toBe(true);
 
-  const mosaicBox = await mosaic.boundingBox();
+  const carouselBox = await carousel.boundingBox();
   const menuBox = await menu.boundingBox();
-  if (!mosaicBox || !menuBox) {
-    throw new Error("Expected mosaic and image context menu layout boxes");
+  if (!carouselBox || !menuBox) {
+    throw new Error("Expected carousel and image context menu layout boxes");
   }
   expect(menuBox.x + menuBox.width).toBeGreaterThan(
-    mosaicBox.x + mosaicBox.width,
+    carouselBox.x + carouselBox.width,
   );
 });
 

@@ -200,7 +200,20 @@ test("a CSV attachment uses the real message and thread renderer and native orig
   );
   const row = card.locator("xpath=ancestor::*[@data-message-id][1]");
   await row.hover();
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  const reply = row.getByRole("button", { name: "Reply", exact: true });
+  // A table can be taller than the timeline. The browser's nearest-edge
+  // auto-scroll puts its top action bar under the header or composer overlay.
+  // Focus keeps the normal hover/focus action bar exposed while we scroll its
+  // control into the visible middle, then use a regular hit-tested click.
+  await reply.focus();
+  await reply.evaluate((button) =>
+    button.scrollIntoView({
+      block: "center",
+      inline: "nearest",
+      behavior: "instant",
+    }),
+  );
+  await reply.click();
   const thread = page.getByTestId("message-thread-head");
   await expect(thread.getByTestId("file-preview-table")).toContainText(
     "Acme, Ltd",
@@ -221,4 +234,16 @@ test("a CSV attachment uses the real message and thread renderer and native orig
       ),
     )
     .toContain("download_file");
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+          (entry) => entry.command === "download_file",
+        ),
+      ),
+    )
+    .toContainEqual({
+      command: "download_file",
+      payload: { url, filename: "service-ledger.csv" },
+    });
 });

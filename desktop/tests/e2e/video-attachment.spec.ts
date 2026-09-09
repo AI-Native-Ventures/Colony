@@ -155,11 +155,12 @@ async function installVideoReviewHarness(
           return 12.5;
         },
       });
-      // This harness supplies a complete timeline, unlike a cold real decoder.
+      // The timeline is known, but tests explicitly dispatch loadeddata when a
+      // decoded frame becomes available. A seek alone must retain the poster.
       Object.defineProperty(HTMLMediaElement.prototype, "readyState", {
         configurable: true,
         get() {
-          return HTMLMediaElement.HAVE_ENOUGH_DATA;
+          return HTMLMediaElement.HAVE_METADATA;
         },
       });
     },

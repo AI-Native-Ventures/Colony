@@ -143,9 +143,7 @@ for (const surface of ["channel", "thread"] as const) {
     await expect(page.getByTestId("reply-model-request")).toContainText(
       "Requested for teammate reply: model-two · reasoning low",
     );
-    await expect(
-      composer.getByTestId("reply-model-controls"),
-    ).not.toContainText("model-two");
+    await expect(composer.getByTestId("reply-model-controls")).toHaveCount(0);
     const requestedMessage = page.getByTestId("message-row").filter({
       has: page.getByTestId("reply-model-request"),
     });
@@ -158,6 +156,17 @@ for (const surface of ["channel", "thread"] as const) {
     });
     expect(createHash("sha256").update(requestedShot).digest("hex")).not.toBe(
       createHash("sha256").update(controlsShot).digest("hex"),
+    );
+    // Sending clears the mention and therefore hides reply controls. Select
+    // the teammate again to prove that this message's choice was not retained.
+    await input.fill("@Jason");
+    await composer
+      .getByTestId("mention-autocomplete")
+      .locator("button", { hasText: "Jason" })
+      .first()
+      .click();
+    await expect(composer.getByTestId("reply-model-controls")).toHaveText(
+      "Model · Reasoning",
     );
   });
 }

@@ -530,8 +530,14 @@ test("commit detail opens from the commits feed with a diff", async ({
   await expect(
     page.getByRole("link", { name: "project guide", exact: true }),
   ).toHaveAttribute("href", "https://example.com/project-guide");
+  const architectureImage = page.getByRole("img", {
+    name: "Architecture",
+    exact: true,
+  });
+  await expect(architectureImage).toBeVisible();
+  await expect(architectureImage).toHaveAttribute("src", "/colony.svg");
   await expect(
-    page.getByRole("button", { name: "Architecture" }),
+    page.getByRole("button", { name: "Expand image", exact: true }),
   ).toBeVisible();
   await expect(page.locator("video")).toHaveAttribute(
     "src",

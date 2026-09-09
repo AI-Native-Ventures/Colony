@@ -58,9 +58,9 @@ test("single-image source dimensions reach the image before decoding without dis
   const image = html.match(/<img [^>]+>/)?.[0] || "";
   assert.match(image, /width="951"/);
   assert.match(image, /height="244"/);
-  assert.match(image, /h-full w-full object-contain/);
+  assert.match(image, /h-full w-full .*object-contain/);
   assert.match(html, new RegExp(`aspect-ratio:${951 / 244}`));
-  assert.doesNotMatch(html, /max-h-|max-w-/);
+  assert.doesNotMatch(html, /max-h-|max-w-\[/);
 });
 test("audio remains phrasing content and never starts automatically", () => {
   const html = render(AudioPlayer, {

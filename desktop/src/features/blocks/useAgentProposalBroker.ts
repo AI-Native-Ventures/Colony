@@ -89,6 +89,7 @@ type AgentProposalCommunityLease = {
   executionScope: string;
   relayUrl: string;
   generation: number;
+  receiptResults: Map<string, AgentProposalReceiptResult>;
 };
 
 // Process-lifetime, cryptographically scoped execution queues. They are
@@ -114,12 +115,14 @@ function activateAgentProposalCommunity(
     executionScope,
     relayUrl,
     generation: nextAgentProposalCommunityGeneration++,
+    receiptResults: new Map<string, AgentProposalReceiptResult>(),
   };
   activeAgentProposalCommunityLease = lease;
   return lease;
 }
 
 function deactivateAgentProposalCommunity(lease: AgentProposalCommunityLease) {
+  lease.receiptResults.clear();
   if (activeAgentProposalCommunityLease === lease) {
     activeAgentProposalCommunityLease = null;
   }
@@ -532,7 +535,10 @@ async function processAction(
   if (!isCurrentAgentProposalCommunity(lease)) return "retry";
   const existing = await existingReceiptForAction(accepted.event);
   if (!isCurrentAgentProposalCommunity(lease)) return "retry";
-  if (existing) return "complete";
+  if (existing) {
+    lease.receiptResults.delete(accepted.event.id);
+    return "complete";
+  }
   const instanceEvent = await fetchProposalInstance(accepted.event);
   if (!isCurrentAgentProposalCommunity(lease)) return "retry";
   if (!instanceEvent) return "retry";
@@ -540,6 +546,7 @@ async function processAction(
   // acknowledgement was buffered. That is terminal for this local action too,
   // so allow the caller to discard it rather than retrying it forever.
   if (await proposalAlreadyResolved(instanceEvent, context.ownerPubkey)) {
+    lease.receiptResults.delete(accepted.event.id);
     return "complete";
   }
   if (!isCurrentAgentProposalCommunity(lease)) return "retry";
@@ -548,42 +555,54 @@ async function processAction(
     instanceEvent,
     context,
   });
-  if (!validated) return "ignored";
+  if (!validated) {
+    lease.receiptResults.delete(accepted.event.id);
+    return "ignored";
+  }
 
-  let result: AgentProposalReceiptResult;
-  if (validated.kind === "decline") {
-    result = { outcome: "declined" };
-  } else {
-    if (!isCurrentAgentProposalCommunity(lease)) return "retry";
-    try {
-      const execution = await executeAgentProposal(
-        validated.action,
-        lease.relayUrl,
-        accepted.backendConfig,
-      );
+  // A relay read or publication can fail after native execution succeeds.
+  // Retain that safe result across retries and query-driven broker remounts;
+  // publishing a receipt must never execute the local operation again.
+  let result = lease.receiptResults.get(accepted.event.id);
+  if (!result) {
+    if (validated.kind === "decline") {
+      result = { outcome: "declined" };
+    } else {
       if (!isCurrentAgentProposalCommunity(lease)) return "retry";
-      result =
-        execution.status === "applied"
-          ? {
-              outcome:
-                validated.actionId === "agent.create" ? "created" : "updated",
-              definitionId: execution.definitionId,
-              ...(execution.agentPubkey
-                ? { agentPubkey: execution.agentPubkey }
-                : {}),
-              recovered: execution.recovered,
-            }
-          : { outcome: "failed", message: execution.safeMessage };
-    } catch {
-      result = {
-        outcome: "failed",
-        message: "Could not apply this Agent Proposal. Review and retry.",
-      };
+      try {
+        const execution = await executeAgentProposal(
+          validated.action,
+          lease.relayUrl,
+          accepted.backendConfig,
+        );
+        if (!isCurrentAgentProposalCommunity(lease)) return "retry";
+        result =
+          execution.status === "applied"
+            ? {
+                outcome:
+                  validated.actionId === "agent.create" ? "created" : "updated",
+                definitionId: execution.definitionId,
+                ...(execution.agentPubkey
+                  ? { agentPubkey: execution.agentPubkey }
+                  : {}),
+                recovered: execution.recovered,
+              }
+            : { outcome: "failed", message: execution.safeMessage };
+      } catch {
+        result = {
+          outcome: "failed",
+          message: "Could not apply this Agent Proposal. Review and retry.",
+        };
+      }
     }
   }
-  return (await publishReceipt(accepted.event, validated, result, lease))
-    ? "complete"
-    : "retry";
+  if (!isCurrentAgentProposalCommunity(lease)) return "retry";
+  lease.receiptResults.set(accepted.event.id, result);
+  if (!(await publishReceipt(accepted.event, validated, result, lease))) {
+    return "retry";
+  }
+  lease.receiptResults.delete(accepted.event.id);
+  return "complete";
 }
 
 /** Owner-side broker for acknowledged and crash-replayed Agent Proposals. */

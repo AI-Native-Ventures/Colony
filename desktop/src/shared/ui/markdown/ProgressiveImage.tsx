@@ -32,13 +32,18 @@ type ProgressiveImageProps = {
   thumbnailRef: React.RefObject<HTMLImageElement | null>;
   thumbSrc: string | undefined;
   width: number;
+  /** Fill the caller-owned carousel stage instead of the legacy inline reserve. */
+  fillStage?: boolean;
+  onError?: () => void;
 };
 
 export function ProgressiveImage({
   alt,
   fullImageRef,
+  fillStage = false,
   height,
   onFullLoad,
+  onError,
   onThumbnailLoad,
   resolvedSrc,
   showSpoilerSize,
@@ -69,7 +74,7 @@ export function ProgressiveImage({
   const setFullImageRef = React.useCallback(
     (image: HTMLImageElement | null) => {
       fullImageRef.current = image;
-      if (image?.complete) void handleFullLoad(image);
+      if (image?.complete && image.naturalWidth > 0) void handleFullLoad(image);
     },
     [fullImageRef, handleFullLoad],
   );
@@ -83,6 +88,7 @@ export function ProgressiveImage({
   );
 
   const frameStyle = React.useMemo<React.CSSProperties>(() => {
+    if (fillStage) return { position: "absolute", inset: 0 };
     const scale = Math.min(1, 384 / width, 256 / height);
     return {
       ...style,
@@ -90,7 +96,7 @@ export function ProgressiveImage({
       height: "auto",
       width: `${Math.max(1, Math.round(width * scale))}px`,
     };
-  }, [height, style, width]);
+  }, [fillStage, height, style, width]);
 
   return (
     <span
@@ -134,6 +140,7 @@ export function ProgressiveImage({
           style={style}
           width={width}
           onLoad={(event) => void handleFullLoad(event.currentTarget)}
+          onError={onError}
         />
       ) : null}
     </span>
