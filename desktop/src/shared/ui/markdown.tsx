@@ -41,9 +41,7 @@ import {
 } from "@/shared/ui/mentionChip";
 
 import {
-  classifyChildren,
   hasBlockMedia,
-  isImageOnlyParagraph,
   shallowArrayEqual,
   shallowRecordEqual,
 } from "./markdownUtils";
@@ -67,7 +65,12 @@ import {
   type MediaContextMenuPosition,
   useDismissMediaContextMenu,
 } from "./markdown/MediaContextMenu";
-import { isVideoMedia } from "./markdown/mediaEntry";
+import { isAudioMedia, isVideoMedia } from "./markdown/mediaEntry";
+import {
+  MarkdownMediaParagraph,
+  MarkdownAudioPlayer,
+  MarkdownImageSurface,
+} from "./markdown/MediaPreview";
 import {
   clampImageLightboxZoom,
   type ImageGalleryDirection,
@@ -1245,30 +1248,6 @@ function ImageBlock({ alt, dim, resolvedSrc, src, thumbSrc }: ImageBlockProps) {
   );
 }
 
-function ImageMosaic({ children }: { children: React.ReactNode[] }) {
-  const mosaicRef = React.useRef<HTMLDivElement | null>(null);
-  const isTriptych = children.length === 3;
-  const hasOddTail = children.length > 3 && children.length % 2 === 1;
-  useSmoothCorners(mosaicRef);
-
-  return (
-    <div
-      className={cn(
-        "mt-1 grid w-full min-w-0 max-w-lg grid-cols-2 gap-1.5 overflow-hidden rounded-2xl [&_br]:hidden [&_[data-block-media]]:min-h-0 [&_[data-block-media]]:max-w-none [&_[data-block-media]]:overflow-hidden [&_[data-block-media]>button]:m-0 [&_[data-block-media]>button]:h-full [&_[data-block-media]>button]:w-full [&_[data-block-media]>button]:max-w-none [&_[data-block-media]>button]:rounded-none [&_[data-block-media]_[data-progressive-image-frame]]:!h-full [&_[data-block-media]_[data-progressive-image-frame]]:!w-full [&_[data-block-media]_img]:!h-full [&_[data-block-media]_img]:!max-h-none [&_[data-block-media]_img]:!w-full [&_[data-block-media]_img]:!max-w-none [&_[data-block-media]_img]:rounded-none [&_[data-block-media]_img]:object-cover",
-        isTriptych
-          ? "h-80 grid-rows-2 [&_[data-block-media]]:h-auto [&_[data-block-media]:first-child]:row-span-2"
-          : "[&_[data-block-media]]:h-48",
-        hasOddTail && "[&_[data-block-media]:last-child]:col-span-2",
-      )}
-      data-image-mosaic=""
-      data-image-mosaic-count={children.length}
-      ref={mosaicRef}
-    >
-      {children}
-    </div>
-  );
-}
-
 function createMarkdownComponents(
   interactive = true,
   mediaInset = false,
@@ -1284,10 +1263,10 @@ function createMarkdownComponents(
     const {
       channels,
       imetaByUrl,
+      relayOrigin,
       onOpenEntityLink,
       onOpenMessageLink,
       onImportSnapshotFromUrl,
-      relayOrigin,
       snapshotSharedBy,
     } = useMarkdownRuntime();
     if (!interactive) {
@@ -1340,6 +1319,15 @@ function createMarkdownComponents(
       href,
       label,
     );
+    if (href && isAudioMedia(href, imetaByUrl?.get(href)?.m)) {
+      return (
+        <MarkdownAudioPlayer
+          src={href}
+          resolvedSrc={rewriteRelayUrl(href)}
+          alt={label}
+        />
+      );
+    }
     if (card) {
       return <FileCard {...card} />;
     }
@@ -1476,6 +1464,17 @@ function createMarkdownComponents(
       }
 
       const resolvedSrc = src ? rewriteRelayUrl(src) : src;
+      if (src && resolvedSrc && isAudioMedia(src, entry?.m)) {
+        return (
+          <span data-block-media="" className="block w-full">
+            <MarkdownAudioPlayer
+              src={src}
+              resolvedSrc={resolvedSrc}
+              alt={alt}
+            />
+          </span>
+        );
+      }
       if (isVideo && src && resolvedSrc) {
         return (
           <span
@@ -1496,12 +1495,22 @@ function createMarkdownComponents(
       }
       return (
         <span data-block-media="" className="block min-w-0 max-w-full">
-          <ImageBlock
+          <MarkdownImageSurface
             alt={alt}
             dim={entry?.dim}
             resolvedSrc={resolvedSrc}
             src={src}
-            thumbSrc={entry?.thumb ? rewriteRelayUrl(entry.thumb) : undefined}
+            spoilerImage={
+              <ImageBlock
+                alt={alt}
+                dim={entry?.dim}
+                resolvedSrc={resolvedSrc}
+                src={src}
+                thumbSrc={
+                  entry?.thumb ? rewriteRelayUrl(entry.thumb) : undefined
+                }
+              />
+            }
           />
         </span>
       );
@@ -1511,26 +1520,7 @@ function createMarkdownComponents(
     ol: ({ children }) => (
       <ol className={cn("list-decimal", listClassName)}>{children}</ol>
     ),
-    p: ({ children }) => {
-      // Detect media-only paragraphs (images + <br> from remarkBreaks).
-      // Multi-image: render as a compact, count-aware mosaic. Two images split
-      // a row, three form a hero-and-stack triptych, and larger odd counts let
-      // the final image span both columns.
-      // Single media: render as a plain <div> to avoid invalid <p><div> nesting
-      // (the img component returns block-level wrappers for lightbox/video).
-      const childArray = React.Children.toArray(children);
-      const { imageChildren } = classifyChildren(childArray);
-
-      if (isImageOnlyParagraph(childArray)) {
-        return <ImageMosaic>{imageChildren}</ImageMosaic>;
-      }
-
-      if (hasBlockMedia(childArray)) {
-        return <div>{children}</div>;
-      }
-
-      return <p>{children}</p>;
-    },
+    p: MarkdownMediaParagraph,
     pre: ({ children }) => {
       if (!interactive) return <span>{children}</span>;
       let language = "";
@@ -1697,7 +1687,7 @@ function createMarkdownComponents(
  * four instances ever exist. Module-stable maps mean cached markdown element
  * trees (see ./markdown/nodeCache.ts) never embed per-mount closures.
  */
-const MARKDOWN_COMPONENT_SCHEMA_VERSION = "5";
+const MARKDOWN_COMPONENT_SCHEMA_VERSION = "6";
 const markdownComponentsByVariant = new Map<string, MarkdownComponentSet>();
 
 type MarkdownComponentSet = { components: Components; variant: string };

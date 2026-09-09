@@ -124,7 +124,7 @@ export type BlockChartNode = {
   value_key: string;
 };
 
-export type BlockMediaKind = "image" | "video" | "file";
+export type BlockMediaKind = "image" | "video" | "audio" | "file";
 
 export type BlockMediaNode = {
   type: "media";
@@ -153,6 +153,11 @@ export type BlockMediaItem = {
   kind?: BlockMediaKind;
   mime?: string;
   filename?: string;
+  poster?: string;
+  width?: number;
+  height?: number;
+  size?: number;
+  durationSeconds?: number;
   expectedSha256?: string;
   actualSha256?: string;
 };

@@ -202,7 +202,12 @@ try {
           migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
         }))
         .catch(() => ({ status: "The renderer was unavailable" }))
-    : { status: "No app window was available" };
+    : {
+        status:
+          phase === "legacy-persistence"
+            ? "Electron has not launched; legacy WebKit persistence failed"
+            : "No app window was available",
+      };
   console.error(
     "Migration fixture startup state:",
     JSON.stringify({ phase, ...state }),

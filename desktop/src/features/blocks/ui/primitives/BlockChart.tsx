@@ -184,7 +184,7 @@ export function BlockChart({
   return (
     <figure
       className={cn(
-        "min-w-0 rounded-xl border border-border/60 bg-muted/10 p-3",
+        "min-w-0 rounded-xl border border-border bg-card p-3 text-card-foreground",
         className,
       )}
       data-block-primitive="chart"
@@ -214,6 +214,23 @@ export function BlockChart({
           No chart data available.
         </p>
       )}
+      {values.length > 0 ? (
+        <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs">
+          {values.slice(0, 8).map((datum) => (
+            <div className="min-w-0" key={`${datum.label}:${datum.value}`}>
+              <dt
+                className="max-w-40 truncate text-muted-foreground"
+                title={datum.label}
+              >
+                {datum.label}
+              </dt>
+              <dd className="mt-0.5 font-medium tabular-nums text-foreground">
+                {new Intl.NumberFormat().format(datum.value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
       <details className="mt-2 rounded-lg border border-border/50 bg-background/50 px-3 py-2">
         <summary className="cursor-pointer text-xs font-medium text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring">
           View chart data

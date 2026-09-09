@@ -66,6 +66,12 @@ async function openThread(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
+  // Leave the sidebar before adding unread activity: its hover preview can
+  // otherwise cover the welcome thread summary on this viewport.
+  await page.mouse.move(700, 24);
+  await expect(
+    page.getByTestId("channel-activity-popover-general"),
+  ).toHaveCount(0);
   await waitForMockLiveSubscription(page, "general");
 
   // Seed a reply so a thread summary row appears, then open it.

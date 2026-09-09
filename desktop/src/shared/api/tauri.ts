@@ -30,7 +30,6 @@ import type {
   ThreadCursor,
   ThreadRepliesResponse,
   CreateManagedAgentInput,
-  AgentModelsResponse,
   UpdateManagedAgentInput,
   AcpRuntimeCatalogEntry,
   CommandAvailability,
@@ -880,9 +879,7 @@ export async function discoverManagedAgentPrereqs(input: {
 
 // ── Model discovery ───────────────────────────────────────────────────────────
 
-export async function getAgentModels(pubkey: string) {
-  return invokeTauri<AgentModelsResponse>("get_agent_models", { pubkey });
-}
+export { getAgentModels } from "./getAgentModels";
 
 export async function getAgentConfigSurface(
   pubkey: string,

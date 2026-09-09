@@ -7,14 +7,6 @@ import { Progress } from "@/shared/ui/progress";
 import { resolveStatus } from "./resolvers";
 import type { BlockStatusNode, BlockTone } from "./types";
 
-const BADGE_VARIANT = {
-  neutral: "outline",
-  info: "info",
-  success: "success",
-  warning: "warning",
-  error: "destructive",
-} as const;
-
 function StatusIcon({ tone }: { tone: BlockTone }) {
   const Icon =
     tone === "success"
@@ -75,7 +67,16 @@ export function BlockStatus({
           <StatusIcon tone={status.tone} />
           <span className="truncate">{status.label}</span>
         </div>
-        <Badge variant={BADGE_VARIANT[status.tone]}>{status.state}</Badge>
+        <Badge
+          variant={status.tone === "error" ? "destructive" : "outline"}
+          className={
+            status.tone === "info" || status.tone === "success"
+              ? "border-primary/20 bg-primary/10 text-primary"
+              : undefined
+          }
+        >
+          {status.state}
+        </Badge>
       </div>
       {status.progress !== undefined ? (
         <Progress

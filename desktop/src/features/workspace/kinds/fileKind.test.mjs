@@ -147,3 +147,65 @@ test("FileBody retries a failed file load", async () => {
   );
   assert.equal(attempts, 2);
 });
+
+test("FileBody previews a chosen CSV outside message roots using the original workspace read", async (t) => {
+  const calls = [];
+  setNativeBridge(
+    createMockNativeBridge((command, args) => {
+      calls.push({ command, args });
+      assert.equal(command, "read_workspace_file");
+      return {
+        bytes_base64: globalThis.btoa("Account,Amount\nChosen account,01"),
+        is_text: true,
+        mime: "text/csv",
+        name: "chosen.csv",
+        path: "/Users/owner/Downloads/chosen.csv",
+        size: 31,
+      };
+    }),
+  );
+  const { parseCsvPreview } = await import(
+    "@/shared/ui/file-preview/csvPreview"
+  );
+  const previousWorker = globalThis.Worker;
+  globalThis.Worker = class {
+    postMessage({ bytes }) {
+      queueMicrotask(() =>
+        this.onmessage({
+          data: { workbook: parseCsvPreview(new TextDecoder().decode(bytes)) },
+        }),
+      );
+    }
+    terminate() {}
+  };
+  t.after(() => {
+    if (previousWorker === undefined) delete globalThis.Worker;
+    else globalThis.Worker = previousWorker;
+  });
+  const { createElement } = await import("react");
+  const { render, screen } = await import("@testing-library/react");
+  const { FileBody } = await import("./fileKind.tsx");
+  render(
+    createElement(FileBody, {
+      channelId: "channel-1",
+      tab: {
+        createdBy: "local",
+        id: "file-chosen",
+        kind: "file",
+        payload: { path: "/Users/owner/Downloads/chosen.csv" },
+        title: "chosen.csv",
+      },
+    }),
+  );
+  assert.equal(
+    (await screen.findByRole("cell", { name: "Chosen account" })).textContent,
+    "Chosen account",
+  );
+  assert.equal(screen.getByRole("cell", { name: "01" }).textContent, "01");
+  assert.deepEqual(calls, [
+    {
+      command: "read_workspace_file",
+      args: { path: "/Users/owner/Downloads/chosen.csv" },
+    },
+  ]);
+});

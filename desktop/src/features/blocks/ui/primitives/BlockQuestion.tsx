@@ -137,7 +137,7 @@ export function BlockQuestion({
       disabled={disabled}
     >
       <legend className="text-sm font-medium text-foreground">{prompt}</legend>
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 @sm:grid-cols-2">
         {options.map((option) => {
           const active = selected.has(option.id);
           return (

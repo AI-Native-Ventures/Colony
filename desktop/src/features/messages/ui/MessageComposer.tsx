@@ -52,13 +52,15 @@ import {
 import { ComposerDockToolbar } from "./ComposerDockToolbar";
 import { ComposerUploadProgressPill } from "./ComposerUploadProgressPill";
 import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
+import { ReplyModelControls } from "@/features/agents/ui/ReplyModelControls";
+import { useReplyModelSelection } from "@/features/agents/ui/useReplyModelSelection";
 import { useMentionSendFlow } from "./useMentionSendFlow";
 import { usePersistentAgentMentionHydration } from "./usePersistentAgentMentionHydration";
 import { useComposerContentState } from "./useComposerContentState";
 import { useDraftPersistLifecycle } from "./useDraftPersistSnapshot";
 import { submitMessageEdit } from "./submitMessageEdit";
 import { useComposerLinkPreviews } from "./useComposerLinkPreviews";
-import { scheduleSettleGatedAutoSubmit } from "./messageComposerAutoSubmit";
+import { useComposerAutoSubmit } from "./useComposerAutoSubmit";
 import type { MessageComposerProps } from "./MessageComposer.types";
 function MessageComposerImpl({
   audienceContext = null,
@@ -141,6 +143,14 @@ function MessageComposerImpl({
   } | null>(null);
   const mentions = useMentions(channelId, undefined, profiles, {
     channelType,
+  });
+  const replyModel = useReplyModelSelection({
+    scope: `${ownerPubkey}:${effectiveDraftKey ?? ""}:${audienceThreadRootId ?? ""}`,
+    enabled: editTarget == null,
+    recipientPubkeys: [
+      ...mentions.extractMentionPubkeys(previewContent),
+      ...(channelType === "dm" ? mentions.memberPubkeys : []),
+    ],
   });
   const channelLinks = useChannelLinks();
   const customEmoji = useCustomEmoji();
@@ -337,6 +347,7 @@ function MessageComposerImpl({
         : undefined,
     resolvePostSendContent: persistentMentionHydration.resolvePostSendContent,
     threadRootId: audienceThreadRootId ?? typingRootEventId,
+    ...replyModel.sendCallbacks,
   });
   React.useEffect(() => {
     onDeferredEditPendingChange?.(isDeferredEditPending);
@@ -583,6 +594,8 @@ function MessageComposerImpl({
     ) {
       return;
     }
+    const replyModelTag = replyModel.capture();
+    if (replyModelTag === null) return;
     isSubmitLockedRef.current = true;
     onPreparingMentionSendChange?.(true);
     persistentMentionHydration.beginSubmit();
@@ -593,6 +606,7 @@ function MessageComposerImpl({
         pendingImeta: currentPendingImeta,
         queuedAttachments: currentQueuedAttachments,
         linkPreviewTags: getReadyLinkPreviewTags(),
+        replyModelTag,
         sentDraftKey: resolveSentDraftKey(
           effectiveDraftKeyRef.current,
           drafts.loadDraft,
@@ -615,6 +629,7 @@ function MessageComposerImpl({
     drafts.loadDraft,
     emojiAutocomplete.clearEmojis,
     getReadyLinkPreviewTags,
+    replyModel.capture,
     hasPendingLinkPreviewSnapshotsRef,
     media.clearQueuedAttachments,
     media.pendingImetaRef,
@@ -642,36 +657,13 @@ function MessageComposerImpl({
     mentions.restoreDraftMentionRefs,
   ]);
   submitMessageRef.current = submitMessage;
-  // ── Auto-submit on draft send ────────────────────────────────────────────
-  // When `autoSubmitDraftKey` is set (the user clicked "Send message" in the
-  // Drafts panel and confirmed), fire `submitMessage` once after mount so the
-  // draft is sent through the real send path (mention resolution, media, etc.).
-  //
-  // Guard: only fire when the effective draft key matches the trigger so a
-  // stale URL param on a different channel never fires a spurious send.
-  //
-  // Fires at most once per mount (empty dep array after the key check) — the
-  // `onAutoSubmitComplete` callback clears the trigger before `submitMessage`
-  // runs, preventing re-fire on re-render or back-navigation.
-  const onAutoSubmitCompleteRef = React.useRef(onAutoSubmitComplete);
-  onAutoSubmitCompleteRef.current = onAutoSubmitComplete;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally fires once on mount only
-  React.useEffect(() => {
-    if (
-      autoSubmitDraftKey === null ||
-      autoSubmitDraftKey !== effectiveDraftKey
-    ) {
-      return;
-    }
-    // Clear the trigger BEFORE firing so any navigation from the send cannot
-    // loop back with the param still present.
-    onAutoSubmitCompleteRef.current?.();
-    return scheduleSettleGatedAutoSubmit({
-      isPending: () => hasPendingLinkPreviewSnapshotsRef.current,
-      submit: () => submitMessageRef.current(),
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount-only
+  useComposerAutoSubmit(
+    autoSubmitDraftKey,
+    effectiveDraftKey,
+    onAutoSubmitComplete,
+    hasPendingLinkPreviewSnapshotsRef,
+    submitMessageRef,
+  );
   const handleSubmit = React.useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -987,7 +979,15 @@ function MessageComposerImpl({
               layoutMode={layoutMode}
               composerDisabled={composerDisabled}
               editor={richText.editor}
-              extraActions={toolbarExtraActions}
+              extraActions={
+                <>
+                  <ReplyModelControls
+                    control={replyModel}
+                    disabled={composerDisabled || isSending}
+                  />
+                  {toolbarExtraActions}
+                </>
+              }
               formattingDisabled={composerDisabled}
               isEmojiPickerOpen={isEmojiPickerOpen}
               isFormattingOpen={isFormattingOpen}

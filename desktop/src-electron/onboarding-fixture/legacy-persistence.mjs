@@ -9,7 +9,7 @@ const ordered = (entries) =>
 export async function persistLegacyFixture({
   writer,
   read,
-  settle = () => setTimeout(1000),
+  settle = () => setTimeout(2_000),
 }) {
   let source;
   try {
@@ -18,8 +18,11 @@ export async function persistLegacyFixture({
       source.length > 0,
       "Legacy fixture must seed nonempty source data",
     );
-    // Fixture preparation only: let WebKit's asynchronous writes settle without
-    // opening competing storage processes. This wait is not persistence proof.
+    // WebKit batches SQLite writes. Keep the live writer alone through the
+    // commit delay, then close it normally before opening any independent reader.
+    // This fixture preparation wait is not persistence proof; the one post-exit
+    // read below must still contain the exact source data.
+    // https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/storage/SQLiteStorageArea.cpp
     await settle();
   } finally {
     await writer.close();

@@ -508,6 +508,7 @@ export function useSendMessageMutation(
         referenceTags,
         linkPreviewTags,
         workTags,
+        replyModelTags,
       } = splitOutgoingTags(mediaTags);
       const recipientPubkeys = messageMentionPubkeys(
         effectiveChannel,
@@ -537,7 +538,8 @@ export function useSendMessageMutation(
         emojiTags.length > 0 ||
         referenceTags.length > 0 ||
         linkPreviewTags.length > 0 ||
-        workTags.length > 0
+        workTags.length > 0 ||
+        replyModelTags.length > 0
       ) {
         const cachedMessages =
           queryClient.getQueryData<RelayEvent[]>(
@@ -554,6 +556,7 @@ export function useSendMessageMutation(
           blockReferenceTags: referenceTags,
           linkPreviewTags,
           workTags,
+          replyModelTags,
           sentFromThreadTag,
         });
 
@@ -595,6 +598,7 @@ export function useSendMessageMutation(
             ...referenceTags,
             ...linkPreviewTags,
             ...workTags,
+            ...replyModelTags,
             ...(sentFromThreadTag ? [sentFromThreadTag] : []),
           ],
           content: content.trim(),

@@ -1,3 +1,4 @@
+import { ReplyModelRequestLabel } from "@/features/agents/ui/ReplyModelRequestLabel";
 import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 
@@ -634,6 +635,7 @@ export const MessageRow = React.memo(
     const messageBodyNode = (
       <>
         <SentFromThreadLine channelId={channelId} tags={message.tags} />
+        <ReplyModelRequestLabel tags={message.tags} />
         {renderBody()}
         {continuationMetadataNode}
         <MessageReactions

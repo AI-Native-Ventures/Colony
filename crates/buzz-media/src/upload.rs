@@ -261,7 +261,10 @@ pub async fn process_file_upload(
         },
         |bytes, cfg| validate_file_content(bytes, cfg),
         |input| async move {
-            // Minimal sidecar — no thumbnail/dim/blurhash/duration for generic files.
+            // Canonical audio duration is derived from validated PCM, never tags.
+            let audio_duration = buzz_core::media_audio::validate_canonical_wav(&input.body)
+                .ok()
+                .map(|audio| audio.duration_secs);
             let meta = BlobMeta {
                 dim: String::new(),
                 blurhash: String::new(),
@@ -270,7 +273,7 @@ pub async fn process_file_upload(
                 ext: input.ext,
                 mime_type: input.mime,
                 uploaded_at: input.uploaded_at,
-                duration_secs: None,
+                duration_secs: audio_duration,
             };
             Ok(meta)
         },

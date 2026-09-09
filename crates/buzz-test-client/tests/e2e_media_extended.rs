@@ -406,21 +406,62 @@ async fn test_auth_server_tag_correct() {
 
 #[tokio::test]
 #[ignore]
-async fn test_upload_svg_accepted_as_text_xml() {
-    // SVG with XML declaration is detected by `infer` as text/xml (not image/svg+xml),
-    // which is not in the blocked list, so it routes through the generic file path.
+async fn test_upload_svg_declarative_roundtrip_is_inert_and_exact() {
     let client = http_client();
     let keys = Keys::generate();
-    let svg = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
-    let resp = upload(&client, &keys, svg).await;
-    let status = resp.status().as_u16();
-    assert_eq!(
-        status, 200,
-        "SVG (undetected) should succeed via file path, got {status}"
-    );
-    let desc: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(desc["type"].as_str().unwrap(), "text/xml");
-    println!("✅ SVG (XML declaration) → 200 as text/xml");
+    let svg = include_bytes!("../../../desktop/public/rich-previews/launch-01.svg");
+    let response = upload(&client, &keys, svg).await;
+    assert_eq!(response.status(), 200, "declarative SVG should upload");
+    let descriptor: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(descriptor["type"], "image/svg+xml");
+    let url = descriptor["url"].as_str().unwrap();
+    assert!(url.ends_with(".svg"));
+    let sha256 = descriptor["sha256"].as_str().unwrap();
+    assert_eq!(sha256, hex::encode(Sha256::digest(svg)));
+    for range in [None, Some("bytes=0-31")] {
+        let mut request = client.get(url).header(
+            "Authorization",
+            blossom_auth_header(&sign_blossom_get_auth(&keys, sha256)),
+        );
+        if let Some(range) = range {
+            request = request.header("Range", range);
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            if range.is_some() { 206 } else { 200 }
+        );
+        assert_eq!(response.headers()["content-type"], "image/svg+xml");
+        assert_eq!(response.headers()["content-disposition"], "attachment");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(
+            response.headers()["content-security-policy"],
+            "default-src 'none'"
+        );
+        let expected = if range.is_some() {
+            &svg[..32]
+        } else {
+            &svg[..]
+        };
+        assert_eq!(response.bytes().await.unwrap().as_ref(), expected);
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_upload_active_svg_is_rejected_with_or_without_xml_declaration() {
+    let client = http_client();
+    let keys = Keys::generate();
+    for prefix in ["", "<?xml version=\"1.0\"?>"] {
+        for body in [
+            "<script>alert(1)</script>",
+            "<foreignObject/>",
+            "<image href='https://external.example/a.png'/>",
+        ] {
+            let svg = format!("{prefix}<svg xmlns=\"http://www.w3.org/2000/svg\">{body}</svg>");
+            assert_eq!(upload(&client, &keys, svg.as_bytes()).await.status(), 415);
+        }
+    }
 }
 
 #[tokio::test]
