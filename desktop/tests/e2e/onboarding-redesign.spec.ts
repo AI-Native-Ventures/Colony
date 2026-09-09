@@ -7,6 +7,7 @@ import {
   continueFounderBusiness,
 } from "../helpers/onboarding";
 import { waitForAnimations } from "../helpers/animations";
+import { MOCK_SUBSCRIPTION_SCAN } from "../../src/testing/e2eBridgeSubscriptions";
 
 async function expectOpaqueFounderSurface(
   page: Page,
@@ -105,7 +106,7 @@ test("power offers all three choices and saves the selected defaults", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await reachPower(page);
+  await reachPower(page, { subscriptionScan: MOCK_SUBSCRIPTION_SCAN });
   const power = page.getByTestId("onboarding-power");
   await expect(
     power.getByRole("button", { name: /^Colony Credits/ }),
@@ -117,8 +118,13 @@ test("power offers all three choices and saves the selected defaults", async ({
 
   await power.getByRole("button", { name: /^Subscriptions/ }).click();
   await expect(
-    power.getByRole("button", { name: /Claude Code/ }),
+    power.getByRole("button", { name: "Claude Max 20x", exact: true }),
   ).toBeVisible();
+  await expect(power).toContainText("Choose a detected connection.");
+  await expect(power).toContainText("65% left");
+  await expect(power).not.toContainText(
+    "Subscription detection could not finish",
+  );
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-power-subscriptions-1440.png",
@@ -160,6 +166,66 @@ test("power offers all three choices and saves the selected defaults", async ({
   await expect(page.getByTestId("sidebar-profile-name")).toHaveText(
     "Horizon Owner",
   );
+});
+
+test("subscription scan retry recovers detection but an unsupported Electron runtime stays blocked", async ({
+  page,
+}) => {
+  const launchError =
+    "Claude Code cannot run isolated teammates in this Electron beta. Choose Colony Agent.";
+  await reachPower(page, {
+    subscriptionScanSequence: [
+      { error: "Synthetic subscription scan failed" },
+      MOCK_SUBSCRIPTION_SCAN,
+    ],
+    acpRuntimesCatalog: [
+      {
+        id: "claude",
+        label: "Claude Code",
+        avatar_url: "",
+        availability: "available",
+        local_launch_error: launchError,
+        command: null,
+        binary_path: null,
+        default_args: [],
+        mcp_command: null,
+        install_hint: "Synthetic installed runtime",
+        install_instructions_url: "https://example.test/install",
+        can_auto_install: false,
+        requires_external_cli: true,
+        underlying_cli_path: "/synthetic/claude",
+        node_required: false,
+        auth_status: { status: "logged_in" },
+        source: "builtin",
+      },
+    ],
+  });
+  const power = page.getByTestId("onboarding-power");
+  await power.getByRole("button", { name: /^Subscriptions/ }).click();
+  await expect(power).toContainText("Subscription detection could not finish");
+  await power.getByRole("button", { name: "Claude Code", exact: true }).click();
+  await expect(power.getByRole("alert")).toContainText(launchError);
+  const complete = power.getByRole("button", { name: "Open my Colony" });
+  await expect(complete).toBeDisabled();
+
+  await power.getByRole("button", { name: "Check again", exact: true }).click();
+  await expect(power).toContainText("Choose a detected connection.");
+  await expect(power).not.toContainText(
+    "Subscription detection could not finish",
+  );
+  await expect(
+    power.getByRole("button", { name: "Claude Max 20x", exact: true }),
+  ).toBeVisible();
+  await expect(power).toContainText("65% left");
+  await expect(power.getByRole("alert")).toContainText(launchError);
+  await expect(complete).toBeDisabled();
+  expect(
+    await page.evaluate(() =>
+      window.__BUZZ_E2E_COMMANDS__?.filter(
+        (command) => command === "set_global_agent_config",
+      ),
+    ),
+  ).toEqual([]);
 });
 
 test("an existing Credits model survives opening the power step and going back", async ({

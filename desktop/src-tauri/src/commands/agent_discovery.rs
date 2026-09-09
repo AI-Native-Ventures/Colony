@@ -102,9 +102,6 @@ pub async fn save_custom_harness(
     use tauri::Manager;
 
     // ── Phase 1: full validation before touching the filesystem ─────────────
-    // validate_harness_definition_pub now covers: id format, non-empty command/label,
-    // env key well-formedness + reserved-key check + NUL/size limits, and
-    // install_instructions_url scheme.
     custom_harnesses::validate_harness_definition_pub(&definition)?;
     custom_harnesses::check_id_collision(&definition.id)?;
 

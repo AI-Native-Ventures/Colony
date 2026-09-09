@@ -3,6 +3,11 @@ import { mockWindows } from "@tauri-apps/api/mocks";
 import { decode, npubEncode, nsecEncode } from "nostr-tools/nip19";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
+import type { SubscriptionScan } from "@/shared/api/tauriSubscriptions";
+import {
+  createMockSubscriptionScanner,
+  type MockSubscriptionScanResult,
+} from "./e2eBridgeSubscriptions";
 import {
   mergeMockCustomHarnesses,
   handleSaveCustomHarness,
@@ -331,6 +336,10 @@ type E2eConfig = {
       normalized_host?: string;
     };
     colonyCreateError?: string;
+    /** Native subscription metadata, distinct from runtime launch support. */
+    subscriptionScan?: SubscriptionScan;
+    /** Success/error responses per scan; the last response repeats on retry. */
+    subscriptionScanSequence?: MockSubscriptionScanResult[];
     acpRuntimesCatalog?: RawAcpRuntimeCatalogEntry[];
     /** Catalog returned after a successful mocked install. */
     acpRuntimesCatalogAfterInstall?: RawAcpRuntimeCatalogEntry[];
@@ -12246,6 +12255,7 @@ export function maybeInstallE2eTauriMocks() {
       sourceUrl: null;
     };
   }> = [];
+  const scanSubscriptions = createMockSubscriptionScanner(config.mock);
   const handleMockCommand = async (
     command: string,
     payload: unknown,
@@ -13681,6 +13691,8 @@ export function maybeInstallE2eTauriMocks() {
         return activeConfig?.mock?.relayRequiresMembership ?? false;
       case "discover_acp_providers":
         return handleDiscoverAcpRuntimes(activeConfig);
+      case "scan_agent_subscriptions":
+        return scanSubscriptions();
       case "save_custom_harness":
         return handleSaveCustomHarness(
           payload as Parameters<typeof handleSaveCustomHarness>[0],

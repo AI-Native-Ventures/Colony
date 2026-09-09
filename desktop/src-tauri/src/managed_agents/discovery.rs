@@ -19,16 +19,12 @@ mod nvm;
 mod presets;
 mod runtime_metadata;
 
-// Re-exported so every existing path to these keeps working: `runtime.rs`
-// reaches `find_nvm_default_bin` through `managed_agents`, and the tests reach
-// all three through `discovery`.
 pub use nvm::find_nvm_default_bin;
 #[cfg(test)]
 pub(crate) use nvm::{is_safe_nvm_tag, parse_semver_tag};
 
 pub(crate) use runtime_metadata::KnownAcpRuntime;
 
-// Split out for the file-size ratchet; every existing path keeps working.
 #[cfg(test)]
 pub(crate) use codex_probe::codex_adapter_is_outdated;
 #[allow(unused_imports)]
