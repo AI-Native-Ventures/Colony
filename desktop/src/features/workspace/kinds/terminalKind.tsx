@@ -29,10 +29,16 @@ type TerminalInstance = import("@xterm/xterm").Terminal;
 const terminalMap = new Map<string, TerminalInstance>();
 
 function isE2eMode(): boolean {
-  return import.meta.env.MODE === "e2e";
+  return import.meta.env?.MODE === "e2e";
 }
 
-if (isE2eMode()) {
+let e2eTerminalTextHookInstalled = false;
+
+/** Installs the e2e-only terminal buffer reader, once, on first mount. */
+function installE2eTerminalTextHook(): void {
+  if (e2eTerminalTextHookInstalled) return;
+  if (!isE2eMode()) return;
+  e2eTerminalTextHookInstalled = true;
   (
     globalThis as { __BUZZ_E2E_TERMINAL_TEXT__?: (tabId?: string) => string }
   ).__BUZZ_E2E_TERMINAL_TEXT__ = (tabId?: string) => {
@@ -113,6 +119,9 @@ export function TerminalBody({
 }: TabBodyProps): React.JSX.Element {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const terminalRef = React.useRef<TerminalInstance | null>(null);
+  React.useEffect(() => {
+    installE2eTerminalTextHook();
+  }, []);
   const { activeCommunity } = useCommunities();
   const projects = useProjectsQuery();
   const session = React.useSyncExternalStore(
@@ -158,7 +167,8 @@ export function TerminalBody({
     let resizeObserver: ResizeObserver | null = null;
     let rootObserver: MutationObserver | null = null;
     let unsubscribeOutput: (() => void) | null = null;
-    let unsubscribeResults: (() => void) | null = null;
+    let unsubscribeResults: { dispose(): void } | null = null;
+    let onData: { dispose(): void } | null = null;
 
     let lastCols: number | null = null;
     let lastRows: number | null = null;
@@ -167,7 +177,8 @@ export function TerminalBody({
     const cleanup = () => {
       disposed = true;
       unsubscribeOutput?.();
-      unsubscribeResults?.();
+      unsubscribeResults?.dispose();
+      onData?.dispose();
       resizeObserver?.disconnect();
       rootObserver?.disconnect();
       terminal?.dispose();
@@ -240,7 +251,7 @@ export function TerminalBody({
       try {
         const webglAddon = new WebglAddon();
         terminal.loadAddon(webglAddon);
-        const _unsubscribeContextLoss = webglAddon.onContextLoss(() => {
+        webglAddon.onContextLoss(() => {
           webglAddon.dispose();
         });
       } catch {

@@ -510,10 +510,9 @@
     "registered": 371,
     "defined": 371,
     "by_reach": {
-      "frontend": 359,
+      "frontend": 360,
       "NO CALLER FOUND": 9,
-      "frontend-plugin-prefixed": 2,
-      "rust-internal": 1
+      "frontend-plugin-prefixed": 2
     },
     "no_caller": [
       "download_voice_models",
@@ -4253,9 +4252,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:162",
-        "src/features/workspace/lib/terminalSessions.ts:300",
-        "src/features/workspace/lib/terminalSessions.ts:320"
+        "src/features/workspace/lib/rustTerminalBackend.ts:53"
       ]
     },
     "workspace_terminal_close_all": {
@@ -4264,7 +4261,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:341"
+        "src/features/workspace/lib/rustTerminalBackend.ts:56"
       ]
     },
     "workspace_terminal_resize": {
@@ -4273,17 +4270,17 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:283"
+        "src/features/workspace/lib/rustTerminalBackend.ts:41"
       ]
     },
     "workspace_terminal_resolve_cwd": {
       "defining_file": "src-tauri/src/commands/terminal.rs",
       "module": "terminal",
       "registered_in": "src-tauri/src/lib.rs",
-      "reached_by": "rust-internal",
+      "reached_by": "frontend",
       "example_sites": [
-        "src-tauri/src/commands/terminal.rs:202",
-        "src-tauri/src/commands/terminal.rs:227"
+        "src/features/workspace/lib/electronTerminalBackend.ts:4",
+        "src/features/workspace/lib/electronTerminalBackend.ts:29"
       ]
     },
     "workspace_terminal_start": {
@@ -4292,7 +4289,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:213"
+        "src/features/workspace/lib/electronTerminalBackend.ts:5",
+        "src/features/workspace/lib/rustTerminalBackend.ts:29"
       ]
     },
     "workspace_terminal_write": {
@@ -4301,7 +4299,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:261"
+        "src/features/workspace/lib/rustTerminalBackend.ts:32"
       ]
     },
     "workspace_web_back": {
