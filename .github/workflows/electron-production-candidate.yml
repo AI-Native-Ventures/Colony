@@ -52,6 +52,7 @@ jobs:
           jq -e '.channel == "candidate" and .signing == "ad-hoc; not notarized" and .onboardingFixture == false' "$MANIFEST"
           export COLONY_SMOKE_APP="$(jq -r .app "$MANIFEST")"
           export COLONY_SMOKE_EXECUTABLE=buzz-desktop
+          export COLONY_SMOKE_PROOF_DIR="$RUNNER_TEMP/colony-candidate-proof"
           node desktop/src-electron/smoke.mjs
           node desktop/src-electron/signup-smoke.mjs
           COLONY_ISOLATION_AGENT="$COLONY_SMOKE_APP/Contents/Resources/native/buzz-agent" \
@@ -60,6 +61,14 @@ jobs:
           cargo test --release --manifest-path desktop/src-tauri/Cargo.toml \
             --features electron-stable --lib managed_agents::isolation -- \
             --include-ignored --skip isolated_http_client_verifies_public_tls_through_gateway
+      - name: Preserve bounded startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: colony-electron-candidate-startup-proof
+          path: ${{ runner.temp }}/colony-candidate-proof
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Preserve private candidate proof
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

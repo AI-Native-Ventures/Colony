@@ -1,6 +1,7 @@
 // Hosted macOS proof only: nonempty incognito WebKit -> native -> Chromium.
 // Requires the separately compiled onboarding fixture; never a production override.
 import { _electron as electron } from "@playwright/test";
+import { createFixtureCertificates } from "./onboarding-fixture/certificates.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -31,6 +32,17 @@ const data = await realpath(
 );
 const namespace = `xyz.block.buzz.app.dev-electron.${createHash("sha256").update(data).digest("hex").slice(0, 16)}`;
 const exec = promisify(execFile);
+// The fixture binary requires its process-private transport even when this
+// proof only reads storage. Keep every allowed host on an unused loopback port;
+// no real DNS, certificate trust or account service is used.
+const fixtureHosts = ["alpha.example.invalid", "bravo.example.invalid"];
+const certificates = await createFixtureCertificates(data, fixtureHosts);
+const transport = JSON.stringify({
+  version: 1,
+  ca_der_base64: certificates.caDerBase64,
+  routes: fixtureHosts.map((host) => ({ host, address: "127.0.0.1:1" })),
+});
+certificates.key.fill(0);
 let app;
 const launch = () =>
   electron.launch({
@@ -44,10 +56,11 @@ const launch = () =>
       ...process.env,
       COLONY_ELECTRON_USER_DATA: data,
       COLONY_MIGRATION_PROOF: "1",
+      BUZZ_ONBOARDING_FIXTURE_TRANSPORT: transport,
       BUZZ_PRIVATE_KEY: `${"0".repeat(63)}1`,
       BUZZ_SHARE_IDENTITY: "0",
-      BUZZ_RELAY_URL: "ws://127.0.0.1:1",
-      BUZZ_RELAY_HTTP: "http://127.0.0.1:1",
+      BUZZ_RELAY_URL: "wss://alpha.example.invalid",
+      BUZZ_RELAY_HTTP: "https://alpha.example.invalid",
     },
     timeout: 30_000,
   });
