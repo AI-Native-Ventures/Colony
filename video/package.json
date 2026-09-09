@@ -8,11 +8,11 @@
     "check": "biome check src && tsc --noEmit"
   },
   "dependencies": {
-    "@remotion/cli": "4.0.523",
-    "@remotion/zod-types": "4.0.523",
+    "@remotion/cli": "4.0.522",
+    "@remotion/zod-types": "4.0.522",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "remotion": "4.0.523",
+    "remotion": "4.0.522",
     "zod": "4.5.4"
   },
   "devDependencies": {
