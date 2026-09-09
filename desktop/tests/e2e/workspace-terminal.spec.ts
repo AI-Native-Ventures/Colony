@@ -47,6 +47,19 @@ async function dispatchPrimaryShortcut(
  * straight into xterm, so the rendered rows are the only evidence.
  */
 async function terminalText(terminal: Locator): Promise<string> {
+  try {
+    const hookText = await terminal
+      .page()
+      .evaluate(
+        () =>
+          (
+            window as Window & { __BUZZ_E2E_TERMINAL_TEXT__?: () => string }
+          ).__BUZZ_E2E_TERMINAL_TEXT__?.() ?? "",
+      );
+    if (hookText) return hookText.replace(/\u00a0/g, " ");
+  } catch {
+    // Hook absent or throws; fall back to DOM rows.
+  }
   const text = await terminal.locator(".xterm-rows").innerText();
   return text.replace(/\u00a0/g, " ");
 }
