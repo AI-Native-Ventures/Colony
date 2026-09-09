@@ -500,6 +500,7 @@ pub async fn send_channel_message(
     client_tags: Option<Vec<Vec<String>>>,
     link_preview_tags: Option<Vec<Vec<String>>>,
     work_tags: Option<Vec<Vec<String>>>,
+    reply_model_tags: Option<Vec<Vec<String>>>,
     sent_from_thread_tag: Option<Vec<String>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
@@ -583,7 +584,22 @@ pub async fn send_channel_message(
         }
     };
 
-    let result = submit_event(builder, &state).await?;
+    let reply_model_tags = reply_model_tags.unwrap_or_default();
+    if reply_model_tags
+        .iter()
+        .any(|tag| tag.first().is_none_or(|v| v != "agent-reply"))
+    {
+        return Err("reply model tags must use agent-reply".into());
+    }
+    let mut validation_tags = reply_model_tags.clone();
+    validation_tags.extend(mentions.iter().map(|pk| vec!["p".to_string(), pk.clone()]));
+    buzz_core_pkg::agent_reply::parse_agent_reply_tags(kind_num, &validation_tags)?;
+    let extra_tags = reply_model_tags
+        .into_iter()
+        .map(nostr::Tag::parse)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let result = submit_event(builder.tags(extra_tags), &state).await?;
 
     let depth = match (&parent_event_id, &resolved_root) {
         (None, _) => 0,

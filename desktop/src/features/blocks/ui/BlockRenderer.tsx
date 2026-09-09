@@ -105,8 +105,8 @@ export function BlockRenderer({
       <div
         className={
           shellTier === "framed"
-            ? "my-1 max-w-[min(100%,32rem)] overflow-hidden rounded-lg border border-border/40 bg-background/40 p-3"
-            : "my-1 max-w-[min(100%,32rem)] min-w-0"
+            ? "@container my-2 w-full min-w-0"
+            : "@container my-1 w-full min-w-0"
         }
         data-block-handle={manifest.handle}
         data-block-trust={trust}

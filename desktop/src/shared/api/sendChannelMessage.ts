@@ -45,6 +45,8 @@ export type SendChannelMessageInput = {
    * imeta-only guard rejected them and failed the send outright.
    */
   workTags?: string[][];
+  /** One-message model request for a named existing teammate. */
+  replyModelTags?: string[][];
   sentFromThreadTag?: string[];
 };
 
@@ -61,6 +63,7 @@ export async function sendChannelMessage({
   clientTags,
   linkPreviewTags,
   workTags,
+  replyModelTags,
   sentFromThreadTag,
 }: SendChannelMessageInput): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
@@ -76,6 +79,7 @@ export async function sendChannelMessage({
       clientTags: clientTags ?? null,
       linkPreviewTags,
       workTags: workTags ?? null,
+      replyModelTags: replyModelTags ?? null,
       sentFromThreadTag: sentFromThreadTag ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
       kind: kind ?? null,

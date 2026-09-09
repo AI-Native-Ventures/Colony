@@ -7,6 +7,36 @@ const source = [
   ["buzz-active-community-id", "proof-alpha"],
 ];
 
+test("a delayed WebKit commit settles before writer exit and cannot meet an early observer", async () => {
+  let committed = false;
+  let closed = false;
+  let reads = 0;
+  const actual = await persistLegacyFixture({
+    writer: {
+      read: async () => source,
+      close: async () => {
+        assert.equal(committed, true, "writer must survive the delayed commit");
+        assert.equal(
+          reads,
+          0,
+          "no competing reader may observe uncommitted storage",
+        );
+        closed = true;
+      },
+    },
+    settle: async () => {
+      committed = true;
+    },
+    read: async () => {
+      reads += 1;
+      assert.equal(closed, true);
+      return committed ? source : [];
+    },
+  });
+  assert.deepEqual(actual, [...source].reverse());
+  assert.equal(reads, 1);
+});
+
 test("legacy writer settles alone and exits before exactly one independent read", async () => {
   const trace = [];
   let closed = false;

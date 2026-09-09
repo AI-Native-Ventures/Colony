@@ -3316,6 +3316,9 @@ async fn ingest_event_inner(
         ));
     }
 
+    buzz_core::agent_reply::parse_agent_reply(&event)
+        .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+
     let imeta_tags: Vec<Vec<String>> = event
         .tags
         .iter()

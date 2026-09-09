@@ -180,6 +180,19 @@ pub fn validate_file_content(
         });
     }
 
+    if buzz_core::media_audio::looks_like_wav(bytes) {
+        buzz_core::media_audio::validate_canonical_wav(bytes)
+            .map_err(|_| MediaError::MetadataForbidden)?;
+        return Ok(("audio/wav".to_string(), "wav".to_string()));
+    }
+
+    // SVG uses exact bytes only after the shared declarative validator succeeds.
+    if buzz_core::media_svg::is_svg_candidate(bytes) {
+        buzz_core::media_svg::validate_svg(bytes)
+            .map_err(|_| MediaError::DisallowedContentType("image/svg+xml".to_string()))?;
+        return Ok(("image/svg+xml".to_string(), "svg".to_string()));
+    }
+
     // ISO-BMFF permits arbitrary major brands, so `infer` cannot enumerate all
     // valid MP4 signatures. Never let an `ftyp` container fall through as an
     // opaque attachment merely because its brand is unfamiliar.
@@ -197,8 +210,8 @@ pub fn validate_file_content(
             let mime = kind.mime_type().to_string();
             // Recognized media must never fall through exact-byte attachment
             // storage. Images and video use their canonical media validators;
-            // audio is rejected until Buzz has an explicit sanitizer and
-            // location-metadata validator for its container.
+            // all other audio is rejected; only canonical WAV passed the
+            // shared metadata-free validator above.
             if mime.starts_with("image/")
                 || mime.starts_with("video/")
                 || mime.starts_with("audio/")
@@ -221,12 +234,12 @@ pub fn validate_file_content(
 /// Whether a stored blob should be served inline (rendered in the client) or as
 /// an attachment (forced download).
 ///
-/// Images and video are previewed inline by the renderer; everything else is a
-/// generic file card with a download action, so it serves as an attachment.
-/// PDF is intentionally *not* inline yet — inline PDF preview is a planned
-/// fast-follow; until the renderer handles it, force download like any other file.
+/// Raster images, video and canonical WAV can use inline disposition. SVG and
+/// documents retain attachment disposition even when trusted client viewers
+/// display them: opening the media URL must never create an active document.
 pub fn serve_inline(mime: &str) -> bool {
-    mime.starts_with("image/") || mime.starts_with("video/")
+    mime != "image/svg+xml" && (mime.starts_with("image/") || mime.starts_with("video/"))
+        || mime == "audio/wav"
 }
 
 /// Metadata extracted from a validated MP4 file.
@@ -951,10 +964,14 @@ pub fn mime_to_ext(mime: &str) -> &'static str {
 }
 
 #[cfg(test)]
+#[path = "media_audio_validation_tests.rs"]
+mod audio_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_config() -> MediaConfig {
+    pub(super) fn test_config() -> MediaConfig {
         MediaConfig {
             s3_endpoint: String::new(),
             s3_access_key: String::new(),
@@ -1605,13 +1622,20 @@ mod tests {
                 "{name} fixture detected as {}",
                 detected.mime_type()
             );
-            assert!(
-                matches!(
+            if name == &"wav" {
+                assert!(matches!(
                     validate_file_content(bytes, &config),
-                    Err(MediaError::DisallowedContentType(mime)) if mime.starts_with("audio/")
-                ),
-                "generic path accepted {name}"
-            );
+                    Err(MediaError::MetadataForbidden)
+                ));
+            } else {
+                assert!(
+                    matches!(
+                        validate_file_content(bytes, &config),
+                        Err(MediaError::DisallowedContentType(mime)) if mime.starts_with("audio/")
+                    ),
+                    "generic path accepted {name}"
+                );
+            }
         }
     }
 
@@ -2727,9 +2751,14 @@ mod tests {
         assert!(serve_inline("video/mp4"));
         // Generic files force download.
         assert!(!serve_inline("application/pdf"));
+        assert!(!serve_inline("image/svg+xml"));
         assert!(!serve_inline("application/zip"));
         assert!(!serve_inline("application/octet-stream"));
         assert!(!serve_inline("audio/mpeg"));
         assert!(!serve_inline("text/plain"));
     }
 }
+
+#[cfg(test)]
+#[path = "validation_svg_tests.rs"]
+mod svg_tests;

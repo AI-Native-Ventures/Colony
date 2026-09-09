@@ -1,7 +1,7 @@
 {
   "name": "buzz",
   "private": true,
-  "version": "0.16.9",
+  "version": "0.16.11",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -83,6 +83,7 @@
     "clsx": "^2.1.1",
     "embla-carousel-react": "^8.6.0",
     "emoji-mart": "^5.6.0",
+    "fflate": "0.8.2",
     "jdenticon": "^3.3.0",
     "lucide-react": "^1.0.0",
     "motion": "^12.38.0",
@@ -102,6 +103,7 @@
     "tiptap-markdown": "^0.9.0",
     "upng-js": "^2.1.0",
     "virtua": "0.49.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yaml": "^2.8.3",
     "zod": "^4.4.3"
   },

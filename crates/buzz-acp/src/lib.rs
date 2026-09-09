@@ -17,6 +17,7 @@ mod pool;
 mod pool_lifecycle;
 mod queue;
 mod relay;
+mod reply_model;
 mod setup_mode;
 mod subscription_bridge;
 mod subscription_provenance;
@@ -3264,7 +3265,14 @@ async fn tokio_main() -> Result<()> {
                             // Event is already queued. If mode requires it AND
                             // the channel has an in-flight task, fire cancel —
                             // OR take the non-cancelling (ACP steer) fork for Steer signals.
-                            if accepted && queue.is_channel_in_flight(buzz_event.channel_id) {
+                            if accepted && queue.is_channel_in_flight(buzz_event.channel_id)
+                                && !buzz_core::agent_reply::has_agent_reply(&event_for_steer)
+                                && !pool.task_map().values().any(|task| {
+                                    task.channel_id == Some(buzz_event.channel_id)
+                                        && task.recoverable_batch.as_ref().is_some_and(|batch| {
+                                            batch.events.iter().any(|entry| buzz_core::agent_reply::has_agent_reply(&entry.event))
+                                        })
+                                }) {
                                 // Author eligibility (owner ∪ allowlist ∪ siblings)
                                 // is already enforced by the inbound author gate
                                 // above, so the mid-turn signal fires for every
@@ -4203,6 +4211,14 @@ fn dispatch_pending(
 
         let recoverable_batch = match ctx.dedup_mode {
             DedupMode::Queue => Some(batch.clone()),
+            DedupMode::Drop
+                if batch
+                    .events
+                    .iter()
+                    .any(|entry| buzz_core::agent_reply::has_agent_reply(&entry.event)) =>
+            {
+                Some(batch.clone())
+            }
             DedupMode::Drop => None,
         };
 
@@ -5864,7 +5880,15 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     // so shutdown() runs on all paths (success, error, timeout).
     let protocol_result = tokio::time::timeout(models_timeout(), async {
         let init = client.initialize().await?;
-        let session = client.session_new_full(&cwd, vec![], None, None).await?;
+        let session = client
+            .session_new_with_meta(
+                &cwd,
+                vec![],
+                None,
+                None,
+                Some(serde_json::json!({ "colony": { "discoverModels": true } })),
+            )
+            .await?;
         Ok::<_, acp::AcpError>((init, session))
     })
     .await;

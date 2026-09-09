@@ -411,6 +411,21 @@ fn openai_efforts_for_model(model: &str) -> Option<&'static [ThinkingEffort]> {
     }
 }
 
+/// Reasoning values that this runtime can apply without a model-family fallback.
+/// Unknown families advertise no override; their configured default still works.
+pub fn supported_reasoning_efforts(provider: Provider, model: &str) -> &'static [ThinkingEffort] {
+    let model = strip_catalog_prefix(model);
+    match provider {
+        Provider::Anthropic | Provider::DatabricksV2
+            if is_manual_budget_model(model) || is_adaptive_thinking_model(model) =>
+        {
+            anthropic_efforts_for_model(model).0
+        }
+        Provider::Anthropic | Provider::OpenRouter => &[],
+        _ => openai_efforts_for_model(model).unwrap_or(&[]),
+    }
+}
+
 /// Returns the effort capability set for a given Anthropic model.
 ///
 /// This is the single production source of truth for Anthropic family routing.
@@ -778,6 +793,9 @@ pub enum OpenAiApi {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub provider: Provider,
+    /// An explicit ACP session selection must not use the gateway's model fallback chain.
+    /// Set on a per-prompt clone only; never configured from environment variables.
+    pub enforce_session_model: bool,
     pub system_prompt: String,
     pub max_rounds: u32,
     pub max_output_tokens: u32,
@@ -1014,6 +1032,7 @@ impl Config {
                 env("OPENROUTER_FALLBACK_MODELS").as_deref(),
             ),
             openrouter_deny_training: parse_env("OPENROUTER_DENY_TRAINING", 0u8)? != 0,
+            enforce_session_model: false,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -1059,6 +1078,7 @@ impl Config {
             prompt_caching: false,
             openrouter_fallback_models: Vec::new(),
             openrouter_deny_training: false,
+            enforce_session_model: false,
         }
     }
 

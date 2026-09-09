@@ -6,6 +6,10 @@ import { useWorkspaceAttachmentOpener } from "@/features/workspace/ui/WorkspaceL
 import { invokeTauri } from "@/shared/api/tauri";
 import { cn } from "@/shared/lib/cn";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
+import {
+  InlineFilePreview,
+  supportsInlineFilePreview,
+} from "@/shared/ui/file-preview/InlineFilePreview";
 
 /** Human-readable byte size: "820 B", "12.4 KB", "3.1 MB". */
 function formatFileSize(bytes: number): string {
@@ -42,7 +46,7 @@ const CARD_CLASS =
  * Surfaces with no channel workspace (project readmes, the agent screens) have
  * no opener, so there the whole card stays the download control it has been.
  */
-export function FileCard({
+function GenericFileCard({
   href,
   filename,
   mime,
@@ -132,4 +136,41 @@ export function FileCard({
       </button>
     </span>
   );
+}
+
+/** Read supported documents inline while preserving legacy unsupported-file actions. */
+export function FileCard(props: {
+  href: string;
+  filename: string;
+  mime: string;
+  size?: number;
+}) {
+  const openInWorkspace = useWorkspaceAttachmentOpener();
+  const frame = React.useRef<HTMLDivElement>(null);
+  useSmoothCorners(frame);
+  if (supportsInlineFilePreview(props.filename, props.mime)) {
+    return (
+      <div
+        ref={frame}
+        className="my-2 w-full rounded-2xl"
+        data-testid="file-card"
+      >
+        <InlineFilePreview
+          {...props}
+          className="my-0 rounded-2xl"
+          onOpenInWorkspace={
+            openInWorkspace
+              ? () =>
+                  openInWorkspace({
+                    url: props.href,
+                    filename: props.filename,
+                    mime: props.mime,
+                  })
+              : undefined
+          }
+        />
+      </div>
+    );
+  }
+  return <GenericFileCard {...props} />;
 }
