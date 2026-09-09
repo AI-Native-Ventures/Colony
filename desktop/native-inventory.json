@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 493,
-    "rust_lines": 182417,
-    "tauri_coupled": 195,
-    "portable": 298,
-    "portable_lines": 103382,
+    "rust_total": 500,
+    "rust_lines": 183905,
+    "tauri_coupled": 199,
+    "portable": 301,
+    "portable_lines": 103883,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -23,11 +23,15 @@
       "src-tauri/src/commands/agent_models.rs",
       "src-tauri/src/commands/agent_models_credits.rs",
       "src-tauri/src/commands/agent_proposals.rs",
+      "src-tauri/src/commands/agent_proposals/preparation.rs",
+      "src-tauri/src/commands/agent_proposals/preparation/leader.rs",
+      "src-tauri/src/commands/agent_proposals/preparation/publication.rs",
       "src-tauri/src/commands/agent_providers.rs",
       "src-tauri/src/commands/agent_settings.rs",
       "src-tauri/src/commands/agent_subscriptions.rs",
       "src-tauri/src/commands/agent_update_rollback.rs",
       "src-tauri/src/commands/agents.rs",
+      "src-tauri/src/commands/agents/create.rs",
       "src-tauri/src/commands/agents/provider_access.rs",
       "src-tauri/src/commands/agents_archive.rs",
       "src-tauri/src/commands/agents_assign.rs",
@@ -237,6 +241,9 @@
       "src-tauri/src/commands/agent_models_env.rs",
       "src-tauri/src/commands/agent_models_openrouter.rs",
       "src-tauri/src/commands/agent_models_tests.rs",
+      "src-tauri/src/commands/agent_proposals/preparation/membership.rs",
+      "src-tauri/src/commands/agent_proposals/preparation/publication_tests.rs",
+      "src-tauri/src/commands/agent_proposals/preparation/tests.rs",
       "src-tauri/src/commands/agent_proposals_tests.rs",
       "src-tauri/src/commands/agents_tests.rs",
       "src-tauri/src/commands/channels_tests.rs",
@@ -527,7 +534,7 @@
     ]
   },
   "params": {
-    "AppHandle": 393,
+    "AppHandle": 400,
     "State": 268,
     "Window": 7,
     "ipc::Request": 1,
@@ -535,7 +542,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 390,
+      "AppHandle": 397,
       "State": 268,
       "Window": 7,
       "ipc::Request": 1,
@@ -2463,7 +2470,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/onboarding/flow/completeFirstRunIo.ts:88",
+        "src/features/onboarding/flow/completeFirstRunIo.ts:90",
         "src/parity/session/script.ts:1416",
         "src/shared/api/tauriManagedAgentMessageMarkers.ts:9"
       ]
@@ -3775,7 +3782,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/companyProfileEdit.ts:30"
+        "src/shared/api/companyProfileEdit.ts:33"
       ]
     },
     "sign_event": {
