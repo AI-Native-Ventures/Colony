@@ -40,6 +40,7 @@ export function App() {
           </a>
           <nav aria-label="Main navigation">
             <a href="#how-it-works">How it works</a>
+            <a href="#inside-colony">See an example</a>
             <a href="#team">What they can do</a>
             <a className="nav-apply" href="#early-access">
               Apply for early access <span aria-hidden="true">↗</span>

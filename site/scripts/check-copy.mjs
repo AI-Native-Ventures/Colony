@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const siteRoot = path.resolve(path.dirname(__filename), "..");
 
 const banned = new Set([
   "agent", "agents", "relay", "nostr",
@@ -10,10 +14,12 @@ const banned = new Set([
   "open source", "teammate", "teammates",
   "scout", "horizon labs",
 ]);
+// Exception: "scout" allowed only in WorkspacePreview.tsx (first employee's real name, app illustration)
 
-const allowedOnlyInFAQ = new Set([
-  "channel", "channels", "thread", "threads", "credits",
-]);
+  const allowedOnlyInFAQ = new Set([
+    "channel", "channels", "thread", "threads", "credits",
+  ]);
+
 
 function findFiles(dir, ext) {
   const results = [];
@@ -53,8 +59,9 @@ function stripAndSearch(filePath, content) {
 
   const hits = [];
   const lines = text.split("\n");
-  const relativePath = path.relative(".", filePath);
+  const relativePath = path.relative(siteRoot, filePath);
   const isFAQ = relativePath === "src/sections/FAQ.tsx" || relativePath.endsWith("/FAQ.tsx");
+  const isWorkspacePreview = relativePath === "src/sections/WorkspacePreview.tsx" || relativePath.endsWith("/WorkspacePreview.tsx");
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -65,35 +72,37 @@ function stripAndSearch(filePath, content) {
     }
     // Check banned words (case-insensitive, whole word)
     for (const word of banned) {
-      // Skip multi-word phrases for regex word boundary approach; handle phrases separately
-      const phraseWords = word.split(" ");
-      if (phraseWords.length > 1) {
-        const regex = new RegExp(word.replace(/\s+/g, "\\s+"), "i");
-        if (regex.test(line)) {
+    // Skip multi-word phrases for regex word boundary approach; handle phrases separately
+    const phraseWords = word.split(" ");
+    if (phraseWords.length > 1) {
+      const regex = new RegExp(word.replace(/\s+/g, "\\s+"), "i");
+      if (regex.test(line)) {
+        hits.push({ path: relativePath, line: lineNum, word, text: line.trim() });
+      }
+    } else {
+      // Exception: "scout" allowed in WorkspacePreview.tsx (first employee's real name)
+      if (isWorkspacePreview && word.toLowerCase() === "scout") continue;
+      const regex = new RegExp("\\b" + word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i");
+      if (regex.test(line)) {
+        // If it's an allowed-only-in-FAQ word and we're not in FAQ, it's a hit
+        if (allowedOnlyInFAQ.has(word.toLowerCase()) && !isFAQ) {
           hits.push({ path: relativePath, line: lineNum, word, text: line.trim() });
-        }
-      } else {
-        const regex = new RegExp("\\b" + word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i");
-        if (regex.test(line)) {
-          // If it's an allowed-only-in-FAQ word and we're not in FAQ, it's a hit
-          if (allowedOnlyInFAQ.has(word.toLowerCase()) && !isFAQ) {
-            hits.push({ path: relativePath, line: lineNum, word, text: line.trim() });
-          } else if (!allowedOnlyInFAQ.has(word.toLowerCase())) {
-            hits.push({ path: relativePath, line: lineNum, word, text: line.trim() });
-          }
+        } else if (!allowedOnlyInFAQ.has(word.toLowerCase())) {
+          hits.push({ path: relativePath, line: lineNum, word, text: line.trim() });
         }
       }
     }
+  }
   }
   return hits;
 }
 
 let allHits = [];
-const indexPath = "index.html";
+const indexPath = path.join(siteRoot, "index.html");
 if (fs.existsSync(indexPath)) {
   allHits.push(...stripAndSearch(indexPath, fs.readFileSync(indexPath, "utf-8")));
 }
-const srcDir = "src";
+const srcDir = path.join(siteRoot, "src");
 const tsFiles = findFiles(srcDir, ".tsx").concat(findFiles(srcDir, ".ts"));
 for (const f of tsFiles) {
   if (f.endsWith("vite-env.d.ts")) continue;
