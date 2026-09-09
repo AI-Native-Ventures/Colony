@@ -16,8 +16,8 @@ and two release lines make "higher version" stop meaning "newer".
    (`v<v>`, `relay-v<v>`) with the release-tagger App. One merge can
    release several components.
 4. The tag push fires the publisher:
-   - `v<v>` runs `colony-desktop-release.yml`: builds the signed and
-     notarized Electron macOS app on GitHub-hosted `macos-15`, then publishes
+   - `v<v>` runs `colony-desktop-release.yml`: builds the stable Electron
+     macOS app on GitHub-hosted `macos-15`, then publishes
      `Colony_<v>_aarch64.dmg` plus the fixed-name `Colony_aarch64.dmg` to
      `AI-Native-Ventures/colony-releases`. The site's download button
      follows `/releases/latest`, so publishing is the whole deploy. The same
@@ -51,7 +51,17 @@ profiles stay private; they do not automatically copy identities or cookies
 into production. An explicit `COLONY_ELECTRON_USER_DATA` override also uses
 a private native namespace, including during packaged release QA.
 
-The production publisher requires these repository credentials:
+The current owner-approved Mac distribution is **ad-hoc signed, without Apple
+Developer signing or notarization**. `COLONY_MACOS_SIGNING: ad-hoc` is a reviewed
+workflow constant, and packaging requires explicit `--production --ad-hoc`.
+There is no automatic downgrade when credentials are missing. The stable
+identity, updater trust key, archive signing and isolation remain unchanged.
+Release notes describe the signing state; macOS may require the user to open
+the downloaded app once, then choose **System Settings → Privacy & Security →
+Open Anyway**. Never ask users to disable Gatekeeper globally.
+
+Developer ID distribution remains available by changing the reviewed workflow
+constant to `developer-id` and configuring these repository credentials:
 
 | GitHub configuration | Required value |
 | --- | --- |
@@ -63,12 +73,15 @@ The production publisher requires these repository credentials:
 | Variable `COLONY_APPLE_SIGNING_IDENTITY` | Full `Developer ID Application: Company (TEAMID)` identity |
 | Variable `COLONY_APPLE_TEAM_ID` | Matching ten-character Apple team ID |
 
-The existing updater and publisher credentials remain required. A temporary
-runner Keychain is created and removed within the job. Production has no
-ad-hoc fallback: Developer ID verification, notarization, ticket stapling,
-Gatekeeper assessment, real packaged smoke checks, embedded updater/relay
-checks and signed archive generation must pass before publication. Missing
-Apple credentials block the release before any platform uploads assets.
+The existing updater and publisher credentials remain required in both modes.
+Ad-hoc distribution verifies the actual bundle signature, runs real packaged
+smoke checks, verifies the embedded updater/relay and signs the update archive.
+Developer ID mode additionally creates a temporary runner Keychain, requires
+the matching Apple team, notarization, ticket stapling and Gatekeeper
+assessment, and removes the Keychain afterwards. Missing Apple credentials
+block a requested Developer ID release; they do not change its signing mode.
+The public release includes the detached update signature and Mac SHA-256
+checksums, and the publisher re-downloads the public DMG to verify its hash.
 
 Credential availability can be checked before promotion by dispatching
 `colony-desktop-release.yml` on the review branch with `preflight_only: true`,
@@ -76,11 +89,14 @@ Credential availability can be checked before promotion by dispatching
 configuration names only; every build and publication job is disabled. It does
 not validate the certificate contents or establish signing/notarization proof.
 
-`Electron production candidate` proves the same bundle/executable and compiled
-native feature on hosted macOS with a private profile. Its ad-hoc artifact is
-explicitly a CI candidate, never a production download. It does not prove
-Apple signing or a live upgrade of an existing installation. Those remain
-separate production gates after credentials are available.
+`Electron production candidate` now builds the actual stable-channel ad-hoc
+package on hosted macOS, checks the same distribution contract as the publisher,
+and exercises it with a private QA profile. Its artifact is unpublished proof,
+not a public download. The separate migration fixture proves preservation of
+synthetic persistent WebKit state across the old and new executable layouts.
+These checks do not establish Apple notarization or a live upgrade of a real
+user's installation. The private `--production-candidate` CLI mode remains
+available and cannot pass the public publisher's stable-channel guard.
 
 Windows continues to publish the established unsigned Tauri NSIS installer.
 Electron's macOS worker isolation must not be presented as Windows parity.

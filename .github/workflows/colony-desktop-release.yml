@@ -1,9 +1,9 @@
 name: Colony desktop release
 
-# macOS is the stable Electron app, signed with Developer ID and notarized.
+# macOS is the stable Electron app, explicitly ad-hoc signed (not notarized).
 # Windows retains the established Tauri NSIS lane until Electron isolation is
 # proven there. Both preserve the existing signed updater manifest contract.
-# No public upload happens until the required signing inputs are present.
+# Updater signing stays mandatory; Apple signing is a separate reviewed mode.
 # Publish only from the immutable v<version> tag; credential-only dispatches
 # may use a review branch and cannot run any publisher job.
 
@@ -53,6 +53,8 @@ env:
   # silently drift onto different relays (or back to the desktop development
   # default). The public build must NOT auto-connect this root relay: a fresh
   # identity is not a member there yet and must reach community creation first.
+  # Explicit owner-approved distribution policy; never infer from missing secrets.
+  COLONY_MACOS_SIGNING: ad-hoc
   COLONY_PRODUCTION_RELAY_WS_URL: wss://relay.colony.ainative.ventures
   COLONY_PRODUCTION_RELAY_HTTP_URL: https://relay.colony.ainative.ventures
 
@@ -62,6 +64,9 @@ jobs:
     if: github.repository == 'AI-Native-Ventures/Colony'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
       - name: Require signing and publisher credentials
         env:
           RELEASE_MACOS: ${{ github.event_name == 'push' || inputs.platform != 'windows' }}
@@ -76,23 +81,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           BUZZ_RELEASE_TAGGER_CLIENT_ID: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
           BUZZ_RELEASE_TAGGER_PRIVATE_KEY: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          required=(BUZZ_UPDATER_PUBLIC_KEY TAURI_SIGNING_PRIVATE_KEY BUZZ_RELEASE_TAGGER_CLIENT_ID BUZZ_RELEASE_TAGGER_PRIVATE_KEY)
-          if [ "$RELEASE_MACOS" = true ]; then
-            required+=(COLONY_APPLE_CERTIFICATE_P12 COLONY_APPLE_CERTIFICATE_PASSWORD COLONY_APPLE_API_KEY COLONY_APPLE_API_KEY_ID COLONY_APPLE_API_ISSUER COLONY_APPLE_SIGNING_IDENTITY COLONY_APPLE_TEAM_ID)
-          fi
-          missing=0
-          for key in "${required[@]}"; do
-            if [ -z "${!key}" ]; then
-              echo "::error::Production release is blocked: configure $key (see RELEASING.md). No ad-hoc fallback is allowed."
-              missing=1
-            fi
-          done
-          exit "$missing"
+        run: bash desktop/scripts/electron-release-preflight.sh
 
   publish-macos:
-    name: Publish signed Electron macOS (Apple Silicon)
+    name: Publish Electron macOS (Apple Silicon)
     needs: [preflight]
     if: "!inputs.preflight_only && github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'macos' || inputs.platform == 'both')))"
     runs-on: macos-15
@@ -122,6 +114,7 @@ jobs:
         run: just desktop-install-ci
 
       - name: Install temporary Apple signing credentials
+        if: env.COLONY_MACOS_SIGNING == 'developer-id'
         env:
           COLONY_APPLE_CERTIFICATE_P12: ${{ secrets.COLONY_APPLE_CERTIFICATE_P12 }}
           COLONY_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.COLONY_APPLE_CERTIFICATE_PASSWORD }}
@@ -142,17 +135,20 @@ jobs:
           set -euo pipefail
           unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
-          pnpm --dir desktop electron:package --production
+          SIGNING_ARGS=()
+          if [ "$COLONY_MACOS_SIGNING" = ad-hoc ]; then SIGNING_ARGS+=(--ad-hoc); fi
+          pnpm --dir desktop electron:package --production "${SIGNING_ARGS[@]}"
 
       - name: Verify packaged runtime and prepare signed update archive
         env:
+          COLONY_APPLE_TEAM_ID: ${{ vars.COLONY_APPLE_TEAM_ID }}
           BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash desktop/scripts/electron-release-assets.sh
 
       - name: Remove temporary Apple signing credentials
-        if: always()
+        if: always() && env.COLONY_MACOS_SIGNING == 'developer-id'
         run: bash desktop/scripts/electron-signing-keychain.sh cleanup
 
       # The token is minted after the long build so its one-hour lifetime
@@ -182,7 +178,15 @@ jobs:
           cp "$DMG" "$STAGING/Colony_aarch64.dmg"
           PREV=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${TAG}^" 2>/dev/null || true)
           {
-            echo "Colony ${VERSION} for macOS (Apple Silicon)."
+            echo "Colony ${VERSION} for macOS (Apple Silicon) and Windows (unsigned NSIS)."
+            echo
+            if [ "$COLONY_MACOS_SIGNING" = ad-hoc ]; then
+              echo "Mac: ad-hoc signed, without Apple Developer signing or notarization. Updates retain Colony signature verification."
+              echo "If macOS blocks the app after opening it, use System Settings → Privacy & Security → Open Anyway for this Colony download."
+            else
+              echo "Mac: signed with Developer ID and notarized."
+            fi
+            echo "Source: https://github.com/AI-Native-Ventures/Colony/tree/${GITHUB_SHA}"
             echo
             if [ -n "$PREV" ]; then
               echo "Changes since ${PREV}:"
@@ -196,10 +200,14 @@ jobs:
             gh release create "$TAG" --repo AI-Native-Ventures/colony-releases \
               --title "Colony ${VERSION}" --notes-file "$STAGING/notes.md"
           fi
+          gh release edit "$TAG" --repo AI-Native-Ventures/colony-releases --notes-file "$STAGING/notes.md"
           cp "$ARCHIVE" "$STAGING/Colony_${VERSION}_aarch64.app.tar.gz"
+          cp "$ARCHIVE_SIG" "$STAGING/Colony_${VERSION}_aarch64.app.tar.gz.sig"
+          (cd "$STAGING" && shasum -a 256 "Colony_${VERSION}_aarch64.dmg" "Colony_${VERSION}_aarch64.app.tar.gz") > "$STAGING/Colony_${VERSION}_macos_SHA256SUMS.txt"
           gh release upload "$TAG" --repo AI-Native-Ventures/colony-releases --clobber \
             "$STAGING/Colony_${VERSION}_aarch64.dmg" "$STAGING/Colony_aarch64.dmg" \
-            "$STAGING/Colony_${VERSION}_aarch64.app.tar.gz"
+            "$STAGING/Colony_${VERSION}_aarch64.app.tar.gz" \
+            "$STAGING/Colony_${VERSION}_aarch64.app.tar.gz.sig" "$STAGING/Colony_${VERSION}_macos_SHA256SUMS.txt"
 
       # The auto-update loop. The app polls one fixed URL, so the manifest
       # lives on a rolling tag that every release overwrites, while the
@@ -250,15 +258,18 @@ jobs:
       - name: Verify the public download
         run: |
           set -euo pipefail
-          EXPECTED=$(stat -f %z "$DMG")
+          EXPECTED=$(shasum -a 256 "$DMG" | cut -d " " -f1)
+          DOWNLOADED="$RUNNER_TEMP/colony-public-download.dmg"
           URL="https://github.com/AI-Native-Ventures/colony-releases/releases/latest/download/Colony_aarch64.dmg"
           for attempt in 1 2 3 4 5; do
-            GOT=$(curl -sIL "$URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
-            if [ "${GOT:-0}" = "$EXPECTED" ]; then
-              echo "latest/download serves the new dmg ($GOT bytes)"
-              exit 0
+            if curl --fail --location --silent --show-error "$URL" -o "$DOWNLOADED"; then
+              GOT=$(shasum -a 256 "$DOWNLOADED" | cut -d ' ' -f1)
+              if [ "$GOT" = "$EXPECTED" ]; then
+                echo "latest/download serves the exact published dmg (sha256 $GOT)"
+                exit 0
+              fi
             fi
-            echo "Attempt $attempt: got '${GOT:-none}' bytes, expected $EXPECTED; retrying"
+            echo "Attempt $attempt: public dmg hash differs or is not available yet; retrying"
             sleep 10
           done
           echo "::error::latest/download/Colony_aarch64.dmg does not serve the freshly published dmg"

@@ -31,7 +31,7 @@ const profile = process.argv.includes("--debug") ? "debug" : "release";
 const cargoProfile = profile === "debug" ? "dev" : "release";
 const variant = electronPackageVariant(process.argv);
 const buildEnv = electronBetaBuildEnv(process.env);
-const signing = variant.production ? productionSigning(process.env) : {};
+const signing = variant.developerId ? productionSigning(process.env) : {};
 if (variant.stable) {
   const updaterConfig = stableUpdaterConfig(process.env);
   buildEnv.TAURI_CONFIG = JSON.stringify(updaterConfig);
@@ -227,12 +227,13 @@ try {
     ...signing,
   });
   const app = path.join(bundle, `${variant.name}.app`);
-  if (!variant.production) {
-    // Private candidates are explicitly non-distributable, like betas.
+  if (!variant.developerId) {
+    // Ad-hoc is explicit for stable distribution; missing Apple credentials
+    // never silently change a requested Developer ID release.
     await run("codesign", ["--force", "--deep", "--sign", "-", app]);
   }
   await run("codesign", ["--verify", "--deep", "--strict", app]);
-  if (variant.production) {
+  if (variant.developerId) {
     await run("xcrun", ["stapler", "validate", app]);
     await run("spctl", ["--assess", "--type", "execute", "--verbose=2", app]);
     const signature = (
@@ -248,6 +249,22 @@ try {
         "Packaged app does not carry the expected Developer ID signature",
       );
     }
+  } else {
+    const signature = (
+      await exec("codesign", ["--display", "--verbose=4", app])
+    ).stderr;
+    if (!signature.includes("Signature=adhoc"))
+      throw new Error(
+        "Packaged app does not carry the expected ad-hoc signature",
+      );
+  }
+  // Codesigning changes executable bytes. Record the binaries actually shipped.
+  for (const binary of binaries) {
+    const bytes = await readFile(
+      path.join(app, "Contents/Resources/native", binary.destination),
+    );
+    binary.bytes = bytes.length;
+    binary.sha256 = createHash("sha256").update(bytes).digest("hex");
   }
   const zip = path.join(
     output,
@@ -262,7 +279,7 @@ try {
         profile,
         arch: process.arch,
         relay: ELECTRON_BETA_RELAY,
-        signing: variant.production
+        signing: variant.developerId
           ? "Developer ID; notarized and stapled"
           : "ad-hoc; not notarized",
         channel: variant.channel,
