@@ -21,6 +21,10 @@ expect_line() {
 # workflow must not silently inherit the OSS desktop default (localhost).
 expect_line "  COLONY_PRODUCTION_RELAY_WS_URL: wss://relay.colony.ainative.ventures"
 expect_line "  COLONY_PRODUCTION_RELAY_HTTP_URL: https://relay.colony.ainative.ventures"
+expect_line "  COLONY_MACOS_SIGNING: ad-hoc"
+expect_line "        run: bash desktop/scripts/electron-release-preflight.sh"
+expect_line '          pnpm --dir desktop electron:package --production "${SIGNING_ARGS[@]}"'
+expect_line '          if [ "$COLONY_MACOS_SIGNING" = ad-hoc ]; then SIGNING_ARGS+=(--ad-hoc); fi'
 
 if grep -Eiq \
   '^[[:space:]]+(BUZZ_RELAY_(URL|HTTP)|COLONY_PRODUCTION_RELAY_(WS_URL|HTTP_URL)):[[:space:]].*localhost' \
