@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 493,
-    "rust_lines": 182352,
+    "rust_lines": 182417,
     "tauri_coupled": 195,
     "portable": 298,
     "portable_lines": 103382,
@@ -507,12 +507,13 @@
     ]
   },
   "commands": {
-    "registered": 370,
-    "defined": 370,
+    "registered": 371,
+    "defined": 371,
     "by_reach": {
       "frontend": 359,
       "NO CALLER FOUND": 9,
-      "frontend-plugin-prefixed": 2
+      "frontend-plugin-prefixed": 2,
+      "rust-internal": 1
     },
     "no_caller": [
       "download_voice_models",
@@ -633,10 +634,10 @@
     "src-tauri/src/commands/media_download.rs": 6,
     "src-tauri/src/managed_agents/runtime_commands.rs": 6,
     "src-tauri/src/commands/mesh_llm.rs": 6,
+    "src-tauri/src/commands/terminal.rs": 6,
     "src-tauri/src/commands/project_git_workflow.rs": 5,
     "src-tauri/src/commands/channel_templates.rs": 5,
     "src-tauri/src/commands/agent_config.rs": 5,
-    "src-tauri/src/commands/terminal.rs": 5,
     "src-tauri/src/commands/initiative.rs": 4,
     "src-tauri/src/commands/workspace.rs": 4,
     "src-tauri/src/commands/task_transition.rs": 4,
@@ -4273,6 +4274,16 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/workspace/lib/terminalSessions.ts:283"
+      ]
+    },
+    "workspace_terminal_resolve_cwd": {
+      "defining_file": "src-tauri/src/commands/terminal.rs",
+      "module": "terminal",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "rust-internal",
+      "example_sites": [
+        "src-tauri/src/commands/terminal.rs:202",
+        "src-tauri/src/commands/terminal.rs:227"
       ]
     },
     "workspace_terminal_start": {
