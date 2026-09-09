@@ -41,6 +41,8 @@ export function PowerCreditsPurchase({
   const [error, setError] = useState<string | null>(null);
   const [hasAttempt, setHasAttempt] = useState(false);
   const [canReopen, setCanReopen] = useState(false);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
+  const [creditsAvailable, setCreditsAvailable] = useState(false);
   const mounted = useRef(false);
   const working = useRef(false);
   const onBalance = useRef(onBalanceChanged);
@@ -60,6 +62,10 @@ export function PowerCreditsPurchase({
       const result = await runtime.credits.check(runtime.scope);
       if (!mounted.current) return;
       onBalance.current();
+      // A paid receipt and spendable balance are separate facts. In particular,
+      // a delayed grant (or credits already consumed) must not look available.
+      if ("paid" in result && result.paid === true) setPaymentConfirmed(true);
+      setCreditsAvailable(result.availableNanousd > 0n);
       // An old positive balance is not proof that this purchase was paid.
       setPhase(
         "paid" in result && result.paid === true
@@ -123,13 +129,13 @@ export function PowerCreditsPurchase({
   }, [load]);
 
   useEffect(() => {
-    if (!pending || phase === "paid") return;
+    if (!pending || (paymentConfirmed && creditsAvailable)) return;
     const onFocus = () => {
       void check();
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [pending, phase, check]);
+  }, [pending, paymentConfirmed, creditsAvailable, check]);
 
   async function pay(reopen: boolean) {
     if (working.current) return;
@@ -185,8 +191,24 @@ export function PowerCreditsPurchase({
           {error}
         </p>
       )}
-      {phase === "paid" ? (
-        <p role="status">Payment confirmed. Your credits are available.</p>
+      {paymentConfirmed ? (
+        <>
+          <p role="status">
+            {creditsAvailable
+              ? "Payment confirmed. Your credits are available."
+              : "Payment confirmed. No credits are currently available to spend. Check your balance again, or review Billing if it looks wrong."}
+          </p>
+          {!creditsAvailable && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void check()}
+            >
+              {phase === "checking" ? "Checking balance…" : "Check balance"}
+            </Button>
+          )}
+        </>
       ) : pending ? (
         <>
           <p className="onb-simple-note" role="status">

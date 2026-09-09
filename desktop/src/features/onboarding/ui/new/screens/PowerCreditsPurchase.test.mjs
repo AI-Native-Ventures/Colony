@@ -141,3 +141,35 @@ test("unreadable recovery data fails closed before a new payment", async () => {
   assert.equal(began, 0);
   ui.unmount();
 });
+
+test("paid receipt with no available balance never claims credits are spendable or asks for payment again", async () => {
+  stored = attempt;
+  let available = 0n;
+  runtime.credits.check = async () => ({
+    kind: available > 0n ? "funded" : "waiting",
+    paid: true,
+    availableNanousd: available,
+  });
+  const { act, ui } = await mount();
+  assert.match(
+    ui.getByRole("status").textContent,
+    /Payment confirmed.*No credits/,
+  );
+  assert.equal(
+    ui.queryByText("Payment confirmed. Your credits are available."),
+    null,
+  );
+  assert.equal(ui.queryByRole("button", { name: /^Pay / }), null);
+  assert.equal(ui.queryByRole("button", { name: "Open checkout again" }), null);
+  available = 1_000_000_000n;
+  await act(async () =>
+    ui.getByRole("button", { name: "Check balance" }).click(),
+  );
+  assert.match(
+    ui.getByRole("status").textContent,
+    /Your credits are available/,
+  );
+  assert.equal(began, 0);
+  assert.equal(reopened, 0);
+  ui.unmount();
+});

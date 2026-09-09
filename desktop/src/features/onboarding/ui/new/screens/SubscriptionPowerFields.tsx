@@ -8,6 +8,7 @@ import {
   type SubscriptionScope,
 } from "@/shared/api/tauriSubscriptionConnections";
 import { Button } from "@/shared/ui/button";
+import { openUrl } from "@/shared/api/nativeBridge";
 import {
   subscriptionConnectionReady,
   subscriptionExhausted,
@@ -90,6 +91,22 @@ export function SubscriptionPowerFields({
     }
   }
 
+  async function installationGuide(runtimeId: string) {
+    const started = generation.current;
+    try {
+      await openUrl(
+        runtimeId === "claude"
+          ? "https://code.claude.com/docs/en/setup"
+          : "https://learn.chatgpt.com/docs/codex/cli",
+      );
+    } catch {
+      if (generation.current === started)
+        setError(
+          "We could not open the provider’s installation guide. Try again.",
+        );
+    }
+  }
+
   return (
     <section
       className="space-y-4"
@@ -146,6 +163,25 @@ export function SubscriptionPowerFields({
                         : "Not installed"}
                 </span>
               </button>
+              {(!entry.installed || entry.launchError) && (
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {!entry.installed
+                      ? "Install the provider’s command-line app using its official guide, then check again here."
+                      : "If this provider needs an update, follow its official guide and check again here."}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={locked}
+                    onClick={() => void installationGuide(entry.runtimeId)}
+                  >
+                    {entry.installed
+                      ? "Install or update guide"
+                      : "Open installation guide"}
+                  </Button>
+                </div>
+              )}
               {entry.installed && <SubscriptionUsage account={account} />}
               {account.notice && (
                 <p className="text-sm text-muted-foreground">

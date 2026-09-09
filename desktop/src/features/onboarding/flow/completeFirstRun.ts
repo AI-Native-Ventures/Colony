@@ -37,6 +37,8 @@ export type CompleteFirstRunDeps = {
   draft: OnboardingV2Draft | null;
   /** kind:0 display name to publish; null/empty skips the profile write. */
   profileDisplayName: string | null;
+  /** Carrying an existing owner's name must not overwrite a newer target name. */
+  profileDisplayNameIfMissing?: boolean;
   /** kind:0 avatar to publish; null/empty leaves the profile without one. */
   profileAvatarUrl: string | null;
 };
@@ -56,7 +58,11 @@ export type CompleteFirstRunIo = {
     input: { displayName?: string; avatarUrl?: string },
     context: Pick<
       CompleteFirstRunDeps,
-      "queryClient" | "relayUrl" | "pubkey" | "assertCurrent"
+      | "queryClient"
+      | "relayUrl"
+      | "pubkey"
+      | "assertCurrent"
+      | "profileDisplayNameIfMissing"
     >,
   ) => Promise<unknown>;
   hasMarker: (args: {

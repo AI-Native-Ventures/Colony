@@ -443,6 +443,13 @@ fn spawn_agent_child_inner(
     let runtime_meta = known_acp_runtime(effective_command);
     let effective_relay_url = runtime_key.relay_url.clone();
     let runtime_id = runtime_meta.map(|runtime| runtime.id).unwrap_or("custom");
+    let isolated_subscription = super::isolation::subscriptions::preflight(
+        app,
+        runtime_id,
+        owner_hex,
+        &effective_relay_url,
+        matches!(global.credential_mode, CredentialMode::ColonyCredits),
+    )?;
     let provisioned_lease = provisioned_spawn_env(
         app,
         provisioned::ProvisionedSpawnRequest {
@@ -574,24 +581,10 @@ fn spawn_agent_child_inner(
         command.env("MCP_HOOK_SERVERS", "*");
     }
 
-    // ── Readiness check: set setup-payload if agent is not ready ─────────────
-    //
-    // Build the effective env the agent would have at start-time, run the
-    // readiness predicate, and if anything is missing, serialize the payload
-    // into BUZZ_ACP_SETUP_PAYLOAD.  buzz-acp detects this env var on startup
-    // and enters the minimal setup-listener mode instead of the agent pool.
-    //
-    // SECURITY: BUZZ_ACP_SETUP_PAYLOAD is in RESERVED_ENV_KEYS so user env
-    // cannot set it, but we also explicitly remove it after writing user env
-    // to guard against the parent-process environment. We then set it only
-    // when desktop has computed NotReady — the desktop is the sole readiness
-    // source and buzz-acp only transports the payload.
-    // The JSON format mirrors `setup_mode::SetupPayload` in buzz-acp:
-    //   { "agent_name": "...", "agent_pubkey": "...", "requirements": [{ "surface": "...", ... }] }
-    //
-    // `spawned_setup_mode` is captured outside the block so it can be stamped
-    // on `ManagedAgentProcess` — used by `install_acp_runtime` to target only
-    // stuck agents for auto-restart.
+    // Dedicated subscriptions validate auth/model inside the vendor bridge;
+    // legacy runtimes use the setup listener for missing requirements. Only
+    // native readiness may write the reserved BUZZ_ACP_SETUP_PAYLOAD. The
+    // spawned flag lets runtime installation restart those setup listeners.
     let spawned_setup_mode;
     {
         use crate::managed_agents::readiness::EffectiveAgentEnv;
@@ -608,66 +601,70 @@ fn spawn_agent_child_inner(
             effective_command: descriptor.command.clone(),
         };
         // Compute the optional payload before touching the command.
-        let setup_payload_json =
-            if let AgentReadiness::NotReady { requirements } = agent_readiness(&effective) {
-                let reqs: Vec<serde_json::Value> = requirements
-                    .into_iter()
-                    .map(|r| match r {
-                        Requirement::NormalizedField { field } => serde_json::json!({
-                            "surface": "normalized_field",
-                            "field": field,
-                        }),
-                        Requirement::EnvKey { key } => serde_json::json!({
-                            "surface": "env_key",
-                            "key": key,
-                        }),
-                        Requirement::CliLogin {
-                            probe_args,
-                            setup_copy,
-                            availability,
-                        } => serde_json::json!({
-                            "surface": "cli_login",
-                            "probe_args": probe_args,
-                            "setup_copy": setup_copy,
-                            "availability": availability,
-                        }),
-                        Requirement::CliConfigInvalid {
-                            probe_args,
-                            setup_copy,
-                            diagnostic,
-                        } => serde_json::json!({
-                            "surface": "cli_config_invalid",
-                            "probe_args": probe_args,
-                            "setup_copy": setup_copy,
-                            "diagnostic": diagnostic,
-                        }),
-                        Requirement::GitBash => serde_json::json!({
-                            "surface": "git_bash",
-                        }),
-                        Requirement::MissingBinary { command } => serde_json::json!({
-                            "surface": "missing_binary",
-                            "command": command,
-                        }),
-                    })
-                    .collect();
-                let payload = serde_json::json!({
-                    "agent_name": record.name,
-                    "agent_pubkey": record.pubkey,
-                    "requirements": reqs,
-                });
-                match serde_json::to_string(&payload) {
-                    Ok(json) => Some(json),
-                    Err(e) => {
-                        eprintln!(
-                            "buzz-desktop: failed to serialize setup payload for {}: {e}",
-                            record.name
-                        );
-                        None
-                    }
-                }
+        let setup_payload_json = if let AgentReadiness::NotReady { requirements } =
+            if isolated_subscription {
+                AgentReadiness::Ready
             } else {
-                None
-            };
+                agent_readiness(&effective)
+            } {
+            let reqs: Vec<serde_json::Value> = requirements
+                .into_iter()
+                .map(|r| match r {
+                    Requirement::NormalizedField { field } => serde_json::json!({
+                        "surface": "normalized_field",
+                        "field": field,
+                    }),
+                    Requirement::EnvKey { key } => serde_json::json!({
+                        "surface": "env_key",
+                        "key": key,
+                    }),
+                    Requirement::CliLogin {
+                        probe_args,
+                        setup_copy,
+                        availability,
+                    } => serde_json::json!({
+                        "surface": "cli_login",
+                        "probe_args": probe_args,
+                        "setup_copy": setup_copy,
+                        "availability": availability,
+                    }),
+                    Requirement::CliConfigInvalid {
+                        probe_args,
+                        setup_copy,
+                        diagnostic,
+                    } => serde_json::json!({
+                        "surface": "cli_config_invalid",
+                        "probe_args": probe_args,
+                        "setup_copy": setup_copy,
+                        "diagnostic": diagnostic,
+                    }),
+                    Requirement::GitBash => serde_json::json!({
+                        "surface": "git_bash",
+                    }),
+                    Requirement::MissingBinary { command } => serde_json::json!({
+                        "surface": "missing_binary",
+                        "command": command,
+                    }),
+                })
+                .collect();
+            let payload = serde_json::json!({
+                "agent_name": record.name,
+                "agent_pubkey": record.pubkey,
+                "requirements": reqs,
+            });
+            match serde_json::to_string(&payload) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    eprintln!(
+                        "buzz-desktop: failed to serialize setup payload for {}: {e}",
+                        record.name
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         spawned_setup_mode = setup_payload_json.is_some();
 
@@ -908,7 +905,7 @@ fn spawn_agent_child_inner(
     );
 
     let (mut command, isolation_network) =
-        super::isolation::launch::wrap(app, &runtime_key, command, &log_path)?;
+        super::isolation::launch::wrap(app, &runtime_key, command, &log_path, owner_hex)?;
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::from(stdout));
     command.stderr(std::process::Stdio::from(stderr));

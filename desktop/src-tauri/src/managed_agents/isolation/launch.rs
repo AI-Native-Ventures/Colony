@@ -20,7 +20,7 @@ pub(crate) fn ensure_supported(runtime_id: Option<&str>) -> Result<(), String> {
     if !cfg!(target_os = "macos") {
         return Err("Isolated local teammates are currently supported on macOS only".into());
     }
-    if runtime_id != Some("buzz-agent") {
+    if !matches!(runtime_id, Some("buzz-agent" | "claude" | "codex")) {
         return Err("This Electron beta requires Colony Agent for isolated local teammates".into());
     }
     Ok(())
@@ -33,6 +33,7 @@ pub(crate) fn wrap(
     key: &ManagedAgentRuntimeKey,
     command: Command,
     log: &Path,
+    owner: Option<&str>,
 ) -> Result<(Command, Option<Arc<WorkerNetwork>>), String> {
     if !crate::electron_host::enabled() {
         return Ok((command, None));
@@ -42,6 +43,9 @@ pub(crate) fn wrap(
     private_directory(&base)?;
     private_directory(workspace.parent().ok_or("Invalid worker directory")?)?;
     private_directory(&workspace)?;
+    if let Some(runtime) = super::subscriptions::runtime(&command) {
+        return super::subscriptions::prepare(app, key, owner, runtime, command, &workspace, log);
+    }
     let (command, network) = prepare(&command, &workspace, Some(log))?;
     Ok((command, Some(network)))
 }
@@ -84,6 +88,15 @@ pub(super) fn prepare(
     workspace: &Path,
     log: Option<&Path>,
 ) -> Result<(Command, Arc<WorkerNetwork>), String> {
+    prepare_worker(original, workspace, log, false)
+}
+
+pub(super) fn prepare_worker(
+    original: &Command,
+    workspace: &Path,
+    log: Option<&Path>,
+    subscription_tools: bool,
+) -> Result<(Command, Arc<WorkerNetwork>), String> {
     let env: BTreeMap<String, OsString> = original
         .get_envs()
         .filter_map(|(key, value)| {
@@ -93,13 +106,17 @@ pub(super) fn prepare(
     let get = |key: &str| env.get(key).and_then(|value| value.to_str()).unwrap_or("");
     let relay = get("BUZZ_RELAY_URL");
     let mut destinations = vec![Destination::resolve(relay)?];
-    let provider = get("BUZZ_AGENT_PROVIDER").trim().to_ascii_lowercase();
+    let provider = if subscription_tools {
+        String::new()
+    } else {
+        get("BUZZ_AGENT_PROVIDER").trim().to_ascii_lowercase()
+    };
     let provider_url = match provider.as_str() {
         "anthropic" => Some(("ANTHROPIC_BASE_URL", "https://api.anthropic.com")),
         "openai" | "openai-compat" => Some(("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1")),
         "deepseek" => Some(("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")),
         "openrouter" => Some(("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")),
-        "" if !get("BUZZ_ACP_SETUP_PAYLOAD").is_empty() => None,
+        "" if subscription_tools || !get("BUZZ_ACP_SETUP_PAYLOAD").is_empty() => None,
         _ => return Err("Isolated teammates require a configured Anthropic, OpenAI, DeepSeek or OpenRouter provider".into()),
     };
     let mut meter_upstream = None;

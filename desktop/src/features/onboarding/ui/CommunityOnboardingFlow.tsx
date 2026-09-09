@@ -360,6 +360,8 @@ export function CommunityOnboardingFlow({
               // published kind:0 on its own profile screen, and the
               // second-community walk never asks for a name it already knows.
               profileDisplayName,
+              profileDisplayNameIfMissing:
+                transaction?.source === "create-community",
               profileAvatarUrl: null,
             },
             DEFAULT_COMPLETE_FIRST_RUN_IO,

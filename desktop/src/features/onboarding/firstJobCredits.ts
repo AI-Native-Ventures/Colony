@@ -319,7 +319,16 @@ export function createFirstJobCredits(
   dependencies: FirstJobCreditsDependencies,
 ): FirstJobCreditsController {
   return createCreditsCheckout({
-    ...dependencies,
+    // Preserve the original dependency boundary: adapters may refresh after a
+    // reconnect, so do not snapshot their functions while adding scope helpers.
+    payments: dependencies.payments,
+    assertCurrent: (scope) => dependencies.assertCurrent(scope),
+    readAvailableCredits: (scope) => dependencies.readAvailableCredits(scope),
+    openUrl: (url) => dependencies.openUrl(url),
+    readAttempt: (scope) => dependencies.readAttempt(scope),
+    writeAttempt: (scope, attempt) => dependencies.writeAttempt(scope, attempt),
+    withAttemptLock: (scope, action) =>
+      dependencies.withAttemptLock(scope, action),
     snapshotScope: snapshotFirstJobScope,
     scopeKey: firstJobScopeKey,
   });

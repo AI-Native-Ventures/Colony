@@ -36,6 +36,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod account;
+pub(crate) mod capability;
 pub(crate) mod claude_account;
 pub(crate) mod codex_account;
 mod environment;

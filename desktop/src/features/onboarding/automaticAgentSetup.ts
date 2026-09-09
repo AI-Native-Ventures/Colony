@@ -16,6 +16,8 @@ import { provisioningFromConfig } from "@/features/communities/colonyProvisionin
 import { fetchColonyProvisioningConfig } from "@/features/communities/hostedCommunityApi";
 import { resolveAgentReadiness } from "@/features/onboarding/ui/agentReadiness";
 import { effectiveOnboardingRuntimeId } from "./ui/onboardingRuntimeSelection";
+import { getSubscriptionConnections } from "@/shared/api/tauriSubscriptionConnections";
+import { subscriptionConnectionReady } from "./subscriptionConnectionState";
 import { discoverAcpRuntimes, installAcpRuntime } from "@/shared/api/tauri";
 import {
   getGlobalAgentConfig,
@@ -64,6 +66,7 @@ export type AutomaticAgentSetupIo = {
   ) => Promise<unknown>;
   installRuntime: (runtimeId: string) => Promise<unknown>;
   loadProvisioning: typeof fetchColonyProvisioningConfig;
+  inspectSubscriptions: typeof getSubscriptionConnections;
 };
 
 const WIRED_IO: AutomaticAgentSetupIo = {
@@ -72,6 +75,7 @@ const WIRED_IO: AutomaticAgentSetupIo = {
   saveConfig: setGlobalAgentConfig,
   installRuntime: installAcpRuntime,
   loadProvisioning: fetchColonyProvisioningConfig,
+  inspectSubscriptions: getSubscriptionConnections,
 };
 
 /**
@@ -216,6 +220,22 @@ export async function ensureBuiltInFounderConfig(
     throw new Error(
       `${currentRuntime.label} was found, but cannot run teammates in this version of Colony. Choose how to power your agents to continue.`,
     );
+  if (
+    options.scope &&
+    (currentRuntime?.id === "claude" || currentRuntime?.id === "codex")
+  ) {
+    const connections = await io.inspectSubscriptions(options.scope);
+    const connection = connections.find(
+      (entry) => entry.runtimeId === currentRuntime.id,
+    );
+    if (
+      subscriptionConnectionReady(connection, current.model, Date.now() / 1000)
+    )
+      return;
+    throw new Error(
+      "Connect your subscription and choose an available model for this business in Power setup before starting your team.",
+    );
+  }
   if (resolveAgentReadiness(runtimes, current, "preferred").ready) return;
   if (options.mode === "validate-only")
     throw new Error(

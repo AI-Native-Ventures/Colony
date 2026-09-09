@@ -40,6 +40,7 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     // binaries/args as the agent process.
     "BUZZ_ACP_AGENT_COMMAND",
     "BUZZ_ACP_AGENT_ARGS",
+    "BUZZ_SUBSCRIPTION_BRIDGE_CONFIG",
     "BUZZ_ACP_MCP_COMMAND",
     "BUZZ_ACP_ELECTRON_BROWSER_CONFIG",
     "BUZZ_WORKER_PROXY",

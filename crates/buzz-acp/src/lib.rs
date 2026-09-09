@@ -18,6 +18,8 @@ mod pool_lifecycle;
 mod queue;
 mod relay;
 mod setup_mode;
+mod subscription_bridge;
+mod subscription_provenance;
 mod thread_record;
 mod usage;
 mod usage_outbox;
@@ -1776,6 +1778,12 @@ mod idle_pool_sleep_tests {
 }
 
 pub fn run() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--subscription-capability") {
+        return subscription_bridge::check_capability();
+    }
+    if std::env::args().nth(1).as_deref() == Some("--subscription-bridge") {
+        return subscription_bridge::run();
+    }
     config::propagate_legacy_env_vars();
     tokio_main()
 }
@@ -2029,6 +2037,14 @@ async fn tokio_main() -> Result<()> {
         config.no_meter,
         config.meter_openai_key.as_deref(),
     );
+    let subscription_runtime = subscription_provenance::runtime(
+        &config.agent_command,
+        &config.agent_args,
+        config.provisioned,
+        config.no_meter,
+    );
+    // Native subscription token counters reach NIP-AM below. They must not be
+    // priced as a per-token invoice or silently enter the shadow-cost ledger.
     let adapter_usage_fallback = codex_adapter_usage;
     let adapter_usage_provider = if adapter_usage_fallback {
         Some("openai".to_string())
@@ -2086,6 +2102,12 @@ async fn tokio_main() -> Result<()> {
                 "wire metering bypassed, but no owner identity is available to receive encrypted Spend records"
             );
         }
+        None
+    } else if let Some(provider) = subscription_runtime {
+        tracing::info!(
+            provider,
+            "subscription token metrics enabled; per-token monetary cost is unavailable"
+        );
         None
     } else if config.no_meter && !config.provisioned {
         tracing::warn!(
@@ -2429,7 +2451,9 @@ async fn tokio_main() -> Result<()> {
             .and_then(|hex| nostr::PublicKey::from_hex(hex).ok()),
         memory_enabled: config.memory_enabled,
         thread_record_enabled: config.thread_record_enabled,
-        harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
+        harness_name: subscription_runtime.map(str::to_owned).unwrap_or_else(|| {
+            crate::config::normalize_agent_command_identity(&config.agent_command)
+        }),
         adapter_usage_provider,
         usage_outbox: usage_outbox.clone(),
         relay_url: config.relay_url.clone(),

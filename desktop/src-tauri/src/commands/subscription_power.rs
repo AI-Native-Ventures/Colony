@@ -15,7 +15,7 @@ use crate::{
         find_command,
         subscriptions::{
             account::{AccountAuthentication, SubscriptionAccount},
-            claude_account, codex_account,
+            capability, claude_account, codex_account,
         },
     },
 };
@@ -128,6 +128,8 @@ pub async fn get_subscription_connections(
     state: State<'_, AppState>,
 ) -> Result<Vec<SubscriptionConnection>, String> {
     scope.check(&state)?;
+    crate::managed_agents::clear_resolve_cache();
+    crate::managed_agents::refresh_login_shell_path();
     let mut connections = Vec::new();
     for (runtime, label) in [("codex", "ChatGPT / Codex"), ("claude", "Claude")] {
         let binary = find_command(runtime);
@@ -137,6 +139,10 @@ pub async fn get_subscription_connections(
         let mut connected = SubscriptionAccount {
             authentication: AccountAuthentication::SignedOut,
             ..Default::default()
+        };
+        let launch_error = match binary.as_ref() {
+            Some(binary) => capability::launch_error(runtime, binary).await,
+            None => Some("Install this provider's app before connecting.".into()),
         };
         if let Some(ref binary) = binary {
             if runtime == "codex" {
@@ -158,8 +164,7 @@ pub async fn get_subscription_connections(
             installed: binary.is_some(),
             detected,
             connected,
-            launch_error: crate::managed_agents::isolation::launch::ensure_supported(Some(runtime))
-                .err(),
+            launch_error,
         });
     }
     Ok(connections)
