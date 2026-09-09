@@ -3,7 +3,6 @@ packages:
   - "web"
   - "admin-web"
   - "site"
-  - "video"
 allowBuilds:
   # @wdio/cli pulls edgedriver/geckodriver as optional deps. Their postinstall
   # scripts download browser drivers this suite never uses; deny explicitly so
