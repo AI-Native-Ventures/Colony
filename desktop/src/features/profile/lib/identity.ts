@@ -1,5 +1,6 @@
 import type { Profile, UserProfileSummary } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { sanitizeDisplayName } from "@/features/onboarding/profileDraft";
 
 export type UserProfileLookup = Record<string, UserProfileSummary>;
 
@@ -103,17 +104,19 @@ export function resolveUserLabel(input: {
     pubkey,
   } = input;
 
-  if (
+  const isSelf =
     typeof currentPubkey === "string" &&
-    normalizePubkey(currentPubkey) === normalizePubkey(pubkey)
-  ) {
+    normalizePubkey(currentPubkey) === normalizePubkey(pubkey);
+  if (isSelf) {
     if (!preferResolvedSelfLabel) {
       return "You";
     }
   }
 
   const profile = getResolvedProfile(pubkey, profiles);
-  const displayName = profile?.displayName?.trim();
+  const displayName = isSelf
+    ? sanitizeDisplayName(profile?.displayName)
+    : profile?.displayName?.trim();
   if (displayName) {
     return displayName;
   }
@@ -123,12 +126,14 @@ export function resolveUserLabel(input: {
     return nip05Handle;
   }
 
-  const safeFallback = fallbackName?.trim();
+  const safeFallback = isSelf
+    ? sanitizeDisplayName(fallbackName)
+    : fallbackName?.trim();
   if (safeFallback) {
     return safeFallback;
   }
 
-  return truncatePubkey(pubkey);
+  return isSelf ? "You" : truncatePubkey(pubkey);
 }
 
 /**

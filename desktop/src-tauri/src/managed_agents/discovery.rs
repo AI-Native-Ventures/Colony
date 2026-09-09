@@ -1164,6 +1164,7 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             label: runtime.label.to_string(),
             avatar_url: runtime.avatar_url.to_string(),
             availability,
+            local_launch_error: super::isolation::launch::ensure_supported(Some(runtime.id)).err(),
             command,
             binary_path,
             default_args,
@@ -1335,6 +1336,7 @@ pub fn discover_acp_runtimes_from(
                 // All icons are bundled assets; customs fall back to TerminalSquare in the UI.
                 avatar_url: String::new(),
                 availability,
+                local_launch_error: super::isolation::launch::ensure_supported(Some(&def.id)).err(),
                 command,
                 binary_path,
                 default_args,

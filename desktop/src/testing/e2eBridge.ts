@@ -14230,9 +14230,29 @@ export function maybeInstallE2eTauriMocks() {
         }
         const input = (
           payload as {
-            input?: { agentCommand?: string; provider?: string };
+            input?: {
+              agentCommand?: string;
+              provider?: string;
+              credentialMode?: "byok" | "colony_credits";
+            };
           } | null
         )?.input;
+        if (input?.credentialMode === "colony_credits") {
+          return {
+            agentName: "Colony Credits",
+            agentVersion: "0.0.0",
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                name: "DeepSeek V4 Flash",
+                description: "Synthetic gateway model for onboarding tests",
+              },
+            ],
+            agentDefaultModel: "deepseek-v4-flash",
+            selectedModel: null,
+            supportsSwitching: true,
+          };
+        }
         const agentCommand = input?.agentCommand?.trim() ?? "";
         const provider = input?.provider?.trim() ?? "";
         const openAiModels = [

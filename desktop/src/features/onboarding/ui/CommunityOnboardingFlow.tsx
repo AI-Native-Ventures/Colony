@@ -462,6 +462,7 @@ export function CommunityOnboardingFlow({
         }}
         onExit={() => void finish()}
         transactionId={transaction.id}
+        relayUrl={transaction.relayUrl}
       />
     );
   }

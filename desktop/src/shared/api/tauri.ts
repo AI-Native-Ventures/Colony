@@ -172,6 +172,7 @@ export type RawAcpRuntimeCatalogEntry = {
   label: string;
   avatar_url: string;
   availability: AcpAvailabilityStatus;
+  local_launch_error?: string;
   command: string | null;
   binary_path: string | null;
   default_args: string[];
@@ -683,6 +684,9 @@ export function fromRawAcpRuntimeCatalogEntry(
     label: entry.label,
     avatarUrl: entry.avatar_url,
     availability: entry.availability,
+    ...(entry.local_launch_error && {
+      localLaunchError: entry.local_launch_error,
+    }),
     command: entry.command,
     binaryPath: entry.binary_path,
     defaultArgs: entry.default_args,

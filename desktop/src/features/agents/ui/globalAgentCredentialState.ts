@@ -1,3 +1,5 @@
+import { isColonyCreditsEligible } from "./colonyCreditsEligibility";
+import type { GlobalAgentConfig } from "@/shared/api/types";
 import type { RuntimeFileConfigSubset } from "@/shared/api/tauri";
 import {
   getBakedSatisfiedEnvKeys,
@@ -7,19 +9,26 @@ import {
 
 export function getGlobalAgentCredentialState({
   bakedEnvKeys,
+  credentialMode = "byok",
   envVars,
   provider,
   runtimeFileConfig,
   runtimeId,
 }: {
   bakedEnvKeys: readonly string[];
+  credentialMode?: GlobalAgentConfig["credential_mode"];
   envVars: Record<string, string>;
   provider: string;
   runtimeFileConfig: RuntimeFileConfigSubset | null | undefined;
   runtimeId: string;
 }) {
-  const requiredEnvKeys = requiredCredentialEnvKeys(runtimeId, provider);
-  const apiKeyEnvVar = getProviderApiKeyEnvVar(provider);
+  const provisioned =
+    credentialMode === "colony_credits" &&
+    isColonyCreditsEligible(runtimeId, provider);
+  const requiredEnvKeys = provisioned
+    ? []
+    : requiredCredentialEnvKeys(runtimeId, provider);
+  const apiKeyEnvVar = provisioned ? null : getProviderApiKeyEnvVar(provider);
   const bakedSatisfiedEnvKeys = getBakedSatisfiedEnvKeys(
     requiredEnvKeys,
     envVars,

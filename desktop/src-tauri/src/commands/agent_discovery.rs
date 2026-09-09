@@ -152,7 +152,10 @@ pub async fn save_custom_harness(
     let default_args =
         crate::managed_agents::normalize_agent_args(&definition.command, definition.args.clone());
 
+    let local_launch_error =
+        crate::managed_agents::isolation::launch::ensure_supported(Some(&definition.id)).err();
     Ok(AcpRuntimeCatalogEntry {
+        local_launch_error,
         id: definition.id,
         label: definition.label,
         avatar_url: String::new(),

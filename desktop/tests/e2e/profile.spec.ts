@@ -164,6 +164,28 @@ test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
 
+test("an existing owner with a key fallback can add their name from the sidebar", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("sidebar-profile-name")).toHaveText(
+    "Your profile",
+  );
+  await page.getByTestId("sidebar-add-name").click();
+  await page.getByTestId("profile-add-name").click();
+  await expect(page.getByTestId("profile-display-name")).toHaveValue("");
+  await page.getByTestId("profile-display-name").fill("Aisha Bello");
+  await page.getByTestId("profile-metadata-edit").click();
+  await expect(page.getByTestId("profile-display-name-value")).toHaveText(
+    "Aisha Bello",
+  );
+  await page.getByTestId("settings-back-to-app").click();
+  await expect(page.getByTestId("sidebar-profile-name")).toHaveText(
+    "Aisha Bello",
+  );
+  await expect(page.getByTestId("sidebar-add-name")).toHaveCount(0);
+});
+
 test("keeps the saved profile description after a community round trip", async ({
   page,
 }) => {
@@ -276,7 +298,7 @@ test("saves profile metadata from the block Done button", async ({ page }) => {
 
   await openSettings(page, "profile");
   await expect(page.getByTestId("profile-display-name-value")).toHaveText(
-    "npub1mock...",
+    "Not set",
   );
   await expect(page.getByTestId("profile-save")).toHaveCount(0);
 

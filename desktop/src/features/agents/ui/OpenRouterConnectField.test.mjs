@@ -368,3 +368,52 @@ test("a rejected connect invoke surfaces the backend message, not the generic fa
     await act(async () => root.unmount());
   }
 });
+
+test("an OAuth result after leaving the power lane cannot change the draft", async () => {
+  let resolveInvoke;
+  ipcHandlers.set(
+    "connect_openrouter",
+    () =>
+      new Promise((resolve) => {
+        resolveInvoke = resolve;
+      }),
+  );
+  const { container, root, changes } = await mountField();
+  await act(async () => {
+    container.dispatchEvent({
+      type: "click",
+      target: findByTestId(container, "openrouter-connect-button"),
+    });
+  });
+  await act(async () => root.unmount());
+  await act(async () => {
+    resolveInvoke({ status: "connected", key: "synthetic-late-key" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  assert.deepEqual(changes, []);
+  ipcHandlers.clear();
+});
+
+test("an onboarding connection is described as staged until the parent saves it", async () => {
+  ipcHandlers.set("connect_openrouter", async () => ({
+    status: "connected",
+    key: "synthetic-staged-key",
+  }));
+  const { container, root, changes } = await mountField();
+  try {
+    await act(async () => {
+      container.dispatchEvent({
+        type: "click",
+        target: findByTestId(container, "openrouter-connect-button"),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    assert.equal(changes.length, 1);
+    const notice = findByTestId(container, "openrouter-connect-notice");
+    assert.match(notice.textContent, /Continue setup to save/);
+    assert.doesNotMatch(notice.textContent, /key is stored/);
+  } finally {
+    ipcHandlers.clear();
+    await act(async () => root.unmount());
+  }
+});

@@ -29,7 +29,7 @@ export function resolveAgentReadiness(
 ): AgentReadinessResult {
   if (scope === "any") {
     for (const runtime of runtimes) {
-      if (runtime.id === "buzz-agent") continue;
+      if (runtime.id === "buzz-agent" || runtime.localLaunchError) continue;
       if (
         runtime.availability === "available" &&
         (runtime.authStatus.status === "logged_in" ||
@@ -46,7 +46,10 @@ export function resolveAgentReadiness(
           (runtime) => runtime.id === globalConfig.preferred_runtime,
         )
       : runtimes.find((runtime) => runtime.id === "buzz-agent");
-  if (preferredRuntime?.availability !== "available") {
+  if (
+    preferredRuntime?.availability !== "available" ||
+    preferredRuntime.localLaunchError
+  ) {
     return { ready: false };
   }
 

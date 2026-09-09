@@ -18,6 +18,7 @@ import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
 import type { PresenceStatus, Profile, UserStatus } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { SidebarCreditsBalance } from "./SidebarCreditsBalance";
+import { sanitizeDisplayName } from "@/features/onboarding/profileDraft";
 
 type SidebarProfileCardProps = {
   activeCommunity: Community | null;
@@ -54,12 +55,15 @@ export function SidebarProfileCard({
   onSwitchCommunity,
   onUpdateCommunity,
   profile,
-  resolvedDisplayName,
+  resolvedDisplayName: suppliedDisplayName,
   selfPresenceStatus,
   selfUserStatus,
   communities,
 }: SidebarProfileCardProps) {
   const selfProfileCache = useSelfProfileCache();
+  const needsName = !!profile && !sanitizeDisplayName(profile.displayName);
+  const resolvedDisplayName =
+    sanitizeDisplayName(suppliedDisplayName) || "Your profile";
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const activeRole = myMembershipQuery.data?.membership?.role;
   const canInvite = activeRole === "owner" || activeRole === "admin";
@@ -240,6 +244,19 @@ export function SidebarProfileCard({
           )}
         </div>
       </div>
+      {needsName ? (
+        <button
+          className="mt-2 text-xs font-medium text-sidebar-foreground underline underline-offset-4"
+          data-testid="sidebar-add-name"
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenSettings("profile");
+          }}
+        >
+          Add your name
+        </button>
+      ) : null}
       <SidebarCreditsBalance onOpenSettings={onOpenSettings} />
     </div>
   );

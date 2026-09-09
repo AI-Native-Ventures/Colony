@@ -200,6 +200,13 @@ export async function ensureBuiltInFounderConfig(
     io.listRuntimes(),
     io.loadConfig(),
   ]);
+  const currentRuntime = runtimes.find(
+    (entry) => entry.id === current.preferred_runtime,
+  );
+  if (currentRuntime?.localLaunchError)
+    throw new Error(
+      `${currentRuntime.label} was found, but cannot run teammates in this version of Colony. Choose how to power your agents to continue.`,
+    );
   if (resolveAgentReadiness(runtimes, current, "preferred").ready) return;
   if (!(await relayHostsAgents(io)))
     throw new Error(

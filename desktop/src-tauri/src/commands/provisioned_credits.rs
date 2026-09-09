@@ -66,11 +66,6 @@ async fn fetch_gateway_account(
 /// being returned to the frontend.
 #[tauri::command]
 pub async fn get_colony_credits_account(app: AppHandle) -> Result<GatewayAccount, String> {
-    if load_global_agent_config(&app)?.credential_mode != CredentialMode::ColonyCredits {
-        return Err(
-            "Colony Credits account is available only when Colony Credits is selected".into(),
-        );
-    }
     let state = app.state::<AppState>();
     let base = normalized_relay_http_origin(&relay_api_base_url_with_override(&state))?;
     let url = format!("{base}/api/gateway/account");

@@ -52,10 +52,13 @@ export type CompleteFirstRunIo = {
     queryClient: unknown,
     args: { focus: boolean; pubkey: string; communityScope: string },
   ) => Promise<{ ok: boolean; reason?: string; focusChannelId?: string }>;
-  updateProfile: (input: {
-    displayName?: string;
-    avatarUrl?: string;
-  }) => Promise<unknown>;
+  updateProfile: (
+    input: { displayName?: string; avatarUrl?: string },
+    context: Pick<
+      CompleteFirstRunDeps,
+      "queryClient" | "relayUrl" | "pubkey" | "assertCurrent"
+    >,
+  ) => Promise<unknown>;
   hasMarker: (args: {
     channelId: string;
     marker: string;
@@ -86,9 +89,9 @@ export type CompleteFirstRunIo = {
 };
 
 /**
- * The profile write is best effort: a founder with no kind:0 still has a
- * working workspace, and settings can publish the name later. The gate key is
- * written last so a thrown step leaves onboarding re-runnable.
+ * A supplied name must be published before completion, so a temporary relay
+ * failure cannot discard it and leave the owner named after their key. The
+ * gate key is written last so a thrown step leaves onboarding re-runnable.
  */
 export async function completeFirstRun(
   deps: CompleteFirstRunDeps,
@@ -131,12 +134,17 @@ export async function completeFirstRun(
   const avatarUrl = deps.profileAvatarUrl?.trim();
   if (displayName || avatarUrl) {
     try {
-      await io.updateProfile({
-        ...(displayName ? { displayName } : {}),
-        ...(avatarUrl ? { avatarUrl } : {}),
-      });
-    } catch (error) {
-      console.warn("First-run profile write failed; continuing.", error);
+      await io.updateProfile(
+        {
+          ...(displayName ? { displayName } : {}),
+          ...(avatarUrl ? { avatarUrl } : {}),
+        },
+        deps,
+      );
+    } catch {
+      throw new Error(
+        "We could not save your profile. Your setup is still here. Try again.",
+      );
     }
   }
 

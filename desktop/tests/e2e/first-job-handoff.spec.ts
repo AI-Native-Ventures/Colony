@@ -497,7 +497,7 @@ test("a funded account without an approved company setup stays editable and crea
   await card.getByRole("button", { name: "Start this job" }).click();
   await expect(card).toHaveAttribute("data-phase", "blocked");
   await expect(card.getByRole("alert")).toContainText(
-    "business setup needs approval",
+    "could not find this business’s setup",
   );
   await expect(card.getByLabel("The brief", { exact: true })).toBeEditable();
   expect(await commandCount(page, "attach_thread_task")).toBe(0);

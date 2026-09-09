@@ -10,17 +10,17 @@ import {
   backStep,
 } from "./steps.ts";
 
-test("two forms keep recovery inside account setup", () => {
+test("three steps keep recovery inside account setup", () => {
   const visibility = { invitesEnabled: false, creditsNeeded: true };
-  assert.deepEqual(visibleSteps(visibility), ["account", "company"]);
+  assert.deepEqual(visibleSteps(visibility), ["account", "company", "brain"]);
   assert.deepEqual(stepPosition("recovery", visibility), {
     index: 0,
-    total: 2,
+    total: 3,
   });
-  assert.deepEqual(stepPosition("company", visibility), { index: 1, total: 2 });
+  assert.deepEqual(stepPosition("company", visibility), { index: 1, total: 3 });
   assert.equal(nextStep("account", EMPTY_ANSWERS), "recovery");
   assert.equal(nextStep("recovery", EMPTY_ANSWERS), "company");
-  assert.equal(nextStep("company", EMPTY_ANSWERS), "done");
+  assert.equal(nextStep("company", EMPTY_ANSWERS), "brain");
 });
 test("resume never skips account recovery or resurrects removed setup questions", () => {
   assert.equal(resumeStep(EMPTY_ANSWERS), "account");
@@ -44,4 +44,20 @@ test("resume never skips account recovery or resurrects removed setup questions"
     backStep("company", { invitesEnabled: false, creditsNeeded: false }),
     null,
   );
+});
+
+test("power resumes only after explicit business confirmation", () => {
+  const confirmed = {
+    ...EMPTY_ANSWERS,
+    account: { email: "owner@example.test" },
+    recoveryAcknowledged: true,
+    businessConfirmed: true,
+  };
+  assert.equal(resumeStep(confirmed), "brain");
+  assert.equal(
+    resumeStep({ ...confirmed, recoveryAcknowledged: false }),
+    "recovery",
+  );
+  assert.equal(resumeStep({ ...confirmed, account: null }), "account");
+  assert.equal(nextStep("brain", confirmed), "done");
 });

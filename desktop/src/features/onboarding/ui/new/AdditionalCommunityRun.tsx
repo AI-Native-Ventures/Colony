@@ -44,6 +44,7 @@ export function CommunityOnboardingExit({ onExit }: { onExit: () => void }) {
 type Props = {
   /** The community-onboarding transaction this walk belongs to. */
   transactionId: string;
+  relayUrl?: string;
   /**
    * The draft already on the transaction, if any. Only its delivery marker is
    * used: reusing it is what stops a relaunch, or a retried handoff, sending
@@ -69,6 +70,7 @@ type Props = {
  */
 export function AdditionalCommunityRun({
   transactionId,
+  relayUrl,
   initialDraft,
   onComplete,
   onExit,
@@ -109,6 +111,7 @@ export function AdditionalCommunityRun({
   return (
     <NewOnboardingFlow
       answersKey={answersKey}
+      expectedRelayUrl={relayUrl}
       canvasOverlay={<CommunityOnboardingExit onExit={leave} />}
       existingIdentity
       onComplete={handleComplete}

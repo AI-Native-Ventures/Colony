@@ -18,11 +18,13 @@ test("account_gate_requires_a_long_enough_password", () => {
   assert.equal(accountReady({ ...valid, password: "short" }), false);
 });
 
-test("account_gate_defers_profile_details", () => {
-  assert.equal(accountReady({ ...valid, name: "   " }), true);
+test("account_gate_requires_the_name_that_will_identify_the_owner", () => {
+  assert.equal(accountReady({ ...valid, name: "   " }), false);
+  assert.equal(accountReady({ ...valid, name: undefined }), false);
+  assert.equal(accountReady({ ...valid, name: "npub1missing" }), false);
 });
 
-test("account_gate_asks_only_email_and_password", () => {
+test("account_gate_keeps_optional_profile_details_out_of_signup", () => {
   // The screen collects a name, an email and a password. City, country and
   // the photo left it: they are profile details, and the gate never depended
   // on them even when the screen still asked.

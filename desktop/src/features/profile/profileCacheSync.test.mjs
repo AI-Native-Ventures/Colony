@@ -4,6 +4,7 @@ import test from "node:test";
 import { QueryClient } from "@tanstack/react-query";
 
 import { readSelfProfileCache } from "./lib/selfProfileStorage.ts";
+import { readCachedUserLabels } from "./lib/userLabelStorage.ts";
 import { refreshProfileCaches } from "./profileCacheSync.ts";
 
 function installBrowserStubs() {
@@ -88,4 +89,49 @@ test("successful deferred save synchronizes every profile cache", async () => {
   assert.equal(persisted.avatarDataUrl, null);
   assert.equal(persisted.hasProfileEvent, true);
   assert.ok(persisted.updatedAt > 0);
+});
+
+test("publishing the first name repairs cached missing authors and survives reopening", async () => {
+  installBrowserStubs();
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(["profile"], {
+    ...PROFILE,
+    displayName: "npub1missing",
+    hasProfileEvent: false,
+  });
+  queryClient.setQueryData(["users-batch", PUBKEY], {
+    profiles: {},
+    missing: [PUBKEY],
+  });
+  queryClient.setQueryData(["users-batch-entry", PUBKEY], {
+    summary: null,
+    fetchedAt: Date.now(),
+  });
+  queryClient.setQueryData(
+    ["channels", "welcome", "members"],
+    [{ pubkey: PUBKEY, displayName: null }],
+  );
+
+  await refreshProfileCaches(
+    queryClient,
+    { ...PROFILE, avatarUrl: null },
+    RELAY_URL,
+  );
+
+  const batch = queryClient.getQueryData(["users-batch", PUBKEY]);
+  assert.equal(batch.profiles[PUBKEY].displayName, "Alice");
+  assert.deepEqual(batch.missing, []);
+  assert.equal(
+    queryClient.getQueryData(["users-batch-entry", PUBKEY]),
+    undefined,
+  );
+  assert.equal(
+    queryClient.getQueryData(["channels", "welcome", "members"])[0].displayName,
+    "Alice",
+  );
+  assert.equal(readSelfProfileCache(RELAY_URL, PUBKEY).displayName, "Alice");
+  assert.equal(
+    readCachedUserLabels(RELAY_URL, [PUBKEY]).profiles[PUBKEY].displayName,
+    "Alice",
+  );
 });

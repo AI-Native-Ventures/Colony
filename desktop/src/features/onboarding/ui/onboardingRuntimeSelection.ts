@@ -18,6 +18,7 @@ export function runtimeIsVisibleInOnboarding(runtimeId: string) {
 
 export function runtimeIsReadyForOnboarding(runtime: AcpRuntimeCatalogEntry) {
   return (
+    !runtime.localLaunchError &&
     runtime.availability === "available" &&
     (runtime.authStatus.status === "logged_in" ||
       runtime.authStatus.status === "not_applicable")

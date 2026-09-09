@@ -252,3 +252,23 @@ test("resolveAgentReadiness_preferred_goose_does_not_borrow_ready_buzz_agent_con
   );
   assert.equal(result.ready, false);
 });
+
+test("detected signed-in subscriptions are not launch-ready when isolation blocks them", () => {
+  const runtimes = [
+    makeRuntime({
+      id: "claude",
+      localLaunchError:
+        "This Electron beta requires Colony Agent for isolated local teammates",
+    }),
+  ];
+  for (const scope of ["any", "preferred"]) {
+    assert.equal(
+      resolveAgentReadiness(
+        runtimes,
+        makeConfig({ preferred_runtime: "claude" }),
+        scope,
+      ).ready,
+      false,
+    );
+  }
+});

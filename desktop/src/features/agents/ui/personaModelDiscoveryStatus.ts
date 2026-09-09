@@ -47,6 +47,19 @@ export function formatModelDiscoveryErrorStatus(
   agentLabel?: string,
 ): PersonaModelDiscoveryStatus | null {
   const message = errorMessage(error);
+  if (provider === "openrouter" && message.includes("OpenRouter connection")) {
+    return { message, tone: "warning" };
+  }
+  if (provider === "colony-credits") {
+    return {
+      message: message.includes("unavailable")
+        ? "Colony Credits is unavailable for this business. Choose another way to power your agents or contact Colony support."
+        : message.includes("expired")
+          ? "Colony Credits connection expired. Reconnect and try again."
+          : "Could not load Colony Credits models. Check the connection and try again.",
+      tone: "warning",
+    };
+  }
 
   if (provider.trim() === "relay-mesh") {
     if (message.includes("waiting for the current member roster")) {

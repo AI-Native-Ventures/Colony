@@ -28,6 +28,7 @@ test("tour", async ({ page }) => {
 
   await expect(page.getByTestId("onboarding-account")).toBeVisible();
   await shot(page, "01-account");
+  await page.getByLabel("Your name", { exact: true }).fill("Horizon Owner");
   await page
     .getByLabel("Email", { exact: true })
     .fill("aisha@rosebankauto.co.za");

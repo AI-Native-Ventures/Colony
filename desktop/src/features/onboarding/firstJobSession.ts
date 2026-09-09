@@ -34,7 +34,9 @@ const fundingDefaults = () => ({
 const messageOf = (error: unknown) =>
   error instanceof Error
     ? error.message
-    : "This step could not be completed. Try again.";
+    : typeof error === "string" && error.trim()
+      ? error.trim()
+      : "This step could not be completed. Try again.";
 
 /** All side effects come from the existing scoped runtime; mounting never starts or pays. */
 export function createFirstJobSession(

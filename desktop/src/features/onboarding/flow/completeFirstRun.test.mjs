@@ -144,25 +144,27 @@ test("throws when starter channels fail without a focus channel", async () => {
   );
 });
 
-test("profile write failure does not block completion", async () => {
+test("profile write failure preserves setup for retry without losing the owner's name", async () => {
   const { io, calls } = makeIo({
     updateProfile: async () => {
       throw new Error("profile down");
     },
   });
-  const result = await completeFirstRun(
-    {
-      queryClient: {},
-      relayUrl: "wss://r",
-      pubkey: "pk",
-      draft: null,
-      profileDisplayName: "Aisha",
-      profileAvatarUrl: null,
-    },
-    io,
+  await assert.rejects(
+    completeFirstRun(
+      {
+        queryClient: {},
+        relayUrl: "wss://r",
+        pubkey: "pk",
+        draft: null,
+        profileDisplayName: "Aisha",
+        profileAvatarUrl: null,
+      },
+      io,
+    ),
+    /could not save your profile/,
   );
-  assert.equal(result.focusChannelId, "chan-1");
-  assert.ok(calls.includes("complete:pk:wss://r"));
+  assert.deepEqual(calls, ["channels"]);
 });
 
 test("the founder's photo is published with their name, in one profile write", async () => {

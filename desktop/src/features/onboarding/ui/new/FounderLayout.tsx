@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { FileText, PencilLine } from "lucide-react";
 import { AntMark } from "@/shared/ui/colony-logo/AntMark";
 
-type FounderStep = "account" | "recovery" | "company";
+type FounderStep = "account" | "recovery" | "company" | "power";
 
 /** The approved founder composition, shared by both account entry paths. */
 export function FounderLayout({
@@ -73,7 +73,13 @@ export function FounderLayout({
           >
             {!businessOnly && (
               <>
-                <span aria-current={!company ? "step" : undefined}>
+                <span
+                  aria-current={
+                    step === "account" || step === "recovery"
+                      ? "step"
+                      : undefined
+                  }
+                >
                   1 · Account
                 </span>
                 <span className="onb-founder-step-divider" />
@@ -82,10 +88,20 @@ export function FounderLayout({
             <span aria-current={company ? "step" : undefined}>
               {businessOnly ? "1" : "2"} · Business
             </span>
+            <span className="onb-founder-step-divider" />
+            <span aria-current={step === "power" ? "step" : undefined}>
+              {businessOnly ? "2" : "3"} · Power
+            </span>
           </div>
           <header className="onb-simple-heading">
             <h1>
-              {company ? (
+              {step === "power" ? (
+                <>
+                  Your team.
+                  <br />
+                  Your choice.
+                </>
+              ) : company ? (
                 <>
                   Make this
                   <br />
@@ -105,11 +121,13 @@ export function FounderLayout({
               )}
             </h1>
             <p>
-              {company
-                ? "A name and a little context help your teammate get the details right."
-                : step === "recovery"
-                  ? "A quick safeguard before we set up your business."
-                  : "Give your AI teammate a job. Get work back that you can review and make your own."}
+              {step === "power"
+                ? "Use a subscription, Colony Credits, or OpenRouter free models. You choose what powers your teammates."
+                : company
+                  ? "A name and a little context help your teammate get the details right."
+                  : step === "recovery"
+                    ? "A quick safeguard before we set up your business."
+                    : "Give your AI teammate a job. Get work back that you can review and make your own."}
             </p>
           </header>
           <aside className="onb-founder-example">

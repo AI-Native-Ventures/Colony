@@ -197,23 +197,7 @@ export type AgentConfigFieldsProps = {
   runtimeFileConfig?: RuntimeFileConfigSubset | null;
   placeholderClassName?: string;
   selectClassName?: string;
-  /**
-   * Which disclosure preset to render (PR 2 flag cleanup — replaces eight
-   * independent show* booleans):
-   * - "full" (default): the evergreen stance — every field, escape hatch
-   *   (custom model/provider), description, required indicator, and
-   *   unavailable option is visible. Settings, defaults modal, dialogs.
-   * - "onboarding-essential": onboarding page 4's first-run stance — only
-   *   valid forward choices. No advanced section, no custom escape hatches,
-   *   no descriptions (the page copy does that job), no un-choosing via
-   *   placeholder options, no greyed-out effort levels.
-   * - "progressive-defaults": the defaults modal's full controls, revealed in
-   *   order. Provider appears after harness selection; model, effort, and
-   *   Advanced appear after a provider is configured.
-   * If a second surface wants the trimmed view, rename this value to plain
-   * "essential" — and have the conversation about whether it should really
-   * match onboarding.
-   */
+  /** Full settings, essential onboarding, or progressive defaults disclosure. */
   disclosure?: AgentConfigDisclosure;
   unstyled?: boolean;
   useCustomSelect?: boolean;
@@ -296,8 +280,7 @@ export function AgentConfigFields({
   const modelField = fieldModel.fields.find(
     (field) => field.kind === "model" && field.render === "control",
   );
-  // CLI-login harnesses apply this setting through ACP rather than an env var
-  // and provide their own default when no model override is persisted.
+  // ACP-native models can fall back to the harness default.
   const modelIsOptional = modelField?.targetApplication.kind === "acpNative";
   const modelIsValid =
     modelIsOptional ||
@@ -356,23 +339,19 @@ export function AgentConfigFields({
     credentialsValid,
   } = getGlobalAgentCredentialState({
     bakedEnvKeys,
+    credentialMode: config.credential_mode,
     envVars: config.env_vars,
     provider: credentialProvider,
     runtimeFileConfig,
     runtimeId: credentialRuntimeId,
   });
-  const configIsValid =
-    selectedRuntimeId.length > 0 && modelIsValid && credentialsValid;
-  React.useEffect(() => {
-    onValidityChange?.(configIsValid);
-  }, [configIsValid, onValidityChange]);
-
   const {
     discoveredModelOptions,
     modelDiscoveryLoading,
     modelDiscoveryStatus,
     modelDiscoverySuccessfulEmpty,
   } = usePersonaModelDiscovery({
+    credentialMode: config.credential_mode,
     envVars: config.env_vars,
     isCustomProviderEditing: isCustomProvider,
     modelFieldVisible: !dependentFieldsDisabled,
@@ -380,6 +359,20 @@ export function AgentConfigFields({
     provider: providerForDiscovery,
     selectedRuntime,
   });
+  const creditsModelIsValid =
+    config.credential_mode !== "colony_credits" ||
+    (!modelDiscoveryLoading &&
+      discoveredModelOptions?.some((option) => option.id === config.model));
+  const configIsValid =
+    selectedRuntimeId.length > 0 &&
+    !selectedRuntime?.localLaunchError &&
+    modelIsValid &&
+    creditsModelIsValid === true &&
+    credentialsValid;
+  React.useEffect(() => {
+    onValidityChange?.(configIsValid);
+  }, [configIsValid, onValidityChange]);
+
   const modelControlVisible = shouldRenderModelControl({
     discoveredModelOptions: dependentFieldsDisabled
       ? null
@@ -393,12 +386,8 @@ export function AgentConfigFields({
     showCustomModelOption,
   });
 
-  // Mount-time healing policy: onboarding page 4 edits the root config during
-  // first-run (no higher layers to inherit from), so acting on open is safe
-  // and intentional there — it heals stale state and picks a valid model.
-  // Evergreen surfaces (Settings, dialogs) edit saved data that may pair with
-  // higher layers (see PR #2148 review thread), so they only act after the
-  // user explicitly edits the provider in this session.
+  // Onboarding may heal its new draft. Settings retain saved choices until
+  // the user edits the provider, because higher layers may still use them.
   const healOnMount =
     fieldModel.dependentValuePolicy.onCatalogMismatch === "onboardingCleanup";
   const userEditedProviderRef = React.useRef(false);
@@ -797,14 +786,21 @@ export function AgentConfigFields({
       {modelControlVisible ? (
         <div className={showDescriptions ? fieldClassName : undefined}>
           <AgentModelField
-            allowDefaultModel={fallbackModel !== null}
+            allowDefaultModel={
+              config.credential_mode !== "colony_credits" &&
+              fallbackModel !== null
+            }
             defaultModelLabel={
               fallbackModel ? `Default model (${fallbackModel})` : undefined
             }
             disableSelectDuringDiscovery={disableModelSelectDuringDiscovery}
             disabled={dependentFieldsDisabled}
             discoveredModelOptions={
-              dependentFieldsDisabled ? null : discoveredModelOptions
+              config.credential_mode === "colony_credits"
+                ? (discoveredModelOptions ?? [])
+                : dependentFieldsDisabled
+                  ? null
+                  : discoveredModelOptions
             }
             globalModel={fallbackModel ?? undefined}
             id="global-agent-model"
@@ -831,7 +827,10 @@ export function AgentConfigFields({
             fieldClassName={unstyled ? fieldClassName : undefined}
             labelClassName={fieldLabelClassName}
             selectClassName={selectClassName}
-            showCustomModelOption={showCustomModelOption}
+            showCustomModelOption={
+              config.credential_mode !== "colony_credits" &&
+              showCustomModelOption
+            }
             showStatusMessage={shouldShowModelStatusMessage(
               showDescriptions,
               dependentFieldsDisabled ? null : modelDiscoveryStatus,

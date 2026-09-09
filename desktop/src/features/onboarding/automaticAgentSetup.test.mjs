@@ -288,3 +288,27 @@ test("founder setup propagates failed config write instead of declaring readines
     /synthetic write failure/,
   );
 });
+
+test("founder setup preserves unsupported saved subscriptions and asks for an explicit power choice", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const { io, device } = fakeDevice({
+    runtimes: [
+      {
+        ...runtime("claude"),
+        localLaunchError:
+          "This Electron beta requires Colony Agent for isolated local teammates",
+      },
+      ...CLEAN_MACHINE,
+    ],
+    config: { ...EMPTY_CONFIG, preferred_runtime: "claude" },
+  });
+  await assert.rejects(
+    () => ensureBuiltInFounderConfig(io),
+    /Choose how to power your agents/,
+  );
+  assert.equal(device.writes, 0);
+  assert.deepEqual(device.installed, []);
+  assert.equal(device.config.preferred_runtime, "claude");
+});

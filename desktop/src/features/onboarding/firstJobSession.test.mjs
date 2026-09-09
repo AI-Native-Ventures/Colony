@@ -236,3 +236,17 @@ test("a verified task refusal offers retry without presenting a lost message rec
   assert.equal(f.session.getSnapshot().briefLocked, true);
   assert.match(f.session.getSnapshot().error, /refused before work started/);
 });
+
+test("native string errors preserve the actionable gateway failure", async () => {
+  const f = fixture({
+    start: async () => {
+      throw "Colony Credits gateway is unavailable on this relay";
+    },
+  });
+  await f.session.start();
+  assert.match(
+    f.session.getSnapshot().error,
+    /Colony Credits gateway is unavailable/,
+  );
+  assert.notEqual(f.session.getSnapshot().phase, "sent");
+});

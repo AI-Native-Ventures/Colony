@@ -61,13 +61,15 @@ test("creating a community starts the founder walk at the company screen", async
   await expect(
     page.getByRole("heading", { name: "Your business", exact: true }),
   ).toBeVisible();
-  // Existing identities answer only the business form; account recovery and
-  // runtime/funding choices are not part of this run.
+  // Existing identities confirm business and power; account recovery stays
+  // behind them.
   await expect(page.getByTestId("onboarding-account")).toHaveCount(0);
   await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
-  await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
+  const steps = page.getByTestId("onboarding-step-counter");
+  await expect(steps.locator('[aria-current="step"]')).toHaveText(
     "1 · Business",
   );
+  await expect(steps).toContainText("2 · Power");
   // The request is recorded, so a relaunch halfway through the walk resumes
   // it instead of dropping the person back on the choice screen.
   await expect

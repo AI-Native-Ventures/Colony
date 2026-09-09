@@ -17,6 +17,8 @@ import type {
 } from "@/shared/api/types";
 import { getAvatarSnapshotUrl } from "@/shared/lib/animatedAvatar";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { updateCachedChannelMemberDisplayName } from "@/features/channels/channelMemberProfileCache";
+import { writeCachedUserLabels } from "@/features/profile/lib/userLabelStorage";
 
 function queryContainsPubkey(query: Query, pubkey: string): boolean {
   return query.queryKey.includes(pubkey);
@@ -47,18 +49,39 @@ export async function refreshProfileCaches(
         queryContainsPubkey(query, pubkey),
     },
     (current) => {
-      if (!current?.profiles[pubkey]) return current;
+      if (!current) return current;
       return {
         ...current,
+        missing: current.missing.filter((key) => key !== pubkey),
         profiles: {
           ...current.profiles,
           [pubkey]: {
             ...current.profiles[pubkey],
+            displayName: profile.displayName,
             avatarUrl: profile.avatarUrl,
+            nip05Handle: profile.nip05Handle,
+            ownerPubkey: profile.ownerPubkey,
           } satisfies UserProfileSummary,
         },
       };
     },
+  );
+  await updateCachedChannelMemberDisplayName(
+    queryClient,
+    pubkey,
+    profile.displayName,
+  );
+  writeCachedUserLabels(
+    relayUrl,
+    {
+      [pubkey]: {
+        displayName: profile.displayName,
+        avatarUrl: profile.avatarUrl,
+        nip05Handle: profile.nip05Handle,
+        ownerPubkey: profile.ownerPubkey,
+      },
+    },
+    [],
   );
   // Search result pages also embed profile avatars, but their arbitrary query
   // text/page shape makes a safe targeted rewrite brittle. Mark every search

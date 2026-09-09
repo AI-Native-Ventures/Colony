@@ -11,8 +11,8 @@ use crate::{
     models::{ProfileInfo, SearchUsersResponse, UserNotesResponse, UsersBatchResponse},
     nostr_convert,
     relay::{
-        query_relay, query_relay_at_with_keys, relay_http_base_url, submit_event,
-        submit_event_at_with_keys,
+        query_relay, query_relay_at_with_keys, relay_api_base_url_with_override,
+        relay_http_base_url, relay_ws_url_with_override, submit_event_at_with_keys,
     },
 };
 
@@ -36,23 +36,37 @@ pub async fn get_profile(state: State<'_, AppState>) -> Result<ProfileInfo, Stri
         .unwrap_or_else(|| empty_profile_info(&current_pubkey_hex_unwrap(&state))))
 }
 
+/// Merge a profile using one pinned signer and relay for the whole operation.
+/// Optional expected identity and relay must be supplied together.
 #[tauri::command]
 pub async fn update_profile(
     display_name: Option<String>,
     avatar_url: Option<String>,
     about: Option<String>,
     nip05_handle: Option<String>,
+    expected_pubkey: Option<String>,
+    expected_relay_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ProfileInfo, String> {
     // Read-merge-write: kind 0 is a full profile snapshot.
-    let my_pubkey = current_pubkey_hex(&state)?;
-    let prior_events = query_relay(
+    let scope = capture_profile_write_scope(
         &state,
-        &[serde_json::json!({
-            "kinds": [0],
-            "authors": [my_pubkey],
-            "limit": 1
-        })],
+        expected_pubkey.as_deref(),
+        expected_relay_url.as_deref(),
+    )
+    .await?;
+    let my_pubkey = scope.signer.public_key().to_hex();
+    let filter = serde_json::json!({
+        "kinds": [0],
+        "authors": [my_pubkey],
+        "limit": 1
+    });
+    let prior_events = query_relay_at_with_keys(
+        &state,
+        &scope.api_base_url,
+        std::slice::from_ref(&filter),
+        &scope.signer,
+        None,
     )
     .await?;
 
@@ -77,25 +91,72 @@ pub async fn update_profile(
         .as_deref()
         .or_else(|| current.get("nip05").and_then(Value::as_str));
 
-    let builder = events::build_profile(dn, name, picture, ab, nip05, None)?;
-    submit_event(builder, &state).await?;
+    let builder = events::build_profile(dn, name, picture, ab, nip05, None)?.custom_created_at(
+        monotonic_created_at(
+            prior_events
+                .first()
+                .map(|event| event.created_at.as_secs() as i64),
+        ),
+    );
+    submit_event_at_with_keys(builder, &state, &scope.api_base_url, &scope.signer).await?;
 
     // Re-fetch to return canonical profile.
-    let events = query_relay(
-        &state,
-        &[serde_json::json!({
-            "kinds": [0],
-            "authors": [current_pubkey_hex(&state)?],
-            "limit": 1
-        })],
-    )
-    .await?;
+    let events =
+        query_relay_at_with_keys(&state, &scope.api_base_url, &[filter], &scope.signer, None)
+            .await?;
 
     Ok(events
         .first()
         .map(nostr_convert::profile_info_from_event)
         .transpose()?
-        .unwrap_or_else(|| empty_profile_info(&current_pubkey_hex_unwrap(&state))))
+        .unwrap_or_else(|| empty_profile_info(&my_pubkey)))
+}
+
+struct ProfileWriteScope {
+    signer: nostr::Keys,
+    api_base_url: String,
+}
+
+async fn capture_profile_write_scope(
+    state: &AppState,
+    expected_pubkey: Option<&str>,
+    expected_relay_url: Option<&str>,
+) -> Result<ProfileWriteScope, String> {
+    if expected_pubkey.is_some() != expected_relay_url.is_some() {
+        return Err("Saving a profile requires both the original account and business.".into());
+    }
+    // Match workspace/identity mutation lock order, then release both before
+    // network I/O. Later switches cannot change this operation's signer or URL.
+    let _community_guard = state.community_operation_lock.read().await;
+    let _identity_guard = state
+        .identity_mutation
+        .lock()
+        .map_err(|error| error.to_string())?;
+    if state
+        .reset_failed
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return Err("Account recovery must finish before saving your profile.".into());
+    }
+    let signer = state.signing_keys()?;
+    let api_base_url = match (expected_pubkey, expected_relay_url) {
+        (Some(pubkey), Some(relay_url)) => {
+            let normalize = buzz_core_pkg::relay::normalize_relay_url;
+            if signer.public_key().to_hex() != pubkey
+                || normalize(&relay_ws_url_with_override(state))
+                    .map_err(|error| error.to_string())?
+                    != normalize(relay_url).map_err(|error| error.to_string())?
+            {
+                return Err("The account or business changed before saving your profile.".into());
+            }
+            relay_http_base_url(relay_url)
+        }
+        _ => relay_api_base_url_with_override(state),
+    };
+    Ok(ProfileWriteScope {
+        signer,
+        api_base_url,
+    })
 }
 
 #[tauri::command]
@@ -417,6 +478,75 @@ fn empty_profile_info(pubkey: &str) -> ProfileInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn profile_write_scope_pins_signer_and_destination_across_context_changes() {
+        let state = crate::app_state::build_app_state();
+        let original_pubkey = state
+            .signing_keys()
+            .expect("signable identity")
+            .public_key()
+            .to_hex();
+        *state.relay_url_override.lock().expect("lock relay") =
+            Some("wss://first.example.test".into());
+        let captured = capture_profile_write_scope(
+            &state,
+            Some(&original_pubkey),
+            Some("wss://first.example.test"),
+        )
+        .await
+        .expect("matching profile scope");
+
+        *state.keys.lock().expect("lock keys") = nostr::Keys::generate();
+        *state.relay_url_override.lock().expect("lock relay") =
+            Some("wss://second.example.test".into());
+
+        let event = events::build_profile(Some("Original Owner"), None, None, None, None, None)
+            .expect("build profile")
+            .sign_with_keys(&captured.signer)
+            .expect("sign pinned profile");
+        assert_eq!(event.pubkey.to_hex(), original_pubkey);
+        assert_eq!(captured.api_base_url, "https://first.example.test");
+        assert!(capture_profile_write_scope(
+            &state,
+            Some(&original_pubkey),
+            Some("wss://first.example.test"),
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn profile_write_scope_rejects_a_wrong_relay_or_incomplete_expectation() {
+        let state = crate::app_state::build_app_state();
+        let pubkey = state
+            .signing_keys()
+            .expect("signable identity")
+            .public_key()
+            .to_hex();
+        *state.relay_url_override.lock().expect("lock relay") =
+            Some("wss://current.example.test".into());
+        assert!(capture_profile_write_scope(
+            &state,
+            Some(&pubkey),
+            Some("wss://different.example.test"),
+        )
+        .await
+        .is_err());
+        assert!(capture_profile_write_scope(&state, Some(&pubkey), None)
+            .await
+            .is_err());
+        assert!(
+            capture_profile_write_scope(&state, None, Some("wss://current.example.test"))
+                .await
+                .is_err()
+        );
+        let compatible = capture_profile_write_scope(&state, None, None)
+            .await
+            .expect("legacy caller captures current profile scope");
+        assert_eq!(compatible.signer.public_key().to_hex(), pubkey);
+        assert_eq!(compatible.api_base_url, "https://current.example.test");
+    }
 
     #[test]
     fn deferred_profile_signer_is_captured_and_rejects_wrong_identity() {

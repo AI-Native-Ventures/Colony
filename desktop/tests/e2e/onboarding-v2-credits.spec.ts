@@ -68,7 +68,7 @@ async function fillSecondBusiness(page: Page) {
   await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
 }
 
-test("a created community needs one business form with a way out", async ({
+test("a created community confirms business and its saved agent connection with a way out", async ({
   page,
 }) => {
   await seedCreatedCommunity(page, "additional-community-canvas");
@@ -79,7 +79,7 @@ test("a created community needs one business form with a way out", async ({
         credential_mode: "byok",
         env_vars: {},
         model: null,
-        preferred_runtime: "codex",
+        preferred_runtime: "claude",
         provider: null,
       },
     },
@@ -90,9 +90,11 @@ test("a created community needs one business form with a way out", async ({
   await expect(page.getByTestId("onboarding-business")).toBeVisible({
     timeout: 15_000,
   });
-  await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
+  const steps = page.getByTestId("onboarding-step-counter");
+  await expect(steps.locator('[aria-current="step"]')).toHaveText(
     "1 · Business",
   );
+  await expect(steps).toContainText("2 · Power");
   await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
   await fillSecondBusiness(page);
   await openFounderBusiness(page);
@@ -144,7 +146,7 @@ test("a zero balance never stands between a second company and its workspace", a
         env_vars: {},
         model: "deepseek-v4-flash",
         preferred_runtime: "buzz-agent",
-        provider: "deepseek",
+        provider: "openai-compat",
       },
     },
     { relayWsUrl: RELAY_URL, skipOnboardingSeed: true },
@@ -172,7 +174,7 @@ test("a Colony Credits user sees the live balance beside the profile", async ({
       env_vars: {},
       model: "deepseek-v4-flash",
       preferred_runtime: "buzz-agent",
-      provider: "deepseek",
+      provider: "openai-compat",
     },
   });
 

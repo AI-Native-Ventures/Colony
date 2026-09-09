@@ -47,7 +47,7 @@ export async function checkFirstJobBusiness(
   );
   if (!profile.ok) {
     if (profile.code === "missing-head")
-      return "Your business setup needs approval before this job can start. Review the setup with your Chief of Staff, then try again.";
+      return "Colony could not find this business’s setup on the server. This is a workspace setup problem, not an approval you missed. Your brief is saved; try again after the workspace connection is repaired.";
     throw new Error("Your business setup could not be checked. Try again.");
   }
   if (!profile.value.costCentres.some((centre) => centre.kind === "internal"))

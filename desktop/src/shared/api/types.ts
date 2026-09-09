@@ -516,6 +516,8 @@ export type AcpRuntimeCatalogEntry = {
   label: string;
   avatarUrl: string;
   availability: AcpAvailabilityStatus;
+  /** Native launch restriction, independent of installation and account detection. */
+  localLaunchError?: string;
   command: string | null;
   binaryPath: string | null;
   defaultArgs: string[];

@@ -36,7 +36,11 @@ mock.module("./OnboardingCanvas.tsx", {
       React.createElement("div", null, overlay, children),
   },
 });
-const { NewOnboardingFlow } = await import("./NewOnboardingFlow.tsx");
+const { NewOnboardingFlow, answerStorage } = await import(
+  "./NewOnboardingFlow.tsx"
+);
+const { saveAccountNameDraft, readAccountNameDraft, founderWithName } =
+  await import("../../accountNameDraft.ts");
 const { createFakeServices } = await import("../../contracts.fake.ts");
 const { render, fireEvent, act, cleanup } = await import(
   "@testing-library/react"
@@ -46,6 +50,55 @@ afterEach(() => {
   localStorage.clear();
 });
 after(() => dom.window.close());
+
+for (const [existingName, expectedName] of [
+  [null, "Horizon Owner"],
+  ["Established Owner", "Established Owner"],
+]) {
+  test(`recovery restores a pending signup name without replacing ${existingName ?? "an empty profile"}`, async () => {
+    const key = "resumed-owner-answers";
+    const email = "owner@example.test";
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        account: { email },
+        recoveryAcknowledged: false,
+        founder: founderWithName(null, existingName ?? ""),
+      }),
+    );
+    saveAccountNameDraft(answerStorage, email, "Horizon Owner");
+    const services = createFakeServices();
+    services.auth.pendingSignup = async () => ({
+      pubkey: "first-owner",
+      email,
+      attemptId: "resumed-signup",
+      recoveryCode: "synthetic recovery code",
+      phase: "registered",
+    });
+    let view;
+    await act(async () => {
+      view = render(
+        React.createElement(NewOnboardingFlow, {
+          currentPubkey: "first-owner",
+          answersKey: key,
+          services,
+          provisioning: null,
+          onComplete: async () => {},
+        }),
+      );
+    });
+    assert.equal(
+      view.getByTestId("onboarding-recovery-code").textContent,
+      "synthetic recovery code",
+    );
+    assert.equal(
+      JSON.parse(localStorage.getItem(key)).founder.fullName,
+      expectedName,
+    );
+    assert.equal(readAccountNameDraft(answerStorage, email), "");
+    assert.equal(view.queryByTestId("onboarding-account"), null);
+  });
+}
 
 async function submitDeferredBusiness(overlay = false) {
   const key = "synthetic-owner-answers";
@@ -89,7 +142,7 @@ async function submitDeferredBusiness(overlay = false) {
   const view = render(React.createElement(NewOnboardingFlow, props));
   await act(async () =>
     fireEvent.click(
-      view.getByRole("button", { name: "Open my Colony", exact: true }),
+      view.getByRole("button", { name: "Continue", exact: true }),
     ),
   );
   return {

@@ -55,6 +55,7 @@ export async function completeFixtureOnboarding({
     .locator("#onb-account-email")
     .waitFor({ state: "visible", timeout: 30_000 });
   await page.locator("#onb-account-email").fill(EMAIL);
+  await page.locator("#onb-account-name").fill("Horizon Owner");
   await page.locator("#onb-account-password").fill(PASSWORD);
   onProgress("account-ready");
   await screenshot(page, proofDirectory, "joined-account.png");
@@ -135,6 +136,12 @@ export async function completeFixtureOnboarding({
   await page.locator("#onb-company-name").fill("Horizon Labs");
   await page.locator("#onb-company-description").fill(BUSINESS);
   await screenshot(page, proofDirectory, "joined-business.png");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByTestId("onboarding-power").waitFor({ state: "visible" });
+  await page
+    .getByRole("button", { name: "Open my Colony", exact: true })
+    .click({ trial: true });
+  await screenshot(page, proofDirectory, "joined-power.png");
   await page
     .getByRole("button", { name: "Open my Colony", exact: true })
     .click();
@@ -181,6 +188,15 @@ export async function completeFixtureOnboarding({
     "Actual native workspace keeps the canonical tenant URL",
   );
   assert.equal((await invoke(page, "get_identity")).pubkey, OWNER);
+  const ownerProfile = await invoke(page, "get_profile");
+  assert.equal(ownerProfile.display_name, "Horizon Owner");
+  assert.equal(ownerProfile.has_profile_event, true);
+  await page.getByTestId("sidebar-profile-name").waitFor({ state: "visible" });
+  assert.equal(
+    await page.getByTestId("sidebar-profile-name").innerText(),
+    "Horizon Owner",
+    "The name entered before recovery survives relaunch and appears in the workspace",
+  );
   const { channels } = await invoke(page, "get_channels", { knownHash: null });
   const welcome = channels.find((channel) => channel.id === channelId);
   assert.ok(

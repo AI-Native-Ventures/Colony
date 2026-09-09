@@ -1,10 +1,12 @@
 import { expect, type Page } from "@playwright/test";
+import { continueFounderBusiness } from "./onboarding";
 
 /** Walk the public account form without introducing any legacy setup questions. */
 export async function createFounderAccount(page: Page, email: string) {
   await expect(
     page.getByRole("heading", { name: "Create your account", exact: true }),
   ).toBeVisible();
+  await page.getByLabel("Your name", { exact: true }).fill("Horizon Owner");
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill("colonyprototype");
   await page
@@ -37,11 +39,15 @@ export async function fillFounderBusiness(
     .getByLabel("What does your business do?", { exact: true })
     .fill(description);
   await expect(
-    page.getByRole("button", { name: "Open my Colony", exact: true }),
+    page.getByRole("button", { name: "Continue", exact: true }),
   ).toBeEnabled();
 }
 
 export async function openFounderBusiness(page: Page) {
+  await continueFounderBusiness(page);
+  await expect(
+    page.getByRole("button", { name: "Open my Colony", exact: true }),
+  ).toBeEnabled();
   await page
     .getByRole("button", { name: "Open my Colony", exact: true })
     .click();

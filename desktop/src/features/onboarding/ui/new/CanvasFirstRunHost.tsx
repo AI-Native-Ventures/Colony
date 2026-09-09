@@ -193,6 +193,7 @@ export function CanvasFirstRunHost({
       services={services}
       provisioning={provisioning}
       onComplete={onComplete}
+      onPreparePower={waitForApply}
       onRequestSignIn={onRequestSignIn}
       existingIdentity={existingIdentity}
       onLeaveRun={onLeaveRun}
