@@ -6,6 +6,7 @@
     "dev": "remotion studio src/index.ts",
     "render": "remotion render src/index.ts Hello out/hello.mp4",
     "render:t1": "remotion render src/index.ts T1 out/t1.mp4 --props=jobs/customers.json",
+    "render:batch": "node scripts/render-batch.mjs",
     "check": "biome check src && tsc --noEmit"
   },
   "dependencies": {

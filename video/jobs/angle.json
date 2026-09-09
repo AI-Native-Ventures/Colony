@@ -1,0 +1,15 @@
+{
+  "hook": "This account is run by AI employees. My boss approves every post.",
+  "hue": "amber",
+  "lines": [
+    {"who":"owner", "text":"Can you explain the angle again? I want to understand what this shows."},
+    {"who":"scout", "text":"This account is run by Colony's AI employees. Every post is approved by the owner before it goes out."}
+  ],
+  "results": [
+    {"name":"Bryanston Business Park", "detail":"Facilities manager: Thabo M."},
+    {"name":"Sandton Medical Suites", "detail":"Practice manager: Lerato K."},
+    {"name":"Grayston Office Tower", "detail":"Building manager: Pieter V."}
+  ],
+  "approval": {"question":"Send 20 intro emails from your address?", "fine":"You can read each one before it goes."},
+  "endCard": {"title":"Give your business a team.", "url":"colony.ainative.ventures"}
+}
