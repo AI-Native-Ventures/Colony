@@ -22,6 +22,28 @@ fn valid_export_origin(label: &str, url: &url::Url) -> bool {
     label == "main" && url.as_str() == "tauri://localhost/electron-migration.html"
 }
 
+fn persistent_fixture_allowed(release_fixture: bool, hosted: bool, mode: &str) -> bool {
+    release_fixture && hosted && matches!(mode, "legacy-seed" | "legacy-read" | "import")
+}
+
+/// Only the separately compiled hosted fixture can select its own persistent store.
+pub(super) fn persistent_fixture() -> bool {
+    persistent_fixture_allowed(
+        cfg!(feature = "onboarding-fixture") && enabled(),
+        std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"),
+        &std::env::var("COLONY_MIGRATION_PROOF").unwrap_or_default(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_fixture() -> bool {
+    persistent_fixture()
+        && matches!(
+            std::env::var("COLONY_MIGRATION_PROOF").as_deref(),
+            Ok("legacy-seed" | "legacy-read")
+        )
+}
+
 #[cfg(any(target_os = "macos", test))]
 fn source_bundle_matches(identifier: Option<&str>, fixture: bool) -> bool {
     identifier
@@ -33,13 +55,18 @@ fn source_bundle_matches(identifier: Option<&str>, fixture: bool) -> bool {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn containing_app(host: &std::path::Path) -> Result<&std::path::Path, &'static str> {
-    if !host.ends_with("Contents/Resources/native/buzz-desktop") {
+fn containing_app(host: &std::path::Path, legacy: bool) -> Result<&std::path::Path, &'static str> {
+    let suffix = if legacy {
+        "Contents/MacOS/buzz-desktop"
+    } else {
+        "Contents/Resources/native/buzz-desktop"
+    };
+    if !host.ends_with(suffix) {
         return Err("Native helper is outside its installed app layout");
     }
     let app = host
         .ancestors()
-        .nth(4)
+        .nth(if legacy { 3 } else { 4 })
         .ok_or("Native app path is incomplete")?;
     if app.extension().and_then(|value| value.to_str()) != Some("app") {
         return Err("Native helper requires its containing application");
@@ -54,7 +81,8 @@ pub(super) fn verify_source_bundle() -> Result<(), String> {
         // Independently validate its real containing app first. Production
         // signing and notarization remain separate release gates.
         let host = std::env::current_exe().map_err(|_| "Native app path unavailable")?;
-        let app = containing_app(&host)?;
+        let legacy = legacy_fixture();
+        let app = containing_app(&host, legacy)?;
         let info = app.join("Contents/Info.plist");
         if host
             .canonicalize()
@@ -78,7 +106,7 @@ pub(super) fn verify_source_bundle() -> Result<(), String> {
         ) {
             return Err("Native helper and containing app identities do not match".into());
         }
-        let executable = if fixture {
+        let executable = if fixture && !legacy {
             "Colony Onboarding Fixture"
         } else {
             "buzz-desktop"
@@ -219,8 +247,8 @@ pub(crate) async fn electron_finish_frontend_migration() -> Result<(), String> {
 pub(crate) fn electron_frontend_migration_fixture() -> Option<Entries> {
     #[cfg(feature = "onboarding-fixture")]
     if enabled()
-        && !super::stable_profile()
-        && std::env::var("COLONY_MIGRATION_PROOF").as_deref() == Ok("1")
+        && persistent_fixture()
+        && std::env::var("COLONY_MIGRATION_PROOF").as_deref() == Ok("legacy-seed")
     {
         return Some(vec![
             ("buzz-communities".into(), r#"[{"id":"proof-alpha","name":"Alpha","relayUrl":"wss://alpha.example.invalid","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","addedAt":"2026-09-09T00:00:00Z"},{"id":"proof-bravo","name":"Bravo","relayUrl":"wss://bravo.example.invalid","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","addedAt":"2026-09-09T00:00:00Z"}]"#.into()),
@@ -238,12 +266,24 @@ pub(crate) fn electron_frontend_migration_fixture() -> Option<Entries> {
 mod tests {
     use super::*;
     #[test]
+    fn persistent_proof_modes_never_authorize_a_production_or_unhosted_binary() {
+        for mode in ["legacy-seed", "legacy-read", "import"] {
+            assert!(persistent_fixture_allowed(true, true, mode));
+            assert!(!persistent_fixture_allowed(false, true, mode));
+            assert!(!persistent_fixture_allowed(true, false, mode));
+        }
+        for mode in ["", "1", "stable", "production"] {
+            assert!(!persistent_fixture_allowed(true, true, mode));
+        }
+    }
+    #[test]
     fn helper_metadata_cannot_authorize_a_standalone_or_wrong_layout_binary() {
         use std::path::Path;
         assert_eq!(
-            containing_app(Path::new(
-                "/Applications/Colony.app/Contents/Resources/native/buzz-desktop"
-            ))
+            containing_app(
+                Path::new("/Applications/Colony.app/Contents/Resources/native/buzz-desktop"),
+                false
+            )
             .unwrap(),
             Path::new("/Applications/Colony.app")
         );
@@ -253,8 +293,21 @@ mod tests {
             "/tmp/Colony.app/Contents/MacOS/buzz-desktop",
             "/tmp/Colony.app/Contents/Resources/native/other",
         ] {
-            assert!(containing_app(Path::new(path)).is_err());
+            assert!(containing_app(Path::new(path), false).is_err());
         }
+        assert_eq!(
+            containing_app(
+                Path::new("/tmp/Fixture.app/Contents/MacOS/buzz-desktop"),
+                true
+            )
+            .unwrap(),
+            Path::new("/tmp/Fixture.app")
+        );
+        assert!(containing_app(
+            Path::new("/tmp/Fixture.app/Contents/Resources/native/buzz-desktop"),
+            true
+        )
+        .is_err());
     }
     #[test]
     fn migration_requires_the_expected_process_bundle_not_only_the_data_identifier() {

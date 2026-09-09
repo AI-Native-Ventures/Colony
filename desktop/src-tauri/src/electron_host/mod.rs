@@ -72,14 +72,15 @@ pub(crate) fn context(mut context: tauri::Context<tauri::Wry>) -> tauri::Context
         let config = context.config_mut();
         // Only the release host's explicit stable profile shares installed data.
         config.identifier = data_identifier().into();
+        let migration = migration::enabled() && migration::verify_source_bundle().is_ok();
         for window in &mut config.app.windows {
             window.visible = false;
             window.focus = false;
             window.maximized = false;
             // WKWebView default storage follows the outer macOS bundle. A
             // candidate or explicit QA profile must not read stable WebKit data.
-            window.incognito = !stable_profile();
-            if migration::enabled() && migration::verify_source_bundle().is_ok() {
+            window.incognito = !(stable_profile() || migration && migration::persistent_fixture());
+            if migration {
                 window.url = tauri::WebviewUrl::App("electron-migration.html".into());
             } else if let Ok(url) = url::Url::parse("about:blank") {
                 window.url = tauri::WebviewUrl::External(url);

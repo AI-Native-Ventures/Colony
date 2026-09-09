@@ -1,7 +1,8 @@
-// Hosted macOS proof only: nonempty incognito WebKit -> native -> Chromium.
+// Hosted macOS proof only: persistent legacy-layout WebKit -> native -> Chromium.
 // Requires the separately compiled onboarding fixture; never a production override.
 import { _electron as electron } from "@playwright/test";
 import { createFixtureCertificates } from "./onboarding-fixture/certificates.mjs";
+import { readLegacyStorage } from "./onboarding-fixture/legacy-storage.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -30,7 +31,8 @@ assert.notEqual(manifest.channel, "stable");
 const data = await realpath(
   await mkdtemp(path.join(os.tmpdir(), "colony-migration-proof-")),
 );
-const namespace = `xyz.block.buzz.app.dev-electron.${createHash("sha256").update(data).digest("hex").slice(0, 16)}`;
+const profileId = createHash("sha256").update(data).digest("hex").slice(0, 16);
+const namespace = `xyz.block.buzz.app.dev-electron.${profileId}`;
 const exec = promisify(execFile);
 // The fixture binary requires its process-private transport even when this
 // proof only reads storage. Keep every allowed host on an unused loopback port;
@@ -43,6 +45,25 @@ const transport = JSON.stringify({
   routes: fixtureHosts.map((host) => ({ host, address: "127.0.0.1:1" })),
 });
 certificates.key.fill(0);
+const fixtureEnv = {
+  ...process.env,
+  COLONY_ELECTRON_USER_DATA: data,
+  COLONY_ELECTRON_PACKAGED: "1",
+  COLONY_ELECTRON_PROFILE_ID: profileId,
+  COLONY_ELECTRON_INSTANCE_ID: namespace,
+  BUZZ_ONBOARDING_FIXTURE_TRANSPORT: transport,
+  BUZZ_PRIVATE_KEY: `${"0".repeat(63)}1`,
+  BUZZ_SHARE_IDENTITY: "0",
+  BUZZ_RELAY_URL: "wss://alpha.example.invalid",
+  BUZZ_RELAY_HTTP: "https://alpha.example.invalid",
+};
+const legacy = (mode) =>
+  readLegacyStorage({ manifest, directory: data, env: fixtureEnv, mode });
+const sourceHash = (entries) =>
+  createHash("sha256")
+    .update(JSON.stringify([...entries].sort(([a], [b]) => a.localeCompare(b))))
+    .digest("hex");
+let phase = "legacy-seed";
 let app;
 const launch = () =>
   electron.launch({
@@ -53,14 +74,9 @@ const launch = () =>
     cwd: data,
     args: [],
     env: {
-      ...process.env,
-      COLONY_ELECTRON_USER_DATA: data,
-      COLONY_MIGRATION_PROOF: "1",
-      BUZZ_ONBOARDING_FIXTURE_TRANSPORT: transport,
-      BUZZ_PRIVATE_KEY: `${"0".repeat(63)}1`,
-      BUZZ_SHARE_IDENTITY: "0",
-      BUZZ_RELAY_URL: "wss://alpha.example.invalid",
-      BUZZ_RELAY_HTTP: "https://alpha.example.invalid",
+      ...fixtureEnv,
+      // Deliberately no seeding: this process must find the previous WebKit store.
+      COLONY_MIGRATION_PROOF: "import",
     },
     timeout: 30_000,
   });
@@ -87,9 +103,26 @@ async function readState(page) {
   }));
 }
 try {
+  const source = await legacy("legacy-seed");
+  assert.equal(source.length, 6);
+  const expectedHash = sourceHash(source);
+  phase = "legacy-persistence";
+  assert.equal(sourceHash(await legacy("legacy-read")), expectedHash);
+  phase = "electron-import";
   app = await launch();
   let page = await app.firstWindow();
   const migrated = await readState(page);
+  const importSeed = await page.evaluate(() =>
+    window.colonyDesktop.request("invoke", {
+      command: "electron_frontend_migration_fixture",
+      args: {},
+    }),
+  );
+  assert.equal(
+    importSeed,
+    null,
+    "The Electron import phase must not reseed WebKit",
+  );
   assert.deepEqual(
     migrated.communities.map((business) => business.id),
     ["proof-alpha", "proof-bravo"],
@@ -106,14 +139,36 @@ try {
     );
   });
   await app.close();
+  app = null;
+  phase = "electron-relaunch";
   app = await launch();
   page = await app.firstWindow();
   const resumed = await readState(page);
   assert.equal(resumed.draft, "newer Electron draft");
   assert.equal(resumed.theme, "github-light");
   assert.deepEqual(resumed.communities, migrated.communities);
+  await app.close();
+  app = null;
+  phase = "legacy-source-unchanged";
+  const finalSource = await legacy("legacy-read");
+  assert.equal(sourceHash(finalSource), expectedHash);
+  const proof = {
+    legacySourceHash: expectedHash,
+    finalSourceHash: sourceHash(finalSource),
+    sourceEntryCount: source.length,
+    importedBusinesses: 2,
+    electronReseeding: false,
+    electronEditsPreserved: true,
+  };
+  if (process.env.COLONY_MIGRATION_PROOF_DIR) {
+    await mkdir(process.env.COLONY_MIGRATION_PROOF_DIR, { recursive: true });
+    await writeFile(
+      path.join(process.env.COLONY_MIGRATION_PROOF_DIR, "migration-proof.json"),
+      JSON.stringify(proof, null, 2),
+    );
+  }
   console.log(
-    "PASS: real private WebKit export, two businesses, owner marker, draft and theme imported before React; relaunch preserves Electron edits. Source immutability is covered by pure migration tests; signed default-store upgrade remains a separate gate.",
+    "PASS: separate legacy-layout WebKit process persisted two businesses, owner marker, draft and theme; Electron imported without reseeding and preserved later edits. Independent legacy reread has the original key/value hash. Signed released-app upgrade remains a separate gate.",
   );
 } catch (error) {
   const page = app ? await app.firstWindow().catch(() => null) : null;
@@ -127,12 +182,15 @@ try {
         }))
         .catch(() => ({ status: "The renderer was unavailable" }))
     : { status: "No app window was available" };
-  console.error("Migration fixture startup state:", JSON.stringify(state));
+  console.error(
+    "Migration fixture startup state:",
+    JSON.stringify({ phase, ...state }),
+  );
   if (process.env.COLONY_MIGRATION_PROOF_DIR) {
     await mkdir(process.env.COLONY_MIGRATION_PROOF_DIR, { recursive: true });
     await writeFile(
       path.join(process.env.COLONY_MIGRATION_PROOF_DIR, "startup-state.json"),
-      JSON.stringify(state, null, 2),
+      JSON.stringify({ phase, ...state }, null, 2),
     );
   }
   throw error;

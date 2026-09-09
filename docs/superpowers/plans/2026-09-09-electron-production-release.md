@@ -55,9 +55,13 @@ Candidate and explicit QA profiles use an incognito hidden WebKit store, even
 though their outer application bundle may have the stable bundle identifier. The
 production native feature cannot be combined with the onboarding fixture feature.
 The separately compiled hosted fixture can seed only fixed synthetic state in its
-incognito origin. GitHub's migration job proves nonempty actual WebKit-to-Chromium
-transfer, two communities, an owner marker, an unsent draft, appearance and relaunch
-non-overwrite. Pure fault-injection tests cover untouched source, malformed state,
-storage failure and retry. The exact signed Tauri-to-Electron upgrade of an existing
+own distinct bundle's persistent WebKit origin. A fixture-only legacy layout first
+persists the state and exits normally. Electron then imports without reseeding;
+an independent legacy read after Chromium edits must match the original key/value
+hash. This hosted gate covers actual WebKit-to-Chromium transfer across executable
+layouts, two communities, an owner marker, an unsent draft, appearance and relaunch
+non-overwrite. Normal candidates remain incognito. Pure fault-injection tests cover
+untouched source, malformed state, storage failure and retry. The exact signed
+Tauri-to-Electron upgrade of an existing
 default WebKit store remains unproven until the signing and packaged upgrade gate
 runs; passing the private fixture must not be described as that proof.

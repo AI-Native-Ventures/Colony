@@ -100,7 +100,7 @@ jobs:
         run: just desktop-install-ci
       - name: Build isolated WebKit migration fixture
         run: pnpm --dir desktop electron:package --onboarding-fixture
-      - name: Prove nonempty WebKit transfer and Electron relaunch
+      - name: Prove persistent legacy WebKit upgrade and unchanged source
         run: |
           set -euo pipefail
           VERSION=$(jq -r .version desktop/package.json)
