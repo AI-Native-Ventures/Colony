@@ -156,10 +156,12 @@ export function ImagePreview({
     setMenu(null);
   };
   const move = (step: number) => {
+    setMenu(null);
     setDirection(step);
     setIndex(clampMediaIndex(activeIndex + step, items.length));
   };
   const moveExpanded = (step: number) => {
+    setMenu(null);
     setDirection(step);
     setExpanded((current) =>
       current

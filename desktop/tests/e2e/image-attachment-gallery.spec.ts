@@ -784,6 +784,8 @@ test("lightbox image context menu stays inside the dialog focus scope", async ({
   const dialog = page.getByRole("dialog");
   const lightboxImage = dialog.locator(`img[src*="${IMAGE_SHAS[0]}"]`);
   await expect(lightboxImage).toBeVisible();
+  const nextButton = dialog.getByRole("button", { name: "Next image" });
+  await expect(nextButton).toBeFocused();
   await lightboxImage.click({ button: "right" });
 
   const menu = dialog.locator("[data-image-context-menu]");
@@ -791,17 +793,34 @@ test("lightbox image context menu stays inside the dialog focus scope", async ({
   const downloadButton = menu.getByRole("button", { name: "Download image" });
   await expect(menu).toBeVisible();
   await expect(page.locator("body > [data-image-context-menu]")).toHaveCount(0);
-
-  await dialog.focus();
-  await page.keyboard.press("Shift+Tab");
-  await expect(downloadButton).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  await expect(copyButton).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(downloadButton).toBeFocused();
-  await page.keyboard.press("Tab");
+  await expect(copyButton).toBeVisible();
+  await expect(downloadButton).toBeVisible();
   await expect(
-    dialog.getByRole("button", { name: "Next image" }),
+    dialog.getByRole("button", { name: "Close", exact: true }),
+  ).toBeVisible();
+
+  // Radix follows the DOM tab order, including the portaled menu and Close.
+  const tabStops = dialog.locator("button:not([disabled])");
+  await expect(tabStops).toHaveCount(5);
+  await expect(tabStops.first()).toHaveAttribute("aria-label", "Next image");
+  await nextButton.focus();
+  for (let position = 1; position < 5; position += 1) {
+    await page.keyboard.press("Tab");
+    await expect(tabStops.nth(position)).toBeFocused();
+  }
+  await page.keyboard.press("Tab");
+  await expect(nextButton).toBeFocused();
+  for (let position = 4; position >= 0; position -= 1) {
+    await page.keyboard.press("Shift+Tab");
+    await expect(tabStops.nth(position)).toBeFocused();
+  }
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    row.getByTestId("message-image-lightbox-trigger").first(),
   ).toBeFocused();
 });
 

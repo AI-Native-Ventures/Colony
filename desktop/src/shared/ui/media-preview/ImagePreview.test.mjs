@@ -129,6 +129,43 @@ test("copy from a navigated slide sends its original URL and portals within the 
   }
 });
 
+for (const expanded of [false, true]) {
+  test(`${expanded ? "expanded" : "inline"} keyboard navigation dismisses the previous image menu and copies the new original`, async () => {
+    calls.length = 0;
+    const view = render(createElement(ImagePreview, { items: originals }));
+    try {
+      if (expanded)
+        fireEvent.click(view.getByRole("button", { name: "Expand image" }));
+      const surface = expanded
+        ? await view.findByRole("dialog")
+        : view.getByTestId("media-image-preview");
+      fireEvent.contextMenu(surface.querySelector("img"));
+      assert.ok(document.querySelector("[data-image-context-menu]"));
+      fireEvent.keyDown(surface, { key: "ArrowRight" });
+      assert.equal(
+        surface.querySelector("img").getAttribute("src"),
+        originals[1].src,
+      );
+      assert.ok(
+        !document.querySelector("[data-image-context-menu]"),
+        "previous image menu should close on navigation",
+      );
+      fireEvent.contextMenu(surface.querySelector("img"));
+      fireEvent.click(view.getByRole("button", { name: "Copy image" }));
+      await waitFor(() =>
+        assert.deepEqual(calls, [
+          {
+            command: "copy_image_to_clipboard",
+            args: { url: originals[1].originalUrl },
+          },
+        ]),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+}
+
 test("repeated URLs preserve the active occurrence when opening and closing", async () => {
   const view = render(
     createElement(ImagePreview, {
