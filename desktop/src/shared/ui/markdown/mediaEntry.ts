@@ -15,6 +15,16 @@
 
 /** Legacy video extensions, used only when an imeta MIME type is absent. */
 const VIDEO_EXTENSIONS = ["mp4", "webm", "mov"] as const;
+const AUDIO_EXTENSIONS = new Set([
+  "mp3",
+  "m4a",
+  "aac",
+  "wav",
+  "ogg",
+  "oga",
+  "flac",
+  "opus",
+]);
 
 /** The lowercased path extension of a URL, ignoring query strings and hashes. */
 function urlPathExtension(src: string): string | undefined {
@@ -45,6 +55,12 @@ export function isVideoMedia(src: string, imetaMime?: string): boolean {
   return (
     ext !== undefined && (VIDEO_EXTENSIONS as readonly string[]).includes(ext)
   );
+}
+
+/** MIME is authoritative for audio, including extensionless relay uploads. */
+export function isAudioMedia(src: string, imetaMime?: string): boolean {
+  if (imetaMime) return imetaMime.toLowerCase().startsWith("audio/");
+  return AUDIO_EXTENSIONS.has(urlPathExtension(src) ?? "");
 }
 
 /**

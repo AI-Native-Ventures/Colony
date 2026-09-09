@@ -283,7 +283,11 @@ export function resolveChartData(
 export function isSafeMediaUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      !url.username &&
+      !url.password
+    );
   } catch {
     return false;
   }
@@ -304,10 +308,67 @@ export function inferMediaKind(item: BlockMediaItem): BlockMediaItem["kind"] {
   if (item.kind) return item.kind;
   if (item.mime?.startsWith("image/")) return "image";
   if (item.mime?.startsWith("video/")) return "video";
-  const path = item.url.toLowerCase().split(/[?#]/, 1)[0] ?? "";
-  if (/\.(png|jpe?g|gif|webp|avif)$/.test(path)) return "image";
+  if (item.mime?.startsWith("audio/")) return "audio";
+  const path =
+    (item.filename || item.url).toLowerCase().split(/[?#]/, 1)[0] ?? "";
+  if (/\.(png|jpe?g|gif|webp|avif|svg)$/.test(path)) return "image";
   if (/\.(mp4|webm|mov|m4v)$/.test(path)) return "video";
+  if (/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/.test(path)) return "audio";
   return "file";
+}
+
+function mediaFilename(url: string): string | undefined {
+  try {
+    const last = new URL(url).pathname.split("/").pop();
+    if (!last) return undefined;
+    const decoded = decodeURIComponent(last);
+    // A filename is a display/download label, never a path or URL instruction.
+    return Array.from(decoded, (character) =>
+      character.charCodeAt(0) < 32 || character === "/" || character === "\\"
+        ? "_"
+        : character,
+    ).join("");
+  } catch {
+    return undefined;
+  }
+}
+
+function mediaDescriptor(
+  value: unknown,
+  alt: string,
+): BlockMediaItem | undefined {
+  if (typeof value === "string") return { url: value, alt };
+  if (!isRecord(value) || typeof value.url !== "string") return undefined;
+  const text = (key: string) =>
+    typeof value[key] === "string" ? (value[key] as string) : undefined;
+  const positive = (key: string) =>
+    typeof value[key] === "number" &&
+    Number.isFinite(value[key]) &&
+    value[key] > 0
+      ? (value[key] as number)
+      : undefined;
+  const kind = text("kind");
+  const poster = text("poster");
+  return {
+    url: value.url,
+    alt: text("alt") || alt,
+    kind:
+      kind === "image" ||
+      kind === "video" ||
+      kind === "audio" ||
+      kind === "file"
+        ? kind
+        : undefined,
+    mime: text("mime")?.toLowerCase(),
+    filename: text("filename"),
+    poster: poster && isSafeMediaUrl(poster) ? poster : undefined,
+    width: positive("width"),
+    height: positive("height"),
+    size: positive("size"),
+    durationSeconds: positive("durationSeconds"),
+    expectedSha256: text("expectedSha256"),
+    actualSha256: text("actualSha256"),
+  };
 }
 
 export function resolveMedia(
@@ -315,36 +376,35 @@ export function resolveMedia(
   data: unknown,
   supplied?: readonly BlockMediaItem[],
 ): ResolvedMedia[] {
-  const source =
+  const resolved =
     supplied ??
-    (() => {
-      const resolved =
-        node.url ??
-        (node.url_path ? resolveBlockPath(data, node.url_path) : "");
-      if (Array.isArray(resolved)) {
-        return resolved
-          .filter((value): value is string => typeof value === "string")
-          .map((url) => ({ url, alt: node.alt }));
-      }
-      return typeof resolved === "string"
-        ? [{ url: resolved, alt: node.alt }]
-        : [];
-    })();
+    node.url ??
+    (node.url_path ? resolveBlockPath(data, node.url_path) : undefined);
+  const contents =
+    isRecord(resolved) && Array.isArray(resolved.items)
+      ? resolved.items
+      : resolved;
+  const source = Array.isArray(contents)
+    ? contents
+    : contents
+      ? [contents]
+      : [];
   if (source.length === 0) return [{ reason: "No media available." }];
-  return source.slice(0, 24).map((item) => {
+  return source.slice(0, 24).map((value) => {
+    const item = mediaDescriptor(value, resolveBlockTemplate(node.alt, data));
+    if (!item) return { reason: "Media source unavailable." };
     if (!isSafeMediaUrl(item.url)) {
       return { reason: "Blocked unsafe media URL." };
     }
     if (!hasValidMediaIntegrity(item)) {
       return { reason: "Media integrity check failed." };
     }
-    return {
-      item: {
-        ...item,
-        alt: item.alt || node.alt,
-        kind: inferMediaKind(item),
-      },
+    const namedItem = {
+      ...item,
+      filename: item.filename || mediaFilename(item.url),
+      alt: item.alt || node.alt,
     };
+    return { item: { ...namedItem, kind: inferMediaKind(namedItem) } };
   });
 }
 

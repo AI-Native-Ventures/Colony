@@ -271,3 +271,29 @@ one-to-one DMs consume the community-scoped, content-stable role context; do not
 add a persona query observer per message. Avatar images and chosen emoji colours
 remain authoritative; fallback colours derive from the agent pubkey independently
 of the workspace accent.
+
+## One-reply model controls
+
+`ui/ReplyModelControls` and `ui/useReplyModelSelection` hold a local unsent
+selection for exactly one addressed managed teammate. They use the native
+`get_agent_models` reply scope and `modelEffortOptions` projections; model and
+reasoning lists never come from a frontend provider table. Only exact advertised
+pairs enter the signed kind-9 `agent-reply` tag. The send flow rechecks recipient
+binding after invitations/uploads. Removing a recipient cannot move the choice
+to a different teammate. A successful send clears the local choice.
+
+Reply discovery is distinct from default configuration discovery: the runtime's
+session catalog constrains available choices. Colony Credits uses an existing,
+unexpired native lease to read the hosted catalog without minting or refreshing
+one, then projects the hosted model catalog through the same Rust reasoning helper
+as bundled runtime discovery. Absent/expired connection and catalog failures remain visible
+errors; unknown capability does not become unsupported. No secrets cross IPC.
+
+ACP validates owner and target, queues a scoped request alone, applies it only
+after a successful runtime acknowledgement, and preserves the original session.
+It cleans up temporary sessions when the runtime advertises that capability.
+The persisted message label says requested; only the actual acknowledgement
+emits `reply_model_applied`. Nothing mutates agent-wide settings or switches the
+provider, billing route, worker, or a reply already running. Tests:
+`replyModelSelection.test.mjs`, `sendChannelMessage.test.mjs`, and
+`inline-reply-model.spec.ts`, plus core/ACP/bundled-runtime unit tests.

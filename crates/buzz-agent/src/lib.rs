@@ -9,7 +9,10 @@ mod hints;
 mod llm;
 mod mcp;
 pub mod model_availability;
+mod openai_catalog;
 pub mod relay_chain;
+mod session_controls;
+pub mod session_models;
 pub mod types;
 mod wire;
 
@@ -47,15 +50,15 @@ use crate::mcp::McpRegistry;
 use crate::types::{ContentBlock, HistoryItem};
 use crate::wire::{
     classify, goose_session_update, Inbound, InitializeParams, SessionCancelParams,
-    SessionNewParams, SessionPromptParams, SessionSetModelParams, SessionSteerParams, WireMsg,
-    WireSender, INVALID_PARAMS, METHOD_NOT_FOUND, PARSE_ERROR,
+    SessionNewParams, SessionPromptParams, SessionSteerParams, WireMsg, WireSender, INVALID_PARAMS,
+    METHOD_NOT_FOUND, PARSE_ERROR,
 };
 
 struct App {
     cfg: Config,
     llm: Arc<Llm>,
     sessions: Mutex<HashMap<String, Session>>,
-    /// Cached model catalog for Databricks providers. Populated lazily on the
+    /// Cached model catalog for OpenAI-compatible and Databricks providers. Populated on the
     /// first successful `session/new` discovery call. Failed discovery is never
     /// cached: static-token authentication errors reject session creation, while
     /// OAuth authentication and non-auth errors use the configured model for that
@@ -92,10 +95,11 @@ struct Session {
     /// with it so the gate can account for history appended since.
     last_request_history_bytes: Option<usize>,
     effective_system_prompt: Arc<str>,
-    /// Per-session model override set by `session/set_model`. When `Some`,
-    /// overrides `App::cfg.model` for all LLM calls on this session. Persists
+    /// Per-session model and optional reasoning override set by `session/set_model`.
+    /// Applied on a prompt-local config clone for all LLM calls. Persists
     /// across `session/prompt` calls until changed.
-    effective_model: Option<String>,
+    effective_model: Option<session_models::Selection>,
+    available_model_ids: Vec<String>,
     /// Session-cumulative input tokens across all turns. Sent in the
     /// `_goose/unstable/session/update` usage notification so buzz-acp's
     /// `UsageTracker` can compute per-turn deltas symmetrically with goose.
@@ -259,7 +263,10 @@ async fn handle_request(
         }
         "session/prompt" => spawn_prompt(app.clone(), id, params, wire_tx.clone()),
         "session/set_model" => {
-            set_model_session(app, id, params, wire_tx).await;
+            session_controls::set_model(app, id, params, wire_tx).await;
+        }
+        "_colony/session/close" => {
+            session_controls::close(app, id, params, wire_tx).await;
         }
         "session/cancel" => {
             cancel_session(app, params).await;
@@ -415,11 +422,19 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
     // its authentication failure rejects before allocation. OAuth authentication
     // failures and other catalog failures use only the configured model for this
     // response, without caching, so session/prompt can run the existing PKCE flow.
-    let available_models: Vec<Value> = {
+    let model_entries: Vec<ModelEntry> = {
         use crate::config::Provider;
         match app.cfg.provider {
+            Provider::OpenAi if p.meta["colony"]["discoverModels"] == true => {
+                match openai_catalog::resolve(&app.cfg, &app.models_cache).await {
+                    Ok(models) => models,
+                    Err(error) => {
+                        return reject(wire_tx, id, error.json_rpc_code(), &error.to_string()).await
+                    }
+                }
+            }
             Provider::Databricks | Provider::DatabricksV2 => {
-                let models = match resolve_models_catalog(
+                match resolve_models_catalog(
                     &app.models_cache,
                     discover_databricks_models(&app.cfg),
                 )
@@ -444,16 +459,18 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
                         );
                         configured_model_fallback(&app.cfg.model)
                     }
-                };
-                models
-                    .iter()
-                    .map(|m| json!({ "modelId": m.id, "name": m.name }))
-                    .collect()
+                }
             }
-            _ => vec![json!({ "modelId": app.cfg.model, "name": app.cfg.model })],
+            _ => configured_model_fallback(&app.cfg.model),
         }
     };
 
+    let model_choices = session_models::catalog(&app.cfg, &model_entries);
+    let available_model_ids = model_choices.iter().map(|model| model.id.clone()).collect();
+    let available_models: Vec<Value> = model_choices
+        .iter()
+        .map(|model| json!({ "modelId": model.id, "name": model.name }))
+        .collect();
     let mcp = match McpRegistry::spawn_all(&app.cfg, &p.mcp_servers, &p.cwd).await {
         Ok(m) => Arc::new(m),
         Err(e) => return reject(wire_tx, id, e.json_rpc_code(), &e.to_string()).await,
@@ -491,6 +508,7 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
             last_request_history_bytes: None,
             effective_system_prompt,
             effective_model: None,
+            available_model_ids,
             accumulated_input_tokens: crate::types::TurnIOState::Unseen,
             accumulated_output_tokens: crate::types::TurnIOState::Unseen,
             accumulated_cached_input_tokens: crate::types::CacheTotalState::Unseen,
@@ -506,6 +524,10 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
             id,
             json!({
                 "sessionId": session_id,
+                "_meta": { "colony": {
+                    "closeSessionMethod": "_colony/session/close",
+                    "modelCatalogDiscovery": true,
+                } },
                 "models": {
                     "currentModelId": app.cfg.model,
                     "availableModels": available_models,
@@ -530,55 +552,6 @@ async fn cancel_session(app: &Arc<App>, params: Value) {
             let _ = s.cancel_tx.send(true);
         }
     }
-}
-
-/// Handle `session/set_model`: apply a per-session model override immediately.
-///
-/// Validation:
-/// - Unknown `sessionId` → `invalid_params`.
-/// - Empty `modelId` → `invalid_params`.
-///
-/// On success: stores `model_id` on the session and responds `{ sessionId, modelId }`.
-/// The override is picked up by the next `session/prompt` call on this session.
-async fn set_model_session(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSender) {
-    let p: SessionSetModelParams = match decode(params, "session/set_model") {
-        Ok(p) => p,
-        Err(m) => return reject(wire_tx, id, INVALID_PARAMS, &m).await,
-    };
-    if p.model_id.trim().is_empty() {
-        return reject(
-            wire_tx,
-            id,
-            INVALID_PARAMS,
-            "session/set_model: modelId must not be empty",
-        )
-        .await;
-    }
-    let mut sessions = app.sessions.lock().await;
-    let Some(s) = sessions.get_mut(&p.session_id) else {
-        return reject(
-            wire_tx,
-            id,
-            INVALID_PARAMS,
-            "session/set_model: unknown session",
-        )
-        .await;
-    };
-    s.effective_model = Some(p.model_id.clone());
-    tracing::info!(
-        session_id = %p.session_id,
-        model_id = %p.model_id,
-        "session/set_model: model overridden"
-    );
-    drop(sessions);
-    wire::send(
-        wire_tx,
-        wire::ok(
-            id,
-            json!({ "sessionId": p.session_id, "modelId": p.model_id }),
-        ),
-    )
-    .await;
 }
 
 /// Handle `_goose/unstable/session/steer`: queue user input into the in-flight
@@ -708,9 +681,7 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
     )
     .await;
     // Resolve effective model: session override wins over config default.
-    let effective_model_str = effective_model_override
-        .as_deref()
-        .unwrap_or(&app.cfg.model);
+    let prompt_cfg = session_models::prompt_config(&app.cfg, effective_model_override.as_ref());
     let mut turn_input_tokens: crate::types::TurnIOState = crate::types::TurnIOState::Unseen;
     let mut turn_output_tokens: crate::types::TurnIOState = crate::types::TurnIOState::Unseen;
     let mut turn_cached_input_tokens: crate::types::CacheTotalState =
@@ -726,8 +697,8 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
     // end-of-turn wire emission.
     let mut turn_pricing_identity: Option<Option<crate::types::PricingIdentity>> = None;
     let mut ctx = RunCtx {
-        cfg: &app.cfg,
-        effective_model: effective_model_str,
+        cfg: &prompt_cfg,
+        effective_model: &prompt_cfg.model,
         session_id: &sid,
         system_prompt: &effective_system_prompt,
         llm: &app.llm,
@@ -831,7 +802,7 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
                 accumulated_cached.exact_value(),
                 accumulated_written.exact_value(),
                 accumulated_total,
-                effective_model_str,
+                &prompt_cfg.model,
                 // Pass the proven per-turn identity if consistent; absent otherwise.
                 turn_pricing_identity
                     .as_ref()
@@ -867,7 +838,7 @@ async fn acquire_session(
         Option<usize>,
         watch::Receiver<bool>,
         Arc<str>,
-        Option<String>,
+        Option<session_models::Selection>,
         String,
         mpsc::UnboundedReceiver<Vec<ContentBlock>>,
         crate::types::SessionUsageBaseline,

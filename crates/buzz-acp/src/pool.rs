@@ -148,6 +148,10 @@ pub struct ChannelDeliveryState {
 /// spawning a real agent subprocess.
 #[derive(Default)]
 pub struct SessionState {
+    /// Disposable session for an owner-selected single reply; cleared on return.
+    pub(crate) scoped_reply_session: Option<crate::reply_model::ScopedReplySession>,
+    /// Bounded leaked sessions for adapters without a close extension.
+    pub(crate) unclosed_reply_sessions: usize,
     /// (channel_id, thread_root) → session_id. `None` root = channel top level.
     pub sessions: HashMap<ConversationKey, String>,
     pub heartbeat_session: Option<String>,
@@ -1327,6 +1331,7 @@ async fn create_session_and_apply_model(
     onboarding_section: Option<&str>,
     channel_id: Option<Uuid>,
     channel_type: Option<&str>,
+    reply_model: Option<&buzz_core::agent_reply::AgentReplyModel>,
 ) -> Result<String, AcpError> {
     // Build base_prompt + system_prompt + onboarding protocol + agent core +
     // canvas metadata into a single prompt. Standard protocol-v2 agents
@@ -1371,7 +1376,7 @@ async fn create_session_and_apply_model(
 
     let resp = agent
         .acp
-        .session_new_full(
+        .session_new_with_meta(
             &ctx.cwd,
             mcp_servers,
             session_new_system_prompt(
@@ -1381,9 +1386,15 @@ async fn create_session_and_apply_model(
                 combined_system_prompt.as_deref(),
             ),
             session_title.as_deref(),
+            reply_model.map(|_| serde_json::json!({ "colony": { "discoverModels": true } })),
         )
         .await?;
 
+    if let Some(scoped) = agent.state.scoped_reply_session.as_mut() {
+        scoped.close_id = Some(resp.session_id.clone());
+        scoped.supports_close = resp.raw["_meta"]["colony"]["closeSessionMethod"].as_str()
+            == Some("_colony/session/close");
+    }
     if is_goose && agent.goose_system_prompt_supported != Some(false) {
         if let Some(prompt) = combined_system_prompt.as_deref() {
             match agent
@@ -1415,7 +1426,17 @@ async fn create_session_and_apply_model(
     // Apply desired_model if set, matching against the fresh session/new response.
     // Track whether the switch succeeded so session_config_captured reflects
     // the post-switch state (not the pre-switch desired state).
-    let switch_succeeded = if let Some(ref desired) = agent.desired_model {
+    let switch_succeeded = if let Some(request) = reply_model {
+        crate::reply_model::apply(
+            &mut agent.acp,
+            &resp.session_id,
+            &resp.raw,
+            agent.provider.as_deref(),
+            request,
+        )
+        .await?;
+        true
+    } else if let Some(ref desired) = agent.desired_model {
         match resolve_model_switch_candidate(&resp.raw, desired, agent.provider.as_deref()) {
             Some((method, applied)) => {
                 apply_model_switch(&mut agent.acp, &resp.session_id, &applied, &method).await?;
@@ -1450,7 +1471,9 @@ async fn create_session_and_apply_model(
     // post-switch state. modelOverridden reflects whether the switch actually
     // applied — false on the unsupported arm so the panel doesn't show a
     // stale override badge.
-    agent.acp.observe(
+    // Scoped settings must not replace the desktop's agent-default cache.
+    if reply_model.is_none() {
+        agent.acp.observe(
         "session_config_captured",
         serde_json::json!({
             "configOptions": resp.raw.get("configOptions").cloned().unwrap_or(serde_json::Value::Null),
@@ -1462,7 +1485,7 @@ async fn create_session_and_apply_model(
             "relayUrl": ctx.relay_url,
         }),
     );
-
+    }
     // Apply permission mode if not the agent's built-in default AND the agent
     // advertises the requested mode in session/new. Agents that don't support
     // the mode (e.g., goose crashes on unrecognized set_config_option values)
@@ -1829,7 +1852,7 @@ fn with_thread_canvas(prompt: Option<String>, thread_canvas: Option<&str>) -> Op
 /// can never trigger the assert.
 ///
 /// On the happy path the read loop has already called `take()`, so this is a no-op.
-fn send_prompt_result(
+async fn send_prompt_result(
     result_tx: &mpsc::UnboundedSender<PromptResult>,
     turn_id: &str,
     mut agent: OwnedAgent,
@@ -1838,6 +1861,7 @@ fn send_prompt_result(
     batch: Option<FlushBatch>,
 ) {
     agent.acp.clear_steer_rx();
+    crate::reply_model::finish(&mut agent, matches!(outcome, PromptOutcome::AgentExited)).await;
     let _ = result_tx.send(PromptResult {
         agent,
         source,
@@ -1947,6 +1971,69 @@ pub async fn run_prompt_task(
     // `(channel, thread_root)` so two threads in one channel never share an
     // ACP session (and never bleed conversation context across threads).
     let turn_thread_root = batch_thread_root(batch.as_ref());
+    let reply_model = match crate::reply_model::requested_model(
+        batch.as_ref(),
+        ctx.agent_keys.public_key(),
+        ctx.agent_owner_pubkey,
+    ) {
+        Ok(request) => request,
+        Err(message) => {
+            if let Some(batch) = &batch {
+                if let Some(entry) = batch.events.last() {
+                    post_failure_notice(
+                        &ctx.rest_client,
+                        batch.channel_id,
+                        &crate::queue::parse_thread_tags(&entry.event),
+                        &message,
+                    )
+                    .await;
+                }
+            }
+            send_prompt_result(
+                &result_tx,
+                &turn_id,
+                agent,
+                source,
+                PromptOutcome::Error(AcpError::AgentError {
+                    code: -32602,
+                    message,
+                }),
+                None,
+            )
+            .await;
+            return;
+        }
+    };
+    if reply_model.is_some() {
+        if let PromptSource::Channel(channel) = &source {
+            if let Err(message) =
+                crate::reply_model::begin(&mut agent.state, (*channel, turn_thread_root.clone()))
+            {
+                if let Some(entry) = batch.as_ref().and_then(|b| b.events.last()) {
+                    post_failure_notice(
+                        &ctx.rest_client,
+                        *channel,
+                        &crate::queue::parse_thread_tags(&entry.event),
+                        &message,
+                    )
+                    .await;
+                }
+                send_prompt_result(
+                    &result_tx,
+                    &turn_id,
+                    agent,
+                    source,
+                    PromptOutcome::Error(AcpError::AgentError {
+                        code: -32602,
+                        message,
+                    }),
+                    None,
+                )
+                .await;
+                return;
+            }
+        }
+    }
 
     // Company onboarding protocol -- resolved once per channel-session
     // lifetime, with a bounded retry on the channel's NEXT message when the
@@ -2177,6 +2264,7 @@ pub async fn run_prompt_task(
                     onboarding_section,
                     Some(*cid),
                     origin_channel_type.as_deref(),
+                    reply_model.as_ref(),
                 )
                 .await
                 {
@@ -2215,12 +2303,35 @@ pub async fn run_prompt_task(
                             source,
                             PromptOutcome::AgentExited,
                             requeue_batch_if_queue(&ctx, batch),
-                        );
+                        )
+                        .await;
                         return;
                     }
                     Err(e) => {
                         // Session creation failed; pending canvas was never committed,
                         // so the next retry will re-fetch a fresh revision.
+                        if reply_model.is_some() {
+                            let notice = format!("I could not apply the model and reasoning requested for this reply: {e}. Your teammate defaults are unchanged. Choose a supported setting and send again.");
+                            if let Some(entry) = batch.as_ref().and_then(|b| b.events.last()) {
+                                post_failure_notice(
+                                    &ctx.rest_client,
+                                    *cid,
+                                    &crate::queue::parse_thread_tags(&entry.event),
+                                    &notice,
+                                )
+                                .await;
+                            }
+                            send_prompt_result(
+                                &result_tx,
+                                &turn_id,
+                                agent,
+                                source,
+                                PromptOutcome::Error(e),
+                                None,
+                            )
+                            .await;
+                            return;
+                        }
                         send_prompt_result(
                             &result_tx,
                             &turn_id,
@@ -2228,7 +2339,8 @@ pub async fn run_prompt_task(
                             source,
                             PromptOutcome::Error(e),
                             requeue_batch_if_queue(&ctx, batch),
-                        );
+                        )
+                        .await;
                         return;
                     }
                 }
@@ -2239,7 +2351,7 @@ pub async fn run_prompt_task(
                 (sid.clone(), false)
             } else {
                 match create_session_and_apply_model(
-                    &mut agent, &ctx, None, None, None, None, None, None, None,
+                    &mut agent, &ctx, None, None, None, None, None, None, None, None,
                 )
                 .await
                 {
@@ -2263,7 +2375,8 @@ pub async fn run_prompt_task(
                             source,
                             PromptOutcome::AgentExited,
                             None,
-                        );
+                        )
+                        .await;
                         return;
                     }
                     Err(e) => {
@@ -2274,7 +2387,8 @@ pub async fn run_prompt_task(
                             source,
                             PromptOutcome::Error(e),
                             None,
-                        );
+                        )
+                        .await;
                         return;
                     }
                 }
@@ -2380,7 +2494,8 @@ pub async fn run_prompt_task(
                         source,
                         PromptOutcome::AgentExited,
                         requeue_batch_if_queue(&ctx, batch),
-                    );
+                    )
+                    .await;
                     return;
                 }
                 Err(AcpError::IdleTimeout(_)) => {
@@ -2406,7 +2521,8 @@ pub async fn run_prompt_task(
                                 source,
                                 PromptOutcome::AgentExited,
                                 requeue_batch_if_queue(&ctx, batch),
-                            );
+                            )
+                            .await;
                             return;
                         }
                         Err(e) => {
@@ -2424,7 +2540,8 @@ pub async fn run_prompt_task(
                         source,
                         PromptOutcome::Timeout(TimeoutKind::Idle),
                         requeue_batch_if_queue(&ctx, batch),
-                    );
+                    )
+                    .await;
                     return;
                 }
                 Err(AcpError::HardTimeout { silence }) => {
@@ -2442,7 +2559,8 @@ pub async fn run_prompt_task(
                         source,
                         PromptOutcome::Timeout(TimeoutKind::Hard { recently_active }),
                         requeue_batch_if_queue(&ctx, batch),
-                    );
+                    )
+                    .await;
                     return;
                 }
                 Err(e) => {
@@ -2458,7 +2576,8 @@ pub async fn run_prompt_task(
                         source,
                         PromptOutcome::Error(e),
                         requeue_batch_if_queue(&ctx, batch),
-                    );
+                    )
+                    .await;
                     return;
                 }
             }
@@ -2663,7 +2782,8 @@ pub async fn run_prompt_task(
             source,
             PromptOutcome::Error(AcpError::Protocol("no batch and no prompt_text".into())),
             None,
-        );
+        )
+        .await;
         return;
     };
 
@@ -2804,7 +2924,7 @@ pub async fn run_prompt_task(
                                     source,
                                     PromptOutcome::Cancelled,
                                     retry_batch,
-                                );
+                                ).await;
                                 return;
                             }
                             Err(error) => {
@@ -2841,7 +2961,7 @@ pub async fn run_prompt_task(
                                     source,
                                     failure.outcome,
                                     failure.retry_batch,
-                                );
+                                ).await;
                                 return;
                             }
                         }
@@ -2907,7 +3027,7 @@ pub async fn run_prompt_task(
                             source,
                             PromptOutcome::Ok(StopReason::EndTurn),
                             None, // turn succeeded — batch was processed, no requeue
-                        );
+                        ).await;
                         return;
                     }
                 }
@@ -3046,7 +3166,8 @@ pub async fn run_prompt_task(
                 source,
                 PromptOutcome::Ok(stop_reason),
                 None,
-            );
+            )
+            .await;
         }
         Err(AcpError::AgentExited) => {
             tracing::error!(target: "pool::prompt", "agent {} exited during prompt", agent.index);
@@ -3069,7 +3190,8 @@ pub async fn run_prompt_task(
                 source,
                 PromptOutcome::AgentExited,
                 requeue_batch_if_queue(&ctx, batch),
-            );
+            )
+            .await;
         }
         Err(AcpError::IdleTimeout(_)) => {
             tracing::warn!(
@@ -3104,7 +3226,8 @@ pub async fn run_prompt_task(
                         source,
                         PromptOutcome::Timeout(TimeoutKind::Idle),
                         requeue_batch_if_queue(&ctx, batch),
-                    );
+                    )
+                    .await;
                 }
                 Err(AcpError::AgentExited) => {
                     tracing::error!(
@@ -3131,7 +3254,8 @@ pub async fn run_prompt_task(
                         source,
                         PromptOutcome::AgentExited,
                         requeue_batch_if_queue(&ctx, batch),
-                    );
+                    )
+                    .await;
                 }
                 Err(e) => {
                     tracing::error!(
@@ -3157,7 +3281,8 @@ pub async fn run_prompt_task(
                         source,
                         PromptOutcome::Timeout(TimeoutKind::Idle),
                         requeue_batch_if_queue(&ctx, batch),
-                    );
+                    )
+                    .await;
                 }
             }
         }
@@ -3187,7 +3312,8 @@ pub async fn run_prompt_task(
                 source,
                 PromptOutcome::Timeout(TimeoutKind::Hard { recently_active }),
                 requeue_batch_if_queue(&ctx, batch),
-            );
+            )
+            .await;
         }
         Err(e) => {
             tracing::error!(target: "pool::prompt", "session_prompt error: {e}");
@@ -3215,7 +3341,8 @@ pub async fn run_prompt_task(
                 source,
                 PromptOutcome::Error(e),
                 requeue_batch_if_queue(&ctx, batch),
-            );
+            )
+            .await;
         }
     }
     // _reaction_guard drops here → spawns clear_reactions for all exit paths.
@@ -8471,7 +8598,8 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             source,
             PromptOutcome::Error(AcpError::Protocol("simulated session-create error".into())),
             None,
-        );
+        )
+        .await;
 
         // Receive the PromptResult back from the channel.
         let mut result = result_rx.recv().await.expect("PromptResult must be sent");
@@ -8531,7 +8659,8 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             source,
             PromptOutcome::Ok(StopReason::EndTurn),
             None,
-        );
+        )
+        .await;
 
         let mut result = result_rx.recv().await.expect("PromptResult must be sent");
 

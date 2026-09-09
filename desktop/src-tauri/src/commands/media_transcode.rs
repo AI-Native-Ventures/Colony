@@ -362,58 +362,50 @@ pub(super) fn transcode_heic_path_to_jpeg_bytes_with_cancellation(
     bytes
 }
 
-/// Extract a single JPEG poster frame from a transcoded MP4 via ffmpeg.
+/// Reject near-black frames while preserving useful dark artwork and title cards.
+/// At least two percent of pixels must contain visible luminance. This is a
+/// thumbnail-selection heuristic, never a claim about the video's content.
+fn poster_frame_has_visible_content(image: &image::RgbImage) -> bool {
+    let total = u64::from(image.width()) * u64::from(image.height());
+    if total == 0 {
+        return false;
+    }
+    let visible = image
+        .pixels()
+        .filter(|pixel| {
+            // Integer Rec. 709 luma: avoid threshold rounding at the boundary.
+            let [r, g, b] = pixel.0;
+            2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) > 240_000
+        })
+        .count() as u64;
+    visible * 100 >= total * 2
+}
+
+/// Extract one useful JPEG from a bounded sequence of early video frames.
 ///
-/// Seeks to 1 second (avoids black leader frames), falls back to first frame
-/// for videos shorter than 1 second. Output is scaled to 640px wide with even
-/// dimensions. Returns the path to a temp JPEG. Caller must clean up.
-///
-/// Best-effort: returns `Err` on failure — callers should log and continue
-/// without a poster rather than failing the entire video upload.
+/// Runs only during upload, using the already-transcoded local MP4; never scans
+/// videos while rendering chat. Sampling does not alter playback start. Long
+/// black leaders/all-dark clips deliberately fall back to the player's designed
+/// placeholder instead of publishing a black thumbnail or fabricating imagery.
 fn extract_poster_frame_with_cancellation(
     mp4_path: &std::path::Path,
     ffmpeg: &std::path::Path,
     cancellation: Option<&CancellationToken>,
 ) -> Result<std::path::PathBuf, String> {
+    const CANDIDATES: [&str; 9] = ["0", "0.25", "0.5", "1", "2", "4", "8", "16", "30"];
     let output = std::env::temp_dir().join(format!("buzz-poster-{}.jpg", uuid::Uuid::new_v4()));
-
-    // Poster extraction is a single-frame decode — 30s is generous.
-    let poster_timeout = std::time::Duration::from_secs(30);
-
-    // Try seeking to 1s first (avoids black first frames from fade-ins).
-    let result = run_ffmpeg_with_cancellation(
-        ffmpeg_command(ffmpeg)
-            .args([
-                "-y",
-                "-nostdin",
-                "-loglevel",
-                "error",
-                "-protocol_whitelist",
-                "file,pipe",
-            ])
-            .arg("-ss")
-            .arg("1")
-            .arg("-i")
-            .arg(mp4_path)
-            .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
-            .arg(&output)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped()),
-        poster_timeout,
-        cancellation,
-    )?;
-
-    // If seek to 1s failed (video shorter than 1s), retry from first frame.
-    if !result.status.success()
-        || !output.exists()
-        || std::fs::metadata(&output).map_or(true, |m| m.len() == 0)
-    {
-        if !result.status.success() {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-            eprintln!("buzz-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
+    let started = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(15);
+    for position in CANDIDATES {
+        let Some(remaining) = budget.checked_sub(started.elapsed()) else {
+            break;
+        };
+        if remaining.is_zero() {
+            break;
         }
+        // A missing output must not reuse the previous candidate.
         let _ = std::fs::remove_file(&output);
-        let fallback = run_ffmpeg_with_cancellation(
+        let result = run_ffmpeg_with_cancellation(
             ffmpeg_command(ffmpeg)
                 .args([
                     "-y",
@@ -423,25 +415,37 @@ fn extract_poster_frame_with_cancellation(
                     "-protocol_whitelist",
                     "file,pipe",
                 ])
+                .arg("-ss")
+                .arg(position)
                 .arg("-i")
                 .arg(mp4_path)
                 .args(["-vframes", "1", "-vf", "scale=640:-2", "-q:v", "2"])
                 .arg(&output)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::piped()),
-            poster_timeout,
+            remaining.min(std::time::Duration::from_secs(5)),
             cancellation,
-        )?;
-
-        if !fallback.status.success() || !output.exists() {
-            let stderr = String::from_utf8_lossy(&fallback.stderr);
-            eprintln!("buzz-desktop: poster frame extraction failed: {stderr}");
-            let _ = std::fs::remove_file(&output);
-            return Err("ffmpeg could not extract a poster frame".to_string());
+        );
+        match result {
+            Ok(result) if result.status.success() => {
+                if let Ok(frame) = image::open(&output) {
+                    if poster_frame_has_visible_content(&frame.to_rgb8()) {
+                        return Ok(output);
+                    }
+                } else if position != "0" && !output.exists() {
+                    // Seeking past EOF in a short video cannot find later content.
+                    break;
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let _ = std::fs::remove_file(&output);
+                return Err(error);
+            }
         }
     }
-
-    Ok(output)
+    let _ = std::fs::remove_file(&output);
+    Err("No visible poster frame found within the preview budget".to_string())
 }
 
 /// Transcode video and extract poster frame. Returns (video_bytes, Option<poster_bytes>).
@@ -701,5 +705,42 @@ mod tests {
         let _ = std::fs::remove_file(&heic_path);
         assert!(jpeg.len() > 2, "empty jpeg output");
         assert_eq!(&jpeg[0..2], &[0xFF, 0xD8], "output is not a JPEG");
+    }
+
+    #[test]
+    fn poster_selection_rejects_near_black_and_accepts_visible_content() {
+        let black = image::RgbImage::from_pixel(100, 100, image::Rgb([8, 8, 8]));
+        assert!(!super::poster_frame_has_visible_content(&black));
+        let mut title_card = black;
+        for x in 0..100 {
+            for y in 0..3 {
+                title_card.put_pixel(x, y, image::Rgb([180, 180, 180]));
+            }
+        }
+        assert!(super::poster_frame_has_visible_content(&title_card));
+        let dark_scene = image::RgbImage::from_pixel(100, 100, image::Rgb([35, 30, 28]));
+        assert!(super::poster_frame_has_visible_content(&dark_scene));
+        assert!(!super::poster_frame_has_visible_content(
+            &image::RgbImage::new(0, 0)
+        ));
+    }
+
+    #[test]
+    fn poster_selection_skips_the_black_leader_in_the_preview_fixture() {
+        let Ok(ffmpeg) = find_ffmpeg() else {
+            // FFmpeg is optional locally, but CI must exercise real decoding.
+            assert!(
+                std::env::var("COLONY_REQUIRE_POSTER_PROOF").ok().as_deref() != Some("1"),
+                "COLONY_REQUIRE_POSTER_PROOF requires FFmpeg for poster selection proof"
+            );
+            return;
+        };
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../public/rich-previews/preview-video.mp4");
+        let poster = extract_poster_frame_with_cancellation(&source, &ffmpeg, None)
+            .expect("the visible portion after the two-second leader should yield a poster");
+        let frame = image::open(&poster).expect("the poster should be a valid image");
+        let _ = std::fs::remove_file(poster);
+        assert!(poster_frame_has_visible_content(&frame.to_rgb8()));
     }
 }

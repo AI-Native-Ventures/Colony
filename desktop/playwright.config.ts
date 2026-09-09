@@ -43,6 +43,9 @@ export default defineConfig({
       name: "smoke",
       testMatch: [
         "**/smoke.spec.ts",
+        "**/inline-reply-model.spec.ts",
+        "**/rich-document-previews.spec.ts",
+        "**/rich-media-previews.spec.ts",
         "**/content-screenshots.spec.ts",
         "**/brand-page.spec.ts",
         "**/onboarding-tour.spec.ts",

@@ -10282,6 +10282,7 @@ async function handleSendChannelMessage(
     linkPreviewTags?: string[][] | null;
     mentionTags?: string[][] | null;
     workTags?: string[][] | null;
+    replyModelTags?: string[][] | null;
     sentFromThreadTag?: string[] | null;
   },
   config: E2eConfig | undefined,
@@ -10386,6 +10387,7 @@ async function handleSendChannelMessage(
     ...linkPreviewTags,
     ...mentionTags,
     ...workTags,
+    ...(args.replyModelTags ?? []),
     ...(sentFromThreadTag ? [sentFromThreadTag] : []),
   ];
   const identity = getIdentity(config);
@@ -14070,6 +14072,16 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleGetManagedAgentLog>[0],
         );
       case "get_agent_models":
+        if (activeConfig?.mock?.discoverAgentModelsError)
+          throw new Error(activeConfig.mock.discoverAgentModelsError);
+        if (activeConfig?.mock?.discoverAgentModels)
+          return {
+            agentName: "mock-agent",
+            agentVersion: "0.0.0",
+            agentDefaultModel: null,
+            selectedModel: null,
+            ...activeConfig.mock.discoverAgentModels,
+          };
         return {
           agentName: "mock-agent",
           agentVersion: "0.0.0",

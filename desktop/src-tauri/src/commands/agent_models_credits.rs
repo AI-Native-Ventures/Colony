@@ -50,6 +50,47 @@ pub(super) async fn discover_credits_models(
     })
 }
 
+/// Query only an existing lease. Reply controls never acquire credentials.
+pub(super) async fn discover_credits_reply_models(
+    app: &AppHandle,
+    state: &AppState,
+    selected_model: Option<String>,
+) -> Result<AgentModelsResponse, String> {
+    let relay = relay_ws_url_with_override(state);
+    let lease = crate::provisioned_credits::cached_catalog_lease(app, &relay)?;
+    let url = format!("{}/gateway/openai/v1/models", lease.key.relay_origin);
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
+    let served = fetch_models(&state.http_client, &url, lease.token.as_str()).await?;
+    if served.is_empty() {
+        return Err("No Colony Credits models are available for this business yet.".into());
+    }
+    // Native hosted discovery and the runtime use the same reasoning capability source.
+    let models: Vec<AgentModelInfo> = served
+        .iter()
+        .filter(|model| buzz_agent_pkg::session_models::is_reply_model_id(&model.id))
+        .flat_map(|model| {
+            buzz_agent_pkg::session_models::supported_reply_model_ids(
+                buzz_agent_pkg::config::Provider::OpenAi,
+                &model.id,
+            )
+            .into_iter()
+            .map(|id| AgentModelInfo::new(id.clone(), Some(id), None))
+        })
+        .collect();
+    if models.is_empty() {
+        return Err("No conversation models are available through Colony Credits.".into());
+    }
+    Ok(AgentModelsResponse {
+        agent_name: "Colony Credits".into(),
+        agent_version: "reply-catalog".into(),
+        models,
+        agent_default_model: selected_model.clone(),
+        selected_model,
+        supports_switching: true,
+    })
+}
+
 async fn fetch_models(
     client: &reqwest::Client,
     url: &str,

@@ -317,6 +317,7 @@ jobs:
             build-essential \
             curl \
             file \
+            ffmpeg \
             libasound2-dev \
             libayatana-appindicator3-dev \
             libgtk-3-dev \
@@ -355,6 +356,7 @@ jobs:
         run: just desktop-tauri-test
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+          COLONY_REQUIRE_POSTER_PROOF: "1"
       - name: Electron native compatibility host
         run: |
           cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --features electron-host --all-targets -- -D warnings

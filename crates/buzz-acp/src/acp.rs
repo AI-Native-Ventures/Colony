@@ -915,6 +915,15 @@ impl AcpClient {
         self.send_request("session/set_config_option", params).await
     }
 
+    /// Close an idle disposable session, only after the runtime advertises this extension.
+    pub async fn session_close(&mut self, session_id: &str) -> Result<serde_json::Value, AcpError> {
+        self.send_request(
+            "_colony/session/close",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await
+    }
+
     /// Send `session/set_model` (unstable ACP path).
     pub async fn session_set_model(
         &mut self,

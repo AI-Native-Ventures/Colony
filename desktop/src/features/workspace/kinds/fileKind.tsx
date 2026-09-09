@@ -1,4 +1,8 @@
 import * as React from "react";
+import {
+  filePreviewKind,
+  supportsInlineFilePreview,
+} from "@/shared/ui/file-preview/filePreviewModel";
 import { invoke } from "@/shared/api/nativeBridge";
 
 import type { TabKindDefinition } from "@/features/workspace/lib/tabKindRegistry";
@@ -15,6 +19,12 @@ import {
   updateTabPayload,
 } from "@/features/workspace/lib/workspaceTabs";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
+
+const InlineFilePreview = React.lazy(() =>
+  import("@/shared/ui/file-preview/InlineFilePreview").then((module) => ({
+    default: module.InlineFilePreview,
+  })),
+);
 
 const PdfWorkspaceViewer = React.lazy(() => import("./PdfWorkspaceViewer"));
 const WORKSPACE_FILE_LOAD_ERROR = "This file could not be loaded.";
@@ -46,13 +56,23 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
     () => readFileSource(tab.payload),
     [tab.payload],
   );
+  const sourceName = source
+    ? source.kind === "path"
+      ? titleForPath(source.path)
+      : source.name
+    : "";
+  const sourceMime = source?.kind === "url" ? source.mime : "";
+  const inlinePreview =
+    source !== null &&
+    supportsInlineFilePreview(sourceName, sourceMime) &&
+    filePreviewKind(sourceName, sourceMime) !== "pdf";
   const [file, setFile] = React.useState<LoadedWorkspaceFile | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [reloadToken, setReloadToken] = React.useState(0);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken intentionally retriggers the file request after Retry.
   React.useEffect(() => {
-    if (!source) {
+    if (!source || inlinePreview) {
       setFile(null);
       setError(null);
       return;
@@ -70,7 +90,7 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [source, reloadToken]);
+  }, [source, reloadToken, inlinePreview]);
 
   const retry = React.useCallback(() => {
     setReloadToken((value) => value + 1);
@@ -96,6 +116,28 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
         >
           Choose a file
         </button>
+      </div>
+    );
+  }
+
+  if (source && inlinePreview) {
+    return (
+      <div className="h-full overflow-auto p-3">
+        <React.Suspense
+          fallback={
+            <p className="p-4 text-sm text-muted-foreground">
+              Loading file preview…
+            </p>
+          }
+        >
+          <InlineFilePreview
+            filename={sourceName}
+            mime={sourceMime}
+            {...(source.kind === "path"
+              ? { localPath: source.path }
+              : { href: source.url })}
+          />
+        </React.Suspense>
       </div>
     );
   }

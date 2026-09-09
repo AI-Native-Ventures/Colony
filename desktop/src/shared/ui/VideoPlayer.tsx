@@ -30,6 +30,11 @@ import { useNaturalVideoAspectRatio } from "./videoAspectRatio";
 import { useVideoContextMenu } from "./useVideoContextMenu";
 import { useRegisterVideoReview } from "./VideoReviewNavigation";
 import { VideoReviewPosterPreview } from "./VideoReviewPosterPreview";
+import { MediaDownloadButton } from "./media-preview/MediaDownloadButton";
+import {
+  formatCommentTimecode,
+  formatTimecode,
+} from "./media-preview/videoTimecode";
 import { parseVideoReviewTimecode } from "./videoReviewTimecode";
 import {
   VideoReviewTimecodeButton,
@@ -138,49 +143,6 @@ function GlassSurface({ className }: { className?: string }) {
   );
 }
 
-function formatTimecode(
-  seconds: number,
-  options: { fractionalDigits?: number; trimZeroFraction?: boolean } = {},
-): string {
-  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
-  const fractionalDigits = Math.max(0, options.fractionalDigits ?? 0);
-  const precisionFactor = 10 ** fractionalDigits;
-  const totalTicks =
-    fractionalDigits > 0
-      ? Math.round(safeSeconds * precisionFactor)
-      : Math.floor(safeSeconds);
-  const totalSeconds =
-    fractionalDigits > 0
-      ? Math.floor(totalTicks / precisionFactor)
-      : totalTicks;
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const remainingSeconds = totalSeconds % 60;
-  const paddedSeconds = String(remainingSeconds).padStart(2, "0");
-  const fraction = fractionalDigits > 0 ? totalTicks % precisionFactor : 0;
-
-  const baseTimecode =
-    hours > 0
-      ? `${hours}:${String(minutes).padStart(2, "0")}:${paddedSeconds}`
-      : `${String(minutes).padStart(2, "0")}:${paddedSeconds}`;
-
-  if (
-    fractionalDigits <= 0 ||
-    (options.trimZeroFraction === true && fraction === 0)
-  ) {
-    return baseTimecode;
-  }
-
-  return `${baseTimecode}.${String(fraction).padStart(fractionalDigits, "0")}`;
-}
-
-function formatCommentTimecode(seconds: number): string {
-  return formatTimecode(seconds, {
-    fractionalDigits: 1,
-    trimZeroFraction: true,
-  });
-}
-
 function formatPlaybackSpeed(speed: number): string {
   return `${speed}x`;
 }
@@ -214,10 +176,6 @@ function fileNameFromUrl(src: string): string {
   const withoutQuery = src.split("?")[0];
   const tail = withoutQuery.split("/").filter(Boolean).pop();
   return tail ? decodeURIComponent(tail) : "Video";
-}
-
-function getInlineSurfaceWidth(aspectRatio: number): number {
-  return Math.round(Math.min(384, Math.max(160, aspectRatio * 180)));
 }
 
 /**
@@ -964,14 +922,13 @@ export function VideoPlayer({
     [reviewContext?.comments],
   );
   const inlineAspectRatio = aspectRatio ?? naturalAspectRatio ?? 16 / 9;
-  const inlineSurfaceWidth = getInlineSurfaceWidth(inlineAspectRatio);
   const showInlineSpeedControl =
     inlineRenderedWidth !== null &&
     inlineRenderedWidth >= INLINE_SPEED_CONTROL_MIN_WIDTH;
   const inlineSurfaceStyle: React.CSSProperties = {
     aspectRatio: String(inlineAspectRatio),
-    maxHeight: 256,
-    width: inlineSurfaceWidth,
+    maxHeight: "min(65vh,36rem)",
+    width: "100%",
   };
   const hideInlineControls = !started || isPlaying;
   const inlineControlsRevealClass = cn(
@@ -983,7 +940,7 @@ export function VideoPlayer({
   return (
     <>
       <div
-        className="relative mt-3 inline-block max-w-full align-top"
+        className="relative mt-3 block w-full min-w-0 max-w-full align-top"
         data-testid="video-player"
       >
         <div
@@ -992,14 +949,11 @@ export function VideoPlayer({
           style={inlineSurfaceStyle}
           onContextMenuCapture={onSurfaceContextMenu}
         >
-          {/* Cover, not contain: when the surface's max-height clamp breaks
-              the aspect match (tall videos), fill the tile and crop instead
-              of letterboxing — the review overlay still shows the full
-              frame. */}
+          {/* Fit the complete frame, including portrait titles and artwork. */}
           {/* biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available */}
           <video
             ref={videoRef}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-contain"
             playsInline
             poster={poster}
             preload="metadata"
@@ -1060,6 +1014,11 @@ export function VideoPlayer({
               setMuted(event.currentTarget.muted);
             }}
             onWaiting={() => setIsBuffering(true)}
+          />
+          <VideoReviewPosterPreview
+            poster={poster}
+            visible={!started}
+            filename={filename ?? "Video"}
           />
           {!hasError && !isBuffering ? (
             <button
@@ -1179,6 +1138,16 @@ export function VideoPlayer({
             </span>
           </button>
         ) : null}
+        <div className="flex min-w-0 items-center justify-between gap-2 px-1 py-1">
+          <span className="min-w-0 truncate text-sm text-muted-foreground">
+            {filename ?? "Video"}
+          </span>
+          <MediaDownloadButton
+            downloadUrl={downloadUrl}
+            filename={filename ?? "video.mp4"}
+            sourceUrl={src}
+          />
+        </div>
       </div>
       {videoContextMenu}
       <VideoReviewDialog
@@ -1733,20 +1702,27 @@ function VideoReviewDialog({
                         syncCurrentTime(pendingSeekSeconds);
                       }
                     }}
-                    onLoadedData={() => setHasVisibleFrame(true)}
+                    onLoadedData={(event) => {
+                      // Loading time zero alone must not replace a useful poster
+                      // with the video's black opening frame.
+                      if (event.currentTarget.currentTime > 0)
+                        setHasVisibleFrame(true);
+                    }}
                     onPause={(event) => {
                       syncCurrentTime(event.currentTarget.currentTime);
                       setIsPlaying(false);
                     }}
                     onPlay={(event) => {
+                      setHasVisibleFrame(true);
                       syncCurrentTime(event.currentTarget.currentTime);
                       setIsPlaying(true);
                     }}
                     onSeeked={(event) => {
                       reviewSeek.handleSeeked();
                       if (
+                        event.currentTarget.currentTime > 0 &&
                         event.currentTarget.readyState >=
-                        HTMLMediaElement.HAVE_CURRENT_DATA
+                          HTMLMediaElement.HAVE_CURRENT_DATA
                       ) {
                         setHasVisibleFrame(true);
                       }
@@ -1761,6 +1737,7 @@ function VideoReviewDialog({
                   />
                   <VideoReviewPosterPreview
                     poster={poster}
+                    filename={title}
                     visible={!hasVisibleFrame}
                   />
                 </div>

@@ -27,15 +27,22 @@ export function BlockCard({
   const card = resolveCard(node, data, rootData);
   return (
     <Attachment
-      className={cn("w-full shadow-none", className)}
+      className={cn(
+        "w-full min-w-0 border-border bg-card text-card-foreground shadow-none",
+        className,
+      )}
       data-block-primitive="card"
       orientation="vertical"
     >
       {(card.title || card.description) && (
         <AttachmentContent className="w-full">
-          {card.title ? <AttachmentTitle>{card.title}</AttachmentTitle> : null}
+          {card.title ? (
+            <AttachmentTitle className="whitespace-normal break-words">
+              {card.title}
+            </AttachmentTitle>
+          ) : null}
           {card.description ? (
-            <AttachmentDescription className="whitespace-pre-wrap text-ellipsis">
+            <AttachmentDescription className="whitespace-pre-wrap break-words text-muted-foreground">
               {card.description}
             </AttachmentDescription>
           ) : null}

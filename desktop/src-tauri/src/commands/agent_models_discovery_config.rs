@@ -9,6 +9,8 @@
 //! Included from `agent_models.rs` via `#[path]`, so `super::*` resolves
 //! against that module (the `agent_models_tests.rs` convention).
 
+use crate::managed_agents::CredentialMode;
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 use crate::managed_agents::known_acp_runtime;
@@ -109,4 +111,54 @@ pub(super) fn draft_agent_model_discovery_env(
     let merged_with_def =
         crate::managed_agents::merged_user_env(&derived_env, &filtered_definition_env);
     crate::managed_agents::merged_user_env(&merged_with_def, env_vars)
+}
+
+/// Use the same readable dangling-harness error as spawn and summary rows.
+pub(super) fn model_discovery_error(pubkey: &str, error: &str) -> String {
+    format!(
+        "cannot discover models for {pubkey}: {}",
+        crate::managed_agents::user_facing_harness_error(error)
+    )
+}
+
+/// A scoped probe runs the same resolved model/provider as a new teammate session.
+pub(super) fn reply_discovery_env(
+    command: &str,
+    model: Option<&str>,
+    provider: Option<&str>,
+    env: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut env = crate::managed_agents::discovery_env_with_baked_floor(env);
+    if let Some(runtime) = known_acp_runtime(command) {
+        if let (Some(key), Some(value)) = (runtime.model_env_var, model) {
+            env.insert(key.into(), value.into());
+        }
+        if !runtime.provider_locked {
+            if let (Some(key), Some(value)) = (runtime.provider_env_var, provider) {
+                env.insert(key.into(), value.into());
+            }
+        }
+    }
+    env
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoverAgentModelsInput {
+    #[serde(default)]
+    pub acp_command: Option<String>,
+    /// Selected payment route; Credits discovery stays inside the native host.
+    #[serde(default)]
+    pub credential_mode: CredentialMode,
+    pub agent_command: String,
+    #[serde(default)]
+    pub agent_args: Vec<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub env_vars: BTreeMap<String, String>,
+    /// Definition-level env from the harness definition (custom/preset).
+    /// Merged below user `env_vars` so user overrides always win.
+    #[serde(default)]
+    pub definition_env: BTreeMap<String, String>,
 }

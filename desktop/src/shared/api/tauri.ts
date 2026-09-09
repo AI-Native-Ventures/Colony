@@ -880,8 +880,11 @@ export async function discoverManagedAgentPrereqs(input: {
 
 // ── Model discovery ───────────────────────────────────────────────────────────
 
-export async function getAgentModels(pubkey: string) {
-  return invokeTauri<AgentModelsResponse>("get_agent_models", { pubkey });
+export async function getAgentModels(pubkey: string, replyScope = false) {
+  return invokeTauri<AgentModelsResponse>("get_agent_models", {
+    pubkey,
+    replyScope,
+  });
 }
 
 export async function getAgentConfigSurface(

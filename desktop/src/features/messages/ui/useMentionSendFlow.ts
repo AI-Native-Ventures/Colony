@@ -1,4 +1,6 @@
+import type { UseMentionSendFlowOptions } from "./useMentionSendFlow.types";
 import * as React from "react";
+import { validateReplyModelRecipient } from "@/features/agents/lib/replyModelSelection";
 import { toast } from "sonner";
 import {
   type CreateChannelManagedAgentInput,
@@ -20,21 +22,14 @@ import { filterEffectiveExplicitAgentPubkeys } from "@/features/messages/lib/eff
 import {
   prepareBackgroundMediaUpload,
   saveQueuedAttachmentsForDraft,
-  type QueuedMediaAttachment,
 } from "@/features/messages/lib/backgroundMediaUploadStore";
-import type { UseChannelLinksResult } from "@/features/messages/lib/useChannelLinks";
-import type { UseEmojiAutocompleteResult } from "@/features/messages/lib/useEmojiAutocomplete";
 import {
   buildOutgoingMessage,
   type ImetaMedia,
 } from "@/features/messages/lib/imetaMediaMarkdown";
-import type { UseMentionsResult } from "@/features/messages/lib/useMentions";
-import type { UseRichTextEditorResult } from "@/features/messages/lib/useRichTextEditor";
-import type { UseDraftsResult } from "@/features/messages/lib/useDrafts";
 import { invokeTauri } from "@/shared/api/tauri";
 import { useComposerNewTask } from "./useComposerNewTask";
-import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
-import type { AcpRuntime, ChannelType, ManagedAgent } from "@/shared/api/types";
+import type { AcpRuntime, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import {
   attachOutgoingWorkContext,
@@ -52,52 +47,7 @@ import {
   type SendMessageWithMentionFlowInput,
   uniqueNormalizedPubkeys,
 } from "./useMentionSendFlow.helpers";
-type UseMentionSendFlowOptions = {
-  channelId: string | null;
-  channelLinks: Pick<UseChannelLinksResult, "clearChannels">;
-  channelType: ChannelType | null;
-  contentRef: React.MutableRefObject<string>;
-  customEmoji: CustomEmoji[];
-  drafts: Pick<UseDraftsResult, "loadDraft" | "markDraftSent" | "persistDraft">;
-  emojiAutocomplete: Pick<UseEmojiAutocompleteResult, "clearEmojis">;
-  mentions: UseMentionsResult;
-  onPrepareSendChannel?: (
-    additionalParticipantPubkeys?: string[],
-  ) => Promise<string | null>;
-  onSendRef: React.MutableRefObject<
-    (
-      content: string,
-      mentionPubkeys: string[],
-      mediaTags?: string[][],
-      channelId?: string | null,
-      threadContext?: {
-        parentEventId: string | null;
-        threadHeadId: string | null;
-      } | null,
-    ) => Promise<void>
-  >;
-  richText: Pick<
-    UseRichTextEditorResult,
-    "clearContent" | "setContent" | "restorePlainTextAndFocusEnd"
-  >;
-  setContent: (content: string) => void;
-  setIsEmojiPickerOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setPendingImeta: (pendingImeta: ImetaMedia[]) => void;
-  hasUnsavedMedia: () => boolean;
-  clearQueuedAttachments: () => void;
-  restoreQueuedAttachments: (attachments: QueuedMediaAttachment[]) => void;
-  setSpoileredAttachmentUrls?: React.Dispatch<
-    React.SetStateAction<Set<string>>
-  >;
-  onSuccessfulExplicitAgentAudience?: (audience: {
-    channelId: string;
-    expectedGeneration: number;
-    expectedRevision: number | null;
-    explicitAgentPubkeys: string[];
-  }) => void;
-  resolvePostSendContent?: (effectiveExplicitAgentPubkeys: string[]) => string;
-  threadRootId?: string | null;
-};
+
 export function useMentionSendFlow({
   channelId,
   channelLinks,
@@ -118,6 +68,7 @@ export function useMentionSendFlow({
   restoreQueuedAttachments,
   setSpoileredAttachmentUrls,
   onSuccessfulExplicitAgentAudience,
+  onReplyModelSent,
   resolvePostSendContent,
   threadRootId = null,
 }: UseMentionSendFlowOptions) {
@@ -549,6 +500,7 @@ export function useMentionSendFlow({
           // everything after it, which used to be reported nowhere at all.
           let finalOutgoingTags: string[][] | undefined;
           try {
+            validateReplyModelRecipient(outgoingTags, agentMentionPubkeys);
             finalOutgoingTags = await attachOutgoingWorkContext({
               channelId: sendChannelId ?? draft.capturedChannelId ?? "",
               content: finalContent,
@@ -574,6 +526,10 @@ export function useMentionSendFlow({
           );
           if (signal?.aborted) return;
           newTask.afterSend(); // Per-send, not a mode.
+          const replyTag = finalOutgoingTags?.find(
+            (tag) => tag[0] === "agent-reply",
+          );
+          if (replyTag) onReplyModelSent?.(replyTag);
           if (effectiveExplicitAgentPubkeys.length > 0) {
             // Promote only explicitly authored agents that remained effective
             // for this successful send. "Send without inviting" removes its
@@ -657,6 +613,7 @@ export function useMentionSendFlow({
       onPrepareSendChannel,
       onSendRef,
       onSuccessfulExplicitAgentAudience,
+      onReplyModelSent,
       resolvePostSendContent,
       richText.setContent,
       setContent,
@@ -710,6 +667,7 @@ export function useMentionSendFlow({
       pendingImeta,
       queuedAttachments = [],
       linkPreviewTags = [],
+      replyModelTag,
       sentDraftKey,
       recoveryDraftKey,
       spoileredAttachmentUrls = new Set(),
@@ -801,7 +759,9 @@ export function useMentionSendFlow({
           trimmed,
           mentionPubkeys: pubkeys,
           nonMemberPubkeys: promptNonMemberPubkeys,
-          outgoingTags,
+          outgoingTags: replyModelTag
+            ? [...(outgoingTags ?? []), replyModelTag]
+            : outgoingTags,
           preparedManagedAgents: personaMentionResult.agents,
           readyAgentPubkeys:
             channelType === "dm" && onPrepareSendChannel

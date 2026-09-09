@@ -1101,7 +1101,9 @@ test("message timecodes deterministically open the first attached video", async 
     .toBe(1);
 });
 
-test("narrow inline videos hide playback speed control", async ({ page }) => {
+test("portrait video fills its thread and hides speed only when the container is narrow", async ({
+  page,
+}) => {
   await installVideoReviewHarness(page);
 
   await page.goto("/");
@@ -1128,7 +1130,19 @@ test("narrow inline videos hide playback speed control", async ({ page }) => {
   const portraitPlayer = page.getByTestId("video-player").last();
   await expect(portraitPlayer).toBeVisible();
   const portraitBox = await portraitPlayer.boundingBox();
-  expect(portraitBox?.width).toBeLessThan(220);
+  expect(portraitBox?.width).toBeGreaterThan(220);
+  await expect(portraitPlayer.locator("video")).toHaveCSS(
+    "object-fit",
+    "contain",
+  );
+  // Media aspect ratio no longer dictates the width of the conversation block.
+  // A genuinely narrow container still gets the compact playback controls.
+  await portraitPlayer.evaluate((element) => {
+    (element as HTMLElement).style.width = "180px";
+  });
+  await expect
+    .poll(async () => (await portraitPlayer.boundingBox())?.width ?? 0)
+    .toBeLessThan(220);
 
   await portraitPlayer.getByRole("button", { name: "Play video" }).click();
   await expect(

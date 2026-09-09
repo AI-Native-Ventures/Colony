@@ -51,6 +51,9 @@ pub struct SessionNewParams {
     pub mcp_servers: Vec<McpServerStdio>,
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Colony requests live model choices; legacy ACP sessions remain usable offline.
+    #[serde(default, rename = "_meta")]
+    pub meta: Value,
 }
 
 #[derive(Debug, Deserialize)]
