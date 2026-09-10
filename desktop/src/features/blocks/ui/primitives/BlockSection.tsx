@@ -1,5 +1,6 @@
 import { cn } from "@/shared/lib/cn";
 
+import "./blockPresentation.css";
 import { resolveSection } from "./resolvers";
 import type { BlockSectionNode } from "./types";
 
@@ -18,20 +19,31 @@ export function BlockSection({
 }) {
   const resolved = resolveSection(node, data, rootData);
   const Heading = `h${headingLevel}` as "h2" | "h3" | "h4";
-  if (!resolved.title && !resolved.text) return null;
-
+  if (
+    (!resolved.title.trim() && !resolved.text.trim()) ||
+    (node.omit_empty_text && !resolved.text.trim())
+  )
+    return null;
   return (
     <section
-      className={cn("min-w-0 space-y-1.5", className)}
+      className={cn("block-native-section min-w-0 space-y-2", className)}
       data-block-primitive="section"
+      data-presentation={node.presentation ?? "body"}
     >
       {resolved.title ? (
-        <Heading className="text-sm font-semibold leading-5 text-foreground">
+        <Heading
+          className={cn(
+            "block-native-copy font-semibold leading-snug text-foreground",
+            node.presentation === "lead"
+              ? "text-2xl tracking-tight"
+              : "text-base",
+          )}
+        >
           {resolved.title}
         </Heading>
       ) : null}
       {resolved.text ? (
-        <p className="whitespace-pre-wrap text-sm leading-5 text-muted-foreground">
+        <p className="block-native-copy text-sm leading-relaxed text-muted-foreground">
           {resolved.text}
         </p>
       ) : null}

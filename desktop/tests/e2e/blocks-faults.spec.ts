@@ -296,7 +296,11 @@ test("permission denial, offline Question recovery, and timed-out receipts remai
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   const questionRow = page.locator(`[data-message-id="${questionEvent.id}"]`);
-  await questionRow.getByRole("button", { name: "Premium editorial" }).click();
+  const premium = questionRow.getByRole("checkbox", {
+    name: /^Premium editorial\b/,
+  });
+  await premium.check();
+  await expect(premium).toBeChecked();
   await questionRow.getByRole("button", { name: "Submit" }).click();
   await expect(questionRow.getByText(/Saved offline/)).toBeVisible();
   await capture(

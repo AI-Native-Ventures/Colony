@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "interview",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Interview",
   "description": "One question at a time. The owner answers in chat, in whatever form the answer already exists in: typed, a link, or a document.",
   "origin": "core",
@@ -51,21 +51,31 @@
   },
   "tree": {
     "type": "stack",
-    "gap": "small",
+    "gap": "medium",
     "children": [
       {
         "type": "status",
-        "label": "Question {{position}} of {{total}}"
+        "label": "Question {{position}} of {{total}}",
+        "position_path": "/position",
+        "total_path": "/total"
       },
       {
         "type": "section",
         "title": "{{question}}",
-        "text": "{{why_asking}}"
+        "text": "{{why_asking}}",
+        "presentation": "lead"
       },
       {
         "type": "section",
         "title": "Already on your site",
-        "text": "{{already_known}}"
+        "text": "{{already_known}}",
+        "presentation": "callout",
+        "omit_empty_text": true
+      },
+      {
+        "type": "section",
+        "text": "Reply in this thread with your answer. You can also say you do not know.",
+        "presentation": "body"
       },
       {
         "type": "actions",

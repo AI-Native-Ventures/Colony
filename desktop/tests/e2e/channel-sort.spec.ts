@@ -82,16 +82,17 @@ test.describe("per-group channel sort", () => {
 
     // Mock recency: all-replies (far future) > deep-history (1m) > general
     // (5m) > agents (15m) > sales (30m) > engineering (42m) > design (120m),
-    // then no-activity channels alphabetically. The list is virtualized, so
-    // only assert on the rendered prefix.
+    // then no-activity channels alphabetically. `general` is the mock's
+    // project channel and sorts inside the Projects section, so it is not
+    // part of this list. The list is virtualized, so only assert on the
+    // rendered prefix.
     await expect
       .poll(async () => (await streamNames(page)).slice(0, 3))
-      .toEqual(["all-replies", "deep-history", "general"]);
+      .toEqual(["all-replies", "deep-history", "agents"]);
     const names = await streamNames(page);
     const recencyOrder = [
       "all-replies",
       "deep-history",
-      "general",
       "agents",
       "sales",
       "engineering",

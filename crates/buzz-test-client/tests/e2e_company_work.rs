@@ -20,6 +20,10 @@
 //! cargo test -p buzz-test-client --test e2e_company_work -- --ignored --test-threads=1
 //! ```
 
+#[path = "common/publish.rs"]
+mod publish;
+
+use publish::send_past_transport_stall;
 use std::time::Duration;
 
 use buzz_core::company::{
@@ -399,39 +403,6 @@ async fn head(
         }
     }
     panic!("the relay never answered a head read for {d_tag}");
-}
-
-/// Send one event, retrying past a silent transport window.
-///
-/// The read paths in this file already treat a timed-out window as a hiccup
-/// rather than an answer, because the relay going quiet for one window proves
-/// nothing about the write. The seed writes did not, so a single stalled
-/// window failed the whole suite with `relay accepts team: Timeout` — a
-/// transport event reported as a relay verdict.
-///
-/// Only `Timeout` is retried. Every other error, and any answered-but-rejected
-/// write, is returned untouched: a relay that says no is an answer, and
-/// retrying past it would hide exactly the failures this suite exists to catch.
-///
-/// Retrying is safe because the same signed event carries the same id. An
-/// addressable event replaces itself, and a re-sent one the relay already
-/// stored comes back `duplicate:`/accepted rather than as a second write.
-async fn send_past_transport_stall(
-    client: &mut BuzzTestClient,
-    event: nostr::Event,
-    what: &str,
-) -> buzz_ws_client::OkResponse {
-    for attempt in 0..8 {
-        match client.send_event(event.clone()).await {
-            Ok(ok) => return ok,
-            Err(buzz_test_client::TestClientError::Timeout) => {
-                eprintln!("{what} send attempt {attempt} timed out, retrying");
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
-            Err(error) => panic!("{what}: {error}"),
-        }
-    }
-    panic!("{what}: the relay never answered eight send attempts");
 }
 
 /// Publish the Team the relay validates Task ownership against.

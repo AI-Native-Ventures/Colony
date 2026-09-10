@@ -56,6 +56,12 @@ export function ImagePreview({
     ownIndices?: (number | undefined)[];
   } | null>(null);
   const [direction, setDirection] = React.useState(0);
+  const [viewedSources, setViewedSources] = React.useState<Set<string>>(
+    () => new Set(),
+  );
+  const [failedThumbnails, setFailedThumbnails] = React.useState<Set<string>>(
+    () => new Set(),
+  );
   const [menu, setMenu] = React.useState<
     (MediaContextMenuPosition & { item: MediaPreviewImage }) | null
   >(null);
@@ -84,6 +90,13 @@ export function ImagePreview({
   }, []);
   const activeIndex = clampMediaIndex(index, items.length);
   const item = items[activeIndex];
+  const thumbnailOccurrences = new Map<string, number>();
+  const thumbnailItems = items.map((entry) => {
+    const identity = entry.originalUrl ?? entry.src;
+    const occurrence = thumbnailOccurrences.get(identity) ?? 0;
+    thumbnailOccurrences.set(identity, occurrence + 1);
+    return { entry, key: `${identity}:${occurrence}` };
+  });
   React.useLayoutEffect(() => {
     const trigger = imageTrigger.current;
     if (!trigger) return;
@@ -155,10 +168,27 @@ export function ImagePreview({
     );
     setMenu(null);
   };
-  const move = (step: number) => {
+  const selectImage = (position: number) => {
+    if (region.current && isInsideHiddenSpoiler(region.current)) return;
+    const next = clampMediaIndex(position, items.length);
     setMenu(null);
-    setDirection(step);
-    setIndex(clampMediaIndex(activeIndex + step, items.length));
+    setDirection(Math.sign(next - activeIndex));
+    setIndex(next);
+  };
+  const move = (step: number) => selectImage(activeIndex + step);
+  const rememberViewedOriginal = (event: React.SyntheticEvent) => {
+    const image = event.target;
+    if (
+      !(image instanceof HTMLImageElement) ||
+      !image.closest("[data-progressive-image-frame]") ||
+      isInsideHiddenSpoiler(image)
+    )
+      return;
+    const source = image.getAttribute("src");
+    if (!source || !items.some((entry) => entry.src === source)) return;
+    setViewedSources((previous) =>
+      previous.has(source) ? previous : new Set(previous).add(source),
+    );
   };
   const moveExpanded = (step: number) => {
     setMenu(null);
@@ -327,6 +357,7 @@ export function ImagePreview({
         )}
         data-testid="media-image-preview"
         onKeyDown={(event) => keyboard(event, move)}
+        onLoadCapture={rememberViewedOriginal}
       >
         <ImagePreviewStage
           key={item.src}
@@ -339,6 +370,66 @@ export function ImagePreview({
           onMove={move}
           onContextMenu={(event) => contextMenu(event, item)}
         />
+        {items.length > 1 ? (
+          <fieldset
+            aria-label="Choose an image"
+            data-testid="media-image-thumbnails"
+            className="flex min-w-0 gap-2 overflow-x-auto overscroll-x-contain border-t border-border/60 bg-muted/10 px-3 py-2"
+          >
+            {thumbnailItems.map(({ entry, key }, position) => {
+              const source =
+                entry.thumbnailSrc ||
+                (position === activeIndex || viewedSources.has(entry.src)
+                  ? entry.src
+                  : undefined);
+              const showThumbnail =
+                source && !hiddenInSpoiler && !failedThumbnails.has(source);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  aria-label={`Show image ${position + 1} of ${items.length}: ${entry.filename || entry.alt || "Image"}`}
+                  aria-current={position === activeIndex ? "true" : undefined}
+                  tabIndex={hiddenInSpoiler ? -1 : undefined}
+                  className={cn(
+                    "relative h-14 w-20 shrink-0 overflow-hidden rounded-md border bg-muted/40 text-xs text-muted-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+                    position === activeIndex
+                      ? "border-foreground/50 ring-1 ring-border"
+                      : "border-border/60 hover:border-foreground/30",
+                  )}
+                  onClick={() => selectImage(position)}
+                >
+                  {showThumbnail ? (
+                    <img
+                      alt=""
+                      aria-hidden="true"
+                      loading="lazy"
+                      decoding="async"
+                      src={source}
+                      className="h-full w-full object-cover"
+                      onError={() => {
+                        if (source)
+                          setFailedThumbnails((previous) =>
+                            new Set(previous).add(source),
+                          );
+                      }}
+                    />
+                  ) : null}
+                  <span
+                    aria-hidden="true"
+                    className={
+                      showThumbnail
+                        ? "absolute right-0.5 bottom-0.5 rounded bg-background/90 px-1 text-2xs text-foreground tabular-nums"
+                        : "tabular-nums"
+                    }
+                  >
+                    {position + 1}
+                  </span>
+                </button>
+              );
+            })}
+          </fieldset>
+        ) : null}
         {controls(false, items, activeIndex, item, move)}
       </section>
       <Dialog
@@ -364,6 +455,7 @@ export function ImagePreview({
             }
           }}
           onKeyDown={(event) => keyboard(event, moveExpanded)}
+          onLoadCapture={rememberViewedOriginal}
         >
           <DialogTitle className="truncate px-4 py-3 pr-12 text-base">
             {title ??

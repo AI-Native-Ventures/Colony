@@ -16,6 +16,7 @@ import { useTheme } from "@/shared/theme/ThemeProvider";
 import { resolveShikiThemeName } from "@/shared/theme/theme-loader";
 import { copyCodeBlockToClipboard } from "@/shared/lib/codeBlockClipboard";
 import { Button } from "@/shared/ui/button";
+import { DiagramPreview } from "@/shared/ui/diagram-preview/DiagramPreview";
 import { INLINE_CODE_CHIP_CLASS } from "@/shared/ui/mentionChip";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
@@ -98,6 +99,10 @@ export function MarkdownCodeBlock({
     },
     [code],
   );
+
+  if (language?.toLowerCase() === "mermaid") {
+    return <DiagramPreview source={code} />;
+  }
 
   return (
     <div className="group relative" data-code-block="">

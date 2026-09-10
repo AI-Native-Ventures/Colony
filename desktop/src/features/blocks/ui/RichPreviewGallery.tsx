@@ -6,6 +6,8 @@ import { AudioPlayer, ImagePreview } from "@/shared/ui/media-preview";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { VideoPlayer } from "@/shared/ui/VideoPlayer";
 import { BlockChart } from "./primitives/BlockChart";
+import { RichCollectionExamples } from "./RichCollectionExamples";
+import { RichDiagramExamples } from "./RichDiagramExamples";
 
 const FILES = "/rich-previews/";
 const slides = [
@@ -86,6 +88,7 @@ export function RichPreviewGallery() {
                 { id: "video", label: "Video", Icon: Play },
                 { id: "audio", label: "Audio", Icon: AudioLines },
                 { id: "diagrams", label: "Diagrams", Icon: Workflow },
+                { id: "collections", label: "Collections", Icon: FileText },
               ] as const
             ).map(({ id, label, Icon }) => (
               <TabsTrigger
@@ -188,23 +191,7 @@ export function RichPreviewGallery() {
           data-testid="rich-preview-example"
           value="diagrams"
         >
-          <Example
-            title="A process at a glance"
-            description="Diagrams arrive as crisp, expandable SVG files."
-          >
-            <ImagePreview
-              items={[
-                {
-                  src: `${FILES}delivery-flow.svg`,
-                  downloadUrl: `${FILES}delivery-flow.svg`,
-                  filename: "delivery-flow.svg",
-                  alt: "Brief, draft, review, deliver",
-                  width: 1200,
-                  height: 480,
-                },
-              ]}
-            />
-          </Example>
+          <RichDiagramExamples />
           <Example
             title="A readable chart"
             description="A visual summary with its underlying values one click away."
@@ -228,6 +215,13 @@ export function RichPreviewGallery() {
               }}
             />
           </Example>
+        </TabsContent>
+        <TabsContent
+          className="m-0 space-y-8 p-5"
+          data-testid="rich-preview-example"
+          value="collections"
+        >
+          <RichCollectionExamples />
         </TabsContent>
       </Tabs>
     </section>

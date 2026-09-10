@@ -9,13 +9,22 @@ import { Textarea } from "@/shared/ui/textarea";
 export type LaunchAgentOption = { label: string; value: string };
 
 export type LaunchAgentFieldsProps = {
+  /** Branch a new worktree forks from, named in the radio's label. */
+  defaultBranch: string;
   disabled: boolean;
   effortDefault: string | null;
   effortValid: ReadonlyArray<string>;
   employees: ReadonlyArray<LaunchAgentOption>;
   form: LaunchAgentFormState;
   modelPlaceholder: string;
-  onChange: (patch: Partial<LaunchAgentFormState>) => void;
+  /**
+   * `branchEdited` rides the patch rather than the form: it records that the
+   * user has taken the branch name over, which stops the dialog re-deriving it
+   * from the brief on every keystroke.
+   */
+  onChange: (
+    patch: Partial<LaunchAgentFormState> & { branchEdited?: boolean },
+  ) => void;
   runtimes: ReadonlyArray<LaunchAgentOption>;
   teams: ReadonlyArray<LaunchAgentOption>;
 };
@@ -27,6 +36,7 @@ export type LaunchAgentFieldsProps = {
  * touches nothing produces exactly the agent the employee already describes.
  */
 export function LaunchAgentFields({
+  defaultBranch,
   disabled,
   effortDefault,
   effortValid,
@@ -142,17 +152,37 @@ export function LaunchAgentFields({
         </legend>
         <label className="flex items-center gap-2 text-sm text-foreground">
           <input
-            checked
-            data-testid="launch-agent-worktree-shared"
+            checked={form.worktreeMode === "new"}
+            data-testid="launch-agent-worktree-new"
+            disabled={disabled}
             name="launch-agent-worktree"
-            readOnly
+            onChange={() => onChange({ worktreeMode: "new" })}
+            type="radio"
+          />
+          {`New worktree from ${defaultBranch}`}
+        </label>
+        <Input
+          aria-label="Worktree branch"
+          autoComplete="off"
+          className="ml-6 w-[calc(100%-1.5rem)] font-mono text-xs"
+          data-testid="launch-agent-worktree-branch"
+          disabled={disabled || form.worktreeMode !== "new"}
+          onChange={(event) =>
+            onChange({ worktreeBranch: event.target.value, branchEdited: true })
+          }
+          placeholder="feat/branch-name"
+          value={form.worktreeBranch}
+        />
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <input
+            checked={form.worktreeMode === "shared"}
+            data-testid="launch-agent-worktree-shared"
+            disabled={disabled}
+            name="launch-agent-worktree"
+            onChange={() => onChange({ worktreeMode: "shared" })}
             type="radio"
           />
           Share the project checkout
-        </label>
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <input disabled name="launch-agent-worktree" type="radio" />
-          Give it its own worktree (not yet available)
         </label>
       </fieldset>
 

@@ -794,6 +794,117 @@ async fn test_auth_event_kind_rejected() {
     client.disconnect().await.expect("disconnect");
 }
 
+/// Admission must reject before storage and permit retrying the same signed
+/// event after the quota expires. Only this generated owner's counter is set;
+/// production limits and other principals' admission state remain unchanged.
+#[tokio::test]
+#[ignore]
+async fn test_ws_quota_rejection_retries_identical_event_after_expiry() {
+    let keys = Keys::generate();
+    seed_relay_owner(&keys).await;
+    let community_id = ensure_test_community(&relay_authority()).await;
+    let channel_id = create_test_channel(&keys).await;
+    let mut client = BuzzTestClient::connect(&relay_url(), &keys)
+        .await
+        .expect("connect quota test owner");
+    let event = EventBuilder::new(Kind::Custom(9), "quota retry regression")
+        .tags([Tag::parse(["h", channel_id.as_str()]).expect("channel tag")])
+        .sign_with_keys(&keys)
+        .expect("sign once before admission rejection");
+    let event_id = event.id.to_hex();
+    let frame = serde_json::json!(["EVENT", &event]);
+    let pool = e2e_db_pool().await;
+
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let mut redis = redis::Client::open(redis_url)
+        .expect("Redis test URL")
+        .get_multiplexed_async_connection()
+        .await
+        .expect("connect harness Redis");
+    let counter_key = format!(
+        "buzz:{community_id}:ratelimit:{}:ws",
+        keys.public_key().to_hex()
+    );
+    redis::cmd("SET")
+        .arg(&counter_key)
+        .arg(1_000_000)
+        .arg("EX")
+        .arg(5)
+        .query_async::<()>(&mut redis)
+        .await
+        .expect("exhaust only the generated owner's WS counter");
+
+    client
+        .send_raw(&frame)
+        .await
+        .expect("send quota-blocked event");
+    let notice = match client
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("quota NOTICE")
+    {
+        RelayMessage::Notice { message } => message,
+        other => panic!("expected quota NOTICE, got {other:?}"),
+    };
+    assert!(notice.starts_with("rate-limited: quota exceeded; retry in "));
+    match client
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("event-scoped quota OK")
+    {
+        RelayMessage::Ok(response) => {
+            assert_eq!(response.event_id, event_id);
+            assert!(!response.accepted);
+            assert_eq!(response.message, notice);
+        }
+        other => panic!("expected exact event rejection, got {other:?}"),
+    }
+    let rejected_count: i64 = sqlx::query_scalar("SELECT count(*) FROM events WHERE id = $1")
+        .bind(event.id.to_bytes().to_vec())
+        .fetch_one(&pool)
+        .await
+        .expect("inspect rejected event storage");
+    assert_eq!(rejected_count, 0, "admission must run before event storage");
+
+    // Let the real Redis TTL expire; do not delete the key or reset quotas.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let exists: bool = redis::cmd("EXISTS")
+        .arg(&counter_key)
+        .query_async(&mut redis)
+        .await
+        .expect("inspect counter expiry");
+    assert!(!exists, "the fixture admission window must have expired");
+    client
+        .send_raw(&frame)
+        .await
+        .expect("retry identical signed frame");
+    match client
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("retry OK")
+    {
+        RelayMessage::Ok(response) => {
+            assert_eq!(response.event_id, event_id);
+            assert!(response.accepted, "retry rejected: {}", response.message);
+        }
+        other => panic!("expected retry acknowledgement, got {other:?}"),
+    }
+    let accepted_count: i64 = sqlx::query_scalar("SELECT count(*) FROM events WHERE id = $1")
+        .bind(event.id.to_bytes().to_vec())
+        .fetch_one(&pool)
+        .await
+        .expect("inspect retried event storage");
+    assert_eq!(
+        accepted_count, 1,
+        "the same signed event must be stored once"
+    );
+    client
+        .disconnect()
+        .await
+        .expect("disconnect quota test owner");
+}
+
 /// NIP-11 max_subscriptions must be enforced; (limit+1)th REQ gets CLOSED.
 ///
 /// This is a protocol-cap test, not an admission-throughput test. Open one REQ
