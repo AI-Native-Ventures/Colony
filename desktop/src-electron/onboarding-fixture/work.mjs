@@ -179,12 +179,12 @@ export async function completeFixtureWork({
   });
   assert.equal(saved.failed_restart_count, 0);
   assert.equal(saved.restarted_count, 0);
-  const reloadStartedAt = Date.now();
+  const proposalReloadStartedAt = Date.now();
   await reloadWelcome();
   assert.equal(provider.receivedCallCount, 0);
   assert.equal((await readPendingAttempt(page, account)).exists, false);
   await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
-  await waitForProposal("afterReload", reloadStartedAt);
+  await waitForProposal("afterReload", proposalReloadStartedAt);
   const unstaffed = {
     modelCalls: 0,
     tasks: 0,
