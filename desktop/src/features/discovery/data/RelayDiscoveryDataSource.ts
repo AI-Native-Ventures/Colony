@@ -24,7 +24,12 @@ import type {
   VerticalDetail,
 } from "../types";
 import { PIPELINE_COLUMN_STATUSES } from "../types";
-import type { DiscoveryDataSource } from "./DiscoveryDataSource";
+import {
+  DISCOVERY_RESOLVE_MAX_REFS,
+  type DiscoveryDataSource,
+  type DiscoveryEntityRef,
+  type ResolvedDiscoveryEntity,
+} from "./DiscoveryDataSource";
 import { createFixtureDiscoveryDataSource } from "./FixtureDiscoveryDataSource";
 import { sourceEvents, sourceFingerprint } from "./relayDiscoveryEvents";
 import {
@@ -208,6 +213,31 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     });
     if (result.result !== "entity_search") {
       throw new Error("The relay returned the wrong entity-search result.");
+    }
+    return result.entities;
+  }
+
+  /**
+   * Resolve the Discovery references carried by one message into current
+   * context. The relay permission-checks every reference and answers with
+   * `unavailable` for anything this reader may not see, so a tile strip never
+   * leaks the existence of a record. Demo workspaces answer from fixtures,
+   * exactly like every other read here.
+   */
+  async resolveEntities(
+    refs: readonly DiscoveryEntityRef[],
+  ): Promise<ResolvedDiscoveryEntity[]> {
+    const bounded = refs.slice(0, DISCOVERY_RESOLVE_MAX_REFS);
+    if (bounded.length === 0) return [];
+    if (!(await this.live())) {
+      return (await this.demo.resolveEntities?.(bounded)) ?? [];
+    }
+    const result = await this.broker.workspace("resolve_entities", {
+      operation: "resolve_entities",
+      refs: bounded.map((ref) => ({ kind: ref.kind, id: ref.id })),
+    });
+    if (result.result !== "resolved_entities") {
+      throw new Error("The relay returned the wrong entity-resolution result.");
     }
     return result.entities;
   }
