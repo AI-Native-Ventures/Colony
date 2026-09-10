@@ -141,7 +141,11 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
       contentType: "image/png",
     }),
   );
+  // Receipt authorization verifies the actual action signature, so enable the
+  // existing test-key signer while keeping relay/native transport mocked.
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
     blockEvents: [...manifests, ...cardListManifest.events],
     blockActionPublishDelayMs: 700,
     relaySelf: OWNER_PUBKEY,
