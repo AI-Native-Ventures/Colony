@@ -52,6 +52,7 @@ import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useS
 import { resetSidebarMoreNav } from "@/features/sidebar/sidebarMoreNav";
 import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
+import { resetWebsiteIntegrationState } from "@/features/websiteIntegration/resetWebsiteIntegrationState";
 
 import {
   initFirstCommunity,
@@ -108,6 +109,7 @@ function resetCommunityState({
   resetRenderScopedReactionHydration();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
+  resetWebsiteIntegrationState();
   resetLinkPreviewMetadataCache();
   return Promise.all([terminalReset, webReset]).then(() => undefined);
 }

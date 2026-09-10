@@ -35,6 +35,12 @@ export type WebsiteReviewProps = {
   artifactLoader?: WebsiteArtifactLoader;
   hostAdapter?: WebsitePreviewHostAdapter;
   getClipBounds?: WebsiteHostBoundsProvider;
+  /** Independent review panel. The channel root renders the preview only. */
+  showQaPanel?: boolean;
+  /** Version history. Rendered by the thread surface, not the root. */
+  showVersionHistory?: boolean;
+  /** Owner decision controls. Rendered by the thread surface only. */
+  showDecisionControls?: boolean;
   className?: string;
 };
 
@@ -55,6 +61,9 @@ export function WebsiteReview({
   artifactLoader,
   hostAdapter,
   getClipBounds,
+  showQaPanel = true,
+  showVersionHistory = true,
+  showDecisionControls = true,
   className,
 }: WebsiteReviewProps) {
   const selection = useRevisionSelection(record);
@@ -63,7 +72,11 @@ export function WebsiteReview({
   const revision = record.revisions.find(
     (entry) => entry.revision === currentSelection,
   );
-  const reportState = useQaReport({ loader: artifactLoader, qa: revision?.qa });
+  const reportState = useQaReport({
+    loader: artifactLoader,
+    qa: revision?.qa,
+    enabled: showQaPanel,
+  });
   const qaView = resolveQaView({ revision, report: reportState });
 
   return (
@@ -88,25 +101,31 @@ export function WebsiteReview({
         record={record}
         selectedRevision={currentSelection}
       />
-      <WebsiteQaPanel
-        agents={agents}
-        artifactLoader={artifactLoader}
-        reportState={reportState}
-        revision={revision}
-        view={qaView}
-      />
-      <WebsiteVersionHistory
-        agents={agents}
-        onSelectRevision={selectRevision}
-        record={record}
-        selectedRevision={currentSelection}
-      />
-      <WebsiteDecisionPanel
-        actor={actor}
-        onDecision={onDecision}
-        record={record}
-        selectedRevision={currentSelection}
-      />
+      {showQaPanel ? (
+        <WebsiteQaPanel
+          agents={agents}
+          artifactLoader={artifactLoader}
+          reportState={reportState}
+          revision={revision}
+          view={qaView}
+        />
+      ) : null}
+      {showVersionHistory ? (
+        <WebsiteVersionHistory
+          agents={agents}
+          onSelectRevision={selectRevision}
+          record={record}
+          selectedRevision={currentSelection}
+        />
+      ) : null}
+      {showDecisionControls ? (
+        <WebsiteDecisionPanel
+          actor={actor}
+          onDecision={onDecision}
+          record={record}
+          selectedRevision={currentSelection}
+        />
+      ) : null}
     </section>
   );
 }

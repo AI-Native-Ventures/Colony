@@ -17,6 +17,7 @@ import type {
   WebsiteAgentDirectory,
   WebsiteArtifactRef,
   WebsiteDecisionRecord,
+  WebsiteHandoverAccessRequest,
   WebsiteHandoverRecord,
   WebsiteProgressInput,
   WebsiteReviewRecord,
@@ -170,6 +171,11 @@ export type WebsiteHandoverResource = {
   kind: "page" | "artifact";
   url: string;
   sha256?: string;
+  /**
+   * Literal relative destination path for a verified download. Site assets use
+   * their canonical path; the archive and captures use UI-assigned filenames.
+   */
+  path?: string;
 };
 
 export type WebsiteHandoverView =
@@ -198,6 +204,8 @@ export type WebsiteHandoverView =
       resources: readonly WebsiteHandoverResource[];
       technicalResources: readonly WebsiteHandoverResource[];
       publishes: false;
+      /** Canonical team-prepared access request; absent means not prepared. */
+      accessRequest?: WebsiteHandoverAccessRequest;
       /** Handovers superseded by later reopen cycles, oldest first. */
       previous: readonly WebsiteHandoverRecord[];
     };
@@ -222,6 +230,7 @@ function revisionResources(
         kind: "artifact",
         url: revision.archive.url,
         sha256: revision.archive.sha256,
+        path: "source-archive.zip",
       },
       {
         id: "capture-desktop",
@@ -229,6 +238,7 @@ function revisionResources(
         kind: "artifact",
         url: revision.captures.desktop.url,
         sha256: revision.captures.desktop.sha256,
+        path: "desktop-capture.png",
       },
       {
         id: "capture-mobile",
@@ -236,6 +246,7 @@ function revisionResources(
         kind: "artifact",
         url: revision.captures.mobile.url,
         sha256: revision.captures.mobile.sha256,
+        path: "mobile-capture.png",
       },
     ],
     technicalResources: [
@@ -267,6 +278,7 @@ function handoverResources(handover: WebsiteHandoverRecord): {
       kind: "artifact",
       url: handover.sourceArchive.url,
       sha256: handover.sourceArchive.sha256,
+      path: "source-archive.zip",
     },
   ];
   for (const asset of handover.assets) {
@@ -276,6 +288,7 @@ function handoverResources(handover: WebsiteHandoverRecord): {
       kind: "artifact",
       url: asset.artifact.url,
       sha256: asset.artifact.sha256,
+      path: asset.path,
     });
   }
   return { resources, technicalResources: [] };
@@ -309,6 +322,9 @@ export function resolveHandoverView(
       resources: resources.resources,
       technicalResources: resources.technicalResources,
       publishes: false,
+      ...(record.handover.accessRequest
+        ? { accessRequest: record.handover.accessRequest }
+        : {}),
       previous: record.handoverHistory ?? [],
     };
   }

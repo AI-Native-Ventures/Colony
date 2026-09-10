@@ -97,6 +97,27 @@ export const KIND_TASK_REPORT = 40026;
 /** A named, bounded set of typed SubjectRef members. Inert data: no lifecycle
  * status, nothing consumes it yet. Mirror of buzz-core's KIND_COHORT. */
 export const KIND_COHORT = 30201;
+/**
+ * Relay-signed NIP-33 Website Manager job head (`d` = jobId). Content is the
+ * compact `colony.website-review/v1` record; tags pin the channel, task,
+ * thread root, review-card instance event id, Block manifest event id,
+ * generation, owner, and coordinator. Authored by the relay self key only
+ * (`is_relay_only_kind`), so a client can never sign one. Mirror of
+ * buzz-core's KIND_WEBSITE_HEAD.
+ */
+export const KIND_WEBSITE_HEAD = 30203;
+/**
+ * Client-signed Website Manager command (`beginWork` and coordinator
+ * operations). Owner approve/request-changes do not use this kind; they are
+ * reserved signed Block actions (40010) so the Blocks receipt pipeline stays
+ * the single decision path. Mirror of buzz-core's KIND_WEBSITE_ACTION.
+ */
+export const KIND_WEBSITE_ACTION = 40027;
+/**
+ * Relay-signed receipt for one applied or duplicate website action. Authored
+ * by the relay self key only. Mirror of buzz-core's KIND_WEBSITE_RECEIPT.
+ */
+export const KIND_WEBSITE_RECEIPT = 40028;
 /** Colony interrupt Ask (NIP-IQ). Filed by an agent, addressed to one tier up. */
 export const KIND_ASK = 44300;
 /** Resolution of an open ask: the answer that closes it. */

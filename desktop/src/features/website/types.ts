@@ -107,6 +107,15 @@ export type WebsiteHandoverAsset = {
   artifact: WebsiteArtifactRef;
 };
 
+/**
+ * Canonical team-prepared domain access request. Backend-owned record content:
+ * absent means not yet prepared, and the UI never composes the text itself.
+ */
+export type WebsiteHandoverAccessRequest = {
+  text: string;
+  authoredBy: string;
+};
+
 export type WebsiteHandoverRecord = {
   jobId: string;
   taskId: string;
@@ -116,6 +125,8 @@ export type WebsiteHandoverRecord = {
   sourceArchive: WebsiteArtifactRef;
   assets: readonly WebsiteHandoverAsset[];
   acceptedBy: string;
+  /** Present once the team has prepared the access request for this handover. */
+  accessRequest?: WebsiteHandoverAccessRequest;
 };
 
 /** Exact `schema` value for review records. */
@@ -378,12 +389,18 @@ export interface WebsiteArtifactLoader {
 
 /**
  * Injected adapter that downloads one handover artifact through the verified
- * native path. It must fetch the exact bytes, verify SHA-256, and save them
- * locally. The UI never sends an artifact URL (or a verified blob URL) to the
- * OS opener, and never labels the remote URL itself as an approved download.
+ * native path. It receives the literal relative destination path (site asset
+ * paths are canonical; the archive uses a UI-assigned filename). It must fetch
+ * the exact bytes, verify SHA-256, and save them locally. The UI never sends an
+ * artifact URL (or a verified blob URL) to the OS opener, and never labels the
+ * remote URL itself as an approved download.
  */
 export interface WebsiteArtifactDownloadAdapter {
-  download(artifact: WebsiteArtifactRef, signal?: AbortSignal): Promise<void>;
+  download(
+    artifact: WebsiteArtifactRef,
+    input: { path: string },
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 /**

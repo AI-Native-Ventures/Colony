@@ -62,8 +62,8 @@ State mapping:
 | --- | --- | --- |
 | `WebsiteArtifactLoader` | Hash-verifies bytes and returns a local object URL (`blob:`, `data:`, `asset:`, `file:`, or loopback host). | Explicit error; never falls back to the remote URL. |
 | `WebsitePreviewHostAdapter` | `attach` resolves a handle once the native view exists; `handle.subscribe?` streams `{status, visible, error}`. | Surface shows the verified capture with an honest notice. |
-| `WebsiteArtifactDownloadAdapter` | Downloads one approved artifact through the verified native path. | Row shows "Download not available in this build". |
-| `WebsiteHandoverDraftAdapter` | Returns a team-prepared request carrying its exact `scope`. | Button disabled with explicit copy. |
+| `WebsiteArtifactDownloadAdapter` | Downloads one approved artifact through the verified native path, with a literal relative destination path (site assets use their canonical path; the archive uses a UI-assigned filename). | Row shows "Download not available in this build". |
+| `WebsiteHandoverDraftAdapter` | Returns a team-prepared request carrying its exact `scope`. Canonical `handover.accessRequest` in the record takes precedence when present. | Button disabled with explicit copy. |
 | `onDecision` | Dispatches the exact request and resolves with a relay receipt. | Controls disabled with "Recording a decision is not available in this build". |
 | `onStart` | Dispatches the exact `{jobId, taskId, channel}` scope. | Start disabled with explicit copy. |
 
@@ -73,6 +73,7 @@ feature-side contracts in `types.ts`.
 
 ### Native handle contract
 
+The shared client now speaks the feature shape directly.
 `WebsitePreviewHostHandle.setBounds` takes the two-rectangle update:
 
 ```ts
@@ -84,18 +85,21 @@ feature-side contracts in `types.ts`.
 }
 ```
 
-The feature never intersects before sending. The integration adapter maps
-`element` to the native `bounds`, `clip` to `clip`, and converts CSS pixels
-with the current webview zoom factor. When `clip` is null the UI sets
-`visible` false for any partial overlap, because clipping cannot be proven.
+The feature never intersects before sending. `websiteIntegration/nativePreviewAdapter.ts`
+passes the update straight to the native handle, which intersects and fits from
+`element` itself. No zoom is sent: the app pins webview zoom to 1 and scales
+text through the root font-size, so `getBoundingClientRect()` is already in
+window coordinates.
 
 `WebsiteNativeHandleState` is the minimal stream: `status` is
 `opening | ready | failed | closed`, `visible` is true only while the native
 view paints, and `error` carries a failure message. The adapter maps
-`WebsitePreviewState` onto it. A ready handle with `visible: false` keeps the
-verified capture on screen; a failure keeps the capture and offers a real
-retry, which re-attaches even while this view already owns the preview
-arbiter.
+`WebsitePreviewState` onto it and buffers state that arrives before the feature
+subscribes, so a failed or hidden handle is never lost. A ready handle with
+`visible: false` keeps the verified capture on screen; a failure keeps the
+capture and offers a real retry, which re-attaches even while this view already
+owns the preview arbiter. `preview_closed` and `preview_aborted` map to a
+detached state rather than an error.
 
 Occlusion is detected from the live DOM (`useSurfaceOcclusion`): any
 `[role="dialog"]`, open menu, or Radix popper detaches the native view, and a
@@ -109,8 +113,9 @@ flips `setVisible`; the view is not remounted to change visibility.
 While `working` or `changesRequested`, `WebsiteJobPanel` shows
 `WebsiteVersionHistory`. Selecting a version opens a read-only preview of that
 exact revision (`inspectionState.ts`); "Back to work" closes it, and it closes
-automatically when the job leaves the working states. Decisions remain tied to
-the current version only.
+automatically when the job leaves the working states. In the thread surface the
+same selection drives the decision target, so an earlier immutable version
+disables both owner controls until the current version is selected again.
 
 ## QA report
 
@@ -154,30 +159,67 @@ Local state in the brief, decision, and handover panels is scoped to
 resets synchronously on a scope switch. Async results are discarded when their
 dispatch scope is no longer current.
 
-## Integration dependencies (open)
+## Application integration (`desktop/src/features/websiteIntegration/`)
 
-1. A worker must implement `WebsitePreviewHostAdapter` over
-   `createWebsitePreviewAdapter` and map `WebsitePreviewState` events to
-   `WebsiteNativeHandleState`.
-2. A worker must wrap `loadWebsiteArtifact` as `WebsiteArtifactLoader` (blob
-   URL preferred so `fetch` in `useQaReport` can read the report) and
-   `downloadWebsiteHandover` as `WebsiteArtifactDownloadAdapter`.
-3. Root wires `onDecision`, `onStart`, and `WebsiteHandoverDraftAdapter` to
-   the relay and agent surfaces. The record remains the core review content;
-   generation or request UUIDs belong to the integration's canonical envelope.
-4. `agents`, `stageAgents`, and `progress` need canonical directory/task
-   data. `completedStages` depends on the backend's typed same-task evidence
-   validation.
-5. `communityId` and `getClipBounds` come from the app shell so the native
-   worker can refuse cross-community attaches and clip to the true scrolling
-   surface.
-6. Expanded-dialog native hosting depends on the adapter tolerating a
-   dialog-scoped view; the UI already exempts only that dialog from occlusion.
+The feature now renders in the real channel and right thread from canonical
+relay state. It is wired without touching the deferred Blocks composite path:
+placement is by event id, not by composite rendering.
+
+| file | responsibility |
+| --- | --- |
+| `websiteHeads.ts` | Strict head (30203) and receipt (40028) parsing, relay-self trust, generation guard, community+channel store, thread/instance indexes, receipt waiters. |
+| `useWebsiteHeads.ts` | Channel-scoped query (`kinds: [30203]`, `#h`) for reload recovery plus live head/receipt subscriptions, exposed through `useSyncExternalStore`. |
+| `websiteInstanceData.ts` | Parses and verifies the coordinator card's inline `website-job` data (`taskId`, `threadRoot`, `sourceUrl`, `brief`), requiring id === head `instance`, signer === head coordinator, manifest match, and record match. Supplies `WebsiteBriefView`. |
+| `websiteTransport.ts` | Builds the exact reserved Block actions (`website.approve`, `website.request-changes`) and kind-40027 `beginWork`; deterministic idempotency UUID; confirms from the canonical head or a matching receipt. |
+| `nativePreviewAdapter.ts` | Feature host adapter over `createWebsitePreviewAdapter`, artifact loader over `createWebsiteArtifactLoader`, handover download over `downloadWebsiteHandover`, error-code mapping. |
+| `websiteAttachments.tsx` | `WebsiteMessageAttachment`: channel root (id === head `thread`) renders the brief/working/review projection; thread card (id === head `instance`) renders QA, version history, decisions, and handover. Builds the agent directory from profiles plus the identity colour hash. |
+| `resetWebsiteIntegrationState.ts` | One `resetCommunityState()` entry clearing heads, receipt waiters, and cached instance refs. |
+
+Seams used:
+
+- `relayClient.fetchEvents` / `subscribeLive` for heads and receipts, with the
+  same `#h` channel scoping the relay expects.
+- `signRelayEvent` and `relayClient.publishEvent` for kind 40027; the existing
+  `submitBlockAction` publisher for decisions, so Blocks validation and the
+  receipt pipeline stay the single decision path.
+- `parseBlockInstance` (read-only reuse) to derive the pinned instance id and
+  trust the card's data; the Blocks module is not edited.
+- `useRelaySelfQuery` and `useCommunities` for the trust anchor and community
+  boundary; `MessageRow.tsx` gains one import and one JSX line.
+
+The head confirmation is canonical: a lost receipt resolves once the head store
+shows the decision or the started status. The decision panel's selected version
+also drives the decision target, so selecting an earlier immutable version
+disables both controls until the current version is selected again.
+
+## Remaining gaps
+
+1. **Shared Blocks composite.** The `website-job` core manifest renders through
+   the existing Block pipeline once PR #682 lands; the integration does not
+   depend on it. The inline card may show the composite fallback until then.
+2. **Native Electron proof.** The browser E2E proves the DOM integration with a
+   mock-only artifact loader. Real clipping, zoom, and view adoption remain the
+   native worker's proof (`.github/workflows/website-preview-native-proof.yml`)
+   and are not claimed here.
+3. **Live agent work.** Heads, instance data, receipts, and handover access
+   requests are consumed from the relay. Real crawl, build, QA, and revision
+   execution belong to the backend and managed-agent workers.
+4. **Progress facets.** `progress` (active stage, completed stages) still needs
+   canonical task data from the backend's typed same-task evidence; until then
+   stage rows show unconfirmed completion.
+5. **Agent roles.** Role titles come from the profile directory (`role`);
+   communities that do not publish kind-0 roles show "Role not recorded" rather
+   than an invented title.
+6. **`getClipBounds`.** The attachment does not yet receive the app shell's
+   clip provider, so in production a partially visible native view falls back
+   to the safe hidden state. Root wiring should pass it when the channel shell
+   exposes one.
 
 ## Tests
 
 Authored under `desktop/src/features/website/**` as `*.test.mjs`, run by
-`pnpm test` (`node --test`). Not executed in this session.
+`pnpm test` (`node --test`). The Playwright spec runs in the smoke project.
+Nothing was executed in this session.
 
 - `reviewLogic.test.mjs` authority matrix, pending/stale blocking, decision
   identity versus note, retry revalidation, code-point note limits.
@@ -194,5 +236,17 @@ Authored under `desktop/src/features/website/**` as `*.test.mjs`, run by
   async guards, retry payloads, and read-only version inspection.
 - `artifactVerification.test.mjs`, `useSurfaceOcclusion.test.mjs` local URL
   policy and occlusion exemption rules.
+- `desktop/tests/e2e/website-manager.spec.ts` (mocked proof): five states x
+  1280x720 and 1440x900 screenshots asserted byte-distinct, desktop/mobile and
+  Before/Redesign switching, expand and close with a dialog-count zero check,
+  earlier-version inspection, stale-selection approval disabled, request
+  changes failing then retrying to a canonical head confirmation, reload
+  recovery, community-switch clearing, and the honest browser native-unavailable
+  state. The spec installs the mock-only artifact loader described below.
+
+Mock-only seam: `__BUZZ_E2E_WEBSITE_ARTIFACT_LOADER__` is read by
+`createWebsiteArtifactLoaderAdapter`. Playwright installs fixture bytes under
+their exact hashes; the feature still verifies the returned hash and local URL,
+so nothing renders unverified. The packaged app never installs it.
 
 No claim of rendered, CI, or native acceptance is made here.

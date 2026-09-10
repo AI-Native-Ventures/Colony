@@ -50,6 +50,7 @@ export default defineConfig({
         "**/brand-page.spec.ts",
         "**/onboarding-tour.spec.ts",
         "**/blocks.spec.ts",
+        "**/website-manager.spec.ts",
         "**/timeline-settle-helper.spec.ts",
         "**/ledger.spec.ts",
         "**/blocks-faults.spec.ts",

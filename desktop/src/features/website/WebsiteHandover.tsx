@@ -47,18 +47,20 @@ export type WebsiteHandoverProps = {
   className?: string;
 };
 
-function AcceptedBy({
+function TeamIdentity({
   agents,
   pubkey,
+  label,
 }: {
   agents: WebsiteAgentDirectory;
   pubkey: string;
+  label: string;
 }) {
   const agent = agents.get(pubkey);
   if (!agent) {
     return (
       <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
-        Accepted by
+        {label}
         <PubKey className="text-2xs" interactive={false} pubkey={pubkey} />
       </span>
     );
@@ -75,7 +77,7 @@ function AcceptedBy({
         {websiteAgentInitial(agent.name)}
       </span>
       <span className="truncate">
-        Accepted by {agent.name} · {agent.role}
+        {label} {agent.name} · {agent.role}
       </span>
     </span>
   );
@@ -227,6 +229,8 @@ export function WebsiteHandover({
     view.kind === "handedOver" ? view.previous : view.history;
   const approvedRevision =
     view.kind === "handedOver" ? view.revision : undefined;
+  const canonicalAccessRequest =
+    view.kind === "handedOver" ? view.accessRequest : undefined;
 
   const requestDraft = () => {
     if (!draftAdapter || !draftScope) return;
@@ -257,11 +261,14 @@ export function WebsiteHandover({
   };
 
   const startDownload = (resource: WebsiteHandoverResource) => {
-    if (!downloadAdapter || !resource.sha256) return;
+    if (!downloadAdapter || !resource.sha256 || !resource.path) return;
     const dispatchScope = scopeKey;
     setLocal((previous) => beginHandoverDownload(previous, resource.id));
     Promise.resolve(
-      downloadAdapter.download({ url: resource.url, sha256: resource.sha256 }),
+      downloadAdapter.download(
+        { url: resource.url, sha256: resource.sha256 },
+        { path: resource.path },
+      ),
     )
       .then(() => {
         if (!isScopeCurrent(dispatchScope, scopeRef.current)) return;
@@ -283,6 +290,17 @@ export function WebsiteHandover({
       });
   };
 
+  const copyAccessRequest = (text: string) => {
+    copyTextToClipboard(text, "Request copied");
+    setLocal(markHandoverDraftCopied);
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+    const timerScope = scopeKey;
+    copyTimerRef.current = setTimeout(() => {
+      if (!isScopeCurrent(timerScope, scopeRef.current)) return;
+      setLocal(clearHandoverDraftCopied);
+    }, 1500);
+  };
+
   const copyDraft = () => {
     const returned = local.draft;
     if (returned.status !== "returned") return;
@@ -292,14 +310,7 @@ export function WebsiteHandover({
     ]
       .filter(Boolean)
       .join("\n\n");
-    copyTextToClipboard(text, "Draft copied");
-    setLocal(markHandoverDraftCopied);
-    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-    const timerScope = scopeKey;
-    copyTimerRef.current = setTimeout(() => {
-      if (!isScopeCurrent(timerScope, scopeRef.current)) return;
-      setLocal(clearHandoverDraftCopied);
-    }, 1500);
+    copyAccessRequest(text);
   };
 
   return (
@@ -321,7 +332,11 @@ export function WebsiteHandover({
           )}
         </span>
         {view.kind === "handedOver" ? (
-          <AcceptedBy agents={agents} pubkey={view.handover.acceptedBy} />
+          <TeamIdentity
+            agents={agents}
+            label="Accepted by"
+            pubkey={view.handover.acceptedBy}
+          />
         ) : null}
       </div>
 
@@ -396,74 +411,102 @@ export function WebsiteHandover({
 
       {view.kind !== "blocked" ? (
         <div className="mt-3 flex flex-col gap-2 border-t border-border/60 pt-3">
-          {local.draft.status === "idle" ? (
-            <Button
-              className="self-start"
-              disabled={!draftAdapter}
-              onClick={requestDraft}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              Prepare domain access request
-            </Button>
-          ) : null}
-          {!draftAdapter ? (
-            <p className="text-2xs text-muted-foreground">
-              Preparing a domain access request is not available in this build.
-            </p>
-          ) : null}
-          {local.draft.status === "requesting" ? (
-            <p
-              aria-live="polite"
-              className="flex items-center gap-1.5 text-2xs text-muted-foreground"
-            >
-              <Loader2 aria-hidden="true" className="size-3 animate-spin" />
-              Waiting for the team to prepare the request.
-            </p>
-          ) : null}
-          {local.draft.status === "failed" ? (
-            <span
-              className="flex flex-wrap items-center gap-2 text-2xs text-destructive"
-              role="alert"
-            >
-              <span>{local.draft.message}</span>
-              <button
-                className="underline underline-offset-2 hover:text-foreground"
-                onClick={requestDraft}
-                type="button"
-              >
-                Try again
-              </button>
-            </span>
-          ) : null}
-          {local.draft.status === "returned" ? (
+          {canonicalAccessRequest ? (
             <div className="flex flex-col gap-1">
-              {local.draft.view.domain ? (
-                <p className="text-2xs text-muted-foreground">
-                  Domain:{" "}
-                  <span className="text-foreground">
-                    {local.draft.view.domain}
-                  </span>
-                </p>
-              ) : null}
-              {local.draft.view.accessRequest ? (
-                <p className="whitespace-pre-line rounded-md border border-border bg-muted/30 px-3 py-2 text-xs leading-relaxed text-foreground">
-                  {local.draft.view.accessRequest}
-                </p>
-              ) : null}
+              <TeamIdentity
+                agents={agents}
+                label="Prepared by"
+                pubkey={canonicalAccessRequest.authoredBy}
+              />
+              <p className="whitespace-pre-line rounded-md border border-border bg-muted/30 px-3 py-2 text-xs leading-relaxed text-foreground">
+                {canonicalAccessRequest.text}
+              </p>
               <span className="flex items-center gap-2 text-2xs text-muted-foreground">
                 <button
                   className="underline underline-offset-2 hover:text-foreground"
-                  onClick={copyDraft}
+                  onClick={() =>
+                    copyAccessRequest(canonicalAccessRequest.text)
+                  }
                   type="button"
                 >
-                  {local.copied ? "Copied" : "Copy draft"}
+                  {local.copied ? "Copied" : "Copy request"}
                 </button>
                 Nothing has been sent. This is a draft.
               </span>
             </div>
-          ) : null}
+          ) : (
+            <>
+              {local.draft.status === "idle" ? (
+                <Button
+                  className="self-start"
+                  disabled={!draftAdapter}
+                  onClick={requestDraft}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  Prepare domain access request
+                </Button>
+              ) : null}
+              {!draftAdapter ? (
+                <p className="text-2xs text-muted-foreground">
+                  Preparing a domain access request is not available in this
+                  build.
+                </p>
+              ) : null}
+              {local.draft.status === "requesting" ? (
+                <p
+                  aria-live="polite"
+                  className="flex items-center gap-1.5 text-2xs text-muted-foreground"
+                >
+                  <Loader2 aria-hidden="true" className="size-3 animate-spin" />
+                  Waiting for the team to prepare the request.
+                </p>
+              ) : null}
+              {local.draft.status === "failed" ? (
+                <span
+                  className="flex flex-wrap items-center gap-2 text-2xs text-destructive"
+                  role="alert"
+                >
+                  <span>{local.draft.message}</span>
+                  <button
+                    className="underline underline-offset-2 hover:text-foreground"
+                    onClick={requestDraft}
+                    type="button"
+                  >
+                    Try again
+                  </button>
+                </span>
+              ) : null}
+              {local.draft.status === "returned" ? (
+                <div className="flex flex-col gap-1">
+                  {local.draft.view.domain ? (
+                    <p className="text-2xs text-muted-foreground">
+                      Domain:{" "}
+                      <span className="text-foreground">
+                        {local.draft.view.domain}
+                      </span>
+                    </p>
+                  ) : null}
+                  {local.draft.view.accessRequest ? (
+                    <p className="whitespace-pre-line rounded-md border border-border bg-muted/30 px-3 py-2 text-xs leading-relaxed text-foreground">
+                      {local.draft.view.accessRequest}
+                    </p>
+                  ) : null}
+                  <span className="flex items-center gap-2 text-2xs text-muted-foreground">
+                    <button
+                      className="underline underline-offset-2 hover:text-foreground"
+                      onClick={copyDraft}
+                      type="button"
+                    >
+                      {local.copied ? "Copied" : "Copy draft"}
+                    </button>
+                    Nothing has been sent. This is a draft.
+                  </span>
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
       ) : null}
     </section>
