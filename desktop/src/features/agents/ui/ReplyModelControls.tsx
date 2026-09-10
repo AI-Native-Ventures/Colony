@@ -55,7 +55,6 @@ function ReplyChoice({
         align="start"
         side="top"
         collisionPadding={12}
-        aria-label={`Reply ${label.toLowerCase()} choices`}
         className="w-72 max-w-[calc(100vw-2rem)]"
       >
         {children}

@@ -149,6 +149,7 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
       name: "Campaign plan",
       description: "Two related pieces of work, presented together.",
       input_schema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
         additionalProperties: false,
         required: ["launch", "followup"],

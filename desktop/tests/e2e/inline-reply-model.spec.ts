@@ -30,9 +30,9 @@ async function captureOpenReplyModelMenu(
   composer: Locator,
   path: string,
 ) {
-  const settings = page.getByRole("menu", {
-    name: "Reply model choices",
-  });
+  // Radix labels the menu by its trigger, so its accessible name is the
+  // trigger's "Reply model" label.
+  const settings = page.getByRole("menu", { name: "Reply model" });
   await expect(settings).toBeVisible();
   await expect(composer).toBeVisible();
   await waitForAnimations(page);
