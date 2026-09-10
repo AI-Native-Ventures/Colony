@@ -59,7 +59,7 @@ Files: core composite JSON, core trusted digest registrations, BlocksSettingsCar
 Files: desktop/tests/e2e/blocks-*.spec.ts and helpers, playwright.config.ts where registration is required, existing CI artifact configuration, acceptance evidence document.
 
 - [x] Build a deterministic GitHub-hosted gallery test from every bundled core manifest, plus live channel/thread fixture instances, both themes and narrow/wide widths. Wait for animations before distinct screenshots.
-- [ ] Exercise dynamic choice submission, Interview unknown response, table search, carousel, multi-file switching and Mermaid expansion in the hosted tests.
+- [x] Exercise dynamic choice submission, Interview unknown response, table search, carousel, multi-file switching and Mermaid expansion in the hosted tests.
 - [ ] Perform focused source/format checks, sign off commits, push develop PR without heavy local hooks, arm auto-merge and inspect every applicable CI result and visual artifact.
 - [ ] Fix found failures and rerun affected checks. Coordinate release owner before a single protected production promotion, then verify published artifacts/updater/runtime separately.
 
@@ -71,7 +71,7 @@ Review corrections include closed CardList layout fields, explicit card children
 
 ## Rollout compatibility gate — desktop 0.16.13 and relay 0.11.10
 
-The released 0.16.12 client rejects the fifteen revised manifests because its closed schema does not recognize the new fields and its Core digest registry predates them. It preserves the original plain-text message with a warning, but cannot offer the new Block actions. Its bundled agent CLI also rejects those active manifests. Historical messages pinned to the earlier definitions remain supported. This requires an ordered normal app update, not a new protocol migration.
+The released 0.16.12 client cannot use the revised catalogue because its closed schema does not recognize the new fields and its Core digest registry predates them. The compatibility probe rejected fifteen revised definitions before the final Media revision; the final catalogue has sixteen versioned revisions. It preserves the original plain-text message with a warning, but cannot offer the new Block actions. Its bundled agent CLI also rejects unsupported active manifests. Historical messages pinned to the earlier definitions remain supported. This requires an ordered normal app update, not a new protocol migration.
 
 The existing update flow installs signature-verified bytes into the outer Colony bundle, then relaunches. Electron window cleanup asks the native host to exit; native shutdown stops its tracked local agent process groups and sweeps owned orphans. On the next launch, packaged helper lookup and the worker PATH prioritize the new bundle's native binaries. After the workspace identity and relay are restored, eligible local agents with `start_on_app_launch` resume; agents without that setting remain stopped. Restore starts the managed listeners with fresh packaged helpers; it does not promise continuation of an interrupted model turn. Source: `use-updater.ts`, `src-electron/{shell-commands,main,native-host,runtime-paths}.mjs`, and `src-tauri/src/{electron_host/updater.rs,shutdown.rs,commands/workspace.rs,managed_agents/restore.rs,managed_agents/discovery/command_paths.rs,managed_agents/runtime/path.rs}`. This is source verification, not proof that the owner's installation has updated.
 
@@ -118,3 +118,11 @@ The correction phase has these acceptance gates:
 The release remains held at PR #682 until these gates and the remaining final-head checks pass. Compatible desktop publication, protected promotion and authenticated production proof remain separate as specified above.
 
 Focused correction proof: eight of the initial thirteen new client regressions failed on the previous publisher. The final focused run passed 61 tests, including seventeen publisher regressions, four existing session-publish tests, twenty-six shared gate tests and fourteen Block-action tests. It covers exact-ID negative ACKs, duplicate ACKs, late native send/reconnect completion, retry budgets, workspace changes and the real Question offline classifier. Independent source review found no remaining actionable issue. The deterministic hosted relay regression sets only its generated owner’s Redis counter, requires rejection before storage, waits for natural expiry and resends the identical signed event; its execution and the full live Blocks loop await GitHub CI.
+
+## Coordinated-fix hosted browser proof
+
+Run `34493640497` at `d030dfe39f3ea5da4c2ab069c577002ef8a86da0` passed all six browser shards. Shard 1 passed all 203 cases on their first attempt, with zero failures, skips or flaky retries. This includes all eight existing Blocks cases: signed Question/receipt, table filtering, catalogue handoff, exact pinned approval completion, text/window scaling, two independent proposals, manifest pinning and community isolation. All 62 approved design cases passed; all 131 captures are present and have distinct hashes. The 48 manifest proofs cover every active definition in both themes, with channel and thread captures.
+
+The independent live Blocks gate also passed. Its bounded metadata shows one accepted create action and receipt, one accepted decline action and receipt, all four stored exactly once, and exactly one native creation command. It encountered no quota rejection, so this is normal action-path proof; it does not substitute for the deterministic forced-quota test.
+
+The same run found an `EventId::from_hex` test-fixture argument that needed a string borrow, in both Rust lint and the relay test-archive build; the dependent relay suites therefore skipped. The one-line correction is committed, with exact-file Rust formatting checked; no local Rust compilation ran. Deterministic quota execution and the final corrected-head matrix remain pending. None of this is production publication or installed-runtime proof.
