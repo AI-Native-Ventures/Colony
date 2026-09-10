@@ -1,14 +1,252 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { finalizeEvent } from "nostr-tools/pure";
+import { PassThrough } from "node:stream";
+import { once } from "node:events";
 import {
   nativeRequestActor,
   personaAuthority,
   scopedFirstJobDefinitionId,
+  taskFailureEvidence,
   verifySigned,
 } from "./native-team.mjs";
 import { bucketRequest } from "./native-services.mjs";
 import { createOnboardingFixtureProvider } from "./provider.mjs";
+import {
+  observeEventResponse,
+  projectIngestFailures,
+} from "./failure-diagnostics.mjs";
+
+test("passive refused response capture preserves streamed bytes and exact event correlation", async () => {
+  const eventId = "a".repeat(64);
+  const raw = JSON.stringify({
+    accepted: false,
+    event_id: eventId,
+    message: "this company has no coordination team to own ambiguous work",
+    privateField: "never-export-this",
+  });
+  const response = new PassThrough();
+  const observations = [];
+  const forwarded = [];
+  observeEventResponse(response, (value) => observations.push(value));
+  response.on("data", (chunk) => forwarded.push(chunk));
+  const ended = once(response, "end");
+  response.write(raw.slice(0, 24));
+  response.end(raw.slice(24));
+  await ended;
+  assert.equal(
+    Buffer.concat(forwarded).toString(),
+    raw,
+    "App receives original response bytes",
+  );
+  assert.deepEqual(observations, [
+    {
+      accepted: false,
+      eventId,
+      message: "this company has no coordination team to own ambiguous work",
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(observations), /never-export-this/);
+});
+
+test("response observation marks unavailable reads explicitly and never buffers unbounded bodies", async () => {
+  for (const [raw, expected] of [
+    [
+      JSON.stringify({ accepted: true, message: "never-export-this" }),
+      { accepted: true },
+    ],
+    ["not JSON", { unavailable: "response-parse" }],
+    [
+      JSON.stringify({ accepted: false, event_id: "not-an-id", message: "x" }),
+      { unavailable: "response-shape" },
+    ],
+    ["x".repeat(32 * 1024 + 1), { unavailable: "response-limit" }],
+    [
+      JSON.stringify({
+        accepted: false,
+        event_id: "a".repeat(64),
+        message: "token=never-export-this",
+      }),
+      {
+        accepted: false,
+        eventId: "a".repeat(64),
+        message: "[redacted-credential]",
+      },
+    ],
+  ]) {
+    const response = new PassThrough();
+    const observations = [];
+    const forwarded = [];
+    observeEventResponse(response, (value) => observations.push(value));
+    response.on("data", (chunk) => forwarded.push(chunk));
+    const ended = once(response, "end");
+    response.end(raw);
+    await ended;
+    assert.equal(Buffer.concat(forwarded).toString(), raw);
+    assert.deepEqual(observations, [expected]);
+  }
+  const aborted = new PassThrough();
+  const observations = [];
+  observeEventResponse(aborted, (value) => observations.push(value));
+  aborted.emit("aborted");
+  aborted.destroy();
+  assert.deepEqual(observations, [{ unavailable: "response-aborted" }]);
+});
+
+test("failure evidence binds signed task receipts to the exact owner and thread", () => {
+  const ownerKey = Uint8Array.from({ length: 32 }, (_, i) =>
+    i === 31 ? 1 : 0,
+  );
+  const relayKey = Uint8Array.from({ length: 32 }, (_, i) =>
+    i === 31 ? 2 : 0,
+  );
+  const sign = (key, kind, tags, content) =>
+    finalizeEvent(
+      { kind, tags, content: JSON.stringify(content), created_at: 1 },
+      key,
+    );
+  const owner = sign(ownerKey, 30176, [["d", "coordination"]], {
+    persona_ids: ["builtin:fizz"],
+    lead_persona_id: "builtin:fizz",
+  });
+  const relayPubkey = sign(relayKey, 1, [], {}).pubkey;
+  const account = {
+    ownerPubkey: owner.pubkey,
+    channelId: "channel",
+    rootEventId: "root",
+  };
+  const action = sign(
+    ownerKey,
+    40013,
+    [
+      ["p", relayPubkey],
+      ["a", `30181:${relayPubkey}:slot`],
+      ["company-action", "1", "attach", "request", "idem"],
+    ],
+    {
+      operation: "attach",
+      payload: {
+        kind: "threadAttach",
+        record: {
+          channelId: account.channelId,
+          threadRoot: account.rootEventId,
+        },
+      },
+    },
+  );
+  const receiptTags = [
+    ["p", owner.pubkey],
+    ["a", `30181:${relayPubkey}:slot`],
+    ["e", action.id, "", "company-action"],
+    ["company-receipt", "1", "request", "idem", "conflict"],
+  ];
+  const receipt = sign(relayKey, 40014, receiptTags, {
+    schema: "colony.company-receipt/v1",
+    headEventId: null,
+  });
+  const input = {
+    account,
+    relayPubkey,
+    actions: [action],
+    receipts: [receipt],
+    teams: [owner],
+  };
+  const result = taskFailureEvidence(input);
+  assert.equal(result.taskRequests[0].receipts[0].id, receipt.id);
+  assert.equal(result.ownerTeamHeads[0].id, owner.id);
+  assert.equal(
+    Reflect.ownKeys(result.taskRequests[0].action).length,
+    7,
+    "No cached verification metadata or extra fields exported",
+  );
+  assert.equal(
+    taskFailureEvidence({
+      ...input,
+      account: { ...account, rootEventId: "other" },
+    }).taskRequests.length,
+    0,
+  );
+  for (const badReceipt of [
+    { ...receipt, content: '{"schema":"tampered"}' },
+    sign(ownerKey, 40014, receiptTags, {
+      schema: "colony.company-receipt/v1",
+      headEventId: null,
+    }),
+    sign(
+      relayKey,
+      40014,
+      receiptTags.map((tag) =>
+        tag[0] === "company-receipt"
+          ? ["company-receipt", "1", "another-request", "idem", "conflict"]
+          : tag,
+      ),
+      { schema: "colony.company-receipt/v1", headEventId: null },
+    ),
+  ])
+    assert.throws(() =>
+      taskFailureEvidence({ ...input, receipts: [badReceipt] }),
+    );
+});
+
+test("failure log projection excludes unrelated records and strips sensitive text", () => {
+  const ownerPubkey = "a".repeat(64);
+  const fields = {
+    message: "HTTP bridge request",
+    route: "/events",
+    pubkey: ownerPubkey,
+    status: 400,
+    accepted: false,
+    kind: 40013,
+    reason: "this company has no coordination team to own ambiguous work",
+  };
+  const lines = [
+    "incomplete JSON tail",
+    "null",
+    JSON.stringify({
+      ...fields,
+      password: "never-export-this",
+      headers: { Authorization: "never-export-this" },
+    }),
+    JSON.stringify({
+      fields: {
+        ...fields,
+        reason: `URL https://private.invalid/path token=never-export-this nsec1abc123 ${"f".repeat(64)}`,
+      },
+    }),
+    JSON.stringify({ ...fields, status: 200 }),
+    JSON.stringify({ ...fields, pubkey: "b".repeat(64) }),
+    JSON.stringify({ ...fields, kind: 0 }),
+    JSON.stringify({ ...fields, route: "/account" }),
+  ];
+  const output = projectIngestFailures(lines, ownerPubkey);
+  assert.equal(output.length, 2);
+  assert.equal(output[0].reason, fields.reason);
+  assert.doesNotMatch(
+    JSON.stringify(output),
+    /never-export-this|private\.invalid|nsec1|ffff/,
+  );
+  const control = projectIngestFailures(
+    [
+      JSON.stringify({
+        ...fields,
+        reason: `reason${String.fromCharCode(0, 31, 127)}end`,
+      }),
+    ],
+    ownerPubkey,
+  )[0].reason;
+  assert.equal(control, "reason end");
+  assert.equal(
+    projectIngestFailures(Array(30).fill(lines[1]), ownerPubkey).length,
+    20,
+  );
+  assert.equal(
+    projectIngestFailures(
+      [JSON.stringify({ ...fields, reason: "x".repeat(1000) })],
+      ownerPubkey,
+    )[0].reason.length,
+    500,
+  );
+});
 
 const team = {
   scout: { pubkey: "a".repeat(64), prompt: "Coordinate the company." },

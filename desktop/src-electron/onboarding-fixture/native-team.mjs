@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { verifyEvent } from "nostr-tools/pure";
 import { readCurrentFixtureTask } from "./task-head.mjs";
+import { wireEvent } from "./failure-diagnostics.mjs";
 
 export function verifySigned(event, kind, author) {
   assert.equal(event.kind, kind);
@@ -139,7 +140,9 @@ export function nativeProofReader({
   const where = `community_id=(SELECT id FROM communities WHERE host='${host}')`;
   const events = async (kind) => {
     assert.ok(
-      [9, 30175, 30177, 30179, 30181, 39002, 40013, 40014].includes(kind),
+      [9, 30175, 30176, 30177, 30179, 30181, 39002, 40013, 40014].includes(
+        kind,
+      ),
     );
     const raw = await relay.query(
       `SELECT coalesce(json_agg(e),'[]')::text FROM (SELECT encode(id,'hex') AS id,encode(pubkey,'hex') AS pubkey,extract(epoch FROM created_at)::bigint AS created_at,kind,tags,content,encode(sig,'hex') AS sig FROM events WHERE ${where} AND kind=${kind} AND deleted_at IS NULL ORDER BY created_at DESC,id ASC LIMIT 101) e;`,
@@ -168,6 +171,14 @@ export function nativeProofReader({
       relayPubkey,
       channelId: account.channelId,
       rootId: account.rootEventId,
+    });
+  const failureEvidence = async () =>
+    taskFailureEvidence({
+      account,
+      relayPubkey,
+      actions: await events(40013),
+      receipts: await events(40014),
+      teams: await events(30176),
     });
   async function readTeam() {
     const approvals = await replies("colony:first-job-team-approval:v1");
@@ -305,7 +316,76 @@ export function nativeProofReader({
     assert.equal(JSON.parse(receipts[0].content).headEventId, profileHead.id);
     return profileHead;
   }
-  return { events, readTask, readTeam, business };
+  return { events, readTask, readTeam, business, failureEvidence };
+}
+
+/** Export only verified requests for this thread and their exact relay outcomes. */
+export function taskFailureEvidence({
+  account,
+  relayPubkey,
+  actions,
+  receipts,
+  teams,
+}) {
+  const requests = actions.filter((event) => {
+    if (event.pubkey !== account.ownerPubkey) return false;
+    verifySigned(event, 40013, account.ownerPubkey);
+    const content = JSON.parse(event.content);
+    const record = content.payload?.record;
+    return (
+      content.operation === "attach" &&
+      content.payload?.kind === "threadAttach" &&
+      record?.channelId === account.channelId &&
+      record?.threadRoot === account.rootEventId
+    );
+  });
+  return {
+    // Receipts intentionally omit a refusal reason. The separate sanitized
+    // ingest log is supporting diagnostics, never signed request authority.
+    taskRequests: requests.map((action) => {
+      const tuple = tag(action, "company-action");
+      assert.equal(tuple.length, 5);
+      assert.equal(tuple[2], "attach");
+      assert.equal(tag(action, "p")[1], relayPubkey);
+      const outcomes = receipts.filter((event) =>
+        event.tags.some(
+          (value) =>
+            value[0] === "e" &&
+            value[1] === action.id &&
+            value[3] === "company-action",
+        ),
+      );
+      for (const event of outcomes) {
+        verifySigned(event, 40014, relayPubkey);
+        assert.deepEqual(tag(event, "e"), [
+          "e",
+          action.id,
+          "",
+          "company-action",
+        ]);
+        assert.deepEqual(tag(event, "p"), ["p", account.ownerPubkey]);
+        assert.deepEqual(tag(event, "a"), tag(action, "a"));
+        const receiptTuple = tag(event, "company-receipt");
+        assert.equal(receiptTuple.length, 5);
+        assert.deepEqual(receiptTuple.slice(1, 4), ["1", tuple[3], tuple[4]]);
+        assert.ok(
+          ["applied", "conflict", "rejected", "failed"].includes(
+            receiptTuple[4],
+          ),
+        );
+        assert.equal(
+          JSON.parse(event.content).schema,
+          "colony.company-receipt/v1",
+        );
+      }
+      return { action: wireEvent(action), receipts: outcomes.map(wireEvent) };
+    }),
+    ownerTeamHeads: teams
+      .filter((event) => event.pubkey === account.ownerPubkey)
+      .map((event) =>
+        wireEvent(verifySigned(event, 30176, account.ownerPubkey)),
+      ),
+  };
 }
 
 /** Match the actual own persona section to verified team definitions, never quoted history. */

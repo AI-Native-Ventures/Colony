@@ -24,6 +24,7 @@ import { createOnboardingFixtureProvider } from "./onboarding-fixture/provider.m
 import { createOnboardingFixtureProxy } from "./onboarding-fixture/proxy.mjs";
 import { startOnboardingFixtureRelay } from "./onboarding-fixture/relay.mjs";
 import { completeFixtureWork } from "./onboarding-fixture/work.mjs";
+import { readIngestFailures } from "./onboarding-fixture/failure-diagnostics.mjs";
 
 assert.ok(
   process.argv.includes("--account-only") !==
@@ -131,6 +132,7 @@ const proof = {
       "onboarding-fixture/native-services.mjs",
       "onboarding-fixture/service-sources.json",
       "onboarding-fixture/diagnostics.mjs",
+      "onboarding-fixture/failure-diagnostics.mjs",
       "onboarding-fixture/tool-result.mjs",
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",
@@ -529,6 +531,10 @@ try {
       .catch(() => {});
   }
   if (relay) {
+    proof.relayIngestFailures = await readIngestFailures(
+      relay.logPath,
+      owner,
+    ).catch(() => ({ unavailable: true }));
     proof.failureCounts = await Promise.all([
       relay.query("SELECT count(*) FROM email_accounts;"),
       relay.query("SELECT count(*) FROM communities;"),

@@ -305,7 +305,11 @@ export async function completeFixtureWork({
     )
     .toBe("completed")
     .catch(async (error) => {
+      const taskFailure = await reader
+        .failureEvidence()
+        .catch(() => ({ unavailable: true }));
       onEvidence({
+        taskFailure,
         ...(await approved.readApprovalEvidence()),
         failedStartCompanyRead: await readRenderedCompany(
           page,
