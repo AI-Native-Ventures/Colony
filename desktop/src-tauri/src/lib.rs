@@ -609,6 +609,7 @@ pub fn run() {
             workspace_terminal_close,
             workspace_terminal_close_all,
             workspace_terminal_resolve_cwd,
+            factory_worktree_create,
             workspace_web_start,
             workspace_web_navigate,
             workspace_web_back,

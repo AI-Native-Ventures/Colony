@@ -557,6 +557,7 @@ pub async fn confirm_team_snapshot_import(
 
         // Build the ManagedAgentRecord for this member.
         let record = ManagedAgentRecord {
+            working_dir: None,
             tier: None,
             manager: None,
             pubkey: pubkey.clone(),

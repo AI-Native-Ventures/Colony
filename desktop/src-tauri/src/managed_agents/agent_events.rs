@@ -240,6 +240,7 @@ mod tests {
 
     pub(super) fn sample_agent() -> ManagedAgentRecord {
         ManagedAgentRecord {
+            working_dir: None,
             tier: None,
             manager: None,
             pubkey: "agentpubkeyhex".to_string(),
