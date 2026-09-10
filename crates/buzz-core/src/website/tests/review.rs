@@ -37,7 +37,7 @@ struct ReviewCase {
     steps: Vec<Step>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Scope {
     #[serde(default)]

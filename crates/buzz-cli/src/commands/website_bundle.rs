@@ -61,6 +61,7 @@ fn mime_for_extension(extension: &str) -> Option<&'static str> {
 }
 
 /// One file discovered under the built directory.
+#[derive(Debug)]
 struct BuiltFile {
     relative: String,
     mime: &'static str,
