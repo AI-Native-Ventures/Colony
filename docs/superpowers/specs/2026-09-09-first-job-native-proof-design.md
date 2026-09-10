@@ -65,3 +65,9 @@ The complete output, Scout review, reload, single Task/instruction, isolation
 and settled Credits-debit requirements remain unchanged. All model responses
 and the five-dollar isolated ledger seed remain synthetic. No local test or
 build execution is part of this work.
+
+### Accounting identity completion gate
+
+The `6017356` native package proved genuine Team loss/recovery, worker output, Scout review and Task completion. Its accounting artifact captured ten synthetic responses but nine debits with zero reservations. Source review found that the fixture used a shared mutable counter after asynchronous context reads to generate provider response IDs; concurrent responses could collide and trigger the real ledger's intended idempotency. Historical response IDs were not retained, so that exact old collision remains an inference.
+
+Each fixture HTTP request now captures an immutable ordinal before awaiting input/context. Hosted concurrent-handler tests exercise both current unique IDs and an explicit old-mutable-counter negative control. Final proof stops the actual scoped model producers after completed/reloaded work, retains every response ID and token usage, reads all exact-owner intents, debit rows and balance in one SQL snapshot, and requires one distinct terminal intent and estimated debit per response. The native account read must match that snapshot. This strengthens fixture accounting proof without changing production metering.

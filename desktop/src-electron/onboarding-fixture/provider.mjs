@@ -77,7 +77,8 @@ export async function createOnboardingFixtureProvider() {
   const toolResults = [];
   const server = createServer(async (request, response) => {
     try {
-      assert.ok(++calls <= 40, "Fixture model call budget exceeded");
+      const requestNumber = ++calls;
+      assert.ok(requestNumber <= 40, "Fixture model call budget exceeded");
       assert.equal(request.method, "POST");
       assert.equal(request.url, "/v1/chat/completions");
       assert.equal(
@@ -179,7 +180,7 @@ export async function createOnboardingFixtureProvider() {
         )?.function.name;
         assert.ok(name, "The actual managed agent exposes the shell tool");
         const shell = await command();
-        const toolCallId = `onboarding-call-${calls}`;
+        const toolCallId = `onboarding-call-${requestNumber}`;
         tools.push({ actor, stage, command: shell, toolCallId });
         steps.set(stage, index + 1);
         message = {
@@ -210,14 +211,27 @@ export async function createOnboardingFixtureProvider() {
                 : SCOUT_REVIEW,
         };
       }
-      requests.push({ actor, stage, completion, model: body.model });
+      const responseId = `onboarding-${requestNumber}`;
+      const usage = {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+      };
+      requests.push({
+        actor,
+        stage,
+        completion,
+        model: body.model,
+        responseId,
+        usage,
+      });
       response.setHeader("Content-Type", "application/json");
       response.end(
         JSON.stringify({
-          id: `onboarding-${calls}`,
+          id: responseId,
           object: "chat.completion",
           model: body.model,
-          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          usage,
           choices: [
             {
               index: 0,

@@ -17,6 +17,7 @@ import {
 } from "./provider.mjs";
 
 import { readFixtureInstruction } from "./instruction.mjs";
+import { assertCreditsProof, creditsProofQuery } from "./credits-proof.mjs";
 import {
   loseSyncedFixtureTeam,
   proveFixtureTeamRecovery,
@@ -656,47 +657,87 @@ export async function completeFixtureWork({
     provider.receivedCallCount,
     "Every received fixture model call comes through the real gateway",
   );
-  let finalCredits;
+  provider.assertHealthy();
+  assert.equal(provider.requests.length, provider.receivedCallCount);
+  const chargedResponses = provider.requests.map((request) => ({
+    responseId: request.responseId,
+    model: request.model,
+    usage: { ...request.usage },
+  }));
+  const callsBeforeStop = provider.receivedCallCount;
+  const stoppedRuntimes = [];
+  for (const agent of [approved.scout, approved.worker]) {
+    assert.equal((await invoke("get_identity")).pubkey, account.ownerPubkey);
+    assert.equal(await invoke("get_relay_ws_url"), account.relayUrl);
+    const stopped = await invoke("stop_managed_agent", {
+      pubkey: agent.pubkey,
+    });
+    assert.ok(
+      stopped.pid == null,
+      "The actual model producer has stopped before final accounting",
+    );
+    stoppedRuntimes.push({ pubkey: agent.pubkey, pid: stopped.pid ?? null });
+  }
+  assert.equal(
+    provider.receivedCallCount,
+    callsBeforeStop,
+    "No late model call escapes final reconciliation",
+  );
+  let accounting;
+  let debits;
   await expect
     .poll(
       async () => {
-        finalCredits = await invoke("get_colony_credits_account");
-        return (
-          finalCredits.gateway_reserved_nanousd === "0" &&
-          finalCredits.discovery_reserved_nanousd === "0"
+        accounting = JSON.parse(
+          await relay.query(creditsProofQuery(account.ownerPubkey)),
         );
+        onEvidence({
+          finalAccounting: {
+            chargedResponses,
+            stoppedRuntimes,
+            snapshot: accounting,
+          },
+        });
+        try {
+          debits = assertCreditsProof(
+            accounting,
+            chargedResponses,
+            initialCredits.total_balance_nanousd,
+          );
+          return true;
+        } catch {
+          return false;
+        }
       },
       {
         timeout: 30_000,
         intervals: [1000],
-        message: "Real Credits reservations settle after both model turns",
+        message:
+          "Every exact provider response has one terminal intent and distinct debit",
       },
     )
     .toBe(true);
-  const initialAmount = BigInt(initialCredits.total_balance_nanousd);
-  const finalAmount = BigInt(finalCredits.total_balance_nanousd);
-  assert.ok(
-    finalAmount >= 0n && finalAmount < initialAmount,
-    "Actual work reduces the seeded Credits balance without overdrawing it",
+  // Retain the precise assertion even if a future poll implementation changes.
+  debits = assertCreditsProof(
+    accounting,
+    chargedResponses,
+    initialCredits.total_balance_nanousd,
   );
-  assert.equal(
-    finalCredits.available_balance_nanousd,
-    finalCredits.total_balance_nanousd,
-  );
-  const debits = JSON.parse(
-    await relay.query(
-      `SELECT json_build_object('count',count(*),'nanousd',coalesce(-sum(delta),0)::text) FROM credit_ledger WHERE pubkey=decode('${account.ownerPubkey}','hex') AND kind='debit';`,
-    ),
-  );
-  assert.ok(
-    debits.count > 0,
-    "The real isolated ledger contains inference debits",
-  );
-  assert.equal(BigInt(debits.nanousd), initialAmount - finalAmount);
+  const finalCredits = await invoke("get_colony_credits_account");
+  assert.equal(finalCredits.total_balance_nanousd, accounting.balance);
+  assert.equal(finalCredits.available_balance_nanousd, accounting.balance);
+  assert.equal(finalCredits.gateway_reserved_nanousd, "0");
+  assert.equal(finalCredits.discovery_reserved_nanousd, "0");
+  assert.equal(provider.receivedCallCount, callsBeforeStop);
+  provider.assertHealthy();
   const creditsSettlement = {
     initial: initialCredits,
     final: finalCredits,
     debits,
+    chargedResponses,
+    stoppedRuntimes,
+    intents: accounting.intents,
+    ledgerRows: accounting.debits,
     funding: "Synthetic isolated admin seed; no checkout or vendor payment",
   };
   onEvidence({ creditsSettlement });

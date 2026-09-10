@@ -49,7 +49,7 @@ jobs:
       - name: Validate joined fixture entry syntax
         run: node --check desktop/src-electron/onboarding-fixture/work.mjs
       - name: Validate proof authority and service contract
-        run: node --test desktop/src-electron/onboarding-fixture/native-team.test.mjs desktop/src-electron/onboarding-fixture/team-recovery.test.mjs desktop/src-electron/onboarding-fixture/instruction.test.mjs desktop/src-electron/onboarding-fixture/task-head.test.mjs desktop/src-electron/onboarding-fixture/tool-result.test.mjs
+        run: node --test desktop/src-electron/onboarding-fixture/provider.test.mjs desktop/src-electron/onboarding-fixture/native-team.test.mjs desktop/src-electron/onboarding-fixture/team-recovery.test.mjs desktop/src-electron/onboarding-fixture/instruction.test.mjs desktop/src-electron/onboarding-fixture/task-head.test.mjs desktop/src-electron/onboarding-fixture/tool-result.test.mjs
       - name: Install PostgreSQL build prerequisite
         run: brew install openssl@3
       - name: Restore pinned native service tools
