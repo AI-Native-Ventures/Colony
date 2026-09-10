@@ -31,10 +31,10 @@ export function validateDiagramSource(source: string): string {
     );
   }
   if (
-    /%%\s*\{|^---|<\/?[a-z!]|(?:javascript|data|https?|file):|@import|@font-face|@\s*\{|url\s*\(|\/\*|\*\/|\\/i.test(
+    /%%\s*\{|^---|<\/?[a-z!]|(?:javascript|data|https?|file):|@import|@font-face|@\s*\{|url\s*\(|\/\*|\*\/|\\|:::/i.test(
       text,
     ) ||
-    /(?:^|[;\n])\s*(?:click|style|classDef|linkStyle|link|links|properties|details|rect)(?:\s|:)/i.test(
+    /(?:^|[;\n])\s*(?:click|style|class|classDef|linkStyle|link|links|properties|details|rect)(?:\s|:)/i.test(
       text,
     )
   ) {

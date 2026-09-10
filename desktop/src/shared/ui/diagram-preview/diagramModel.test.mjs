@@ -31,6 +31,9 @@ test("source configuration, active labels, image shapes and link callbacks never
     "sequenceDiagram\nrect url(//host/path)\nA->>B: hello\nend",
     "sequenceDiagram\nrect u\\72l(/private)\nA->>B: hello\nend",
     "sequenceDiagram\nlink Actor: Label @ /private",
+    "sequenceDiagram\nDETAILS Actor: private-dom-element",
+    "flowchart LR\nA-->B;class A hidden",
+    "flowchart LR\nA:::hidden-->B",
     "pie\nA:3",
   ])
     assert.throws(() => validateDiagramSource(text));
