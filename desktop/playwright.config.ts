@@ -46,6 +46,8 @@ export default defineConfig({
         "**/inline-reply-model.spec.ts",
         "**/rich-document-previews.spec.ts",
         "**/rich-media-previews.spec.ts",
+        "**/approved-blocks-design.spec.ts",
+        "**/approved-blocks-shared-states.spec.ts",
         "**/content-screenshots.spec.ts",
         "**/brand-page.spec.ts",
         "**/onboarding-tour.spec.ts",

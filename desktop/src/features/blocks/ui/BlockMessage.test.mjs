@@ -175,3 +175,89 @@ test("a newer retry action supersedes an older failed receipt with pending", () 
   assert.equal(state.latestStatus, "pending");
   assert.equal(state.pendingActionId, "question.submit");
 });
+
+function retryFixture() {
+  const fixture = signedFixture();
+  const retry = signedEvent(
+    fixture.processorSecret,
+    40010,
+    4,
+    fixture.action.tags.map((tag) =>
+      tag[0] === "block-action"
+        ? [...tag.slice(0, 4), "33333333-3333-4333-8333-333333333333"]
+        : tag,
+    ),
+  );
+  const receipt = (action, status, createdAt, resolvesAttention = false) =>
+    signedEvent(fixture.processorSecret, 40011, createdAt, [
+      ["h", CHANNEL],
+      ["e", action.id, "", "block-action"],
+      ["e", fixture.instance.id, "", "block-instance"],
+      [
+        "block-receipt",
+        "1",
+        INSTANCE_ID,
+        action.tags.find((tag) => tag[0] === "block-action")[4],
+        status,
+      ],
+      ...(resolvesAttention ? [["block-attention", "1", "resolved"]] : []),
+    ]);
+  const state = (receipts) =>
+    deriveBlockActionViewState(
+      {
+        id: fixture.instance.id,
+        blockEvent: fixture.instance,
+        blockState: { actions: [retry, fixture.action], receipts },
+      },
+      INSTANCE_ID,
+      MANIFEST,
+    );
+  return { ...fixture, retry, receipt, state };
+}
+
+test("a late failure for the previous attempt cannot overwrite a completed retry", () => {
+  const fixture = retryFixture();
+  const completed = fixture.receipt(fixture.retry, "succeeded", 5, true);
+  const stale = fixture.receipt(fixture.action, "failed", 6);
+  const state = fixture.state([completed, stale]);
+
+  assert.equal(state.latestStatus, "succeeded");
+  assert.equal(state.latestAttentionStatus, "succeeded");
+  assert.equal(state.pendingActionId, undefined);
+});
+
+test("a late receipt for the previous attempt cannot hide a pending retry", () => {
+  const fixture = retryFixture();
+  const state = fixture.state([
+    fixture.receipt(fixture.action, "timed-out", 6),
+  ]);
+
+  assert.equal(state.latestStatus, "pending");
+  assert.equal(state.pendingActionId, "question.submit");
+});
+
+test("receipts in the same second show the newest action regardless of arrival order", () => {
+  const fixture = retryFixture();
+  const completed = fixture.receipt(fixture.retry, "succeeded", 5, true);
+  const stale = fixture.receipt(fixture.action, "failed", 5);
+  for (const receipts of [
+    [completed, stale],
+    [stale, completed],
+  ]) {
+    const state = fixture.state(receipts);
+    assert.equal(state.latestStatus, "succeeded");
+    assert.equal(state.latestAttentionStatus, "succeeded");
+  }
+});
+
+test("receipt updates for the newest action still use their event ordering", () => {
+  const fixture = retryFixture();
+  const state = fixture.state([
+    fixture.receipt(fixture.retry, "succeeded", 7, true),
+    fixture.receipt(fixture.retry, "failed", 5),
+    fixture.receipt(fixture.action, "failed", 6),
+  ]);
+
+  assert.equal(state.latestStatus, "succeeded");
+  assert.equal(state.latestAttentionStatus, "succeeded");
+});

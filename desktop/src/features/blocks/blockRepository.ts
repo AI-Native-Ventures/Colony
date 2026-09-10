@@ -34,6 +34,36 @@ const EVENT_ID_RE = /^[0-9a-f]{64}$/;
  * one of these reviewed product digests must match.
  */
 export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
+  // details 1.1.0; retain historical digests below.
+  "efccd244d7e4eee768f1849c02dd5981e86f6699097a93dfd446f033d442cf3d",
+  // question 2.0.0; retain historical digests below.
+  "e3b192b1388b218bfb443345cfbd6b11a8d80c809099b67c60d9bb061c472daf",
+  // agent-proposal 1.1.0; retain historical digests below.
+  "c5b46825bef5d607bdd0b897f9626bb2e535537c1ce6e6b4672781e2f2ee4018",
+  // approval 1.1.0; retain historical digests below.
+  "5f939e1b2fa7053483cf27ad38abb7335388fce2e5da30579eda17276fa3fda1",
+  // artifact 1.1.0; retain historical digests below.
+  "5434b4ff68d181b1f4029653152f2d0084692f3467749cb7e0ab150fa480b8ad",
+  // brainstorm 1.1.0; retain historical digests below.
+  "8ded39001dff7ea2f9c6ccccf728078bddcec091d7a37351df55f2c03d774000",
+  // company-blueprint 1.1.0; retain historical digests below.
+  "5a636e42d728e3d0fa35f9b0594cb2e79762698469603179fd91fec9e2124bed",
+  // company-brief 1.1.0; retain historical digests below.
+  "87d4dd63346e6aa8b93454ad03057b0dd06f21ce037e028b667aeff667886417",
+  // deliverable 1.1.0; retain historical digests below.
+  "57dd5cdcc3d71c8adbb12146cd822895af48f7323321b277c268ebd05476e7f0",
+  // handover 1.1.0; retain historical digests below.
+  "5367ece8cf1a3ab583f578abcb17e75bd862d16fa2c367ea55b582763f8c4f3d",
+  // initiative 1.1.0; retain historical digests below.
+  "47dd0234feac2ab8eff21172c1b61d7132786699692635b427002e5cfd18214f",
+  // interview 1.1.0; retain historical digests below.
+  "e318bef5d64e9e5e280090fba6fcb3edd659e9800c8464d7f7901d1b1748a659",
+  // lead-card 1.1.0; retain historical digests below.
+  "fe791e585d4cddba1e3104f6cbcedafa5527cb88bfd5385dd671d4cfe40c3694",
+  // receipt 1.1.0; retain historical digests below.
+  "30422971240c5644ba5677410f12671bc581610bf8428e1496ef40ead1d0fb6e",
+  // report 1.1.0; retain historical digests below.
+  "86f1ca1ddb874158926dce81aa308dde42fdcc81abf1ee3b55777215257b5834",
   // media 1.1.0; retain the prior digest for pinned conversation history.
   "dc672b9514f8a31ae871d2935899e96aeb10d929a9e6c5a2546a9b8fb07335da",
   "d9a3804173fb77c5c3a084889b528519188f48a5520bc3fcea3a39fffb3c78fb",

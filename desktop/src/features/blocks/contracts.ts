@@ -90,32 +90,51 @@ export type BlockNode =
     }
   | {
       type: "section";
+      presentation?: "lead" | "body" | "callout";
+      omit_empty_text?: boolean;
       title?: string;
       text?: string;
     }
   | {
       type: "metric";
+      comparison?: string;
       label: string;
       value: string;
       unit?: string;
     }
   | {
       type: "details";
-      items: Array<{ label: string; value: string }>;
+      presentation?: "rows" | "disclosure";
+      summary?: string;
+      items: Array<{
+        label: string;
+        value: string;
+        format?: "date" | "boolean" | "text";
+      }>;
+      items_path?: string;
     }
   | {
       type: "table";
-      columns: Array<{ key: string; label: string }>;
+      columns: Array<{
+        key: string;
+        label: string;
+        format?: "text" | "number" | "currency" | "date" | "boolean";
+      }>;
       rows_path: string;
     }
   | {
       type: "card";
+      presentation?: "surface" | "row" | "rail";
+      eyebrow?: string;
+      subtitle?: string;
       title?: string;
       description?: string;
       children: BlockNode[];
     }
   | {
       type: "card-list";
+      mode?: "list" | "grid" | "carousel";
+      presentation?: "separated" | "numbered";
       items_path: string;
       card: BlockNode;
     }
@@ -134,6 +153,9 @@ export type BlockNode =
     }
   | {
       type: "status";
+      progress_path?: string;
+      position_path?: string;
+      total_path?: string;
       label: string;
       state_path?: string;
     }
@@ -145,6 +167,7 @@ export type BlockNode =
       type: "question";
       prompt: string;
       mode: "single-select" | "multi-select";
+      mode_path?: string;
       options?: BlockQuestionOption[];
       options_path?: string;
       min_selections: number;

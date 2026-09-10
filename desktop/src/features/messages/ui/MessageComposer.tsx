@@ -975,19 +975,15 @@ function MessageComposerImpl({
             </div>
 
             {mentionSendFlow.newTaskToggle}
+            <ReplyModelControls
+              control={replyModel}
+              disabled={composerDisabled || isSending}
+            />
             <ComposerDockToolbar
               layoutMode={layoutMode}
               composerDisabled={composerDisabled}
               editor={richText.editor}
-              extraActions={
-                <>
-                  <ReplyModelControls
-                    control={replyModel}
-                    disabled={composerDisabled || isSending}
-                  />
-                  {toolbarExtraActions}
-                </>
-              }
+              extraActions={toolbarExtraActions}
               formattingDisabled={composerDisabled}
               isEmojiPickerOpen={isEmojiPickerOpen}
               isFormattingOpen={isFormattingOpen}

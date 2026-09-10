@@ -129,6 +129,125 @@ test("copy from a navigated slide sends its original URL and portals within the 
   }
 });
 
+test("thumbnail selection keeps inactive originals unloaded and dismisses the previous menu", async () => {
+  calls.length = 0;
+  const view = render(createElement(ImagePreview, { items: originals }));
+  try {
+    const strip = view.getByTestId("media-image-thumbnails");
+    const thumbnails = strip.querySelectorAll("button");
+    assert.equal(thumbnails.length, 3);
+    assert.deepEqual(
+      [...strip.querySelectorAll("img")].map((image) =>
+        image.getAttribute("src"),
+      ),
+      [originals[0].src],
+    );
+    assert.equal(thumbnails[1].querySelector("img"), null);
+    assert.equal(thumbnails[2].querySelector("img"), null);
+    const firstStage = view.getByTestId("message-image-lightbox-trigger");
+    await act(async () => fireEvent.load(firstStage.querySelector("img")));
+    fireEvent.contextMenu(firstStage.querySelector("img"));
+    assert.ok(document.querySelector("[data-image-context-menu]"));
+    fireEvent.click(thumbnails[1]);
+    const stage = view.getByTestId("message-image-lightbox-trigger");
+    assert.equal(
+      stage.querySelector("img").getAttribute("src"),
+      originals[1].src,
+    );
+    assert.equal(document.querySelector("[data-image-context-menu]"), null);
+    assert.equal(thumbnails[1].getAttribute("aria-current"), "true");
+    assert.equal(thumbnails[0].getAttribute("aria-current"), null);
+    assert.equal(
+      thumbnails[0].querySelector("img").getAttribute("src"),
+      originals[0].src,
+    );
+    assert.equal(thumbnails[2].querySelector("img"), null);
+    fireEvent.contextMenu(stage.querySelector("img"));
+    fireEvent.click(view.getByRole("button", { name: "Copy image" }));
+    await waitFor(() =>
+      assert.deepEqual(calls, [
+        {
+          command: "copy_image_to_clipboard",
+          args: { url: originals[1].originalUrl },
+        },
+      ]),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("thumbnail failure leaves a numbered selector and selection preserves dialog focus return", async () => {
+  const view = render(
+    createElement(ImagePreview, {
+      items: originals.map((entry, position) => ({
+        ...entry,
+        thumbnailSrc: `/thumb-${position}.jpg`,
+      })),
+    }),
+  );
+  try {
+    const thumbnail = view.getByRole("button", {
+      name: "Show image 3 of 3: 2.png",
+    });
+    assert.equal(
+      thumbnail.querySelector("img").getAttribute("loading"),
+      "lazy",
+    );
+    fireEvent.error(thumbnail.querySelector("img"));
+    assert.equal(thumbnail.querySelector("img"), null);
+    assert.equal(thumbnail.textContent, "3");
+    fireEvent.click(thumbnail);
+    const expand = view.getByRole("button", { name: "Expand image" });
+    fireEvent.click(expand);
+    const dialog = await view.findByRole("dialog");
+    assert.equal(
+      dialog.querySelector("img").getAttribute("src"),
+      originals[2].src,
+    );
+    assert.equal(
+      dialog.querySelector('[data-testid="media-image-thumbnails"]'),
+      null,
+    );
+    fireEvent.click(view.getByRole("button", { name: "Close" }));
+    await waitFor(() => assert.equal(view.queryByRole("dialog"), null));
+    await waitFor(() => assert.equal(document.activeElement, expand));
+  } finally {
+    cleanup();
+  }
+});
+
+test("hidden spoiler thumbnails cannot select images before reveal", async () => {
+  const view = render(
+    createElement(
+      "div",
+      {
+        className: "buzz-spoiler",
+        "data-spoiler": "",
+        "data-revealed": "false",
+      },
+      createElement(ImagePreview, { items: originals }),
+    ),
+  );
+  try {
+    const strip = view.getByTestId("media-image-thumbnails");
+    const second = strip.querySelectorAll("button")[1];
+    assert.equal(second.tabIndex, -1);
+    assert.equal(strip.querySelector("img"), null);
+    fireEvent.click(second);
+    assert.equal(view.getByTestId("media-preview-count").textContent, "1 / 3");
+    await act(async () =>
+      view.container.firstChild.setAttribute("data-revealed", "true"),
+    );
+    assert.equal(second.tabIndex, 0);
+    fireEvent.click(second);
+    assert.equal(view.getByTestId("media-preview-count").textContent, "2 / 3");
+    assert.equal(view.queryByRole("dialog"), null);
+  } finally {
+    cleanup();
+  }
+});
+
 for (const expanded of [false, true]) {
   test(`${expanded ? "expanded" : "inline"} keyboard navigation dismisses the previous image menu and copies the new original`, async () => {
     calls.length = 0;

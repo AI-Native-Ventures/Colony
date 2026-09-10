@@ -223,10 +223,11 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
     channelName: string;
     event: RelayEvent;
   }>;
-  /** Native external-Block fetch outcomes keyed by exact HTTPS URL. */
+  /** Native external-Block fetch outcomes keyed by exact HTTPS URL.
+   * `hold` waits for `__BUZZ_E2E_RELEASE_BLOCK_DATA__(url)` before returning. */
   blockDataResponses?: Record<
     string,
-    { body?: string; bytes?: number[]; error?: string }
+    { body?: string; bytes?: number[]; error?: string; hold?: boolean }
   >;
   /** Reject successive kind-40010 publications, then resume. */
   blockActionPublishErrors?: string[];

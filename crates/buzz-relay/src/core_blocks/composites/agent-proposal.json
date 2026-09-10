@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "agent-proposal",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Agent Proposal",
   "description": "A persistent request to create or update an owned company agent.",
   "origin": "core",
@@ -79,16 +79,28 @@
   },
   "tree": {
     "type": "card",
-    "title": "Agent proposal",
+    "title": "{{displayName}}",
     "description": "{{mode}} agent request",
     "children": [
       {
         "type": "details",
         "items": [
-          { "label": "Change", "value": "{{mode}}" },
-          { "label": "Proposed agent", "value": "{{displayName}}" },
-          { "label": "Existing agent", "value": "{{agentName}}" },
-          { "label": "Purpose", "value": "{{systemPrompt}}" }
+          {
+            "label": "Change",
+            "value": "{{mode}}"
+          },
+          {
+            "label": "Proposed agent",
+            "value": "{{displayName}}"
+          },
+          {
+            "label": "Existing agent",
+            "value": "{{agentName}}"
+          },
+          {
+            "label": "Purpose",
+            "value": "{{systemPrompt}}"
+          }
         ]
       },
       {
@@ -131,7 +143,9 @@
           }
         ]
       }
-    ]
+    ],
+    "eyebrow": "Your team",
+    "subtitle": "Agent proposal"
   },
   "actions": [
     {

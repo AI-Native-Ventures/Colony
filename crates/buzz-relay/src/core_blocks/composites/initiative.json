@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "initiative",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Initiative",
   "description": "One proposed piece of company work. Nobody is assigned and nothing is spent until it is started.",
   "origin": "core",
@@ -78,9 +78,18 @@
       {
         "type": "details",
         "items": [
-          { "label": "Accountable", "value": "{{owner}}" },
-          { "label": "Costs land in", "value": "{{cost_centre}}" },
-          { "label": "Commercial purpose", "value": "{{commercial_purpose}}" }
+          {
+            "label": "Accountable",
+            "value": "{{owner}}"
+          },
+          {
+            "label": "Costs land in",
+            "value": "{{cost_centre}}"
+          },
+          {
+            "label": "Commercial purpose",
+            "value": "{{commercial_purpose}}"
+          }
         ]
       },
       {
@@ -104,7 +113,8 @@
           }
         ]
       }
-    ]
+    ],
+    "eyebrow": "Proposed work"
   },
   "actions": [
     {
