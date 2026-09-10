@@ -30,6 +30,26 @@ pub struct MailSendResult {
     pub screenshot_png_base64: Option<String>,
 }
 
+/// Small helper so the journey reads as the five steps it is.
+fn failed_result(
+    to: &str,
+    subject: &str,
+    reason: String,
+    screenshot: Option<String>,
+) -> MailSendResult {
+    MailSendResult {
+        status: "failed".to_string(),
+        failure_reason: Some(reason),
+        sent_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        to: to.to_string(),
+        subject: subject.to_string(),
+        screenshot_png_base64: screenshot,
+    }
+}
+
 /// A practical flat-tree search: the AX `nodes` array is flat.
 fn collect_nodes_flat(ax_tree: &Value) -> Vec<Value> {
     ax_tree["nodes"].as_array().cloned().unwrap_or_default()
@@ -51,11 +71,9 @@ fn find_controls(
     let mut send_id: Option<i64> = None;
     for n in &nodes {
         let name = n["name"]["value"].as_str().unwrap_or_default();
-        let backend = n["backendDOMNodeId"].as_i64();
-        if backend.is_none() {
+        let Some(id) = n["backendDOMNodeId"].as_i64() else {
             continue;
-        }
-        let id = backend.unwrap();
+        };
         let role = n["role"]["value"].as_str().unwrap_or_default();
         if name.starts_with(to_prefix)
             && (role == "textbox" || role == "combobox")
@@ -143,21 +161,9 @@ pub async fn run_mail_send_journey(
     body: &str,
     compose_url: &str,
 ) -> MailSendResult {
-    let start_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
     // Step 1: navigate.
     if let Err(e) = client.navigate(compose_url).await {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some(format!("navigation failed: {e}")),
-            sent_at: start_at,
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: None,
-        };
+        return failed_result(to, subject, format!("navigation failed: {e}"), None);
     }
 
     // Step 2: bounded wait for controls (up to 30 s, bounded snapshot count).
@@ -220,120 +226,40 @@ pub async fn run_mail_send_journey(
             } else {
                 reason.to_string()
             };
-            return MailSendResult {
-                status: "failed".to_string(),
-                failure_reason: Some(format!("{diag}")),
-                sent_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                to: to.to_string(),
-                subject: subject.to_string(),
-                screenshot_png_base64: None,
-            };
+            return failed_result(to, subject, diag, None);
         }
     };
 
     // Click recipient and type.
     if let Err(e) = click_by_backend(client, to_id).await {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some(format!("recipient click failed: {e}")),
-            sent_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: None,
-        };
+        return failed_result(to, subject, format!("recipient click failed: {e}"), None);
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
     if let Err(e) = type_text(client, to).await {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some(format!("recipient type failed: {e}")),
-            sent_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: None,
-        };
+        return failed_result(to, subject, format!("recipient type failed: {e}"), None);
     }
 
     // Click subject and type.
     if let Err(e) = click_by_backend(client, sub_id).await {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some(format!("subject click failed: {e}")),
-            sent_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: None,
-        };
+        return failed_result(to, subject, format!("subject click failed: {e}"), None);
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
     if let Err(e) = type_text(client, subject).await {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some(format!("subject type failed: {e}")),
-            sent_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: None,
-        };
+        return failed_result(to, subject, format!("subject type failed: {e}"), None);
     }
 
     // Click body and type.
     if let Err(e) = click_by_backend(client, body_id).await {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some(format!("body click failed: {e}")),
-            sent_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: None,
-        };
+        return failed_result(to, subject, format!("body click failed: {e}"), None);
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
     if let Err(e) = type_text(client, body).await {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some(format!("body type failed: {e}")),
-            sent_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: None,
-        };
+        return failed_result(to, subject, format!("body type failed: {e}"), None);
     }
 
     // Click Send.
     if let Err(e) = click_by_backend(client, send_id).await {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some(format!("send click failed: {e}")),
-            sent_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: None,
-        };
+        return failed_result(to, subject, format!("send click failed: {e}"), None);
     }
 
     // Step 3: bounded wait for "Message sent" (up to 30 s, bounded snapshot count).
@@ -359,23 +285,15 @@ pub async fn run_mail_send_journey(
     }
 
     // Capture screenshot regardless of message outcome (required output field).
-    let screenshot_png = match client.capture_screenshot().await {
-        Ok(png) => Some(png),
-        Err(_) => None,
-    };
+    let screenshot_png = client.capture_screenshot().await.ok();
 
     if !message_sent {
-        return MailSendResult {
-            status: "failed".to_string(),
-            failure_reason: Some("timeout: 'Message sent' did not appear within 30 s".to_string()),
-            sent_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            to: to.to_string(),
-            subject: subject.to_string(),
-            screenshot_png_base64: screenshot_png,
-        };
+        return failed_result(
+            to,
+            subject,
+            "timeout: 'Message sent' did not appear within 30 s".to_string(),
+            screenshot_png,
+        );
     }
 
     MailSendResult {
@@ -501,10 +419,7 @@ mod tests {
             .unwrap();
 
         let fixture_url = "file://".to_string()
-            + &std::env::current_dir()
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
+            + std::env::current_dir().unwrap().to_string_lossy().as_ref()
             + "/test-fixtures/gmail-compose.html";
 
         let result = run_mail_send_journey(
@@ -570,10 +485,7 @@ mod tests {
             .unwrap();
 
         let fixture_url = "file://".to_string()
-            + &std::env::current_dir()
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
+            + std::env::current_dir().unwrap().to_string_lossy().as_ref()
             + "/test-fixtures/gmail-compose-no-send.html";
 
         let result = run_mail_send_journey(
