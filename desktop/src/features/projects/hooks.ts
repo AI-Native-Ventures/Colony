@@ -620,8 +620,9 @@ async function deleteProject(project: Project): Promise<void> {
 
 export const projectsQueryKey = ["projects"] as const;
 
-export function useProjectsQuery() {
+export function useProjectsQuery(options?: { enabled?: boolean }) {
   return useQuery({
+    enabled: options?.enabled ?? true,
     queryKey: projectsQueryKey,
     queryFn: () => fetchProjects(),
     staleTime: 60_000,

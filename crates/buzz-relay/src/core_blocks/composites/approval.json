@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "approval",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Approval",
   "description": "An exact proposed external action awaiting an explicit decision.",
   "origin": "core",
@@ -30,9 +30,19 @@
       {
         "type": "details",
         "items": [
-          { "label": "Destination", "value": "{{destination}}" },
-          { "label": "Exact content", "value": "{{content}}" },
-          { "label": "Expires", "value": "{{expires_at}}" }
+          {
+            "label": "Destination",
+            "value": "{{destination}}"
+          },
+          {
+            "label": "Exact content",
+            "value": "{{content}}"
+          },
+          {
+            "label": "Expires",
+            "value": "{{expires_at}}",
+            "format": "date"
+          }
         ]
       },
       {
@@ -61,7 +71,8 @@
           }
         ]
       }
-    ]
+    ],
+    "eyebrow": "Your decision"
   },
   "actions": [
     {

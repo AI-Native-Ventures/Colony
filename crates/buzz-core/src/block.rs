@@ -10,6 +10,18 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
+#[path = "block_presentation.rs"]
+mod presentation;
+pub use presentation::{
+    CardListMode, CardListPresentation, CardPresentation, DetailValueFormat, DetailsPresentation,
+    SectionPresentation, TableValueFormat,
+};
+#[path = "block_instance_fields.rs"]
+mod instance_fields;
+pub use instance_fields::validate_manifest_action_input;
+#[path = "block_question_composition.rs"]
+mod question_composition;
+
 /// JSON Schema dialect accepted for Block inputs and actions.
 pub const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 /// Maximum composition-tree depth, including the root.
@@ -191,6 +203,9 @@ pub enum BlockValidationState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DetailItem {
+    /// Optional native value formatting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<DetailValueFormat>,
     /// Visible label.
     pub label: String,
     /// Literal or template-bound value.
@@ -201,6 +216,9 @@ pub struct DetailItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TableColumn {
+    /// Optional native cell formatting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<TableValueFormat>,
     /// Data key.
     pub key: String,
     /// Visible column label.
@@ -258,6 +276,12 @@ pub struct BlockActionControl {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SectionNode {
+    /// Optional native hierarchy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<SectionPresentation>,
+    /// Hide the section when its resolved body is empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omit_empty_text: Option<bool>,
     /// Optional heading or template.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -270,6 +294,9 @@ pub struct SectionNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MetricNode {
+    /// Optional comparison copy or template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<String>,
     /// Visible metric label.
     pub label: String,
     /// Literal or template-bound value.
@@ -283,6 +310,15 @@ pub struct MetricNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DetailsNode {
+    /// Optional bounded instance list; static items remain a legacy fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items_path: Option<String>,
+    /// Optional native disclosure style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<DetailsPresentation>,
+    /// Optional disclosure label or template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     /// Ordered label/value items.
     pub items: Vec<DetailItem>,
 }
@@ -301,6 +337,15 @@ pub struct TableNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CardNode {
+    /// Optional native grouping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<CardPresentation>,
+    /// Optional small contextual label or template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eyebrow: Option<String>,
+    /// Optional supporting label or template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
     /// Optional card title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -316,6 +361,12 @@ pub struct CardNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CardListNode {
+    /// Optional native layout; omitted legacy lists remain stacked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<CardListMode>,
+    /// Optional native repeated-card grouping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<CardListPresentation>,
     /// Path to the instance collection.
     pub items_path: String,
     /// Card template rendered for each item.
@@ -354,6 +405,15 @@ pub struct MediaNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct StatusNode {
+    /// Optional pointer to percentage progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_path: Option<String>,
+    /// Optional pointer to current step, paired with total_path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_path: Option<String>,
+    /// Optional pointer to total steps, paired with position_path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_path: Option<String>,
     /// Visible status label.
     pub label: String,
     /// Optional path to state in instance data.
@@ -373,6 +433,9 @@ pub struct ActionsNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct QuestionNode {
+    /// Optional pointer to single-select or multi-select instance mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_path: Option<String>,
     /// Prompt shown to the user.
     pub prompt: String,
     /// Selection mode.
@@ -694,6 +757,7 @@ pub fn validate_manifest(manifest: &BlockManifest) -> Result<(), BlockError> {
 
     let mut count = 0;
     validate_node(&manifest.tree, 1, &mut count, manifest, &ids)?;
+    question_composition::validate_question_composition(&manifest.tree)?;
     for permission in &manifest.permissions {
         if permission.capability.trim().is_empty()
             || contains_secret_looking_key(&permission.constraints)
@@ -837,6 +901,7 @@ fn validate_node(
     manifest: &BlockManifest,
     action_ids: &HashSet<&str>,
 ) -> Result<(), BlockError> {
+    instance_fields::validate_field_bindings(node)?;
     if depth > MAX_BLOCK_DEPTH {
         return Err(BlockError::InvalidManifest(
             "composition exceeds 12 nesting levels".to_owned(),
@@ -1000,6 +1065,7 @@ fn valid_question_option(
 }
 
 fn validate_dynamic_question_options(node: &BlockNode, data: &Value) -> Result<(), BlockError> {
+    instance_fields::validate_dynamic_fields(node, data)?;
     match node {
         BlockNode::Stack { children, .. } | BlockNode::Grid { children, .. } => {
             for child in children {
@@ -1011,7 +1077,13 @@ fn validate_dynamic_question_options(node: &BlockNode, data: &Value) -> Result<(
                 validate_dynamic_question_options(child, data)?;
             }
         }
-        BlockNode::CardList(list) => validate_dynamic_question_options(&list.card, data)?,
+        BlockNode::CardList(list) => {
+            if let Some(items) = data.pointer(&list.items_path).and_then(Value::as_array) {
+                for item in items {
+                    validate_dynamic_question_options(&list.card, item)?;
+                }
+            }
+        }
         BlockNode::Question(question) => {
             if let Some(path) = &question.options_path {
                 let options = data
@@ -1129,6 +1201,8 @@ mod tests {
 
     fn section_node() -> BlockNode {
         BlockNode::Section(SectionNode {
+            presentation: None,
+            omit_empty_text: None,
             title: Some("Summary".to_owned()),
             text: Some("{{summary}}".to_owned()),
         })
@@ -1369,6 +1443,7 @@ mod tests {
     #[test]
     fn question_accepts_single_multi_and_optional_custom_input() {
         let single = question_manifest(QuestionNode {
+            mode_path: None,
             prompt: "Choose one".to_owned(),
             mode: QuestionMode::SingleSelect,
             options: options(2),
@@ -1382,6 +1457,7 @@ mod tests {
         validate_manifest(&single).expect("single-select should validate");
 
         let multiple = question_manifest(QuestionNode {
+            mode_path: None,
             prompt: "Choose several".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(3),
@@ -1395,6 +1471,7 @@ mod tests {
         validate_manifest(&multiple).expect("multi-select should validate");
 
         let custom = question_manifest(QuestionNode {
+            mode_path: None,
             prompt: "Choose or add your own".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(3),
@@ -1411,6 +1488,7 @@ mod tests {
     #[test]
     fn question_rejects_impossible_selection_bounds() {
         let impossible = question_manifest(QuestionNode {
+            mode_path: None,
             prompt: "Impossible".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(2),
@@ -1432,6 +1510,7 @@ mod tests {
     #[test]
     fn question_accepts_one_closed_data_backed_option_source() {
         let static_manifest = question_manifest(QuestionNode {
+            mode_path: None,
             prompt: "Choose several".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(3),
@@ -1511,6 +1590,7 @@ mod tests {
     #[test]
     fn question_rejects_ambiguous_or_oversized_option_sources() {
         let too_many = question_manifest(QuestionNode {
+            mode_path: None,
             prompt: "Too many".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(13),
@@ -1524,6 +1604,7 @@ mod tests {
         assert!(validate_manifest(&too_many).is_err());
 
         let static_manifest = question_manifest(QuestionNode {
+            mode_path: None,
             prompt: "Ambiguous".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: options(2),

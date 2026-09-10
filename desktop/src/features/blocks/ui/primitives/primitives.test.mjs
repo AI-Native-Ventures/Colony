@@ -57,7 +57,7 @@ test("block layout resolver clamps columns and renders responsive grid", () => {
     React.createElement("span", null, "Child"),
   );
   assert.match(html, /grid-cols-1/);
-  assert.match(html, /sm:grid-cols-2/);
+  assert.match(html, /@sm\/block-layout:grid-cols-2/);
 });
 
 test("block section resolver uses local then root data and semantic heading", () => {
@@ -320,7 +320,8 @@ test("block question renders data-backed choices once as selectable described ca
   assert.match(html, /Purposeful transitions and pacing\./);
   assert.match(html, /Which qualities should the first concept combine\?/);
   assert.doesNotMatch(html, /\{\{prompt\}\}/);
-  assert.equal(html.match(/aria-pressed="false"/g)?.length, 2);
+  assert.equal(html.match(/type="checkbox"/g)?.length, 2);
+  assert.doesNotMatch(html, /checked=""/);
 });
 
 test("block question shows a durable answer while its processor is still working", () => {
@@ -355,7 +356,9 @@ test("block question shows a durable answer while its processor is still working
     },
   });
 
-  assert.match(html, />Answered</);
+  assert.match(html, />Submitted</);
+  assert.match(html, /Waiting for the responsible teammate/);
+  assert.match(html, /aria-busy="true"/);
   assert.doesNotMatch(html, />Submit</);
   assert.match(html, /disabled/);
 });
@@ -430,11 +433,11 @@ test("block table resolver formats filters and stable-sorts typed cells", () => 
   });
   assert.match(html, /<table/);
   assert.match(html, /<caption[^>]*>Leads/);
-  assert.match(html, /aria-sort="none"/);
+  assert.doesNotMatch(html, /aria-sort|type="search"/);
   assert.match(html, /type="checkbox"/);
 });
 
-test("block card resolver uses the Attachment family", () => {
+test("block card resolver renders the native surface", () => {
   const node = {
     type: "card",
     title: "{{name}}",
@@ -449,7 +452,7 @@ test("block card resolver uses the Attachment family", () => {
     data: { name: "Acme", summary: "Qualified" },
     node,
   });
-  assert.match(html, /data-slot="attachment"/);
+  assert.match(html, /class="block-native-card"/);
   assert.match(html, /Acme/);
 });
 
@@ -500,8 +503,13 @@ test("block chart resolver and native SVG cover bar line area donut and negative
       node: { ...base, kind },
       title: `${kind} chart`,
     });
-    assert.match(html, /<svg/);
-    assert.match(html, /role="img"/);
+    if (kind === "donut") {
+      assert.doesNotMatch(html, /<svg/);
+      assert.match(html, /needs non-negative values/);
+    } else {
+      assert.match(html, /<svg/);
+      assert.match(html, /role="img"/);
+    }
     assert.match(html, /View chart data/);
     assert.match(html, /<table/);
   }

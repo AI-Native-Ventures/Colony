@@ -1,5 +1,6 @@
 import { cn } from "@/shared/lib/cn";
 
+import "./blockPresentation.css";
 import { resolveChartData } from "./resolvers";
 import type {
   BlockChartKind,
@@ -35,14 +36,17 @@ function donutPath(start: number, end: number): string {
   const inner = 48;
   const outerStart = polarPoint(cx, cy, outer, start);
   const outerEnd = polarPoint(cx, cy, outer, end);
+  const outerMid = polarPoint(cx, cy, outer, (start + end) / 2);
+  const innerMid = polarPoint(cx, cy, inner, (start + end) / 2);
   const innerEnd = polarPoint(cx, cy, inner, end);
   const innerStart = polarPoint(cx, cy, inner, start);
-  const largeArc = end - start > Math.PI ? 1 : 0;
   return [
     `M ${outerStart.x} ${outerStart.y}`,
-    `A ${outer} ${outer} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
+    `A ${outer} ${outer} 0 0 1 ${outerMid.x} ${outerMid.y}`,
+    `A ${outer} ${outer} 0 0 1 ${outerEnd.x} ${outerEnd.y}`,
     `L ${innerEnd.x} ${innerEnd.y}`,
-    `A ${inner} ${inner} 0 ${largeArc} 0 ${innerStart.x} ${innerStart.y}`,
+    `A ${inner} ${inner} 0 0 0 ${innerMid.x} ${innerMid.y}`,
+    `A ${inner} ${inner} 0 0 0 ${innerStart.x} ${innerStart.y}`,
     "Z",
   ].join(" ");
 }
@@ -53,10 +57,14 @@ export function buildBlockChartGeometry(
   const plotWidth = WIDTH - PAD_X * 2;
   const plotHeight = HEIGHT - PAD_Y * 2;
   const values = data.map((datum) => datum.value);
-  const minimum = Math.min(0, ...values);
-  const maximum = Math.max(0, ...values);
+  // Normalize first so finite values near Number.MAX_VALUE cannot overflow the span.
+  const scale = Math.max(1, ...values.map(Math.abs));
+  const normalized = values.map((value) => value / scale);
+  const minimum = Math.min(0, ...normalized);
+  const maximum = Math.max(0, ...normalized);
   const span = maximum - minimum || 1;
-  const y = (value: number) => PAD_Y + ((maximum - value) / span) * plotHeight;
+  const y = (value: number) =>
+    PAD_Y + ((maximum - value / scale) / span) * plotHeight;
   const baselineY = y(0);
   const slot = data.length > 0 ? plotWidth / data.length : plotWidth;
   const barWidth = Math.max(2, Math.min(48, slot * 0.62));
@@ -86,14 +94,14 @@ export function buildBlockChartGeometry(
           .join(" ")} L ${points.at(-1)?.x ?? points[0].x} ${baselineY} Z`
       : "";
   const positiveTotal = data.reduce(
-    (sum, datum) => sum + Math.max(0, datum.value),
+    (sum, datum) => sum + Math.max(0, datum.value / scale),
     0,
   );
   let angle = -Math.PI / 2;
   const donutPaths =
     positiveTotal > 0
       ? data.flatMap((datum) => {
-          const value = Math.max(0, datum.value);
+          const value = Math.max(0, datum.value / scale);
           if (value === 0) return [];
           const start = angle;
           angle += (value / positiveTotal) * Math.PI * 2;
@@ -181,16 +189,21 @@ export function BlockChart({
 }) {
   const values = resolveChartData(node, data);
   const geometry = buildBlockChartGeometry(values);
+  const donutUnavailable =
+    node.kind === "donut" &&
+    (values.some((datum) => datum.value < 0) ||
+      !values.some((datum) => datum.value > 0));
+  const displayChart = values.length > 0 && !donutUnavailable;
   return (
     <figure
       className={cn(
-        "min-w-0 rounded-xl border border-border bg-card p-3 text-card-foreground",
+        "min-w-0 rounded-xl border border-border/70 bg-card p-5 text-card-foreground",
         className,
       )}
       data-block-primitive="chart"
     >
-      <figcaption className="mb-2 text-sm font-semibold">{title}</figcaption>
-      {values.length > 0 ? (
+      <figcaption className="mb-4 text-sm font-medium">{title}</figcaption>
+      {displayChart ? (
         <svg
           aria-label={`${title}, ${node.kind} chart`}
           className="h-auto w-full text-primary"
@@ -199,40 +212,57 @@ export function BlockChart({
         >
           <title>{`${title}, ${node.kind} chart`}</title>
           {node.kind !== "donut" ? (
-            <line
-              className="stroke-border"
-              x1={PAD_X}
-              x2={WIDTH - PAD_X}
-              y1={geometry.baselineY}
-              y2={geometry.baselineY}
-            />
+            <>
+              {[PAD_Y, HEIGHT / 2, HEIGHT - PAD_Y].map((y) => (
+                <line
+                  className="stroke-border opacity-60"
+                  key={y}
+                  x1={PAD_X}
+                  x2={WIDTH - PAD_X}
+                  y1={y}
+                  y2={y}
+                />
+              ))}
+              <line
+                className="stroke-border"
+                x1={PAD_X}
+                x2={WIDTH - PAD_X}
+                y1={geometry.baselineY}
+                y2={geometry.baselineY}
+              />
+            </>
           ) : null}
           <ChartMarks data={values} geometry={geometry} kind={node.kind} />
         </svg>
       ) : (
         <p className="py-8 text-center text-sm text-muted-foreground">
-          No chart data available.
+          {values.length === 0
+            ? "No chart data available."
+            : "A donut chart needs non-negative values with a positive total. The original values are listed below."}
         </p>
       )}
       {values.length > 0 ? (
-        <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs">
+        <dl className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,6rem),1fr))] gap-4 text-sm">
           {values.slice(0, 8).map((datum) => (
             <div className="min-w-0" key={`${datum.label}:${datum.value}`}>
               <dt
-                className="max-w-40 truncate text-muted-foreground"
+                className="block-native-copy text-xs text-muted-foreground"
                 title={datum.label}
               >
                 {datum.label}
               </dt>
-              <dd className="mt-0.5 font-medium tabular-nums text-foreground">
+              <dd className="block-native-copy mt-1 font-medium tabular-nums text-foreground">
                 {new Intl.NumberFormat().format(datum.value)}
               </dd>
             </div>
           ))}
         </dl>
       ) : null}
-      <details className="mt-2 rounded-lg border border-border/50 bg-background/50 px-3 py-2">
-        <summary className="cursor-pointer text-xs font-medium text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring">
+      <details
+        className="block-native-disclosure mt-4"
+        open={donutUnavailable || undefined}
+      >
+        <summary className="rounded-sm text-sm font-medium text-muted-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
           View chart data
         </summary>
         <div className="mt-2 overflow-x-auto">
@@ -251,10 +281,13 @@ export function BlockChart({
             <tbody className="divide-y divide-border/40">
               {values.map((datum) => (
                 <tr key={`${datum.label}:${datum.value}`}>
-                  <th className="py-1.5 pr-4 font-normal" scope="row">
+                  <th
+                    className="block-native-copy py-2.5 pr-4 font-normal"
+                    scope="row"
+                  >
                     {datum.label}
                   </th>
-                  <td className="py-1.5 text-right tabular-nums">
+                  <td className="py-2.5 text-right tabular-nums">
                     {datum.value}
                   </td>
                 </tr>

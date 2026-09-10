@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "handover",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Handover",
   "description": "Finished work passed from the thread that produced it to the person who takes it next.",
   "origin": "core",
@@ -65,16 +65,27 @@
   },
   "tree": {
     "type": "card",
-    "title": "Handover: {{subject}}",
+    "title": "{{subject}}",
     "description": "{{summary}}",
     "children": [
       {
         "type": "details",
         "items": [
-          { "label": "Assignee", "value": "{{assignee}}" },
-          { "label": "Target channel", "value": "{{target_channel}}" },
-          { "label": "Source thread", "value": "{{source_event_id}}" }
-        ]
+          {
+            "label": "Assignee",
+            "value": "{{assignee}}"
+          },
+          {
+            "label": "Target channel",
+            "value": "{{target_channel}}"
+          },
+          {
+            "label": "Source thread",
+            "value": "{{source_event_id}}"
+          }
+        ],
+        "presentation": "disclosure",
+        "summary": "Assignment and references"
       },
       {
         "type": "card-list",
@@ -83,8 +94,10 @@
           "type": "card",
           "title": "{{label}}",
           "description": "{{role}}: {{url}}",
-          "children": []
-        }
+          "children": [],
+          "presentation": "row"
+        },
+        "presentation": "separated"
       },
       {
         "type": "status",
@@ -112,7 +125,8 @@
           }
         ]
       }
-    ]
+    ],
+    "eyebrow": "Ready to pick up"
   },
   "actions": [
     {

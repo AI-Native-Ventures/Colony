@@ -36,7 +36,15 @@ async function dragOver(page: Page, source: Locator, target: Locator) {
   // header. Scroll the drag source into the scroll viewport before using its
   // geometry; boundingBox() alone still returns coordinates hidden underneath
   // that header.
-  await source.scrollIntoViewIfNeeded();
+  // Centre the pair in the scrollport rather than using
+  // `scrollIntoViewIfNeeded`: the sidebar floats an unread pill and a profile
+  // footer over the end of the list, and an element covered by those still
+  // counts as "in view", so the conditional scroll is a no-op and the drop
+  // lands on the overlay instead of a droppable. Centring is deterministic in
+  // every environment; the two headers are adjacent, so one scroll suits both.
+  await source.evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
   const from = await source.boundingBox();
   const to = await target.boundingBox();
   if (!from || !to) throw new Error("drag handles not laid out");

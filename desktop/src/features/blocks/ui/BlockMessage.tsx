@@ -90,7 +90,12 @@ export function deriveBlockActionViewState(
   const pending = [...actions]
     .reverse()
     .find((action) => !receiptsByAction.has(action.event.id));
-  const latestReceipt = receipts.at(-1);
+  // Receipt delivery time does not order attempts: an older attempt can finish
+  // late, or share a timestamp with its retry. Show the newest action's result.
+  const latestAction = actions.at(-1);
+  const latestReceipt = latestAction
+    ? receiptsByAction.get(latestAction.event.id)
+    : undefined;
   const attentionStatuses: Array<"succeeded" | "denied"> = [];
   for (const receipt of receipts) {
     const { resolvesAttention, status } = receipt.parsed.value;
@@ -99,19 +104,16 @@ export function deriveBlockActionViewState(
     }
   }
   const latestAttentionStatus = attentionStatuses.at(-1);
-  const pendingIsNewest =
-    pending &&
-    (!latestReceipt ||
-      compareRelayEvents(latestReceipt.event, pending.event) < 0);
   return {
     completedActionIds,
     ...(latestAttentionStatus ? { latestAttentionStatus } : {}),
     ...(pending ? { pendingActionId: pending.parsed.value.actionId } : {}),
-    ...(pendingIsNewest
-      ? { latestStatus: "pending" as const }
-      : latestReceipt
-        ? { latestStatus: latestReceipt.parsed.value.status }
-        : {}),
+    ...(latestAction
+      ? {
+          latestStatus:
+            latestReceipt?.parsed.value.status ?? ("pending" as const),
+        }
+      : {}),
   };
 }
 

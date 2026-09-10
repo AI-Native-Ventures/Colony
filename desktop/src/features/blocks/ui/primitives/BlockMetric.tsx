@@ -1,6 +1,7 @@
 import { cn } from "@/shared/lib/cn";
 
-import { resolveMetric } from "./resolvers";
+import "./blockPresentation.css";
+import { resolveBlockTemplate, resolveMetric } from "./resolvers";
 import type { BlockMetricNode } from "./types";
 
 export function BlockMetric({
@@ -15,27 +16,30 @@ export function BlockMetric({
   rootData?: unknown;
 }) {
   const metric = resolveMetric(node, data, rootData);
+  const comparison = resolveBlockTemplate(node.comparison, data, rootData);
   return (
     <div
-      className={cn(
-        "min-w-0 rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5",
-        className,
-      )}
+      className={cn("block-native-metric", className)}
       data-block-primitive="metric"
     >
-      <div className="text-xs font-medium text-muted-foreground">
+      <div className="block-native-copy text-sm text-muted-foreground">
         {metric.label}
       </div>
-      <div className="mt-1 flex min-w-0 items-baseline gap-1.5">
-        <span className="truncate text-base font-semibold tabular-nums text-foreground">
+      <div className="mt-2 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="block-native-copy text-3xl font-semibold leading-tight tracking-tight tabular-nums text-foreground">
           {metric.value || "—"}
         </span>
         {metric.unit ? (
-          <span className="text-xs font-medium text-muted-foreground">
+          <span className="block-native-copy text-sm text-muted-foreground">
             {metric.unit}
           </span>
         ) : null}
       </div>
+      {comparison ? (
+        <p className="block-native-copy mt-3 text-sm text-muted-foreground">
+          {comparison}
+        </p>
+      ) : null}
     </div>
   );
 }

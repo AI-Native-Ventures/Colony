@@ -1,0 +1,30 @@
+flowchart TB
+    subgraph PLAN[Plan the campaign]
+      A([Client brief]) --> B[Confirm audience and goal]
+      B --> C{Brief complete?}
+      C -->|Missing facts| D[Ask owner in thread]
+      D --> B
+    end
+    subgraph CREATE[Create in parallel]
+      C -->|Yes| E[Write captions]
+      C -->|Yes| F[Design carousel]
+      C -->|Yes| G[Prepare video cut]
+      E --> H[Assemble review package]
+      F --> H
+      G --> H
+    end
+    subgraph REVIEW[Review with the owner]
+      H --> I{Owner decision}
+      I -->|Changes requested| J[Revise affected assets]
+      J --> H
+      I -->|Approved| K[Schedule approved version]
+    end
+    subgraph DELIVERY[Publish and report]
+      K --> L{Platform response}
+      L -->|Published| M[Save post URL and receipt]
+      L -->|Temporary failure| N[Retry within agreed policy]
+      N --> L
+      L -->|Needs attention| O[Ask owner to reconnect]
+      O --> K
+      M --> P([Report results in thread])
+    end

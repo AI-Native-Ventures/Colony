@@ -5306,7 +5306,9 @@ what you already know"
     fn company_onboarding_reads_state_from_the_thread() {
         assert!(PROMPT.contains("State lives in this thread"));
         assert!(PROMPT.contains("re-read the thread"));
-        assert!(PROMPT.contains("State is read from persistent thread Blocks and receipts"));
+        assert!(PROMPT.contains(
+            "State is read from persistent thread Blocks, owner replies and signed action receipts"
+        ));
     }
 }
 

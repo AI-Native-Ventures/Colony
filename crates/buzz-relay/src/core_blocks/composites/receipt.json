@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "receipt",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Receipt",
   "description": "A verified outcome with immutable references.",
   "origin": "core",
@@ -43,11 +43,21 @@
       {
         "type": "details",
         "items": [
-          { "label": "Occurred", "value": "{{occurred_at}}" },
-          { "label": "Immutable references", "value": "{{references}}" }
-        ]
+          {
+            "label": "Occurred",
+            "value": "{{occurred_at}}",
+            "format": "date"
+          },
+          {
+            "label": "Immutable references",
+            "value": "{{references}}"
+          }
+        ],
+        "presentation": "disclosure",
+        "summary": "Receipt details"
       }
-    ]
+    ],
+    "eyebrow": "Activity record"
   },
   "actions": [],
   "permissions": [],

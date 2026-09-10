@@ -292,10 +292,11 @@ type E2eConfig = {
       channelName: string;
       event: RelayEvent;
     }>;
-    /** Native external-Block fetch outcomes keyed by exact HTTPS URL. */
+    /** Native external-Block fetch outcomes keyed by exact HTTPS URL.
+     * `hold` waits for `__BUZZ_E2E_RELEASE_BLOCK_DATA__(url)` before returning. */
     blockDataResponses?: Record<
       string,
-      { body?: string; bytes?: number[]; error?: string }
+      { body?: string; bytes?: number[]; error?: string; hold?: boolean }
     >;
     /** Reject successive kind-40010 publications, then resume. */
     blockActionPublishErrors?: string[];
@@ -1323,6 +1324,10 @@ declare global {
       kind: number;
     }) => boolean;
     __BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__?: () => void;
+    __BUZZ_E2E_BLOCK_DATA_HOLD_STATE__?: (
+      url: string,
+    ) => { observed: boolean; held: boolean } | null;
+    __BUZZ_E2E_RELEASE_BLOCK_DATA__?: (url: string) => void;
     __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -6695,6 +6700,23 @@ function buildMockProjectEvents(): RelayEvent[] {
       "project-buzz".padEnd(64, "0"),
     ),
   );
+  // A second project the mock identity owns, deliberately with no
+  // `buzz-channel` tag: it is what the channel-settings "Project" row and the
+  // create-channel dialog offer as a linkable project.
+  events.push(
+    createMockEvent(
+      KIND_PROJECT_ANNOUNCEMENT,
+      "",
+      [
+        ["d", "side-quests"],
+        ["name", "side-quests"],
+        ["description", "Unlinked project used to prove channel linking."],
+      ],
+      projectOwner,
+      now,
+      "project-side-quests".padEnd(64, "0"),
+    ),
+  );
 
   return events;
 }
@@ -6718,7 +6740,11 @@ function isMockProjectScopedEvent(event: RelayEvent): boolean {
     (tag) => tag[0] === "a" && (tag[1] ?? "").startsWith("30617:"),
   );
   return (
-    (event.kind === KIND_REPO_ANNOUNCEMENT || hasRepoAddressTag) &&
+    (event.kind === KIND_REPO_ANNOUNCEMENT ||
+      // A project head carries no channel tag and need not carry a repository
+      // either (an empty project is valid), so kind alone identifies it.
+      event.kind === KIND_PROJECT_ANNOUNCEMENT ||
+      hasRepoAddressTag) &&
     (event.kind === 1 || MOCK_PROJECT_KINDS.has(event.kind))
   );
 }
@@ -11502,6 +11528,40 @@ export function maybeInstallE2eTauriMocks() {
   resetMockSaveSubscriptions(config);
   resetMockThreadCanvases(config);
   resetObserverArchivePolicyGate();
+  // Per-page, exact-fixture gates keep loading captures independent of runner
+  // speed. Releasing before a lookup is safe; no production transport changes.
+  const blockDataHolds = new Map<
+    string,
+    {
+      gate: Promise<void>;
+      release: () => void;
+      observed: boolean;
+      held: boolean;
+    }
+  >();
+  for (const [url, response] of Object.entries(
+    config.mock?.blockDataResponses ?? {},
+  )) {
+    if (!response.hold) continue;
+    if (blockDataHolds.size >= 10) {
+      throw new Error(`E2E block data hold cap (10) exceeded at ${url}`);
+    }
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    blockDataHolds.set(url, { gate, release, observed: false, held: true });
+  }
+  window.__BUZZ_E2E_BLOCK_DATA_HOLD_STATE__ = (url) => {
+    const hold = blockDataHolds.get(url);
+    return hold ? { observed: hold.observed, held: hold.held } : null;
+  };
+  window.__BUZZ_E2E_RELEASE_BLOCK_DATA__ = (url) => {
+    const hold = blockDataHolds.get(url);
+    if (!hold) return;
+    hold.held = false;
+    hold.release();
+  };
   resetMockPendingCommunityDeepLinks(config);
   initializeMockHuddle(config.mock?.huddle, config);
   mockWebsocketSendMutexWedged = false;
@@ -13453,6 +13513,11 @@ export function maybeInstallE2eTauriMocks() {
         const response = activeConfig?.mock?.blockDataResponses?.[url];
         if (!response) {
           throw new Error(`mock Block data is unavailable for ${url}`);
+        }
+        const hold = blockDataHolds.get(url);
+        if (hold) {
+          hold.observed = true;
+          await hold.gate;
         }
         if (response.error) {
           throw new Error(response.error);

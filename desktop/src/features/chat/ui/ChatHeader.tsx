@@ -32,6 +32,12 @@ type ChatHeaderProps = {
   leadingContent?: React.ReactNode;
   mode?: "home" | "channel" | "agents" | "workflows" | "pulse" | "projects";
   overlaysContent?: boolean;
+  /**
+   * Force the description line visible. It is hidden by default (the
+   * workspace-gradient appearance reveals it), but a project channel's
+   * "owner/repo · branch · N employees" is identity, not decoration.
+   */
+  showDescription?: boolean;
   statusBadge?: React.ReactNode;
   /** Render the chrome wrapper without an individual backdrop when a parent supplies shared blur. */
   transparentChrome?: boolean;
@@ -95,6 +101,7 @@ export function ChatHeader({
   leadingContent,
   mode = "channel",
   overlaysContent = false,
+  showDescription = false,
   statusBadge,
   transparentChrome = false,
 }: ChatHeaderProps) {
@@ -168,7 +175,13 @@ export function ChatHeader({
         </div>
       </div>
       {trimmedDescription && mode === "channel" ? (
-        <p className="colony-channel-description hidden truncate text-xs text-muted-foreground">
+        <p
+          className={cn(
+            "colony-channel-description truncate text-xs text-muted-foreground",
+            showDescription ? "mt-0.5 block" : "hidden",
+          )}
+          data-testid="chat-header-description"
+        >
           {trimmedDescription}
         </p>
       ) : null}
