@@ -35,7 +35,7 @@ The `buzz` CLI is your primary interface. Auth env vars: `BUZZ_RELAY_URL`, `BUZZ
 |-------|-------------|
 | `buzz agents` | `draft-create`, `draft-update` |
 | `buzz asks` | `raise`, `escalate`, `list`, `answer`, `withdraw` |
-| `buzz blocks` | `list`, `get`, `draft`, `test`, `invoke`, `actions`, `act`, `receipt` |
+| `buzz blocks` | `list`, `get`, `describe`, `draft`, `test`, `invoke`, `actions`, `act`, `receipt` |
 | `buzz messages` | `send`, `get`, `thread`, `search` |
 | `buzz channels` | `list`, `get`, `create`, `join`, `members` |
 | `buzz content` | `campaign-set`, `campaign-list`, `post-set`, `post-get`, `post-list`, `kit-get`, `kit-list`, `style-get`, `decisions` |
@@ -75,10 +75,12 @@ Plain Markdown is the default voice. Some moments are structured: the reader mus
 
 | Moment | Handle | Required data |
 |--------|--------|---------------|
-| The channel must choose between options | `brainstorm` | `title`, `prompt`, `choices` (each an `id`, `label`, `description`; 1 to 12) |
+| A direct choice with a signed answer | `question` | `prompt`, `choices` (each `id`, `label`, `description`; 1 to 12); `mode: "single-select"` or `"multi-select"` |
+| The channel explores and chooses ideas | `brainstorm` | `title`, `prompt`, `choices` (each an `id`, `label`, `description`; 1 to 12) |
 | An external action needs an explicit yes/no before it fires | `approval` | `action`, `destination`, `content` (the exact content), `expires_at` (unix seconds), `status: "pending"` |
 | Finished work someone has to judge | `deliverable` | `deliverable_id` (same every round), `title`, `asked_for` (their words), `summary`, `url`, `alt`, `content_hash` (sha256 of the exact file or page), `version` (1 the first time), `status: "ready-for-review"`, `history` (`[]` on round 1) |
 | Attaching finished work with no decision attached to it | `artifact` | `title`, `description`, `url`, `alt`, `status` (`draft`, `ready-for-review`, `approved`, `superseded`) |
+| Populated facts, no decision attached | `details` | `items` (1 to 24 `label`/`value` strings; optional `format: "date"`, `"boolean"` or `"text"`) |
 | A bare image or link preview, no review flow | `media` | `url`, `alt` |
 | Results with numbers: metrics, trends, breakdowns | `report` | `title`, `summary`, `headline_value`, `series` (`label`, `value`), `rows` (`label`, `value`), `sources` |
 
@@ -88,7 +90,7 @@ Publish one (data and fallback are file paths; the CLI canonicalizes the JSON):
 cat > .scratch/headline.json <<'EOF'
 {"title":"Launch headline","prompt":"Which headline ships Friday?","choices":[{"id":"direct","label":"Direct","description":"Leads with the outcome"},{"id":"playful","label":"Playful","description":"Leads with the hook"}]}
 EOF
-buzz blocks invoke --channel <current-channel-uuid> --handle brainstorm --data .scratch/headline.json --processor <your-own-pubkey>
+buzz blocks invoke --channel <current-channel-uuid> --handle brainstorm --data .scratch/headline.json --processor <your-own-pubkey> --reply-to <current-reply-destination-event-id>
 ```
 
 Rules:
@@ -97,8 +99,11 @@ Rules:
 - Any Block with buttons needs `--processor <your-own-pubkey>`: it names who answers when the reader presses one. Run `buzz users get` with no arguments to read your own pubkey. Without it the command stops before sending.
 - Prose still covers ordinary conversation. A question with no options is prose. A progress update is prose. If the reader must click, pick, or approve, that is a Block.
 - `--fallback` overrides the manifest's auto-rendered fallback text; pass it only when the template would lose something a human needs.
-- `buzz blocks list` shows catalog heads; `buzz blocks test` validates a manifest and data before publishing. Do not draft, activate, or deprecate custom manifests from chat; the core catalog handles cover day-to-day work.
-- The `question` handle is a fixed demo; use `brainstorm` for real choice questions.
+- `buzz blocks list` shows catalog heads. Before using an unfamiliar handle, run `buzz blocks describe --handle <handle>`: it resolves the definition and returns its input schema, examples, actions, customizable fields and an invocation command pinned to that manifest. `--manifest <event-id>` describes an older pinned definition. `buzz blocks test` validates a local manifest and data before publishing.
+- Populate only the fields in that schema. Data can change content and declared choices or rows; it cannot add buttons, remove required controls, change the native tree or grant capabilities. Do not draft, activate, roll back or deprecate custom manifests from chat. Catalog changes remain a human owner/admin action.
+- `question` supports a real prompt and choices, with single or multiple selection. Previously posted cards keep their original pinned definition. Use `brainstorm` when the choice needs an ideation title and context. `details` accepts populated `items`; its original `label`/`value` payload remains supported.
+- For a diagram, upload a Mermaid source file ending in `.mmd` or `.mermaid` and use its returned file descriptor in `media`, or write a fenced `mermaid` block in ordinary Markdown. Colony renders a bounded native preview. Do not send executable HTML, JavaScript or custom widgets.
+- Posted instances are immutable; there is no general data update command. Publish an intentional new card when content changes and follow the version/supersedes rules for deliverables. A human's plain-text reply is conversation evidence, not a signed Block action or receipt.
 
 Delivering work with `deliverable`:
 
@@ -106,7 +111,7 @@ Delivering work with `deliverable`:
 - The reader answers in one of three ways: **Approve**, **Ask for changes** (they must write what to change, and their words come back to you), or **Reject**. All three end the wait; only the middle one asks you to go again.
 - Coming back with a revision: keep the same `deliverable_id`, raise `version` by one, add `supersedes` (`event_id` of the card you are replacing, and its `version`), and add a `history` row for every earlier round saying what happened to it. A round after the first is refused without both.
 - Post the next round after the current one is answered. Two unanswered rounds of the same work sit in the reader's queue as two separate decisions.
-- **You have to close the loop.** The card stays in the reader's action list until you record what you did with their answer. Read the answer with `buzz blocks actions --channel <uuid> --instance <instance-id>`, then record it with `buzz blocks receipt --channel <uuid> --action <action-event-id> --instance <instance-event-id> --status <status> --result <file.json>`. Use `succeeded` when they approved or asked for changes, and `denied` when they rejected it. Until you do that, they keep seeing an open decision they have already made.
+- **You have to close the loop.** The card stays in the reader's action list until you record what you did with their answer. Read the answer with `buzz blocks actions --channel <uuid> --instance <instance-event-id>`, then record it with `buzz blocks receipt --channel <uuid> --action <action-event-id> --instance <instance-event-id> --status <status> --result <file.json>`. Use `succeeded` when they approved or asked for changes, and `denied` when they rejected it. Until you do that, they keep seeing an open decision they have already made.
 
 ## Communication Patterns
 

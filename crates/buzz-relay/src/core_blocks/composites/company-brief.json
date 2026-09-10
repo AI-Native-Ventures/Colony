@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "company-brief",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Company Brief",
   "description": "What a website says about a business, with sources, confidence, and the gaps still to fill.",
   "origin": "core",
@@ -113,38 +113,73 @@
       {
         "type": "section",
         "title": "{{trading_name}}",
-        "text": "{{summary}}"
+        "text": "{{summary}}",
+        "presentation": "lead"
       },
       {
-        "type": "table",
-        "columns": [
-          { "key": "label", "label": "What we found" },
-          { "key": "value", "label": "Detail" },
-          { "key": "confidence", "label": "Confidence" },
-          { "key": "source", "label": "Source" }
-        ],
-        "rows_path": "/findings"
+        "type": "card-list",
+        "items_path": "/findings",
+        "mode": "list",
+        "presentation": "separated",
+        "card": {
+          "type": "card",
+          "presentation": "row",
+          "title": "{{label}}",
+          "description": "{{value}}",
+          "eyebrow": "{{confidence}}",
+          "children": [
+            {
+              "type": "details",
+              "items": [
+                {
+                  "label": "Source",
+                  "value": "{{source}}"
+                }
+              ],
+              "presentation": "disclosure",
+              "summary": "Evidence"
+            }
+          ]
+        }
       },
       {
         "type": "section",
         "title": "Still missing",
-        "text": "These are not on the website. Nothing has been assumed in their place."
+        "text": "These are not on the website. Nothing has been assumed in their place.",
+        "presentation": "body"
       },
       {
-        "type": "table",
-        "columns": [
-          { "key": "label", "label": "Gap" },
-          { "key": "why_it_matters", "label": "Why it matters" }
-        ],
-        "rows_path": "/gaps"
+        "type": "card-list",
+        "items_path": "/gaps",
+        "mode": "list",
+        "presentation": "separated",
+        "card": {
+          "type": "card",
+          "presentation": "row",
+          "title": "{{label}}",
+          "description": "{{why_it_matters}}",
+          "children": []
+        }
       },
       {
         "type": "details",
         "items": [
-          { "label": "Scanned", "value": "{{scanned_at}}" },
-          { "label": "Pages read", "value": "{{pages_read}}" },
-          { "label": "Source", "value": "{{source_url}}" }
-        ]
+          {
+            "label": "Scanned",
+            "value": "{{scanned_at}}",
+            "format": "date"
+          },
+          {
+            "label": "Pages read",
+            "value": "{{pages_read}}"
+          },
+          {
+            "label": "Source",
+            "value": "{{source_url}}"
+          }
+        ],
+        "presentation": "disclosure",
+        "summary": "Research details"
       }
     ]
   },
@@ -154,7 +189,8 @@
   "supported_clients": ["desktop"],
   "primitive_versions": {
     "section": 1,
-    "table": 1,
+    "card": 1,
+    "card-list": 1,
     "details": 1
   },
   "examples": [

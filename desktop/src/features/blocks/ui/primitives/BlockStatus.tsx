@@ -1,9 +1,9 @@
 import { CheckCircle2, CircleAlert, CircleX, Clock3, Info } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
-import { Badge } from "@/shared/ui/badge";
 import { Progress } from "@/shared/ui/progress";
 
+import "./blockPresentation.css";
 import { resolveStatus } from "./resolvers";
 import type { BlockStatusNode, BlockTone } from "./types";
 
@@ -56,30 +56,59 @@ export function BlockStatus({
             progress: undefined,
           }
       : resolved;
+  const stateLabel = status.state.replaceAll(/[-_]+/g, " ");
+  const duplicateLabel =
+    status.label.trim().toLowerCase() === stateLabel.trim().toLowerCase();
+  const position = "position" in status ? status.position : undefined;
+  const total = "total" in status ? status.total : undefined;
+  const isSteps = position !== undefined && total !== undefined;
   return (
     <div
-      className={cn("min-w-0 space-y-2", className)}
+      className={cn("min-w-0 space-y-3", className)}
       data-block-primitive="status"
       role="status"
     >
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-          <StatusIcon tone={status.tone} />
-          <span className="truncate">{status.label}</span>
-        </div>
-        <Badge
-          variant={status.tone === "error" ? "destructive" : "outline"}
-          className={
-            status.tone === "info" || status.tone === "success"
-              ? "border-primary/20 bg-primary/10 text-primary"
-              : undefined
-          }
-        >
-          {status.state}
-        </Badge>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        {!duplicateLabel || isSteps ? (
+          <span className="block-native-copy min-w-0 text-sm text-muted-foreground">
+            {status.label}
+          </span>
+        ) : null}
+        {!isSteps ? (
+          <span
+            className="block-native-status-pill text-xs font-medium"
+            data-tone={status.tone}
+          >
+            <StatusIcon tone={status.tone} />
+            <span className="block-native-copy min-w-0">{stateLabel}</span>
+          </span>
+        ) : null}
       </div>
-      {status.progress !== undefined ? (
+      {isSteps ? (
+        <div
+          className="flex gap-1.5"
+          role="progressbar"
+          aria-label={status.label}
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={position}
+          aria-valuetext={`${position} of ${total}`}
+        >
+          {Array.from({ length: total }, (_, index) => index + 1).map(
+            (step) => (
+              <span
+                key={step}
+                className={cn(
+                  "h-1 flex-1 rounded-full",
+                  step <= position ? "bg-primary" : "bg-muted",
+                )}
+              />
+            ),
+          )}
+        </div>
+      ) : status.progress !== undefined ? (
         <Progress
+          className="h-1.5"
           aria-label={`${status.label}: ${status.progress}%`}
           value={status.progress}
         />

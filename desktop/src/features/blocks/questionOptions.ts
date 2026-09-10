@@ -1,3 +1,4 @@
+import { resolveQuestionMode, validBlockFieldPath } from "./dynamicBlockFields";
 import {
   BLOCK_MAX_QUESTION_OPTIONS,
   type BlockNode,
@@ -62,6 +63,8 @@ function validOption(
 export function validateQuestionNodeDefinition(
   node: BlockQuestionNode,
 ): string | null {
+  if (node.mode_path !== undefined && !validBlockFieldPath(node.mode_path))
+    return "Question mode_path must be a bounded JSON Pointer";
   const hasStaticOptions = node.options !== undefined;
   const hasDataOptions = node.options_path !== undefined;
   if (hasStaticOptions === hasDataOptions) {
@@ -106,6 +109,9 @@ export function resolveQuestionOptions(
   node: BlockQuestionNode,
   data: unknown,
 ): QuestionOptionsResult {
+  const resolved = resolveQuestionMode(node, data);
+  if (!resolved.ok) return resolved;
+  node = resolved.node;
   const definitionError = validateQuestionNodeDefinition(node);
   if (definitionError) return { ok: false, reason: definitionError };
   if (node.options) return { ok: true, options: node.options };
@@ -168,12 +174,20 @@ export function validateQuestionOptionsData(
     const result = resolveQuestionOptions(node, data);
     return result.ok ? null : result.reason;
   }
+  if (node.type === "card-list") {
+    const items = resolveJsonPointer(data, node.items_path);
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        const error = validateQuestionOptionsData(node.card, item);
+        if (error) return error;
+      }
+    }
+    return null;
+  }
   const children =
     node.type === "stack" || node.type === "grid" || node.type === "card"
       ? node.children
-      : node.type === "card-list"
-        ? [node.card]
-        : [];
+      : [];
   for (const child of children) {
     const error = validateQuestionOptionsData(child, data);
     if (error) return error;

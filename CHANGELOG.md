@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- feat(desktop): browse a searchable Blocks catalogue with one full preview, clearer cards and tables, and theme-aware company plans, findings and review details.
+- feat(desktop): switch between documents and media in an ordered collection while retaining reading position, and view expandable Mermaid flow, sequence and relationship diagrams inline.
+- feat(agents): describe a Block's active schema and examples in one command, supply custom Question choices and Details, and receive valid Interview responses.
+
 ## v0.16.12
 
 - fix(desktop): prepare and verify the business coordination Team before starting a first job, including recovery when its relay projection is missing. Preserve existing team choices and owner approvals.

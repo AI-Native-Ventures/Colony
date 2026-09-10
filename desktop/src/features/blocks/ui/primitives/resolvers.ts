@@ -1,3 +1,4 @@
+import { resolveDetailsItems } from "../../dynamicBlockFields";
 import type {
   BlockActionControl,
   BlockActionEnvironment,
@@ -118,10 +119,49 @@ export function resolveDetails(
   data: unknown,
   rootData?: unknown,
 ) {
-  return node.items.map((item) => ({
-    label: resolveBlockTemplate(item.label, data, rootData),
-    value: resolveBlockTemplate(item.value, data, rootData),
+  const result = resolveDetailsItems(node, data);
+  if (!result.ok) return [];
+  return result.items.map((item) => ({
+    label: result.dynamic
+      ? item.label
+      : resolveBlockTemplate(item.label, data, rootData),
+    value: formatDetailsValue(
+      result.dynamic
+        ? item.value
+        : resolveBlockTemplate(item.value, data, rootData),
+      item.format,
+    ),
   }));
+}
+
+function formatDetailsValue(
+  value: string,
+  format?: "text" | "date" | "boolean",
+): string {
+  if (value.trim() === "") return "";
+  if (format === "boolean") {
+    if (value === "true" || value === "1") return "Yes";
+    if (value === "false" || value === "0") return "No";
+  }
+  if (format === "date") {
+    const number = Number(value);
+    const date = new Date(
+      Number.isFinite(number) && number > 0
+        ? number < 100_000_000_000
+          ? number * 1000
+          : number
+        : value,
+    );
+    if (!Number.isNaN(date.valueOf()))
+      return (
+        date.toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+          timeZone: "UTC",
+        }) + " UTC"
+      );
+  }
+  return value;
 }
 
 function statusTone(state: string): BlockTone {
@@ -158,14 +198,33 @@ export function resolveStatus(
     formatBlockValue(record?.state ?? raw) ||
     resolveBlockTemplate(node.label, data, rootData) ||
     "neutral";
-  const progressValue = record?.progress;
+  const progressValue = node.progress_path
+    ? resolveBlockPath(data, node.progress_path)
+    : record?.progress;
   const progress =
     typeof progressValue === "number" && Number.isFinite(progressValue)
       ? Math.max(0, Math.min(100, progressValue))
       : undefined;
+  const position = node.position_path
+    ? resolveBlockPath(data, node.position_path)
+    : undefined;
+  const total = node.total_path
+    ? resolveBlockPath(data, node.total_path)
+    : undefined;
+  const step =
+    typeof position === "number" &&
+    typeof total === "number" &&
+    Number.isInteger(position) &&
+    Number.isInteger(total) &&
+    position >= 1 &&
+    position <= total &&
+    total <= 20
+      ? { position, total }
+      : {};
   return {
     label: resolveBlockTemplate(node.label, data, rootData),
     state,
+    ...step,
     tone: statusTone(state),
     progress,
   };
@@ -304,7 +363,9 @@ export function hasValidMediaIntegrity(item: BlockMediaItem): boolean {
   );
 }
 
-export function inferMediaKind(item: BlockMediaItem): BlockMediaItem["kind"] {
+export function inferMediaKind(
+  item: BlockMediaItem,
+): NonNullable<BlockMediaItem["kind"]> {
   if (item.kind) return item.kind;
   if (item.mime?.startsWith("image/")) return "image";
   if (item.mime?.startsWith("video/")) return "video";
@@ -390,7 +451,7 @@ export function resolveMedia(
       ? [contents]
       : [];
   if (source.length === 0) return [{ reason: "No media available." }];
-  return source.slice(0, 24).map((value) => {
+  const result: ResolvedMedia[] = source.slice(0, 24).map((value) => {
     const item = mediaDescriptor(value, resolveBlockTemplate(node.alt, data));
     if (!item) return { reason: "Media source unavailable." };
     if (!isSafeMediaUrl(item.url)) {
@@ -406,6 +467,12 @@ export function resolveMedia(
     };
     return { item: { ...namedItem, kind: inferMediaKind(namedItem) } };
   });
+  if (source.length > 24)
+    result.push({
+      reason: `Showing the first 24 files. ${source.length - 24} additional files are not previewed.`,
+      omittedCount: source.length - 24,
+    });
+  return result;
 }
 
 export function resolveActionAvailability(

@@ -648,9 +648,15 @@ test("multi-image carousels fill the message width with stable contained stages"
     await expect(carousel.getByTestId("media-preview-count")).toHaveText(
       `1 / ${count}`,
     );
-    await expect(carousel.locator("img")).toHaveCount(1);
-    await expect(carousel.locator("img")).toHaveCSS("object-fit", "contain");
-    await expect(carousel.locator("img")).toHaveJSProperty("naturalWidth", 320);
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveCount(1);
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveCSS("object-fit", "contain");
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveJSProperty("naturalWidth", 320);
     // Wait for an actual layout, then compare equal stages across item counts.
     let box: Awaited<ReturnType<typeof carousel.boundingBox>> = null;
     await expect
@@ -707,7 +713,7 @@ test("image carousel screenshot", async ({ page }) => {
     .filter({ hasText: "Weekend photo dump" })
     .last();
   await expect(
-    row.getByTestId("media-image-preview").locator("img"),
+    row.getByTestId("message-image-lightbox-trigger").locator("img"),
   ).toHaveCount(1);
   await expect(row.getByTestId("media-preview-count")).toHaveText("1 / 3");
   await waitForAnimations(page);

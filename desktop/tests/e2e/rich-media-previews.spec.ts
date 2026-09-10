@@ -60,6 +60,7 @@ async function openGallery(page: Page) {
   await page.getByTestId("open-settings").click();
   await page.getByTestId("profile-popover-settings").click();
   await page.getByTestId("settings-nav-blocks").click();
+  await page.getByRole("tab", { name: "Examples", exact: true }).click();
   const gallery = page.getByTestId("rich-preview-gallery");
   await expect(gallery).toBeVisible();
   return gallery;
@@ -95,12 +96,15 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
       .toBeLessThanOrEqual(1);
     const carousel = gallery.getByRole("region", { name: "Image carousel" });
     await expect(carousel).toBeVisible();
-    await expect(carousel.locator("img")).toHaveCount(1);
-    await expect(carousel.locator("img")).toHaveCSS("object-fit", "contain");
-    await expect(carousel.locator("img")).toHaveJSProperty(
-      "naturalWidth",
-      1080,
-    );
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveCount(1);
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveCSS("object-fit", "contain");
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveJSProperty("naturalWidth", 1080);
     const originalHeight = (await carousel.boundingBox())?.height ?? 0;
     await carousel
       .getByRole("button", { name: "Next image", exact: true })
@@ -109,11 +113,16 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     await expect(carousel.getByTestId("media-preview-count")).toHaveText(
       "2 / 3",
     );
-    await expect(carousel.locator("img")).toHaveJSProperty("naturalWidth", 900);
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveJSProperty("naturalWidth", 900);
     expect(
       Math.abs(((await carousel.boundingBox())?.height ?? 0) - originalHeight),
     ).toBeLessThanOrEqual(1);
-    const artUrl = await carousel.locator("img").getAttribute("src");
+    const artUrl = await carousel
+      .getByTestId("message-image-lightbox-trigger")
+      .locator("img")
+      .getAttribute("src");
     await carousel.getByRole("button", { name: "Expand image" }).click();
     const expanded = page.getByRole("dialog");
     await expect(expanded).toBeVisible();
@@ -298,7 +307,9 @@ test("message carousel fits a narrow native thread and supports touch without lo
   const thread = page.getByTestId("message-thread-panel");
   const carousel = thread.getByRole("region", { name: "Image carousel" });
   await expect(carousel).toBeVisible();
-  await expect(carousel.locator("img")).toHaveJSProperty("naturalWidth", 1080);
+  await expect(
+    carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+  ).toHaveJSProperty("naturalWidth", 1080);
   const threadBox = await thread.boundingBox();
   const carouselBox = await carousel.boundingBox();
   expect(threadBox?.width).toBeLessThanOrEqual(500);
@@ -309,7 +320,10 @@ test("message carousel fits a narrow native thread and supports touch without lo
       (element) => element.scrollWidth <= element.clientWidth + 1,
     ),
   ).toBe(true);
-  const stage = carousel.locator("img").locator("..");
+  const stage = carousel
+    .getByTestId("message-image-lightbox-trigger")
+    .locator("img")
+    .locator("..");
   await stage.dispatchEvent("pointerdown", {
     pointerType: "touch",
     clientX: 200,
@@ -374,6 +388,7 @@ test("gallery controls change with the selected accent and colour mode", async (
   await page.getByTestId("settings-nav-appearance").click();
   await page.getByTestId("accent-color-green").click();
   await page.getByTestId("settings-nav-blocks").click();
+  await page.getByRole("tab", { name: "Examples", exact: true }).click();
   await gallery.getByRole("tab", { name: "Audio", exact: true }).click();
   await expect(play).not.toHaveCSS("background-color", violet);
   const green = await play.evaluate((element) => {
@@ -392,6 +407,7 @@ test("gallery controls change with the selected accent and colour mode", async (
     "buzz-dark",
   );
   await page.getByTestId("settings-nav-blocks").click();
+  await page.getByRole("tab", { name: "Examples", exact: true }).click();
   await gallery.getByRole("tab", { name: "Audio", exact: true }).click();
   await expect(audio).not.toHaveCSS("background-color", lightSurface);
 });

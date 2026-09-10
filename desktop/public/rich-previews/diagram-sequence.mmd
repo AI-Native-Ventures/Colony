@@ -1,0 +1,23 @@
+sequenceDiagram
+    autonumber
+    actor Owner
+    participant Scout
+    participant Designer
+    participant Thread
+    Owner->>Scout: Prepare a campaign for review
+    Scout->>Designer: Create the carousel assets
+    Designer-->>Scout: Draft assets and notes
+    Scout->>Thread: Post draft and review choices
+    Thread-->>Owner: Show the draft inline
+    alt Changes requested
+      Owner->>Thread: Choose changes and add feedback
+      Thread->>Scout: Deliver the signed response
+      Scout->>Designer: Revise the selected assets
+      Designer-->>Scout: Return the next version
+      Scout->>Thread: Post revised draft with history
+    else Approved
+      Owner->>Thread: Approve this version
+      Thread->>Scout: Deliver the signed approval
+      Scout->>Thread: Record the confirmed outcome
+      Thread-->>Owner: Show the receipt
+    end

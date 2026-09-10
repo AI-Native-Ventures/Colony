@@ -25,9 +25,14 @@ import {
 } from "./filePreviewLoad";
 import { SpreadsheetFilePreview } from "./SpreadsheetFilePreview";
 import { parseSpreadsheetInWorker } from "./spreadsheetPreviewRuntime";
+import {
+  type FilePreviewViewState,
+  useFilePreviewViewState,
+} from "./useFilePreviewViewState";
 
 const PdfFilePreview = React.lazy(() => import("./PdfFilePreview"));
 export { supportsInlineFilePreview } from "./filePreviewModel";
+export type { FilePreviewViewState } from "./useFilePreviewViewState";
 
 /** A URL attachment or an explicitly routed workspace file; neither source is rewritten. */
 export type InlineFilePreviewProps = {
@@ -40,6 +45,10 @@ export type InlineFilePreviewProps = {
   size?: number;
   className?: string;
   onOpenInWorkspace?: () => void;
+  /** Navigation restored on mount or source identity change; later prop changes do not reset it. */
+  initialViewState?: FilePreviewViewState;
+  /** Reports navigation synchronously, without retaining loaded file bytes or document workers. */
+  onViewStateChange?: (state: FilePreviewViewState) => void;
 };
 
 /** Shared renderer for real message attachments, Blocks and trusted workspace paths. */
@@ -61,6 +70,8 @@ function FilePreviewInstance({
   size,
   className,
   onOpenInWorkspace,
+  initialViewState,
+  onViewStateChange,
 }: InlineFilePreviewProps) {
   const kind = filePreviewKind(filename, mime);
   const [visible, setVisible] = React.useState(false);
@@ -70,10 +81,8 @@ function FilePreviewInstance({
   const [workbook, setWorkbook] = React.useState<PreviewWorkbook>();
   const [error, setError] = React.useState("");
   const [retry, setRetry] = React.useState(0);
-  const [sheet, setSheet] = React.useState(0);
-  const [rowPages, setRowPages] = React.useState<Record<number, number>>({});
-  const [page, setPage] = React.useState(1);
-  const [zoom, setZoom] = React.useState(1);
+  const [{ sheet, rowPages, page, zoom }, changeViewState] =
+    useFilePreviewViewState(initialViewState, onViewStateChange);
   const element = React.useRef<HTMLDivElement>(null);
   const expandButton = React.useRef<HTMLButtonElement>(null);
   const inlineBody = React.useRef<HTMLDivElement>(null);
@@ -199,10 +208,8 @@ function FilePreviewInstance({
         workbook={workbook}
         sheetIndex={sheet}
         rowPage={rowPages[sheet] || 0}
-        onSheetChange={setSheet}
-        onRowPageChange={(value) =>
-          setRowPages((previous) => ({ ...previous, [sheet]: value }))
-        }
+        onSheetChange={(value) => changeViewState("sheet", value)}
+        onRowPageChange={(value) => changeViewState("rowPage", value)}
       />
     ) : bytes && kind === "pdf" ? (
       <React.Suspense
@@ -217,8 +224,8 @@ function FilePreviewInstance({
           filename={filename}
           page={page}
           zoom={zoom}
-          onPageChange={setPage}
-          onZoomChange={setZoom}
+          onPageChange={(value) => changeViewState("page", value)}
+          onZoomChange={(value) => changeViewState("zoom", value)}
         />
       </React.Suspense>
     ) : (

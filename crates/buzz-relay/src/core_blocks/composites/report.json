@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "report",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Report",
   "description": "Metrics, visualization, rows, summary, and sources.",
   "origin": "core",
@@ -55,7 +55,8 @@
       {
         "type": "section",
         "title": "{{title}}",
-        "text": "{{summary}}"
+        "text": "{{summary}}",
+        "presentation": "lead"
       },
       {
         "type": "metric",
@@ -72,16 +73,28 @@
       {
         "type": "table",
         "columns": [
-          { "key": "label", "label": "Item" },
-          { "key": "value", "label": "Value" }
+          {
+            "key": "label",
+            "label": "Item"
+          },
+          {
+            "key": "value",
+            "label": "Value",
+            "format": "number"
+          }
         ],
         "rows_path": "/rows"
       },
       {
         "type": "details",
         "items": [
-          { "label": "Sources", "value": "{{sources}}" }
-        ]
+          {
+            "label": "Sources",
+            "value": "{{sources}}"
+          }
+        ],
+        "presentation": "disclosure",
+        "summary": "Sources"
       }
     ]
   },

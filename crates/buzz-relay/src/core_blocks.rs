@@ -332,13 +332,13 @@ mod tests {
         ),
         (
             "details",
-            1785369600,
-            "ca17325975b2d7d37a5ed5786728d3e7992e0dce02bb5f9962ff655255a4af0b",
+            1785369601,
+            "efccd244d7e4eee768f1849c02dd5981e86f6699097a93dfd446f033d442cf3d",
         ),
         (
             "media",
-            1785369600,
-            "985799c0b35ea2660326c7021750324eba9f04a5b2bf0912549b8976c960e0ca",
+            1788973902,
+            "dc672b9514f8a31ae871d2935899e96aeb10d929a9e6c5a2546a9b8fb07335da",
         ),
         (
             "metric",
@@ -347,8 +347,8 @@ mod tests {
         ),
         (
             "question",
-            1785369600,
-            "ac4ac00924546181a4771c652340a9c861f36e99a3a62803ffacf8fdb84d51b8",
+            1785369601,
+            "e3b192b1388b218bfb443345cfbd6b11a8d80c809099b67c60d9bb061c472daf",
         ),
         (
             "section",
@@ -367,68 +367,68 @@ mod tests {
         ),
         (
             "agent-proposal",
-            1785369600,
-            "613baba8284b6e0a474b621de8d3444d62cafc709ab9b7c4d41b1f0e7025ef8f",
+            1785369601,
+            "c5b46825bef5d607bdd0b897f9626bb2e535537c1ce6e6b4672781e2f2ee4018",
         ),
         (
             "approval",
-            1785369600,
-            "0cc52eb39da3700731b60de102b42cb0efdefc38327f4dc562346a8d4918ff5d",
+            1785369601,
+            "5f939e1b2fa7053483cf27ad38abb7335388fce2e5da30579eda17276fa3fda1",
         ),
         (
             "artifact",
-            1785369600,
-            "4672923e3d54245a44b2d9722a0e89e1bd109268cb425c4a861a50605bcb5b52",
+            1785369601,
+            "5434b4ff68d181b1f4029653152f2d0084692f3467749cb7e0ab150fa480b8ad",
         ),
         (
             "brainstorm",
-            1785369600,
-            "78cd3ac006f93b01c521c726b3dd5de070452d99045e877060b0722f9f4b2da3",
+            1785369601,
+            "8ded39001dff7ea2f9c6ccccf728078bddcec091d7a37351df55f2c03d774000",
         ),
         (
             "company-blueprint",
-            1787875200,
-            "aabdc030ae647df430ba28651aa127cc350e1441abaf30eedc84029443938595",
+            1787875201,
+            "b336adcbdc36865c35a35908aa112289e17e2e4b1fbd405f1e555acbc25a4d03",
         ),
         (
             "company-brief",
-            1785369600,
-            "6936a3f3b147ad3739dc19fae71df77fb2010de6953fb4039e6d7f06e359b2a5",
+            1785369601,
+            "084182e25b491f98573ca2b7da7ff96d98bdae0ba5d04b06a83d55e7276f1d1c",
         ),
         (
             "deliverable",
-            1785369600,
-            "341c6999607295c49c161785eaed12ac8480e8594dfb9a4d7e2a0b356298057e",
+            1785369601,
+            "57dd5cdcc3d71c8adbb12146cd822895af48f7323321b277c268ebd05476e7f0",
         ),
         (
             "handover",
-            1785369600,
-            "542e2eefd8e515e35fb1d72063271b90d7975bedfc59afb98594a5216dd43198",
+            1785369601,
+            "5367ece8cf1a3ab583f578abcb17e75bd862d16fa2c367ea55b582763f8c4f3d",
         ),
         (
             "initiative",
-            1785369600,
-            "1e350094a920530ccaf8ee6d521ab0dc8bf2a3103b6a0200ab578aba77d36967",
+            1785369601,
+            "47dd0234feac2ab8eff21172c1b61d7132786699692635b427002e5cfd18214f",
         ),
         (
             "interview",
-            1785369600,
-            "44f7517a011316af12f5057128851b885e23842fb14cedbcd4a75578c76e7ff7",
+            1785369601,
+            "e318bef5d64e9e5e280090fba6fcb3edd659e9800c8464d7f7901d1b1748a659",
         ),
         (
             "lead-card",
-            1785369600,
-            "7230932d4988e12b766fef18dfd833e39bc38d480bca4aefef15e41b5b258680",
+            1785369601,
+            "fe791e585d4cddba1e3104f6cbcedafa5527cb88bfd5385dd671d4cfe40c3694",
         ),
         (
             "receipt",
-            1785369600,
-            "3f90a6f201e52fa35b9ebb7e5fd75d394e398d1cd391a7c8f77d37b9704cfb40",
+            1785369601,
+            "30422971240c5644ba5677410f12671bc581610bf8428e1496ef40ead1d0fb6e",
         ),
         (
             "report",
-            1785369600,
-            "d7c03f0a0f3d4b603394cfcf388efeebfb1b6bcae080f24fb9291ddc19e3c885",
+            1785369601,
+            "86f1ca1ddb874158926dce81aa308dde42fdcc81abf1ee3b55777215257b5834",
         ),
     ];
 
@@ -458,6 +458,20 @@ mod tests {
                 "{handle} changed. Its catalog head is ordered by created_at, so \
                  bump created_at as well or the new head cannot replace the one \
                  already seeded on every running relay. Then update this table."
+            );
+        }
+    }
+
+    #[test]
+    fn published_manifest_serialization_matches_the_reviewed_asset_bytes() {
+        for (path, source) in CORE_BLOCK_ASSETS {
+            let raw: Value = serde_json::from_str(source).expect("bundled JSON");
+            let typed = buzz_core::block::parse_manifest(source).expect("bundled manifest");
+            let serialized = serde_json::to_value(&typed).expect("typed manifest JSON");
+            assert_eq!(
+                buzz_core::block::canonical_json(&serialized).expect("serialized canonical JSON"),
+                buzz_core::block::canonical_json(&raw).expect("asset canonical JSON"),
+                "{path}: Rust serialization must preserve the raw bytes pinned by Core trust; make defaulted fields explicit in the asset"
             );
         }
     }

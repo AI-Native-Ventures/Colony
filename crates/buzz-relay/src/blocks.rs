@@ -1097,6 +1097,20 @@ pub(crate) async fn validate_public_envelope(
             let instance = stored_instance(tenant, state, &action.instance_event_id).await?;
             validate_action_authority(event.pubkey.as_bytes(), action, &instance)?;
             let manifest = stored_manifest(tenant, state, &action.manifest_event_id).await?;
+            let typed_manifest: buzz_core::block::BlockManifest =
+                serde_json::from_value(manifest.content.clone())
+                    .map_err(|error| format!("stored Block manifest is malformed: {error}"))?;
+            let data = match &instance.data {
+                InstanceData::Inline(data) => Some(data),
+                _ => None,
+            };
+            buzz_core::block::validate_manifest_action_input(
+                &typed_manifest,
+                data,
+                &action.action_id,
+                &action.content,
+            )
+            .map_err(|error| format!("Block action does not match its pinned question: {error}"))?;
             let declaration = manifest_action(&manifest, &action.action_id)
                 .ok_or_else(|| "Block action ID is not declared by its manifest".to_string())?;
             if let Some(schema) = declaration
