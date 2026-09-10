@@ -13,15 +13,27 @@ const REF = {
 
 test("the request key is null when no load may start", () => {
   assert.equal(
-    verifiedArtifactRequestKey({ artifact: null, enabled: true, hasLoader: true }),
+    verifiedArtifactRequestKey({
+      artifact: null,
+      enabled: true,
+      hasLoader: true,
+    }),
     null,
   );
   assert.equal(
-    verifiedArtifactRequestKey({ artifact: REF, enabled: false, hasLoader: true }),
+    verifiedArtifactRequestKey({
+      artifact: REF,
+      enabled: false,
+      hasLoader: true,
+    }),
     null,
   );
   assert.equal(
-    verifiedArtifactRequestKey({ artifact: REF, enabled: true, hasLoader: false }),
+    verifiedArtifactRequestKey({
+      artifact: REF,
+      enabled: true,
+      hasLoader: false,
+    }),
     null,
   );
   assert.equal(
@@ -73,10 +85,7 @@ test("only local verified object URLs are accepted", () => {
   assert.equal(isLocalArtifactUrl("data:image/png;base64,AAAA"), true);
   assert.equal(isLocalArtifactUrl("asset://localhost/capture.png"), true);
   assert.equal(isLocalArtifactUrl("file:///tmp/capture.png"), true);
-  assert.equal(
-    isLocalArtifactUrl("http://asset.localhost/capture.png"),
-    true,
-  );
+  assert.equal(isLocalArtifactUrl("http://asset.localhost/capture.png"), true);
   assert.equal(isLocalArtifactUrl("http://127.0.0.1:1420/capture.png"), true);
 });
 

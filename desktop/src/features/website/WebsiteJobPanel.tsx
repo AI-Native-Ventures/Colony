@@ -97,9 +97,7 @@ export function WebsiteJobPanel({
   const visible = visibleInspection(record, inspection);
   const inspectRevision = visible?.revision ?? null;
   const openVersion = (revision: number) =>
-    setInspection((previous) =>
-      openInspection(record, previous, revision),
-    );
+    setInspection((previous) => openInspection(record, previous, revision));
 
   return (
     <WebsiteJobCard
@@ -153,8 +151,8 @@ export function WebsiteJobPanel({
             <>
               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-3.5 py-2">
                 <span className="text-2xs text-muted-foreground">
-                  Read-only view of Version {inspectRevision}. Decisions apply to
-                  Version {record.currentRevision} only.
+                  Read-only view of Version {inspectRevision}. Decisions apply
+                  to Version {record.currentRevision} only.
                 </span>
                 <button
                   className="text-2xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"

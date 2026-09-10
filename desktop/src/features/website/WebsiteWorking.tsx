@@ -95,7 +95,9 @@ export function WebsiteWorking({
               : "No independent review is recorded for this version yet."}
           </span>
           {record.status === "changesRequested" ? (
-            <span>Changes have been requested. A new version follows review.</span>
+            <span>
+              Changes have been requested. A new version follows review.
+            </span>
           ) : null}
         </div>
       ) : null}

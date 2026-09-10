@@ -28,11 +28,7 @@ fn artifact(url: &str, sha256: &str) -> PreviewArtifactRef {
     }
 }
 
-fn signed(
-    keys: &Keys,
-    content: &Value,
-    generation: Option<u64>,
-) -> nostr::Event {
+fn signed(keys: &Keys, content: &Value, generation: Option<u64>) -> nostr::Event {
     let mut tags = vec![
         Tag::parse(["h", CHANNEL]).expect("h"),
         Tag::parse(["task", TASK]).expect("task"),
@@ -44,10 +40,13 @@ fn signed(
     if let Some(generation) = generation {
         tags.push(Tag::parse(["generation", &generation.to_string()]).expect("generation"));
     }
-    EventBuilder::new(Kind::Custom(KIND_WEBSITE_ACTION as u16), content.to_string())
-        .tags(tags)
-        .sign_with_keys(keys)
-        .expect("sign action")
+    EventBuilder::new(
+        Kind::Custom(KIND_WEBSITE_ACTION as u16),
+        content.to_string(),
+    )
+    .tags(tags)
+    .sign_with_keys(keys)
+    .expect("sign action")
 }
 
 fn create_content() -> Value {
@@ -65,8 +64,8 @@ fn create_content() -> Value {
 #[test]
 fn parses_a_well_formed_create_without_generation() {
     let keys = Keys::generate();
-    let action = parse_website_action(&signed(&keys, &create_content(), None))
-        .expect("valid create parses");
+    let action =
+        parse_website_action(&signed(&keys, &create_content(), None)).expect("valid create parses");
     assert_eq!(action.channel_id, CHANNEL.parse::<Uuid>().unwrap());
     assert_eq!(action.task_id, TASK);
     assert_eq!(action.thread_root, THREAD);
@@ -295,7 +294,9 @@ fn job_id_derivation_is_stable_and_scope_sensitive() {
 #[test]
 fn reserved_decision_action_ids_and_content() {
     assert!(is_reserved_website_action_id(WEBSITE_APPROVE_ACTION_ID));
-    assert!(is_reserved_website_action_id(WEBSITE_REQUEST_CHANGES_ACTION_ID));
+    assert!(is_reserved_website_action_id(
+        WEBSITE_REQUEST_CHANGES_ACTION_ID
+    ));
     assert!(!is_reserved_website_action_id("website.publish"));
 
     let job_id = Uuid::new_v4();
@@ -391,12 +392,8 @@ fn content_round_trips_through_parse() {
         },
     };
     let content = action.content_value();
-    let parsed = parse_website_action(&signed(
-        &Keys::generate(),
-        &content,
-        action.generation,
-    ))
-    .expect("round trip parses");
+    let parsed = parse_website_action(&signed(&Keys::generate(), &content, action.generation))
+        .expect("round trip parses");
     assert_eq!(
         WebsiteAction {
             actor: parsed.actor.clone(),
@@ -454,7 +451,9 @@ fn public_url_guard_rejects_loopback_and_credentials() {
 fn manifest_hash_helper_is_lowercase_hex() {
     let hash = sha256_hex(b"manifest");
     assert_eq!(hash.len(), 64);
-    assert!(hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+    assert!(hash
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
 }
 
 #[test]

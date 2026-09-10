@@ -81,10 +81,7 @@ export const PREVIEW_CSP_DIRECTIVES = Object.freeze([
  * token is added only when handler hashes exist. There is no code path that
  * adds `'unsafe-inline'` to `script-src`.
  */
-export function previewCsp({
-  scriptHashes = [],
-  handlerHashes = [],
-} = {}) {
+export function previewCsp({ scriptHashes = [], handlerHashes = [] } = {}) {
   return PREVIEW_CSP_DIRECTIVES.map((directive) => {
     if (!directive.startsWith("script-src")) return directive;
     const tokens = [...scriptHashes];

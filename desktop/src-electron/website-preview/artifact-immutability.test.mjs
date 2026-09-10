@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  loadWebsitePreview,
-  PREVIEW_SCHEMA,
-  sha256Hex,
-} from "./artifact.mjs";
+import { loadWebsitePreview, PREVIEW_SCHEMA, sha256Hex } from "./artifact.mjs";
 
 const PUBLIC_ADDRESS = "93.184.216.34";
 const MANIFEST_URL = "https://cdn.example.com/site/manifest.json";
@@ -28,7 +24,9 @@ function reply(chunks) {
 }
 
 function fileEntry(path, content, options = {}) {
-  const contentBytes = Buffer.isBuffer(content) ? content : bytes(content ?? path);
+  const contentBytes = Buffer.isBuffer(content)
+    ? content
+    : bytes(content ?? path);
   return {
     path,
     url: options.url ?? `https://cdn.example.com/assets/${path}`,

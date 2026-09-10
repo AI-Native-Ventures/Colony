@@ -1471,8 +1471,7 @@ mod tests {
         assert!(website_jobs.contains("CREATE TABLE IF NOT EXISTS website_actions"));
         assert!(website_jobs.contains("PRIMARY KEY (community_id, job_id)"));
         assert!(website_jobs.contains("UNIQUE (community_id, task_id)"));
-        assert!(website_jobs
-            .contains("PRIMARY KEY (community_id, actor, request_id)"));
+        assert!(website_jobs.contains("PRIMARY KEY (community_id, actor, request_id)"));
         assert!(website_jobs.contains("UNIQUE (community_id, action_event_id)"));
         assert!(website_jobs.contains("attach_community_write_fence('website_jobs'"));
         assert!(website_jobs.contains("attach_community_write_fence('website_actions'"));

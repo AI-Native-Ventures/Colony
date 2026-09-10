@@ -169,7 +169,11 @@ test("an approval completes owner review only when it pins the current revision"
 
 test("handover completes the handover stage", () => {
   const progress = deriveWebsiteProgress(
-    record({ status: "handedOver", currentRevision: 1, revisions: [revision(1)] }),
+    record({
+      status: "handedOver",
+      currentRevision: 1,
+      revisions: [revision(1)],
+    }),
   );
   assert.ok(progress.completedStages?.includes("handover"));
 });

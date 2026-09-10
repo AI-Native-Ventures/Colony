@@ -186,7 +186,13 @@ export function useWebsitePreviewHost(options: {
       setNative(null);
       return;
     }
-    if (!adapter || !available || !previewUrl || !previewSha256 || !revisionNumber) {
+    if (
+      !adapter ||
+      !available ||
+      !previewUrl ||
+      !previewSha256 ||
+      !revisionNumber
+    ) {
       setPhase("idle");
       setAttachError(undefined);
       setNative(null);

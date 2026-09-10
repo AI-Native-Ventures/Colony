@@ -51,13 +51,8 @@ pub(crate) async fn create_agent_for_install(
     state: &AppState,
     request_id: String,
 ) -> Result<crate::managed_agents::CreateManagedAgentResponse, String> {
-    super::agents::create_managed_agent_with_creation_request(
-        input,
-        app,
-        state,
-        Some(request_id),
-    )
-    .await
+    super::agents::create_managed_agent_with_creation_request(input, app, state, Some(request_id))
+        .await
 }
 
 #[cfg(test)]
@@ -85,7 +80,10 @@ mod tests {
         let one = team_id_for_relay("wss://one.example").expect("team id");
         let one_trailing = team_id_for_relay("wss://one.example/").expect("team id");
         let two = team_id_for_relay("wss://two.example").expect("team id");
-        assert_eq!(one, one_trailing, "equivalent spellings share one community");
+        assert_eq!(
+            one, one_trailing,
+            "equivalent spellings share one community"
+        );
         assert_ne!(one, two, "different communities must not share a team");
         assert!(one.starts_with("website-team:"));
         assert!(one.ends_with(":website-manager"));
@@ -97,8 +95,14 @@ mod tests {
         let other_owner = "b".repeat(64);
         let relay = "wss://one.example";
         let base = agent_request_id(&owner, relay, PERSONAS[0].persona_id);
-        assert_eq!(base, agent_request_id(&owner, relay, PERSONAS[0].persona_id));
-        assert_ne!(base, agent_request_id(&other_owner, relay, PERSONAS[0].persona_id));
+        assert_eq!(
+            base,
+            agent_request_id(&owner, relay, PERSONAS[0].persona_id)
+        );
+        assert_ne!(
+            base,
+            agent_request_id(&other_owner, relay, PERSONAS[0].persona_id)
+        );
         assert_ne!(
             base,
             agent_request_id(&owner, "wss://two.example", PERSONAS[0].persona_id)

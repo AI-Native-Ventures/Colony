@@ -153,9 +153,8 @@ fn walk_site(
                 "unsupported file type for {relative}; add the asset or serve it another way"
             ))
         })?;
-        let bytes = std::fs::read(&path).map_err(|error| {
-            CliError::Usage(format!("cannot read {}: {error}", path.display()))
-        })?;
+        let bytes = std::fs::read(&path)
+            .map_err(|error| CliError::Usage(format!("cannot read {}: {error}", path.display())))?;
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err(CliError::Usage(format!(
                 "file {relative} is {} bytes, maximum is {MAX_FILE_BYTES}",
@@ -336,9 +335,8 @@ fn collect_source(
             .replace('\\', "/");
         validate_asset_path(&relative)
             .map_err(|error| CliError::Usage(format!("invalid source path {relative}: {error}")))?;
-        let bytes = std::fs::read(&path).map_err(|error| {
-            CliError::Usage(format!("cannot read {}: {error}", path.display()))
-        })?;
+        let bytes = std::fs::read(&path)
+            .map_err(|error| CliError::Usage(format!("cannot read {}: {error}", path.display())))?;
         entries.push((relative, bytes));
     }
     Ok(())
@@ -433,7 +431,10 @@ pub async fn run(
     }
     let mut manifest_with_urls: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| CliError::Other(error.to_string()))?;
-    if let Some(files) = manifest_with_urls.get_mut("files").and_then(Value::as_array_mut) {
+    if let Some(files) = manifest_with_urls
+        .get_mut("files")
+        .and_then(Value::as_array_mut)
+    {
         for file in files {
             if let Some(path) = file.get("path").and_then(Value::as_str) {
                 if let Some(upload) = uploaded.get(path) {
@@ -510,7 +511,15 @@ mod tests {
         write(&temp.path().join("img/logo.svg"), b"<svg/>");
         let files = collect_built_site(temp.path()).expect("collect");
         let paths: Vec<&str> = files.iter().map(|file| file.relative.as_str()).collect();
-        assert_eq!(paths, vec!["assets/app.js", "assets/caf\u{e9}.css", "img/logo.svg", "index.html"]);
+        assert_eq!(
+            paths,
+            vec![
+                "assets/app.js",
+                "assets/caf\u{e9}.css",
+                "img/logo.svg",
+                "index.html"
+            ]
+        );
         assert_eq!(files[1].mime, "text/css");
     }
 
@@ -557,8 +566,9 @@ mod tests {
         let temp = TempDir::new().expect("tempdir");
         write(&temp.path().join("index.html"), b"<html></html>");
         let files = collect_built_site(temp.path()).expect("collect");
-        let mut manifest: Value = serde_json::from_slice(&build_manifest(&files, "index.html").unwrap())
-            .expect("manifest json");
+        let mut manifest: Value =
+            serde_json::from_slice(&build_manifest(&files, "index.html").unwrap())
+                .expect("manifest json");
         manifest["files"][0]["url"] = serde_json::json!("https://cdn.colony.test/site/index.html");
         let bytes = serde_json::to_vec(&manifest).expect("serialize");
         let parsed = parse_preview_manifest(&bytes).expect("core parser accepts");

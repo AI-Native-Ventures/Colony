@@ -5,7 +5,9 @@
 //! receipts are relay-authored; these parsers only decode the shape a reader
 //! validates against before rendering.
 
-use buzz_core::kind::{KIND_TASK_REPORT, KIND_WEBSITE_ACTION, KIND_WEBSITE_HEAD, KIND_WEBSITE_RECEIPT};
+use buzz_core::kind::{
+    KIND_TASK_REPORT, KIND_WEBSITE_ACTION, KIND_WEBSITE_HEAD, KIND_WEBSITE_RECEIPT,
+};
 use buzz_core::website::{WebsiteAction, WebsiteReceipt, WebsiteReview};
 use nostr::{Event, EventBuilder, Kind, Tag};
 use uuid::Uuid;
@@ -42,10 +44,7 @@ pub fn build_website_action(action: &WebsiteAction) -> Result<EventBuilder, SdkE
     let tags = action
         .event_tags()
         .map_err(|error| SdkError::InvalidInput(error.to_string()))?;
-    Ok(
-        EventBuilder::new(Kind::Custom(KIND_WEBSITE_ACTION as u16), content)
-            .tags(tags),
-    )
+    Ok(EventBuilder::new(Kind::Custom(KIND_WEBSITE_ACTION as u16), content).tags(tags))
 }
 
 /// Parse a relay-signed website head's content review record.
@@ -111,8 +110,7 @@ pub fn parse_website_receipt(event: &Event) -> Result<WebsiteReceipt, SdkError> 
             "event is not a website receipt".into(),
         ));
     }
-    serde_json::from_str(&event.content)
-        .map_err(|error| SdkError::InvalidInput(error.to_string()))
+    serde_json::from_str(&event.content).map_err(|error| SdkError::InvalidInput(error.to_string()))
 }
 
 /// Build the exact QA binding tag for a KIND_TASK_REPORT event.
@@ -146,8 +144,8 @@ pub fn build_website_qa_task_report(
     note: &str,
 ) -> Result<EventBuilder, SdkError> {
     let binding = website_qa_binding_tag(revision, manifest_sha256, report_url, report_sha256)?;
-    let task = Tag::parse(["task", task_id])
-        .map_err(|error| SdkError::InvalidTag(error.to_string()))?;
+    let task =
+        Tag::parse(["task", task_id]).map_err(|error| SdkError::InvalidTag(error.to_string()))?;
     Ok(EventBuilder::new(Kind::Custom(KIND_TASK_REPORT as u16), note).tags([task, binding]))
 }
 
@@ -210,7 +208,11 @@ mod tests {
         let binding = event
             .tags
             .iter()
-            .find(|tag| tag.as_slice().first().is_some_and(|part| part == WEBSITE_QA_TAG))
+            .find(|tag| {
+                tag.as_slice()
+                    .first()
+                    .is_some_and(|part| part == WEBSITE_QA_TAG)
+            })
             .expect("binding tag");
         assert_eq!(binding.as_slice()[1], "2");
         assert_eq!(binding.as_slice()[2], HASH);

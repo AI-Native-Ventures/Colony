@@ -111,9 +111,7 @@ function createFixture() {
     "utf8",
   );
   const manifestSha256 = hashOf(manifest);
-  const bodies = new Map(
-    files.map(([filePath, bytes]) => [filePath, bytes]),
-  );
+  const bodies = new Map(files.map(([filePath, bytes]) => [filePath, bytes]));
   const site = Object.freeze({
     schema: "colony.website-preview/1",
     entrypoint: "index.html",
@@ -131,7 +129,10 @@ function createFixture() {
   });
   return {
     site,
-    manifestRef: { url: "https://fixture.invalid/manifest.json", sha256: manifestSha256 },
+    manifestRef: {
+      url: "https://fixture.invalid/manifest.json",
+      sha256: manifestSha256,
+    },
   };
 }
 
@@ -279,7 +280,10 @@ async function proveDenials(host, fixture, handles) {
     `url=${wc.getURL()}`,
   );
 
-  const popup = await evaluate(wc, "window.open('https://example.com/') === null");
+  const popup = await evaluate(
+    wc,
+    "window.open('https://example.com/') === null",
+  );
   check("denial.popup", popup === true, "window.open returned null");
 
   const media = await evaluate(
@@ -361,7 +365,10 @@ async function proveClipPixels(window) {
     });
     const source = sources.find((entry) => entry.name === window.getTitle());
     if (source === undefined) {
-      results.clip = { status: "unavailable", detail: "window source not found" };
+      results.clip = {
+        status: "unavailable",
+        detail: "window source not found",
+      };
       return;
     }
     const image = source.thumbnail;
@@ -387,11 +394,10 @@ async function proveClipPixels(window) {
     const headerTarget = [255, 0, 170];
     const pageTarget = [18, 52, 86];
     const orderOf = (pixel, target) =>
-      ["bOrder", "aOrder"].find(
-        (order) =>
-          [0, 1, 2].every((index) =>
-            closeEnough(pixel[order][index], target[index]),
-          ),
+      ["bOrder", "aOrder"].find((order) =>
+        [0, 1, 2].every((index) =>
+          closeEnough(pixel[order][index], target[index]),
+        ),
       ) ?? null;
     // The capture is usable only when a window pixel with no native view on
     // it reads as the app background. Anything else means no usable frames.

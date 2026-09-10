@@ -206,11 +206,7 @@ export function computePreviewLayout(input) {
 
   // The fit uses the full element pane, never the clipped slice, so clipping
   // during scroll cannot change the page scale.
-  const scale = Math.min(
-    1,
-    full.width / pixelWidth,
-    full.height / pixelHeight,
-  );
+  const scale = Math.min(1, full.width / pixelWidth, full.height / pixelHeight);
   const viewWidth = Math.max(1, Math.round(pixelWidth * scale));
   const viewHeight = Math.max(1, Math.round(pixelHeight * scale));
   const offsetX = Math.round((full.width - viewWidth) / 2);

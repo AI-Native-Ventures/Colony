@@ -8,10 +8,7 @@
  */
 
 import type { WebsitePendingDecision } from "./reviewLogic";
-import type {
-  WebsiteDecisionReceipt,
-  WebsiteDecisionRequest,
-} from "./types";
+import type { WebsiteDecisionReceipt, WebsiteDecisionRequest } from "./types";
 
 export type WebsiteDecisionFailure = {
   message: string;

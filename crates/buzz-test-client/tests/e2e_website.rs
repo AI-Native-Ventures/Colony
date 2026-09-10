@@ -186,8 +186,7 @@ async fn create_channel(keys: &Keys) -> String {
     let event = EventBuilder::new(Kind::Custom(9007), "")
         .tags(vec![
             Tag::parse(["h", channel_uuid.to_string().as_str()]).expect("h tag"),
-            Tag::parse(["name", format!("website-e2e-{channel_uuid}").as_str()])
-                .expect("name tag"),
+            Tag::parse(["name", format!("website-e2e-{channel_uuid}").as_str()]).expect("name tag"),
             Tag::parse(["channel_type", "stream"]).expect("type tag"),
             Tag::parse(["visibility", "open"]).expect("visibility tag"),
         ])
@@ -259,7 +258,10 @@ async fn bundled_website_job_manifest(client: &mut BuzzTestClient, relay: &str) 
         .kind(Kind::Custom(KIND_BLOCK_MANIFEST as u16))
         .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
         .limit(100);
-    client.subscribe(&id, vec![filter]).await.expect("subscribe");
+    client
+        .subscribe(&id, vec![filter])
+        .await
+        .expect("subscribe");
     let events = client
         .collect_until_eose(&id, Duration::from_secs(10))
         .await
@@ -280,7 +282,10 @@ async fn await_task_root(client: &mut BuzzTestClient, task_id: &str, root: &str)
         let filter = Filter::new()
             .kind(Kind::Custom(KIND_TASK as u16))
             .limit(200);
-        client.subscribe(&id, vec![filter]).await.expect("subscribe");
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
         let events = client
             .collect_until_eose(&id, Duration::from_secs(5))
             .await
@@ -306,7 +311,10 @@ async fn event_by_id(client: &mut BuzzTestClient, event_id: &str) -> Option<nost
         let filter = Filter::new()
             .id(nostr::EventId::from_hex(event_id).expect("event id"))
             .limit(1);
-        client.subscribe(&id, vec![filter]).await.expect("subscribe");
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
         let events = client
             .collect_until_eose(&id, Duration::from_secs(5))
             .await
@@ -446,32 +454,29 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         "brief": brief,
     });
     let canonical = buzz_core::block::canonical_json(&data).expect("canonical instance data");
-    let instance_event = EventBuilder::new(
-        Kind::Custom(KIND_STREAM_MESSAGE as u16),
-        "Website job",
-    )
-    .tags(vec![
-        Tag::parse(["h", channel.as_str()]).expect("h tag"),
-        Tag::parse([
-            "block",
-            "1",
-            WEBSITE_JOB_BLOCK_HANDLE,
-            manifest_event_id.as_str(),
-            instance_id.to_string().as_str(),
+    let instance_event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "Website job")
+        .tags(vec![
+            Tag::parse(["h", channel.as_str()]).expect("h tag"),
+            Tag::parse([
+                "block",
+                "1",
+                WEBSITE_JOB_BLOCK_HANDLE,
+                manifest_event_id.as_str(),
+                instance_id.to_string().as_str(),
+            ])
+            .expect("block tag"),
+            Tag::parse(["block-data", canonical.as_str()]).expect("data tag"),
+            Tag::parse([
+                "block-processor",
+                "1",
+                coordinator.public_key().to_hex().as_str(),
+            ])
+            .expect("processor tag"),
+            Tag::parse(["p", owner.public_key().to_hex().as_str()]).expect("attention tag"),
+            Tag::parse(["e", thread_root.as_str(), "", "reply"]).expect("reply tag"),
         ])
-        .expect("block tag"),
-        Tag::parse(["block-data", canonical.as_str()]).expect("data tag"),
-        Tag::parse([
-            "block-processor",
-            "1",
-            coordinator.public_key().to_hex().as_str(),
-        ])
-        .expect("processor tag"),
-        Tag::parse(["p", owner.public_key().to_hex().as_str()]).expect("attention tag"),
-        Tag::parse(["e", thread_root.as_str(), "", "reply"]).expect("reply tag"),
-    ])
-    .sign_with_keys(&coordinator)
-    .expect("instance signs");
+        .sign_with_keys(&coordinator)
+        .expect("instance signs");
     let instance_event_id = instance_event.id.to_hex();
     assert!(
         send_past_transport_stall(client, instance_event, "review instance")
@@ -499,7 +504,10 @@ async fn await_receipt_task(client: &mut BuzzTestClient, relay: &str, action_id:
             .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
             .event(nostr::EventId::from_hex(action_id).expect("action id"))
             .limit(1);
-        client.subscribe(&id, vec![filter]).await.expect("subscribe");
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
         let events = client
             .collect_until_eose(&id, Duration::from_secs(5))
             .await
@@ -512,7 +520,9 @@ async fn await_receipt_task(client: &mut BuzzTestClient, relay: &str, action_id:
                 buzz_sdk::company::CompanyReceiptOutcome::Applied
             );
             let head_id = receipt.head_event_id.expect("attach names its head");
-            let head = event_by_id(client, &head_id).await.expect("task head stored");
+            let head = event_by_id(client, &head_id)
+                .await
+                .expect("task head stored");
             let task = parse_task_event(&head).expect("task parses");
             return task.id;
         }
@@ -580,11 +590,14 @@ async fn owner_create_commits_a_head_receipt_and_job_row() {
 
     let action = create_action(&fixture, &coordinator_hex);
     let ok = send_action(&mut client, &owner, &action).await;
-    assert!(ok.accepted, "owner create must be accepted: {:?}", ok.message);
+    assert!(
+        ok.accepted,
+        "owner create must be accepted: {:?}",
+        ok.message
+    );
     assert_eq!(job_row_generation(&fixture.task_id).await, Some(1));
 
-    let message: serde_json::Value =
-        serde_json::from_str(&ok.message).expect("result json");
+    let message: serde_json::Value = serde_json::from_str(&ok.message).expect("result json");
     let head_event_id = message["head_event_id"]
         .as_str()
         .expect("create receipt names its head");
@@ -687,7 +700,11 @@ async fn begin_work_requires_the_current_generation() {
     assert!(job_row_generation(&fixture.task_id).await == Some(1));
 
     let fresh = send_action(&mut client, &owner, &build_action(1)).await;
-    assert!(fresh.accepted, "the current generation is applied: {:?}", fresh.message);
+    assert!(
+        fresh.accepted,
+        "the current generation is applied: {:?}",
+        fresh.message
+    );
     assert_eq!(job_row_generation(&fixture.task_id).await, Some(2));
 }
 
@@ -771,6 +788,9 @@ async fn builder_and_reviewer_cannot_be_the_same_agent() {
         review_personas: vec![fixture.personas.build.clone()],
     };
     let ok = send_action(&mut client, &owner, &action).await;
-    assert!(!ok.accepted, "an overlapping build/review persona is refused");
+    assert!(
+        !ok.accepted,
+        "an overlapping build/review persona is refused"
+    );
     assert!(job_row_generation(&fixture.task_id).await.is_none());
 }

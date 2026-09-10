@@ -166,9 +166,7 @@ impl WebsiteHandover {
             if access
                 .text
                 .chars()
-                .any(|character| {
-                    character.is_control() && !matches!(character, '\n' | '\r' | '\t')
-                })
+                .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
             {
                 return Err(WebsiteError::InvalidHandover("accessRequest"));
             }
@@ -260,7 +258,10 @@ impl WebsiteReview {
             }
             revision.validate()?;
         }
-        let highest = self.revisions.last().map_or(0, |revision| revision.revision);
+        let highest = self
+            .revisions
+            .last()
+            .map_or(0, |revision| revision.revision);
         if self.current_revision != highest {
             return Err(WebsiteError::CurrentRevisionMismatch(
                 highest,
@@ -332,9 +333,7 @@ impl WebsiteReview {
                 return Err(WebsiteError::MissingActiveApproval(self.status.as_str()));
             }
             (Some(_), _) => {
-                return Err(WebsiteError::UnexpectedActiveApproval(
-                    self.status.as_str(),
-                ))
+                return Err(WebsiteError::UnexpectedActiveApproval(self.status.as_str()))
             }
             (None, _) => {}
         }
@@ -501,7 +500,11 @@ fn validate_scope_string(field: &'static str, value: &str) -> Result<(), Website
         return Err(WebsiteError::EmptyField(field));
     }
     if value.len() > MAX_SCOPE_LEN {
-        return Err(WebsiteError::FieldTooLong(field, value.len(), MAX_SCOPE_LEN));
+        return Err(WebsiteError::FieldTooLong(
+            field,
+            value.len(),
+            MAX_SCOPE_LEN,
+        ));
     }
     Ok(())
 }

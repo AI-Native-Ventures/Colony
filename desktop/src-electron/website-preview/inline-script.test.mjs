@@ -21,7 +21,7 @@ test("hashes exact inline script bytes and skips external scripts", () => {
 
 test("hashes inline event handler values after entity decoding", () => {
   const html =
-    '<button onclick="go(&quot;a&quot;)">x</button><a onmouseover=\'tick()\'>y</a>';
+    "<button onclick=\"go(&quot;a&quot;)\">x</button><a onmouseover='tick()'>y</a>";
   const result = collectInlineAuthorizations(Buffer.from(html, "utf8"));
   assert.deepEqual(result.handlerHashes, [
     tokenFor('go("a")'),

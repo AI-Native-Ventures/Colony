@@ -1,9 +1,6 @@
 import * as React from "react";
 
-import type {
-  WebsiteClipBounds,
-  WebsiteHostBoundsProvider,
-} from "./types";
+import type { WebsiteClipBounds, WebsiteHostBoundsProvider } from "./types";
 
 /**
  * Read the true scrolling surface the app shell exposes for native preview

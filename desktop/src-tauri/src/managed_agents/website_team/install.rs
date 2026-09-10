@@ -31,9 +31,9 @@ use super::recipe::{
 };
 use super::skills::{install_recipe_skills, InstalledWebsiteSkill};
 use super::{
-    agent_request_id, InstalledWebsitePersona, InstallWebsiteTeamRequest,
-    InstallWebsiteTeamResult, PublicationEntry, WebsiteTeamPublication, PUBLICATION_MISSING,
-    PUBLICATION_PUBLISHED, PUBLICATION_QUEUED,
+    agent_request_id, InstallWebsiteTeamRequest, InstallWebsiteTeamResult, InstalledWebsitePersona,
+    PublicationEntry, WebsiteTeamPublication, PUBLICATION_MISSING, PUBLICATION_PUBLISHED,
+    PUBLICATION_QUEUED,
 };
 
 static INSTALL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -85,9 +85,7 @@ async fn install_inner(
 ) -> Result<InstallWebsiteTeamResult, String> {
     let scope = active_retention_scope(app, state)?;
     if scope.relay_url.trim().is_empty() {
-        return Err(
-            "Select a community before installing the Website Manager team.".to_string(),
-        );
+        return Err("Select a community before installing the Website Manager team.".to_string());
     }
     let owner = scope.owner_keys.public_key().to_hex();
     let canonical_relay = canonical(&scope.relay_url);
@@ -389,8 +387,7 @@ pub(super) fn ensure_team_members(team: &mut TeamRecord, now: &str) -> bool {
             .iter()
             .any(|member| member == recipe_persona.persona_id)
         {
-            team.persona_ids
-                .push(recipe_persona.persona_id.to_string());
+            team.persona_ids.push(recipe_persona.persona_id.to_string());
             changed = true;
         }
     }
@@ -555,7 +552,13 @@ fn reconcile_expected(
     persona: &RecipePersona,
     ctx: &InstallContext<'_>,
 ) -> Result<(), String> {
-    record_matches_install(record, persona, &ctx.team_id, &ctx.owner, &ctx.canonical_relay)
+    record_matches_install(
+        record,
+        persona,
+        &ctx.team_id,
+        &ctx.owner,
+        &ctx.canonical_relay,
+    )
 }
 
 /// Pure identity check for the reconcile path: the record must carry the exact

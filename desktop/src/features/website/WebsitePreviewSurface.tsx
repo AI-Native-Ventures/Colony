@@ -123,7 +123,9 @@ function VerifiedCaptureImage({
 }) {
   const state = useVerifiedArtifact({ artifact, loader, enabled });
   if (!artifact) {
-    return <ErrorOverlay message="No saved image is recorded for this version." />;
+    return (
+      <ErrorOverlay message="No saved image is recorded for this version." />
+    );
   }
   if (state.status === "idle") {
     return (
@@ -212,7 +214,9 @@ export function WebsitePreviewSurface({
       : viewport === "mobile"
         ? (revision?.captures.mobile ?? null)
         : (revision?.captures.desktop ?? null);
-  const versionLabel = revision ? `Version ${revision.revision}` : "this version";
+  const versionLabel = revision
+    ? `Version ${revision.revision}`
+    : "this version";
   const alt =
     comparison === "before"
       ? `Saved image of the original site for ${versionLabel}`
@@ -237,10 +241,7 @@ export function WebsitePreviewSurface({
       )[host.status];
 
   return (
-    <div
-      className={cn("relative mx-auto w-full", className)}
-      ref={wrapperRef}
-    >
+    <div className={cn("relative mx-auto w-full", className)} ref={wrapperRef}>
       <div
         className="relative mx-auto w-full overflow-hidden rounded-md border border-border bg-muted/20"
         style={{

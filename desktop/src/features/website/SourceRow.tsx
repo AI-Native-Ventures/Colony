@@ -37,7 +37,10 @@ export function WebsiteSourceRow({
         className,
       )}
     >
-      <Globe2 aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+      <Globe2
+        aria-hidden="true"
+        className="size-4 shrink-0 text-muted-foreground"
+      />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm text-foreground">
           {hostname(record.sourceUrl)}

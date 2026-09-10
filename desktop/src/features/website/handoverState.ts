@@ -22,13 +22,11 @@ export type WebsiteHandoverDraftState =
   | { status: "returned"; view: WebsiteHandoverReturnedView }
   | { status: "failed"; message: string };
 
-export type WebsiteHandoverDownloadState =
-  | {
-      resourceId: string;
-      status: "downloading" | "done" | "failed";
-      message?: string;
-    }
-  | null;
+export type WebsiteHandoverDownloadState = {
+  resourceId: string;
+  status: "downloading" | "done" | "failed";
+  message?: string;
+} | null;
 
 export type WebsiteHandoverLocalState = {
   scopeKey: string;

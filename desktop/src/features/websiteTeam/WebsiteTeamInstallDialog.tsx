@@ -92,16 +92,12 @@ export function WebsiteTeamInstallDialog({
   const assessment = run ? assessInstall(run.result) : null;
   const startSummary = run ? summarizeAgentStarts(run.starts) : null;
   const startByPersona = new Map(
-    (run?.starts ?? []).map(
-      (outcome) => [outcome.personaId, outcome] as const,
-    ),
+    (run?.starts ?? []).map((outcome) => [outcome.personaId, outcome] as const),
   );
   const selectedChannel =
     channels.find((channel) => channel.id === channelId) ?? null;
   const canInstall =
-    Boolean(selectedChannel) &&
-    Boolean(recipe) &&
-    !installMutation.isPending;
+    Boolean(selectedChannel) && Boolean(recipe) && !installMutation.isPending;
 
   async function handleInstall() {
     if (!selectedChannel || !recipe) {
@@ -168,7 +164,9 @@ export function WebsiteTeamInstallDialog({
             {installStatusQuery.data ? (
               <p className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
                 Already installed in this community on{" "}
-                {new Date(installStatusQuery.data.updated_at).toLocaleDateString()}
+                {new Date(
+                  installStatusQuery.data.updated_at,
+                ).toLocaleDateString()}
                 . Installing again reconciles the same team, agents, and skills
                 instead of creating duplicates.
               </p>
@@ -213,9 +211,7 @@ export function WebsiteTeamInstallDialog({
               </label>
               <select
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
-                disabled={
-                  channels.length === 0 || installMutation.isPending
-                }
+                disabled={channels.length === 0 || installMutation.isPending}
                 id="website-team-channel"
                 onChange={(event) => setChannelId(event.target.value)}
                 value={channelId}
@@ -341,8 +337,8 @@ export function WebsiteTeamInstallDialog({
                   <p className="text-xs text-muted-foreground">
                     {startSummary.started} of {run.starts.length} teammates
                     running. Retry after fixing your agent defaults or Power
-                    configuration; installation is already complete and will
-                    not duplicate anyone.
+                    configuration; installation is already complete and will not
+                    duplicate anyone.
                   </p>
                 ) : null}
 

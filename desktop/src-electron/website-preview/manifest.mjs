@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { classifyHost, isBlockedHostName, isPrivateAddress } from "./address.mjs";
+import {
+  classifyHost,
+  isBlockedHostName,
+  isPrivateAddress,
+} from "./address.mjs";
 import { PreviewArtifactError } from "./errors.mjs";
 
 /** Exact schema string for preview manifests. */
@@ -71,7 +75,7 @@ function requirePlainObject(value, fields, label, code) {
     }
   }
   for (const key of fields) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+    if (!Object.hasOwn(value, key)) {
       throw new PreviewArtifactError(
         code,
         `${label} is missing field ${JSON.stringify(key)}`,
@@ -129,12 +133,18 @@ export function validateAssetPath(path) {
     throw invalidPath(path, "must be at most 1024 bytes");
   }
   if (path.startsWith("/") || path.endsWith("/")) {
-    throw invalidPath(path, "must be relative without a leading or trailing slash");
+    throw invalidPath(
+      path,
+      "must be relative without a leading or trailing slash",
+    );
   }
-  if (path.includes("\\")) throw invalidPath(path, "must not contain a backslash");
-  if (path.includes("%")) throw invalidPath(path, "must not contain percent encoding");
+  if (path.includes("\\"))
+    throw invalidPath(path, "must not contain a backslash");
+  if (path.includes("%"))
+    throw invalidPath(path, "must not contain percent encoding");
   if (path.includes("?")) throw invalidPath(path, "must not contain a query");
-  if (path.includes("#")) throw invalidPath(path, "must not contain a fragment");
+  if (path.includes("#"))
+    throw invalidPath(path, "must not contain a fragment");
   for (const character of path) {
     const code = character.codePointAt(0);
     if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
@@ -142,9 +152,12 @@ export function validateAssetPath(path) {
     }
   }
   for (const segment of path.split("/")) {
-    if (segment === "") throw invalidPath(path, "must not contain an empty segment");
-    if (segment === ".") throw invalidPath(path, "must not contain a dot segment");
-    if (segment === "..") throw invalidPath(path, "must not contain a parent segment");
+    if (segment === "")
+      throw invalidPath(path, "must not contain an empty segment");
+    if (segment === ".")
+      throw invalidPath(path, "must not contain a dot segment");
+    if (segment === "..")
+      throw invalidPath(path, "must not contain a parent segment");
     if (segment.endsWith(" ") || segment.endsWith(".")) {
       throw invalidPath(path, "segments must not end in a space or dot");
     }
@@ -216,9 +229,17 @@ export function validatePublicUrl(value) {
 
 /** Validate an artifact ref `{url, sha256}`; the hash covers raw bytes. */
 export function validateArtifactRef(value) {
-  const ref = requirePlainObject(value, REF_FIELDS, "artifact ref", "ref_invalid");
+  const ref = requirePlainObject(
+    value,
+    REF_FIELDS,
+    "artifact ref",
+    "ref_invalid",
+  );
   if (typeof ref.url !== "string") {
-    throw new PreviewArtifactError("ref_invalid", "artifact ref url must be a string");
+    throw new PreviewArtifactError(
+      "ref_invalid",
+      "artifact ref url must be a string",
+    );
   }
   validatePublicUrl(ref.url);
   validateSha256(ref.sha256);
@@ -256,7 +277,12 @@ export function parsePreviewManifest(bytes) {
     );
   }
 
-  const manifest = requirePlainObject(value, MANIFEST_FIELDS, "manifest", "manifest_json");
+  const manifest = requirePlainObject(
+    value,
+    MANIFEST_FIELDS,
+    "manifest",
+    "manifest_json",
+  );
   if (manifest.schema !== PREVIEW_SCHEMA) {
     throw new PreviewArtifactError(
       "manifest_schema",
@@ -265,7 +291,10 @@ export function parsePreviewManifest(bytes) {
     );
   }
   if (typeof manifest.entrypoint !== "string") {
-    throw new PreviewArtifactError("manifest_json", "entrypoint must be a string");
+    throw new PreviewArtifactError(
+      "manifest_json",
+      "entrypoint must be a string",
+    );
   }
   if (!Array.isArray(manifest.files)) {
     throw new PreviewArtifactError("manifest_json", "files must be an array");

@@ -8,8 +8,8 @@
 
 use buzz_core::kind::KIND_WEBSITE_HEAD;
 use buzz_core::website::{
-    sha256_hex, HandoverAccessRequest, HandoverAsset, PreviewArtifactRef, Stage,
-    StageEvidenceKind, WebsiteAction, WebsiteActionOp, WebsiteCaptures, MAX_ACCESS_REQUEST_CHARS,
+    sha256_hex, HandoverAccessRequest, HandoverAsset, PreviewArtifactRef, Stage, StageEvidenceKind,
+    WebsiteAction, WebsiteActionOp, WebsiteCaptures, MAX_ACCESS_REQUEST_CHARS,
 };
 use nostr::EventBuilder;
 use serde_json::Value;
@@ -354,13 +354,17 @@ async fn cmd_revision(
         }
     };
     let op = wire.into_op(default_revision)?;
-    cmd_mutation(client, &WebsiteCmd::Revision {
-        channel: channel.to_owned(),
-        task: task.to_owned(),
-        thread: thread.to_owned(),
-        generation,
-        file: file.to_owned(),
-    }, op)
+    cmd_mutation(
+        client,
+        &WebsiteCmd::Revision {
+            channel: channel.to_owned(),
+            task: task.to_owned(),
+            thread: thread.to_owned(),
+            generation,
+            file: file.to_owned(),
+        },
+        op,
+    )
     .await
 }
 
@@ -376,13 +380,17 @@ async fn cmd_handover(
     let op: WebsiteActionOp = serde_json::from_value::<HandoverWire>(value)
         .map_err(|error| CliError::Usage(format!("invalid handover file: {error}")))?
         .into_op()?;
-    cmd_mutation(client, &WebsiteCmd::Handover {
-        channel: channel.to_owned(),
-        task: task.to_owned(),
-        thread: thread.to_owned(),
-        generation,
-        file: file.to_owned(),
-    }, op)
+    cmd_mutation(
+        client,
+        &WebsiteCmd::Handover {
+            channel: channel.to_owned(),
+            task: task.to_owned(),
+            thread: thread.to_owned(),
+            generation,
+            file: file.to_owned(),
+        },
+        op,
+    )
     .await
 }
 
@@ -512,11 +520,9 @@ async fn cmd_list(client: &BuzzClient, channel: &str, limit: Option<u32>) -> Res
 /// Dispatch `buzz website` subcommands.
 pub async fn dispatch(cmd: WebsiteCmd, client: &BuzzClient) -> Result<(), CliError> {
     match cmd {
-        WebsiteCmd::Get {
-            channel,
-            task,
-            job,
-        } => cmd_get(client, &channel, task.as_deref(), job.as_deref()).await,
+        WebsiteCmd::Get { channel, task, job } => {
+            cmd_get(client, &channel, task.as_deref(), job.as_deref()).await
+        }
         WebsiteCmd::List { channel, limit } => cmd_list(client, &channel, limit).await,
         WebsiteCmd::Create {
             channel,
@@ -579,7 +585,13 @@ pub async fn dispatch(cmd: WebsiteCmd, client: &BuzzClient) -> Result<(), CliErr
                     thread,
                     generation,
                     file,
-                } => (channel.clone(), task.clone(), thread.clone(), *generation, file.clone()),
+                } => (
+                    channel.clone(),
+                    task.clone(),
+                    thread.clone(),
+                    *generation,
+                    file.clone(),
+                ),
                 _ => unreachable!("matched revision"),
             };
             cmd_revision(client, &channel, &task, &thread, generation, &file).await
@@ -592,7 +604,13 @@ pub async fn dispatch(cmd: WebsiteCmd, client: &BuzzClient) -> Result<(), CliErr
                     thread,
                     generation,
                     file,
-                } => (channel.clone(), task.clone(), thread.clone(), *generation, file.clone()),
+                } => (
+                    channel.clone(),
+                    task.clone(),
+                    thread.clone(),
+                    *generation,
+                    file.clone(),
+                ),
                 _ => unreachable!("matched handover"),
             };
             cmd_handover(client, &channel, &task, &thread, generation, &file).await

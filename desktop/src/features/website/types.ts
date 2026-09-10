@@ -184,7 +184,12 @@ export type WebsiteAgentIdentity = {
 
 export type WebsiteAgentDirectory = ReadonlyMap<string, WebsiteAgentIdentity>;
 
-export type WebsiteStageState = "done" | "working" | "next" | "then" | "blocked";
+export type WebsiteStageState =
+  | "done"
+  | "working"
+  | "next"
+  | "then"
+  | "blocked";
 
 export type WebsiteStageRow = {
   id: string;
@@ -317,9 +322,7 @@ export type WebsitePreviewHostHandle = {
    * failure, and close after the promise from `attach`. A late event from a
    * previous handle must never affect the current surface.
    */
-  subscribe?(
-    listener: (state: WebsiteNativeHandleState) => void,
-  ): () => void;
+  subscribe?(listener: (state: WebsiteNativeHandleState) => void): () => void;
 };
 
 /**

@@ -69,7 +69,13 @@ export type InstalledWebsitePersona = {
 export type InstalledWebsiteSkill = {
   name: string;
   path: string;
-  status: "installed" | "updated" | "unchanged" | "preserved" | "failed" | string;
+  status:
+    | "installed"
+    | "updated"
+    | "unchanged"
+    | "preserved"
+    | "failed"
+    | string;
   detail: string | null;
 };
 

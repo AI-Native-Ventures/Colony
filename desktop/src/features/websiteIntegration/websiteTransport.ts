@@ -25,10 +25,7 @@ import type {
   WebsiteDecisionRequest,
 } from "@/features/website/types";
 
-import {
-  websiteHeadsStore,
-  type WebsiteHead,
-} from "./websiteHeads";
+import { websiteHeadsStore, type WebsiteHead } from "./websiteHeads";
 
 const LOST_RECEIPT_GRACE_MS = 4_000;
 const WEBSITE_ACTION_SCHEMA = "colony.website-action/v1";
@@ -36,8 +33,7 @@ const WEBSITE_JOB_BLOCK_HANDLE = "website-job";
 const WEBSITE_APPROVE_ACTION_ID = "website.approve";
 const WEBSITE_REQUEST_CHANGES_ACTION_ID = "website.request-changes";
 const HEX_64 = /^[0-9a-f]{64}$/;
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export type WebsiteInstanceRef = {
   instanceEventId: string;
@@ -104,8 +100,7 @@ export function websiteInstanceRefFromMessage(input: {
     instanceEventId: head.instanceEventId,
     instanceId: parsed.value.instanceId,
     manifestId: parsed.value.manifestId,
-    processorPubkey:
-      parsed.value.processorPubkey ?? head.coordinatorPubkey,
+    processorPubkey: parsed.value.processorPubkey ?? head.coordinatorPubkey,
   };
 }
 
@@ -138,8 +133,7 @@ export function resolveWebsiteInstanceRef(
       instanceEventId: head.instanceEventId,
       instanceId: parsed.value.instanceId,
       manifestId: parsed.value.manifestId,
-      processorPubkey:
-        parsed.value.processorPubkey ?? head.coordinatorPubkey,
+      processorPubkey: parsed.value.processorPubkey ?? head.coordinatorPubkey,
     };
   })().catch(() => null);
   instanceRefCache.set(head.instanceEventId, request);
@@ -168,7 +162,10 @@ function requestScopeMatchesHead(
   );
 }
 
-function decisionRecorded(head: WebsiteHead, request: WebsiteDecisionRequest): boolean {
+function decisionRecorded(
+  head: WebsiteHead,
+  request: WebsiteDecisionRequest,
+): boolean {
   return head.record.decisions.some(
     (decision) =>
       decision.kind === request.kind &&
@@ -234,8 +231,7 @@ export async function submitWebsiteDecision(
       "This decision does not match the current website version.",
     );
   }
-  const instance =
-    input.instance ?? (await resolveWebsiteInstanceRef(head));
+  const instance = input.instance ?? (await resolveWebsiteInstanceRef(head));
   if (!instance) {
     throw new Error(
       "The pinned review card could not be verified, so the decision was not sent.",

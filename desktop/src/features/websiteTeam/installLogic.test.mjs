@@ -204,11 +204,17 @@ test("summarizeAgentStarts separates running from needs-configuration", () => {
 
 test("starterPromptFor falls back to the recipe example", () => {
   assert.equal(
-    starterPromptFor({ starterPrompt: "  Redo the pricing page  " }, { examplePrompt: "Improve my website" }),
+    starterPromptFor(
+      { starterPrompt: "  Redo the pricing page  " },
+      { examplePrompt: "Improve my website" },
+    ),
     "Redo the pricing page",
   );
   assert.equal(
-    starterPromptFor({ starterPrompt: null }, { examplePrompt: "Improve my website" }),
+    starterPromptFor(
+      { starterPrompt: null },
+      { examplePrompt: "Improve my website" },
+    ),
     "Improve my website",
   );
 });

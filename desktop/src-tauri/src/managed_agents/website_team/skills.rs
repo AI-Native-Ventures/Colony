@@ -85,7 +85,11 @@ fn install_one(root: &Path, skill: &RecipeSkill) -> InstalledWebsiteSkill {
 
     let existing = fs::read_to_string(&target).ok();
     let has_existing = existing.is_some();
-    let mut status = if has_existing { "unchanged" } else { "installed" };
+    let mut status = if has_existing {
+        "unchanged"
+    } else {
+        "installed"
+    };
     let mut detail = None;
 
     let should_write = match existing.as_deref() {
@@ -97,16 +101,15 @@ fn install_one(root: &Path, skill: &RecipeSkill) -> InstalledWebsiteSkill {
         }
         Some(content) => {
             let existing_hash = sha256_hex(content.as_bytes());
-            let ours = read_marker(&marker_path)
-                .is_some_and(|marker| marker.sha256 == existing_hash);
+            let ours =
+                read_marker(&marker_path).is_some_and(|marker| marker.sha256 == existing_hash);
             if ours {
                 status = "updated";
                 true
             } else {
                 status = "preserved";
-                detail = Some(
-                    "Kept your edited copy; the bundled recipe was not applied.".to_string(),
-                );
+                detail =
+                    Some("Kept your edited copy; the bundled recipe was not applied.".to_string());
                 false
             }
         }
@@ -190,7 +193,10 @@ fn ensure_provider_links(_root: &Path, _name: &str) -> Result<(), String> {
 /// Never fails the whole install: a per-skill filesystem error is reported in
 /// that skill's outcome so the UI can show the real state.
 pub fn install_recipe_skills(root: &Path) -> Vec<InstalledWebsiteSkill> {
-    SKILLS.iter().map(|skill| install_one(root, skill)).collect()
+    SKILLS
+        .iter()
+        .map(|skill| install_one(root, skill))
+        .collect()
 }
 
 #[cfg(test)]
@@ -224,7 +230,10 @@ mod tests {
         fs::write(dir.join("SKILL.md"), "my edited runbook").unwrap();
 
         let outcomes = install_recipe_skills(root.path());
-        let research = outcomes.iter().find(|skill| skill.name == "website-research").unwrap();
+        let research = outcomes
+            .iter()
+            .find(|skill| skill.name == "website-research")
+            .unwrap();
         assert_eq!(research.status, "preserved");
         assert_eq!(
             fs::read_to_string(dir.join("SKILL.md")).unwrap(),
@@ -242,7 +251,10 @@ mod tests {
         fs::write(dir.join("SKILL.md"), "an older bundled runbook").unwrap();
 
         let outcomes = install_recipe_skills(root.path());
-        let research = outcomes.iter().find(|skill| skill.name == "website-research").unwrap();
+        let research = outcomes
+            .iter()
+            .find(|skill| skill.name == "website-research")
+            .unwrap();
         assert_eq!(research.status, "updated");
         assert!(fs::read_to_string(dir.join("SKILL.md"))
             .unwrap()

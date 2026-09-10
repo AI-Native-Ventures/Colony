@@ -147,10 +147,7 @@ test("a pending dispatch disables both controls for the owner", () => {
 test("a stale selection disables both controls", () => {
   const record = makeRecord({
     currentRevision: 2,
-    revisions: [
-      makeRevision(),
-      makeRevision({ revision: 2, qa: undefined }),
-    ],
+    revisions: [makeRevision(), makeRevision({ revision: 2, qa: undefined })],
   });
   const eligibility = evaluateDecisionEligibility({
     record,
@@ -226,7 +223,11 @@ test("a pending decision goes invalid when the head moves", () => {
     currentRevision: 2,
     revisions: [
       makeRevision(),
-      makeRevision({ revision: 2, preview: { url: "https://cdn.example.com/m2", sha256: "7".repeat(64) }, qa: undefined }),
+      makeRevision({
+        revision: 2,
+        preview: { url: "https://cdn.example.com/m2", sha256: "7".repeat(64) },
+        qa: undefined,
+      }),
     ],
   });
   const resolution = resolvePendingDecision({ record, pending });
@@ -248,13 +249,14 @@ test("retry revalidation refuses a request that is no longer authorized", () => 
 test("retry revalidation refuses a request for an older revision", () => {
   const record = makeRecord({
     currentRevision: 2,
-    revisions: [
-      makeRevision(),
-      makeRevision({ revision: 2, qa: undefined }),
-    ],
+    revisions: [makeRevision(), makeRevision({ revision: 2, qa: undefined })],
   });
   const stale = request();
-  const check = revalidateDecisionRequest({ record, request: stale, actor: OWNER });
+  const check = revalidateDecisionRequest({
+    record,
+    request: stale,
+    actor: OWNER,
+  });
   assert.equal(check.ok, false);
   assert.equal(check.code, "stale_revision");
 });

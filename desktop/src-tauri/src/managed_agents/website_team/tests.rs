@@ -69,7 +69,10 @@ fn team_ids_are_per_community() {
     let one = team_id_for_relay("wss://one.example").unwrap();
     assert_eq!(one, team_id_for_relay("wss://one.example/").unwrap());
     assert_ne!(one, team_id_for_relay("wss://two.example").unwrap());
-    assert!(team_id_for_relay("   ").is_none(), "a blank relay is not a community");
+    assert!(
+        team_id_for_relay("   ").is_none(),
+        "a blank relay is not a community"
+    );
 }
 
 #[test]
@@ -92,8 +95,9 @@ fn reconcile_accepts_the_exact_row_and_rejects_crossed_rows() {
             "community" => crossed.relay_url = "wss://two.example".to_string(),
             _ => unreachable!(),
         }
-        let error = record_matches_install(&crossed, persona, &team_id, &owner, "wss://one.example")
-            .expect_err("a crossed identity must be rejected");
+        let error =
+            record_matches_install(&crossed, persona, &team_id, &owner, "wss://one.example")
+                .expect_err("a crossed identity must be rejected");
         assert!(
             error.contains(field),
             "error should name the {field} mismatch: {error}"
@@ -114,9 +118,15 @@ fn existing_team_edits_survive_reconcile() {
     assert_eq!(existing.description.as_deref(), Some("keep this"));
     assert_eq!(existing.instructions.as_deref(), Some("keep these"));
     for persona in PERSONAS {
-        assert!(existing.persona_ids.iter().any(|id| id == persona.persona_id));
+        assert!(existing
+            .persona_ids
+            .iter()
+            .any(|id| id == persona.persona_id));
     }
-    assert_eq!(existing.lead_persona_id.as_deref(), Some(PERSONAS[0].persona_id));
+    assert_eq!(
+        existing.lead_persona_id.as_deref(),
+        Some(PERSONAS[0].persona_id)
+    );
 
     // Second pass is a no-op: no duplicate members, no timestamp churn.
     let updated_at = existing.updated_at.clone();

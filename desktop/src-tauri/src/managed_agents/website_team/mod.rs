@@ -201,8 +201,7 @@ pub fn team_id_for_relay(relay_url: &str) -> Option<String> {
     if relay_url.trim().is_empty() {
         return None;
     }
-    let discriminator =
-        buzz_core_pkg::company_roster::relay_discriminator(&canonical(relay_url));
+    let discriminator = buzz_core_pkg::company_roster::relay_discriminator(&canonical(relay_url));
     Some(format!("website-team:{discriminator}:{TEAM_SLUG}"))
 }
 
@@ -214,8 +213,7 @@ pub fn team_id_for_relay(relay_url: &str) -> Option<String> {
 /// and the community discriminator are both part of the identity, so a second
 /// owner or a second community never collides with the first install.
 pub fn agent_request_id(owner_pubkey: &str, relay_url: &str, persona_id: &str) -> String {
-    let discriminator =
-        buzz_core_pkg::company_roster::relay_discriminator(&canonical(relay_url));
+    let discriminator = buzz_core_pkg::company_roster::relay_discriminator(&canonical(relay_url));
     format!(
         "website-team:{}:{discriminator}:{persona_id}",
         owner_pubkey.trim().to_lowercase()

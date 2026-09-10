@@ -38,46 +38,34 @@ test("no overlay means no occlusion", () => {
 });
 
 test("any dialog, open menu, or popover occludes", () => {
-  withDocument(
-    { querySelectorAll: () => [{}] },
-    () => {
-      assert.equal(isSurfaceOccluded(), true);
-    },
-  );
+  withDocument({ querySelectorAll: () => [{}] }, () => {
+    assert.equal(isSurfaceOccluded(), true);
+  });
 });
 
 test("only the exact own dialog node is exempt", () => {
   const ownDialog = {};
-  withDocument(
-    { querySelectorAll: () => [ownDialog] },
-    () => {
-      assert.equal(isSurfaceOccluded(ownDialog), false);
-    },
-  );
+  withDocument({ querySelectorAll: () => [ownDialog] }, () => {
+    assert.equal(isSurfaceOccluded(ownDialog), false);
+  });
 });
 
 test("a nested overlay inside the expanded dialog still occludes", () => {
   const ownDialog = {};
   const nestedMenu = { parent: ownDialog };
-  withDocument(
-    { querySelectorAll: () => [nestedMenu] },
-    () => {
-      assert.equal(
-        isSurfaceOccluded(ownDialog),
-        true,
-        "a menu inside the dialog paints above it and must hide native content",
-      );
-    },
-  );
+  withDocument({ querySelectorAll: () => [nestedMenu] }, () => {
+    assert.equal(
+      isSurfaceOccluded(ownDialog),
+      true,
+      "a menu inside the dialog paints above it and must hide native content",
+    );
+  });
 });
 
 test("a sibling dialog is never exempted by another dialog's node", () => {
   const ownDialog = {};
   const siblingDialog = {};
-  withDocument(
-    { querySelectorAll: () => [siblingDialog] },
-    () => {
-      assert.equal(isSurfaceOccluded(ownDialog), true);
-    },
-  );
+  withDocument({ querySelectorAll: () => [siblingDialog] }, () => {
+    assert.equal(isSurfaceOccluded(ownDialog), true);
+  });
 });

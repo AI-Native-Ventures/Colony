@@ -71,7 +71,10 @@ async fn fetch_inner(url: &str) -> Result<Vec<u8>, String> {
         }
 
         if !status.is_success() {
-            return Err(format!("artifact fetch failed with HTTP {}", status.as_u16()));
+            return Err(format!(
+                "artifact fetch failed with HTTP {}",
+                status.as_u16()
+            ));
         }
         return read_capped(response, MAX_FETCH_BYTES).await;
     }
@@ -94,8 +97,12 @@ fn validate_hop(origin_host: &str, next: &Url) -> Result<(), String> {
     }
     // Core policy rejects userinfo, fragments, and hosts it can prove are not
     // publicly routable, including private IPv6 literals in brackets.
-    validate_public_url(next.as_str())
-        .map_err(|error| format!("artifact redirect is not publicly routable: {}", error.code()))
+    validate_public_url(next.as_str()).map_err(|error| {
+        format!(
+            "artifact redirect is not publicly routable: {}",
+            error.code()
+        )
+    })
 }
 
 async fn fetch_once(url: &Url) -> Result<reqwest::Response, String> {
@@ -133,10 +140,7 @@ async fn resolve_public(host: &str, port: u16) -> Result<IpAddr, String> {
     let address = addresses
         .first()
         .ok_or_else(|| "artifact host resolved to no addresses".to_owned())?;
-    if addresses
-        .iter()
-        .any(|address| is_private_ip(&address.ip()))
-    {
+    if addresses.iter().any(|address| is_private_ip(&address.ip())) {
         return Err("artifact host resolved to a non-public address".to_owned());
     }
     Ok(address.ip())
@@ -167,10 +171,7 @@ async fn read_capped(mut response: reqwest::Response, cap: usize) -> Result<Vec<
 ///
 /// Extracted so the deadline arithmetic is unit-testable without a network.
 #[cfg(test)]
-fn remaining_before(
-    deadline: tokio::time::Instant,
-    now: tokio::time::Instant,
-) -> Option<Duration> {
+fn remaining_before(deadline: tokio::time::Instant, now: tokio::time::Instant) -> Option<Duration> {
     deadline.checked_duration_since(now)
 }
 

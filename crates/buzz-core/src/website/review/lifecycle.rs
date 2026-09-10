@@ -11,10 +11,10 @@
 use super::super::error::WebsiteError;
 use super::super::preview::{parse_preview_manifest, sha256_hex, validate_sha256, MAX_NOTE_LEN};
 use super::types::{
-    DecisionKind, DecisionOutcome, DecisionSubmission, QaEvidence, RevisionSubmission, StageEvidence,
-    WebsiteDecision, WebsiteHandover, WebsiteReview, WebsiteReviewInit, WebsiteRevision,
-    WebsiteStatus, MAX_DECISIONS, MAX_REVIEW_BYTES, MAX_REVISIONS, MAX_STAGE_EVIDENCE,
-    REVIEW_SCHEMA,
+    DecisionKind, DecisionOutcome, DecisionSubmission, QaEvidence, RevisionSubmission,
+    StageEvidence, WebsiteDecision, WebsiteHandover, WebsiteReview, WebsiteReviewInit,
+    WebsiteRevision, WebsiteStatus, MAX_DECISIONS, MAX_REVIEW_BYTES, MAX_REVISIONS,
+    MAX_STAGE_EVIDENCE, REVIEW_SCHEMA,
 };
 use super::validate::{
     require_passing_qa, validate_artifact_ref, validate_event_id, validate_identity,
@@ -22,8 +22,8 @@ use super::validate::{
 
 /// Refuse a candidate record whose serialized bytes exceed the record budget.
 fn require_record_budget(review: &WebsiteReview) -> Result<(), WebsiteError> {
-    let bytes = serde_json::to_vec(review)
-        .map_err(|error| WebsiteError::ReviewJson(error.to_string()))?;
+    let bytes =
+        serde_json::to_vec(review).map_err(|error| WebsiteError::ReviewJson(error.to_string()))?;
     if bytes.len() > MAX_REVIEW_BYTES {
         return Err(WebsiteError::ReviewTooLarge(bytes.len(), MAX_REVIEW_BYTES));
     }
@@ -97,10 +97,7 @@ impl WebsiteReview {
     /// bytes are hashed; `submission.preview.sha256` must match that hash. A
     /// new revision clears any active approval (the previous approval remains
     /// in `approvals` as history) and moves the status to `working`.
-    pub fn record_revision(
-        &mut self,
-        submission: RevisionSubmission,
-    ) -> Result<(), WebsiteError> {
+    pub fn record_revision(&mut self, submission: RevisionSubmission) -> Result<(), WebsiteError> {
         match self.status {
             WebsiteStatus::Working | WebsiteStatus::ChangesRequested => {}
             WebsiteStatus::ReadyForReview => {
@@ -112,9 +109,7 @@ impl WebsiteReview {
                 return Err(WebsiteError::RevisionAfterApproval(self.current_revision))
             }
             WebsiteStatus::HandedOver => {
-                return Err(WebsiteError::RevisionAfterHandover(
-                    self.current_revision,
-                ))
+                return Err(WebsiteError::RevisionAfterHandover(self.current_revision))
             }
             WebsiteStatus::Draft => {
                 return Err(WebsiteError::InvalidTransition(

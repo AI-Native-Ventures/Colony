@@ -45,7 +45,8 @@ function parseIpv6(address) {
     ];
   };
 
-  let head = sections[0] === "" ? [] : expandEmbeddedIpv4(sections[0].split(":"));
+  let head =
+    sections[0] === "" ? [] : expandEmbeddedIpv4(sections[0].split(":"));
   let tail = null;
   if (sections.length === 2) {
     tail = sections[1] === "" ? [] : expandEmbeddedIpv4(sections[1].split(":"));
@@ -99,7 +100,12 @@ function isPrivateIpv6(segments) {
     return isPrivateIpv4(embeddedIpv4(segments));
   }
   const nat64WellKnown =
-    s0 === 0x0064 && s1 === 0xff9b && s2 === 0 && s3 === 0 && s4 === 0 && s5 === 0;
+    s0 === 0x0064 &&
+    s1 === 0xff9b &&
+    s2 === 0 &&
+    s3 === 0 &&
+    s4 === 0 &&
+    s5 === 0;
   if (nat64WellKnown) return isPrivateIpv4(embeddedIpv4(segments));
   const ipv4Translated =
     s0 === 0 && s1 === 0 && s2 === 0 && s3 === 0 && s4 === 0xffff && s5 === 0;

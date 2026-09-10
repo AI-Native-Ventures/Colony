@@ -8,10 +8,7 @@ import {
   websiteAgentInitial,
 } from "./agentPresentation";
 import { resolveRevisionView } from "./viewLogic";
-import type {
-  WebsiteAgentDirectory,
-  WebsiteReviewRecord,
-} from "./types";
+import type { WebsiteAgentDirectory, WebsiteReviewRecord } from "./types";
 
 export type WebsiteRevisionProps = {
   record: WebsiteReviewRecord;

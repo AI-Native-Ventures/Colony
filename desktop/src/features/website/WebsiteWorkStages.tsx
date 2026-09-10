@@ -51,11 +51,11 @@ function StateIcon({ state }: { state: WebsiteStageRow["state"] }) {
     );
   }
   if (state === "blocked") {
-    return (
-      <CircleAlert aria-hidden="true" className="size-4 text-amber-600" />
-    );
+    return <CircleAlert aria-hidden="true" className="size-4 text-amber-600" />;
   }
-  return <CircleDot aria-hidden="true" className="size-4 text-muted-foreground" />;
+  return (
+    <CircleDot aria-hidden="true" className="size-4 text-muted-foreground" />
+  );
 }
 
 function EvidenceDetails({ rows }: { rows: readonly WebsiteStageRow[] }) {
@@ -126,9 +126,7 @@ function StageRowView({ row }: { row: WebsiteStageRow }) {
       <span
         className={cn(
           "text-2xs",
-          row.state === "working"
-            ? "text-foreground"
-            : "text-muted-foreground",
+          row.state === "working" ? "text-foreground" : "text-muted-foreground",
         )}
       >
         {STATE_LABEL[row.state]}
@@ -156,7 +154,10 @@ export function WebsiteWorkStages({
 
   if (allDone && !showAll) {
     return (
-      <section aria-label="Work stages" className={cn("flex flex-col", className)}>
+      <section
+        aria-label="Work stages"
+        className={cn("flex flex-col", className)}
+      >
         <div className="flex items-center justify-between gap-3 py-0.5">
           <span className="flex items-center gap-2 text-sm text-foreground">
             <Check aria-hidden="true" className="size-4 text-emerald-600" />
@@ -176,7 +177,10 @@ export function WebsiteWorkStages({
   }
 
   return (
-    <section aria-label="Work stages" className={cn("flex flex-col", className)}>
+    <section
+      aria-label="Work stages"
+      className={cn("flex flex-col", className)}
+    >
       <ol className="flex flex-col">
         {rows.map((row) => (
           <StageRowView key={row.id} row={row} />

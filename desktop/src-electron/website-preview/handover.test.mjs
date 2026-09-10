@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { MAX_FILE_BYTES, sha256Hex } from "./artifact.mjs";
-import {
-  HANDOVER_STAGING_PREFIX,
-  downloadHandover,
-} from "./handover.mjs";
+import { HANDOVER_STAGING_PREFIX, downloadHandover } from "./handover.mjs";
 
 const PUBLIC_ADDRESS = "93.184.216.34";
 
@@ -263,9 +260,7 @@ test("cancellation creates nothing and needs no retry cleanup", async () => {
   await assert.rejects(
     downloadHandover({
       window: null,
-      items: [
-        item("a.zip", "https://cdn.example.com/a.zip", Buffer.from("x")),
-      ],
+      items: [item("a.zip", "https://cdn.example.com/a.zip", Buffer.from("x"))],
       chooseDirectory: async () => null,
       fileSystem: fake.fs,
     }),
@@ -401,10 +396,10 @@ test("a retry after partial finalization skips already-present files", async () 
   });
   assert.equal(retry.complete, true);
   assert.equal(retry.files.length, 0);
-  assert.deepEqual(
-    retry.alreadyPresent.map((file) => file.path).sort(),
-    ["one.zip", "two.zip"],
-  );
+  assert.deepEqual(retry.alreadyPresent.map((file) => file.path).sort(), [
+    "one.zip",
+    "two.zip",
+  ]);
 });
 
 test("a context change before finalize removes staging and writes nothing", async () => {

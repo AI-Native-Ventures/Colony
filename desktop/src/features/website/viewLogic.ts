@@ -12,7 +12,10 @@ import {
   type WebsiteQaReportResult,
 } from "./qaReport";
 import { findRevision, validateQa } from "./reviewLogic";
-import type { WebsiteEligibilityReason, WebsiteReasonCode } from "./reviewLogic";
+import type {
+  WebsiteEligibilityReason,
+  WebsiteReasonCode,
+} from "./reviewLogic";
 import type {
   WebsiteAgentDirectory,
   WebsiteArtifactRef,
@@ -107,7 +110,8 @@ export function resolveQaView(input: {
   let reportAgrees = true;
   let checksUnavailableReason: string | undefined;
   if (!qa || !revision) {
-    checksUnavailableReason = "No independent review is recorded for this version.";
+    checksUnavailableReason =
+      "No independent review is recorded for this version.";
   } else if (report.status === "loading") {
     checksUnavailableReason = "The reviewer checklist is loading.";
   } else if (report.status === "unavailable") {
@@ -210,9 +214,7 @@ export type WebsiteHandoverView =
       previous: readonly WebsiteHandoverRecord[];
     };
 
-function revisionResources(
-  revision: WebsiteRevisionRecord,
-): {
+function revisionResources(revision: WebsiteRevisionRecord): {
   resources: WebsiteHandoverResource[];
   technicalResources: WebsiteHandoverResource[];
 } {
@@ -340,7 +342,8 @@ export function resolveHandoverView(
       reasons: [
         {
           code: "invalid_transition" as WebsiteReasonCode,
-          message: "This job is marked handed over but no handover is recorded.",
+          message:
+            "This job is marked handed over but no handover is recorded.",
         },
       ],
       publishes: false,
@@ -498,7 +501,8 @@ export function activeApprovalForCurrentRevision(
     return undefined;
   }
   const head = findRevision(record, record.currentRevision);
-  if (!head || approval.manifestSha256 !== head.preview.sha256) return undefined;
+  if (!head || approval.manifestSha256 !== head.preview.sha256)
+    return undefined;
   return approval;
 }
 
@@ -625,24 +629,20 @@ export function deriveStageRows(input: {
   const head = findRevision(record, record.currentRevision);
   const reviewBlocked =
     record.status === "readyForReview" && (!head || !validateQa(head).ok);
-  const firstOpen = definitions.findIndex(
-    (entry) => !facts[entry.stage].done,
-  );
-  const states: WebsiteStageRow["state"][] = definitions.map(
-    (entry, index) => {
-      if (facts[entry.stage].done) return "done";
-      if (
-        activity &&
-        activity.stage === entry.stage &&
-        record.status !== "draft"
-      ) {
-        return "working";
-      }
-      if (entry.stage === "review" && reviewBlocked) return "blocked";
-      if (index === firstOpen) return "next";
-      return "then";
-    },
-  );
+  const firstOpen = definitions.findIndex((entry) => !facts[entry.stage].done);
+  const states: WebsiteStageRow["state"][] = definitions.map((entry, index) => {
+    if (facts[entry.stage].done) return "done";
+    if (
+      activity &&
+      activity.stage === entry.stage &&
+      record.status !== "draft"
+    ) {
+      return "working";
+    }
+    if (entry.stage === "review" && reviewBlocked) return "blocked";
+    if (index === firstOpen) return "next";
+    return "then";
+  });
 
   return definitions.map((entry, index) => {
     const pubkey =
@@ -657,8 +657,7 @@ export function deriveStageRows(input: {
     const agent = pubkey ? agents.get(pubkey) : undefined;
     const fact = facts[entry.stage];
     const working = states[index] === "working";
-    const detail =
-      working && activity?.detail ? activity.detail : fact.detail;
+    const detail = working && activity?.detail ? activity.detail : fact.detail;
     return {
       id: entry.id,
       stage: entry.stage,

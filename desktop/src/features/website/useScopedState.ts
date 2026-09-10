@@ -26,9 +26,7 @@ export function useScopedState<T>(
     (action: React.SetStateAction<T>) => {
       setEntry((previous) => {
         const base =
-          previous.key === scopeKey
-            ? previous.value
-            : createInitial(scopeKey);
+          previous.key === scopeKey ? previous.value : createInitial(scopeKey);
         return {
           key: scopeKey,
           value:

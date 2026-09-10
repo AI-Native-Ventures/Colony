@@ -122,9 +122,7 @@ function RevisionRow({
                   : "text-foreground",
               )}
             >
-              {decision.kind === "approve"
-                ? "Approved"
-                : "Changes requested"}
+              {decision.kind === "approve" ? "Approved" : "Changes requested"}
             </span>
             {decision.note ? (
               <span className="line-clamp-2 min-w-0 text-muted-foreground">

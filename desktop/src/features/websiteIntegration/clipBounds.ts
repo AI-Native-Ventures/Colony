@@ -90,7 +90,8 @@ export function resolveAttachmentClipBounds(
 export function useAttachmentClipBounds(
   ref: React.RefObject<HTMLElement | null>,
 ): WebsiteHostBoundsProvider {
-  return React.useCallback(() => resolveAttachmentClipBounds(ref.current), [
-    ref,
-  ]);
+  return React.useCallback(
+    () => resolveAttachmentClipBounds(ref.current),
+    [ref],
+  );
 }

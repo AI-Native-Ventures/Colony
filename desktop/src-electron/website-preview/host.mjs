@@ -314,12 +314,18 @@ export class WebsitePreviewHost {
           signal: signal ?? undefined,
         });
         if (entry.disposed) {
-          throw invalid("preview_closed", "preview was closed before it opened");
+          throw invalid(
+            "preview_closed",
+            "preview was closed before it opened",
+          );
         }
         this.verifySite(entry, site);
         await mountEntry(this, entry);
         if (entry.disposed) {
-          throw invalid("preview_closed", "preview was closed before it opened");
+          throw invalid(
+            "preview_closed",
+            "preview was closed before it opened",
+          );
         }
         entry.state = "ready";
         const state = this.stateFor(entry);
@@ -343,10 +349,7 @@ export class WebsitePreviewHost {
       !Array.isArray(site.files) ||
       typeof site.entrypoint !== "string"
     ) {
-      throw invalid(
-        "invalid_artifact",
-        "the loader returned no verified site",
-      );
+      throw invalid("invalid_artifact", "the loader returned no verified site");
     }
     if (site.manifestSha256 !== entry.manifestSha256) {
       throw invalid(
@@ -409,7 +412,8 @@ export class WebsitePreviewHost {
   }
 
   applyLayout(entry) {
-    if (entry.disposed || entry.container === null || entry.view === null) return;
+    if (entry.disposed || entry.container === null || entry.view === null)
+      return;
     const layout =
       entry.bounds === null
         ? { visible: false }

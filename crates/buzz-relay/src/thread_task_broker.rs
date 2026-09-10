@@ -742,13 +742,10 @@ pub(crate) async fn reconcile_website_task(
         .map_err(|error| format!("the canonical company task is unreadable: {error}"))?;
 
     let owner_hex = hex::encode(job_owner);
-    let slot_owner = buzz_db::thread_tasks::find_thread_task_owner(
-        state.db.pool(),
-        tenant.community(),
-        task_id,
-    )
-    .await
-    .map_err(|error| format!("database error reading the task slot: {error}"))?;
+    let slot_owner =
+        buzz_db::thread_tasks::find_thread_task_owner(state.db.pool(), tenant.community(), task_id)
+            .await
+            .map_err(|error| format!("database error reading the task slot: {error}"))?;
     match slot_owner {
         Some(slot_owner) => {
             if slot_owner.to_ascii_lowercase() != owner_hex {
@@ -775,7 +772,10 @@ pub(crate) async fn reconcile_website_task(
         .iter()
         .flat_map(|team| team.persona_ids.iter().map(String::as_str))
         .collect();
-    for persona in participants.iter().chain(std::iter::once(&qa_persona.to_owned())) {
+    for persona in participants
+        .iter()
+        .chain(std::iter::once(&qa_persona.to_owned()))
+    {
         if !installed.contains(persona.as_str()) {
             return Err(format!(
                 "persona {persona} is not part of the owner's installed team"
@@ -785,7 +785,11 @@ pub(crate) async fn reconcile_website_task(
 
     let mut replacement = task.clone();
     for persona in participants {
-        if !replacement.assignee_persona_ids.iter().any(|id| id == persona) {
+        if !replacement
+            .assignee_persona_ids
+            .iter()
+            .any(|id| id == persona)
+        {
             replacement.assignee_persona_ids.push(persona.clone());
         }
     }
@@ -810,7 +814,10 @@ pub(crate) async fn reconcile_website_task(
     if replacement == task {
         return Ok(task);
     }
-    replacement.updated_at = replacement.updated_at.max(task.updated_at).saturating_add(1);
+    replacement.updated_at = replacement
+        .updated_at
+        .max(task.updated_at)
+        .saturating_add(1);
 
     let company = load_company(tenant, state).await?;
     validate_task(&replacement, &company, None, &teams)

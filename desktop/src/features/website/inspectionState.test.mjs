@@ -12,9 +12,15 @@ import {
 function revision(number) {
   return {
     revision: number,
-    preview: { url: `https://cdn.example.com/m${number}`, sha256: "a".repeat(64) },
+    preview: {
+      url: `https://cdn.example.com/m${number}`,
+      sha256: "a".repeat(64),
+    },
     sourceUrl: "https://example.com",
-    archive: { url: `https://cdn.example.com/a${number}`, sha256: "b".repeat(64) },
+    archive: {
+      url: `https://cdn.example.com/a${number}`,
+      sha256: "b".repeat(64),
+    },
     captures: {
       before: { url: "https://cdn.example.com/b.png", sha256: "c".repeat(64) },
       desktop: { url: "https://cdn.example.com/d.png", sha256: "d".repeat(64) },
@@ -48,7 +54,10 @@ test("inspection is available only while a revision is in progress", () => {
     canInspectVersions(makeRecord("changesRequested", [revision(1)])),
     true,
   );
-  assert.equal(canInspectVersions(makeRecord("readyForReview", [revision(1)])), false);
+  assert.equal(
+    canInspectVersions(makeRecord("readyForReview", [revision(1)])),
+    false,
+  );
   assert.equal(canInspectVersions(makeRecord("working", [])), false);
 });
 
@@ -85,7 +94,10 @@ test("a vanished revision hides the inspection view", () => {
 
 test("closing returns to the current work surface", () => {
   assert.equal(closeInspection(), null);
-  assert.equal(visibleInspection(makeRecord("working", [revision(1)]), null), null);
+  assert.equal(
+    visibleInspection(makeRecord("working", [revision(1)]), null),
+    null,
+  );
 });
 
 test("the inspection scope key includes job identity", () => {

@@ -18,10 +18,7 @@ import {
   KIND_WEBSITE_RECEIPT,
 } from "@/shared/constants/kinds";
 
-import {
-  websiteHeadsStore,
-  type WebsiteHead,
-} from "./websiteHeads";
+import { websiteHeadsStore, type WebsiteHead } from "./websiteHeads";
 
 const HEAD_QUERY_STALE_MS = 10_000;
 
@@ -89,9 +86,7 @@ function acquireWebsiteChannelSubscription(input: {
     dispose: () => {
       disposed = true;
       for (const promise of pending) {
-        void promise
-          .then((unsubscribe) => unsubscribe())
-          .catch(() => {});
+        void promise.then((unsubscribe) => unsubscribe()).catch(() => {});
       }
     },
   });
@@ -163,9 +158,7 @@ export function useWebsiteHeads(input: {
 
   return React.useSyncExternalStore(
     websiteHeadsStore.subscribe,
-    () =>
-      websiteHeadsStore.channelHeads(communityId ?? "", channelId ?? ""),
-    () =>
-      websiteHeadsStore.channelHeads(communityId ?? "", channelId ?? ""),
+    () => websiteHeadsStore.channelHeads(communityId ?? "", channelId ?? ""),
+    () => websiteHeadsStore.channelHeads(communityId ?? "", channelId ?? ""),
   );
 }

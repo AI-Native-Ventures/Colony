@@ -184,9 +184,9 @@ pub fn validate_qa_report(report: &WebsiteQaReport) -> Result<(), WebsiteError> 
             // tab) is legitimate. Only other control characters are rejected.
             if detail.is_empty()
                 || detail.chars().count() > MAX_QA_DETAIL_CHARS
-                || detail
-                    .chars()
-                    .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+                || detail.chars().any(|character| {
+                    character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+                })
             {
                 return Err(WebsiteError::QaReportInvalid("check.detail"));
             }

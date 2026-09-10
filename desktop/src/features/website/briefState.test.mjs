@@ -42,5 +42,8 @@ test("a switched job starts from a fresh idle state", () => {
   const second = createBriefStartState();
   assert.equal(first.status, "starting");
   assert.equal(second.status, "idle");
-  assert.notEqual(briefScopeKey(REQUEST), briefScopeKey({ ...REQUEST, jobId: "job-2" }));
+  assert.notEqual(
+    briefScopeKey(REQUEST),
+    briefScopeKey({ ...REQUEST, jobId: "job-2" }),
+  );
 });

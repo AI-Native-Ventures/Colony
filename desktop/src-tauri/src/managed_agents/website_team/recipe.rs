@@ -19,7 +19,8 @@ pub const RECIPE_VERSION: &str = "0.1.0";
 /// Team slug, used in the per-community team id.
 pub const TEAM_SLUG: &str = "website-manager";
 pub const TEAM_NAME: &str = "Website Manager";
-pub const TEAM_DESCRIPTION: &str = "A four-person website studio: research, direction, build, and independent review.";
+pub const TEAM_DESCRIPTION: &str =
+    "A four-person website studio: research, direction, build, and independent review.";
 
 /// One-sentence outcome shown on the Agents entry point.
 pub const OUTCOME_SENTENCE: &str =
@@ -111,9 +112,8 @@ pub const PERSONAS: &[RecipePersona] = &[
 
 /// Shared method appended to every member deployment through the team's
 /// `instructions` field (`effective_team_instructions` layers it at spawn).
-pub const TEAM_INSTRUCTIONS: &str = include_str!(
-    "../../../../../persona-packs/website-manager/instructions.md"
-);
+pub const TEAM_INSTRUCTIONS: &str =
+    include_str!("../../../../../persona-packs/website-manager/instructions.md");
 
 pub struct RecipeSkill {
     pub name: &'static str,
@@ -222,9 +222,9 @@ mod tests {
         for persona in PERSONAS {
             let id = persona.persona_id;
             let valid_slug = id.len() <= 64
-                && id.bytes().all(|byte| {
-                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                });
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
             assert!(valid_slug, "{id} must be a valid lowercase slug");
             assert!(id.starts_with("website-manager-"), "{id}");
         }

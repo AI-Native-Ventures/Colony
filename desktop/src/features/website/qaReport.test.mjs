@@ -135,7 +135,9 @@ test("label limits count code points, not UTF-16 units", () => {
 
 test("allows multiline detail but refuses other control characters", () => {
   const multiline = parseQaReportValue(
-    makeReport({ checks: [makeCheck({ detail: "Line one\nLine two\tTabbed" })] }),
+    makeReport({
+      checks: [makeCheck({ detail: "Line one\nLine two\tTabbed" })],
+    }),
   );
   assert.equal(multiline.ok, true);
 
@@ -158,7 +160,10 @@ test("verdict agreement follows the backend semantics", () => {
   const passReport = parseQaReportValue(makeReport());
   assert.equal(passReport.ok, true);
   assert.equal(qaReportAgreesWithResult(passReport.report, true).agrees, true);
-  assert.equal(qaReportAgreesWithResult(passReport.report, false).agrees, false);
+  assert.equal(
+    qaReportAgreesWithResult(passReport.report, false).agrees,
+    false,
+  );
 
   const mixedReport = parseQaReportValue(
     makeReport({

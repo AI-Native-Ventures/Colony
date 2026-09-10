@@ -94,10 +94,7 @@ test("a head signed by anyone but the relay self key is refused", () => {
 
 test("a head whose record disagrees with its tags is refused", () => {
   const mismatched = draftRecord({ threadRoot: "f".repeat(64) });
-  assert.equal(
-    parseWebsiteHead(headEvent(mismatched), RELAY_PUBKEY).ok,
-    false,
-  );
+  assert.equal(parseWebsiteHead(headEvent(mismatched), RELAY_PUBKEY).ok, false);
 });
 
 test("the store keeps the highest generation per thread root", () => {
@@ -122,7 +119,10 @@ test("the store keeps the highest generation per thread root", () => {
     },
     RELAY_SECRET,
   );
-  assert.equal(store.applyEvent("community", CHANNEL, RELAY_PUBKEY, first), true);
+  assert.equal(
+    store.applyEvent("community", CHANNEL, RELAY_PUBKEY, first),
+    true,
+  );
   assert.equal(
     store.applyEvent("community", CHANNEL, RELAY_PUBKEY, second),
     true,
@@ -139,10 +139,7 @@ test("the store keeps the highest generation per thread root", () => {
     store.headForInstance("community", CHANNEL, "d".repeat(64))?.eventId,
     second.id,
   );
-  assert.equal(
-    store.channelHeads("community", CHANNEL).length,
-    1,
-  );
+  assert.equal(store.channelHeads("community", CHANNEL).length, 1);
 });
 
 test("receipts parse for the relay signer and resolve waiters", async () => {

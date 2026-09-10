@@ -66,7 +66,12 @@ test("clip bounds never mutate the element rect", () => {
   });
   assert.deepEqual(update.element, { x: 0, y: 0, width: 100, height: 100 });
   assert.deepEqual(update.clip, { top: 10, left: 10, right: 50, bottom: 50 });
-  assert.deepEqual(update.intersection, { x: 10, y: 10, width: 40, height: 40 });
+  assert.deepEqual(update.intersection, {
+    x: 10,
+    y: 10,
+    width: 40,
+    height: 40,
+  });
   assert.equal(update.visible, true);
 });
 
@@ -112,7 +117,11 @@ test("intersecting a detached element returns null", () => {
 test("the arbiter keeps sticky ownership until release", () => {
   const arbiter = new WebsitePreviewHostArbiter();
   assert.equal(arbiter.claim("a"), true);
-  assert.equal(arbiter.claim("a"), true, "re-claim by the owner is not a steal");
+  assert.equal(
+    arbiter.claim("a"),
+    true,
+    "re-claim by the owner is not a steal",
+  );
   assert.equal(arbiter.claim("b"), false);
   assert.equal(arbiter.isActive("a"), true);
   arbiter.release("b");

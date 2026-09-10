@@ -49,7 +49,8 @@ impl WebsiteTeamJournal {
 
     /// Replace this scope's entry, keeping the journal bounded.
     pub fn record(&mut self, entry: WebsiteTeamJournalEntry) {
-        self.entries.retain(|existing| existing.scope_key != entry.scope_key);
+        self.entries
+            .retain(|existing| existing.scope_key != entry.scope_key);
         self.entries.push(entry);
         if self.entries.len() > MAX_JOURNAL_ENTRIES {
             self.entries.sort_by(|left, right| {
@@ -66,7 +67,11 @@ impl WebsiteTeamJournal {
 /// `owner::canonical-relay`; the journal key that cannot collide across owners
 /// or equivalent relay spellings.
 pub fn scope_key(owner_pubkey: &str, canonical_relay: &str) -> String {
-    format!("{}::{}", owner_pubkey.trim().to_lowercase(), canonical_relay)
+    format!(
+        "{}::{}",
+        owner_pubkey.trim().to_lowercase(),
+        canonical_relay
+    )
 }
 
 pub fn journal_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -168,7 +173,9 @@ mod tests {
         assert_eq!(journal.entries.len(), MAX_JOURNAL_ENTRIES);
         // The oldest entries were dropped, not the newest.
         assert!(journal.entry_for("scope-00").is_none());
-        assert!(journal.entry_for(&format!("scope-{:02}", MAX_JOURNAL_ENTRIES + 4)).is_some());
+        assert!(journal
+            .entry_for(&format!("scope-{:02}", MAX_JOURNAL_ENTRIES + 4))
+            .is_some());
     }
 
     #[test]
@@ -177,6 +184,9 @@ mod tests {
         let path = dir.path().join(JOURNAL_FILE_NAME);
         record_entry(&path, entry("a::wss://one", "2026-01-01T00:00:00Z")).unwrap();
         let found = entry_for_scope(&path, &"a".repeat(64), "wss://one").unwrap();
-        assert_eq!(found.unwrap().team_id, "website-team:00000000:website-manager");
+        assert_eq!(
+            found.unwrap().team_id,
+            "website-team:00000000:website-manager"
+        );
     }
 }

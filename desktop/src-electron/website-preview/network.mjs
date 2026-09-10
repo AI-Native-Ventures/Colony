@@ -348,9 +348,7 @@ function openHttps(request) {
     clientRequest.setTimeout(timeoutMs, () => {
       clientRequest.destroy(
         Object.assign(
-          new Error(
-            `request to ${request.url} timed out after ${timeoutMs}ms`,
-          ),
+          new Error(`request to ${request.url} timed out after ${timeoutMs}ms`),
           { code: TIMEOUT_CODE },
         ),
       );

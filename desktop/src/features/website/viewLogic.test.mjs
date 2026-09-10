@@ -31,9 +31,18 @@ function revision(number, overrides = {}) {
       sha256: "1".repeat(64),
     },
     captures: {
-      before: { url: "https://cdn.example.com/before.png", sha256: "2".repeat(64) },
-      desktop: { url: "https://cdn.example.com/desktop.png", sha256: "3".repeat(64) },
-      mobile: { url: "https://cdn.example.com/mobile.png", sha256: "4".repeat(64) },
+      before: {
+        url: "https://cdn.example.com/before.png",
+        sha256: "2".repeat(64),
+      },
+      desktop: {
+        url: "https://cdn.example.com/desktop.png",
+        sha256: "3".repeat(64),
+      },
+      mobile: {
+        url: "https://cdn.example.com/mobile.png",
+        sha256: "4".repeat(64),
+      },
     },
     builtBy: BUILDER,
     ...overrides,
@@ -224,7 +233,11 @@ test("QA checks come only from a scoped, verified report", () => {
     revision: 1,
     manifestSha256: SHA_1,
     checks: [
-      { id: "layout", label: "Desktop and mobile layouts checked", result: "pass" },
+      {
+        id: "layout",
+        label: "Desktop and mobile layouts checked",
+        result: "pass",
+      },
     ],
   });
   assert.equal(report.ok, true);

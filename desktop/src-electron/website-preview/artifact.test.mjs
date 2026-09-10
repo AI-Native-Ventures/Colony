@@ -29,7 +29,9 @@ function bytes(value) {
 }
 
 function fileEntry(path, content, options = {}) {
-  const contentBytes = Buffer.isBuffer(content) ? content : bytes(content ?? path);
+  const contentBytes = Buffer.isBuffer(content)
+    ? content
+    : bytes(content ?? path);
   return {
     path,
     url: options.url ?? `https://cdn.example.com/assets/${path}`,
@@ -78,7 +80,8 @@ function createWorld(options = {}) {
   const dependencies = {
     async lookup(hostname) {
       const value = addresses[hostname];
-      if (value === undefined) throw new Error(`unexpected lookup for ${hostname}`);
+      if (value === undefined)
+        throw new Error(`unexpected lookup for ${hostname}`);
       if (value instanceof Error) throw value;
       return value;
     },
@@ -196,7 +199,9 @@ test("bounds a file body even without Content-Length", async () => {
     size: 4,
   });
   const ref = manifestRef(world, manifestBytes([entry]));
-  world.routes.set(entry.url, () => reply({ chunks: [bytes("1234"), bytes("5678")] }));
+  world.routes.set(entry.url, () =>
+    reply({ chunks: [bytes("1234"), bytes("5678")] }),
+  );
 
   await expectCode(
     loadWebsitePreview({ manifestRef: ref, dependencies: world.dependencies }),
@@ -278,9 +283,15 @@ test("reports DNS failures and empty answers", async () => {
   );
 
   const empty = createWorld({ addresses: { "cdn.example.com": [] } });
-  const emptyRef = manifestRef(empty, manifestBytes([fileEntry("index.html", "x")]));
+  const emptyRef = manifestRef(
+    empty,
+    manifestBytes([fileEntry("index.html", "x")]),
+  );
   await expectCode(
-    loadWebsitePreview({ manifestRef: emptyRef, dependencies: empty.dependencies }),
+    loadWebsitePreview({
+      manifestRef: emptyRef,
+      dependencies: empty.dependencies,
+    }),
     "dns_empty",
   );
 });
@@ -321,7 +332,11 @@ test("re-resolves and re-pins every redirect hop", async () => {
 test("rejects insecure, credentialed, and fragmented redirects", async () => {
   const body = manifestBytes([fileEntry("index.html", "x")]);
   const cases = [
-    ["https://cdn.example.com/start", "http://cdn.example.com/final", "url_insecure"],
+    [
+      "https://cdn.example.com/start",
+      "http://cdn.example.com/final",
+      "url_insecure",
+    ],
     [
       "https://cdn.example.com/start",
       "https://user:pass@cdn.example.com/final",
@@ -332,13 +347,22 @@ test("rejects insecure, credentialed, and fragmented redirects", async () => {
       "https://cdn.example.com/final#frag",
       "url_invalid",
     ],
-    ["https://cdn.example.com/start", "https://127.0.0.1/final", "url_blocked_host"],
+    [
+      "https://cdn.example.com/start",
+      "https://127.0.0.1/final",
+      "url_blocked_host",
+    ],
   ];
   for (const [url, location, code] of cases) {
-    const world = createWorld({ routes: new Map([[url, () => redirect(302, location)]]) });
+    const world = createWorld({
+      routes: new Map([[url, () => redirect(302, location)]]),
+    });
     const ref = { url, sha256: sha256Hex(body) };
     await expectCode(
-      loadWebsitePreview({ manifestRef: ref, dependencies: world.dependencies }),
+      loadWebsitePreview({
+        manifestRef: ref,
+        dependencies: world.dependencies,
+      }),
       code,
     );
   }
@@ -458,7 +482,8 @@ test("validates artifact refs before any network work", async () => {
     "ref_invalid",
   );
   await expectCode(
-    () => loadWebsitePreview({ manifestRef: { url: MANIFEST_URL, sha256: "AB" } }),
+    () =>
+      loadWebsitePreview({ manifestRef: { url: MANIFEST_URL, sha256: "AB" } }),
     "sha256_invalid",
   );
   await expectCode(
@@ -487,7 +512,10 @@ test("rejects unknown fields and malformed shapes at every level", async () => {
     "manifest_json",
   );
   await expectCode(() => parsePreviewManifest(bytes([])), "manifest_json");
-  await expectCode(() => parsePreviewManifest(manifestBytes([42])), "manifest_json");
+  await expectCode(
+    () => parsePreviewManifest(manifestBytes([42])),
+    "manifest_json",
+  );
 });
 
 test("rejects malformed manifest bytes", async () => {
@@ -498,7 +526,10 @@ test("rejects malformed manifest bytes", async () => {
   );
   await expectCode(() => parsePreviewManifest("not bytes"), "manifest_bytes");
   await expectCode(
-    () => parsePreviewManifest(manifestBytes([], { schema: "colony.website-preview/2" })),
+    () =>
+      parsePreviewManifest(
+        manifestBytes([], { schema: "colony.website-preview/2" }),
+      ),
     "manifest_schema",
   );
 });
@@ -530,7 +561,9 @@ test("rejects invalid asset paths", async () => {
   await expectCode(
     () =>
       parsePreviewManifest(
-        manifestBytes([fileEntry("index.html", "x")], { entrypoint: "../index" }),
+        manifestBytes([fileEntry("index.html", "x")], {
+          entrypoint: "../index",
+        }),
       ),
     "path_invalid",
   );
@@ -540,14 +573,20 @@ test("rejects duplicate and case-folded paths", async () => {
   await expectCode(
     () =>
       parsePreviewManifest(
-        manifestBytes([fileEntry("index.html", "a"), fileEntry("index.html", "b")]),
+        manifestBytes([
+          fileEntry("index.html", "a"),
+          fileEntry("index.html", "b"),
+        ]),
       ),
     "path_duplicate",
   );
   await expectCode(
     () =>
       parsePreviewManifest(
-        manifestBytes([fileEntry("index.html", "a"), fileEntry("Index.html", "b")]),
+        manifestBytes([
+          fileEntry("index.html", "a"),
+          fileEntry("Index.html", "b"),
+        ]),
       ),
     "path_ambiguous",
   );
@@ -574,14 +613,18 @@ test("enforces file, total, and count bounds", async () => {
   await expectCode(
     () =>
       parsePreviewManifest(
-        manifestBytes([fileEntry("index.html", "x", { mime: "application/pdf" })]),
+        manifestBytes([
+          fileEntry("index.html", "x", { mime: "application/pdf" }),
+        ]),
       ),
     "mime_invalid",
   );
   await expectCode(
     () =>
       parsePreviewManifest(
-        manifestBytes([fileEntry("index.html", "x", { sha256: "A".repeat(64) })]),
+        manifestBytes([
+          fileEntry("index.html", "x", { sha256: "A".repeat(64) }),
+        ]),
       ),
     "sha256_invalid",
   );
@@ -602,7 +645,9 @@ test("enforces file, total, and count bounds", async () => {
   await expectCode(
     () =>
       parsePreviewManifest(
-        manifestBytes([fileEntry("index.html", "x", { size: MAX_FILE_BYTES + 1 })]),
+        manifestBytes([
+          fileEntry("index.html", "x", { size: MAX_FILE_BYTES + 1 }),
+        ]),
       ),
     "file_too_large",
   );
@@ -613,12 +658,18 @@ test("enforces file, total, and count bounds", async () => {
       mime: index === 0 ? "text/html" : "text/plain",
     }),
   );
-  await expectCode(() => parsePreviewManifest(manifestBytes(big)), "total_too_large");
+  await expectCode(
+    () => parsePreviewManifest(manifestBytes(big)),
+    "total_too_large",
+  );
 
   const many = Array.from({ length: 513 }, (_, index) =>
     fileEntry(`file-${index}.txt`, "x", { mime: "text/plain" }),
   );
-  await expectCode(() => parsePreviewManifest(manifestBytes(many)), "too_many_files");
+  await expectCode(
+    () => parsePreviewManifest(manifestBytes(many)),
+    "too_many_files",
+  );
 });
 
 test("rejects non-public and malformed file URLs", async () => {
@@ -636,7 +687,10 @@ test("rejects non-public and malformed file URLs", async () => {
   ];
   for (const [url, code] of cases) {
     await expectCode(
-      () => parsePreviewManifest(manifestBytes([fileEntry("index.html", "x", { url })])),
+      () =>
+        parsePreviewManifest(
+          manifestBytes([fileEntry("index.html", "x", { url })]),
+        ),
       code,
     );
   }
@@ -712,8 +766,12 @@ test("pinned HTTPS options carry no credentials and pin the resolved address", (
   assert.equal(options.path, "/a/b?q=1");
   assert.equal(options.headers.host, "cdn.example.com:8443");
   assert.equal(options.agent, false);
-  const headerNames = Object.keys(options.headers).map((name) => name.toLowerCase());
-  assert.ok(!headerNames.some((name) => /cookie|authorization|proxy/.test(name)));
+  const headerNames = Object.keys(options.headers).map((name) =>
+    name.toLowerCase(),
+  );
+  assert.ok(
+    !headerNames.some((name) => /cookie|authorization|proxy/.test(name)),
+  );
 
   const literal = buildHttpsRequestOptions({
     url: "https://[2606:4700::1]/x",

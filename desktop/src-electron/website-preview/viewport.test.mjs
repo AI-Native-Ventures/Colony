@@ -100,7 +100,8 @@ test("clip opt-in preserves the CSS viewport without rescaling", async () => {
   assert.equal(mobileView.bounds.width, 300);
   assert.equal(mobileView.bounds.height, Math.round((844 * 300) / 390));
   assert.equal(mobileView.webContents.zoomFactor, 300 / 390);
-  const cssHeight = mobileView.bounds.height / mobileView.webContents.zoomFactor;
+  const cssHeight =
+    mobileView.bounds.height / mobileView.webContents.zoomFactor;
   assert.ok(Math.abs(cssHeight - 844) <= 1, `css height ${cssHeight}`);
 });
 

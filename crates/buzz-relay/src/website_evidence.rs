@@ -87,9 +87,7 @@ pub(crate) async fn require_agent_persona_installed(
         .ok_or_else(|| format!("{label} must be a managed agent with an assigned persona"))?;
     let installed = installed_personas(tenant, state, owner).await?;
     if !installed.contains(persona.as_str()) {
-        return Err(format!(
-            "{label} is not part of the owner's installed team"
-        ));
+        return Err(format!("{label} is not part of the owner's installed team"));
     }
     Ok(persona)
 }
@@ -99,8 +97,8 @@ async fn installed_personas(
     state: &Arc<AppState>,
     owner: &[u8],
 ) -> Result<std::collections::BTreeSet<String>, String> {
-    let owner_key = PublicKey::from_slice(owner)
-        .map_err(|_| "the job owner pubkey is invalid".to_owned())?;
+    let owner_key =
+        PublicKey::from_slice(owner).map_err(|_| "the job owner pubkey is invalid".to_owned())?;
     let teams = crate::company_broker::load_team_refs(tenant, state, &owner_key).await?;
     Ok(teams
         .iter()
@@ -269,11 +267,11 @@ pub(crate) async fn require_task_report(
     if report_task.as_deref() != Some(task_id) {
         return Err("QA evidence must name this job's canonical task".to_owned());
     }
-    let mut matches = stored
-        .event
-        .tags
-        .iter()
-        .filter(|tag| tag.as_slice().first().is_some_and(|part| part == QA_TASK_REPORT_TAG));
+    let mut matches = stored.event.tags.iter().filter(|tag| {
+        tag.as_slice()
+            .first()
+            .is_some_and(|part| part == QA_TASK_REPORT_TAG)
+    });
     let Some(binding_tag) = matches.next() else {
         return Err("QA evidence must bind this revision and report".to_owned());
     };

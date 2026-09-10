@@ -52,7 +52,9 @@ export function isInstallCommunityActive(
   return normalizeRelay(activeRelayUrl) === normalizeRelay(result.relayUrl);
 }
 
-export function describePublication(status: PublicationStatus | string): string {
+export function describePublication(
+  status: PublicationStatus | string,
+): string {
   switch (status) {
     case "published":
       return "Published to this community";
@@ -94,8 +96,12 @@ export function assessInstall(
     agentPubkey: persona.agentPubkey,
     assignedSkills: persona.assignedSkills,
   }));
-  const missingAgents = personas.filter((row) => row.status === "missing").length;
-  const failedSkills = result.skills.filter((skill) => skill.status === "failed");
+  const missingAgents = personas.filter(
+    (row) => row.status === "missing",
+  ).length;
+  const failedSkills = result.skills.filter(
+    (skill) => skill.status === "failed",
+  );
   const preservedSkills = result.skills.filter(
     (skill) => skill.status === "preserved",
   );
@@ -147,7 +153,8 @@ export function assessInstall(
     headline: result.reconciled
       ? "Website Manager team is already installed"
       : "Website Manager team is installed",
-    detail: "Editable in Agents. Avery leads; Ren, Jules, and Vera report to her.",
+    detail:
+      "Editable in Agents. Avery leads; Ren, Jules, and Vera report to her.",
     personas,
     pendingPublications: 0,
     failedSkills,

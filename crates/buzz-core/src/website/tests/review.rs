@@ -109,7 +109,10 @@ struct Step {
 /// Outcome of a single vector step.
 enum StepOutcome {
     Unit,
-    Decision { outcome: DecisionOutcome, derived: Uuid },
+    Decision {
+        outcome: DecisionOutcome,
+        derived: Uuid,
+    },
 }
 
 /// Mutable state for one vector case.
@@ -227,7 +230,10 @@ fn record_revision(harness: &mut Harness, step: &Step) -> Result<(), WebsiteErro
         .unwrap_or_else(|| harness.review.current_revision.saturating_add(1));
     let manifest_value = step.manifest.clone().unwrap_or_else(default_manifest);
     let manifest = serde_json::to_string(&manifest_value).expect("manifest serializes");
-    let sha = resolve_sha(step.manifest_hash.as_deref(), &sha256_hex(manifest.as_bytes()));
+    let sha = resolve_sha(
+        step.manifest_hash.as_deref(),
+        &sha256_hex(manifest.as_bytes()),
+    );
     let result = harness.review.record_revision(RevisionSubmission {
         revision,
         manifest: manifest.clone(),
@@ -287,11 +293,7 @@ fn attach_evidence(harness: &mut Harness, step: &Step, label: &str) -> Result<()
     })
 }
 
-fn decide(
-    harness: &mut Harness,
-    step: &Step,
-    label: &str,
-) -> Result<StepOutcome, WebsiteError> {
+fn decide(harness: &mut Harness, step: &Step, label: &str) -> Result<StepOutcome, WebsiteError> {
     let kind = match step.kind.as_deref() {
         Some("approve") => DecisionKind::Approve,
         Some("requestChanges") => DecisionKind::RequestChanges,
@@ -312,7 +314,9 @@ fn decide(
         task_id: scope
             .task_id
             .unwrap_or_else(|| harness.review.task_id.clone()),
-        channel: scope.channel.unwrap_or_else(|| harness.review.channel.clone()),
+        channel: scope
+            .channel
+            .unwrap_or_else(|| harness.review.channel.clone()),
         kind,
         revision: step.revision.unwrap_or(harness.review.current_revision),
         manifest_sha256: resolve_sha(step.manifest_hash.as_deref(), &current_sha(harness)),
@@ -365,10 +369,7 @@ fn record_handover(harness: &mut Harness, step: &Step) -> Result<(), WebsiteErro
         job_id: harness.review.job_id,
         task_id: harness.review.task_id.clone(),
         approved_revision: revision_number,
-        approved_manifest_sha256: resolve_sha(
-            step.handover_hash.as_deref(),
-            &current_sha(harness),
-        ),
+        approved_manifest_sha256: resolve_sha(step.handover_hash.as_deref(), &current_sha(harness)),
         source_url,
         source_archive: archive,
         assets,
@@ -401,11 +402,7 @@ fn check_assets(harness: &Harness, step: &Step, label: &str) -> Result<(), Websi
     validate_handover_assets(handover, &bytes)
 }
 
-fn run_step(
-    harness: &mut Harness,
-    step: &Step,
-    label: &str,
-) -> Result<StepOutcome, WebsiteError> {
+fn run_step(harness: &mut Harness, step: &Step, label: &str) -> Result<StepOutcome, WebsiteError> {
     match step.op.as_str() {
         "begin_work" => harness.review.begin_work().map(|()| StepOutcome::Unit),
         "record_revision" => record_revision(harness, step).map(|()| StepOutcome::Unit),

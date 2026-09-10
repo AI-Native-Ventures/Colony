@@ -50,9 +50,7 @@ export function visibleInspection(
   current: WebsiteInspection,
 ): WebsiteInspection {
   if (!canInspectVersions(record) || !current) return null;
-  return record.revisions.some(
-    (entry) => entry.revision === current.revision,
-  )
+  return record.revisions.some((entry) => entry.revision === current.revision)
     ? current
     : null;
 }

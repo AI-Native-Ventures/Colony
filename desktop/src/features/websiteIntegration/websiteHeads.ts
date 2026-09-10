@@ -37,8 +37,7 @@ import type {
 } from "@/features/website/types";
 
 const HEX_64 = /^[0-9a-f]{64}$/;
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_TASK_ID_CHARS = 256;
 
 const JOB_STATUSES: readonly WebsiteJobStatus[] = [
@@ -264,9 +263,7 @@ function parseDecision(value: unknown): WebsiteDecisionRecord | null {
   };
 }
 
-function parseStageEvidence(
-  value: unknown,
-): WebsiteStageEvidenceRecord | null {
+function parseStageEvidence(value: unknown): WebsiteStageEvidenceRecord | null {
   if (!isRecord(value)) return null;
   const stage = value.stage;
   const revision = value.revision;
@@ -351,10 +348,7 @@ function parseHandover(value: unknown): WebsiteHandoverRecord | null {
           const text = value.accessRequest.text;
           const authoredBy = value.accessRequest.authoredBy;
           if (typeof text !== "string" || text.length === 0) return null;
-          if (
-            typeof authoredBy !== "string" ||
-            !HEX_64.test(authoredBy)
-          ) {
+          if (typeof authoredBy !== "string" || !HEX_64.test(authoredBy)) {
             return null;
           }
           return { text, authoredBy };
@@ -523,9 +517,7 @@ export function parseWebsiteHead(
   const instanceEventId = singleTag(event, "instance");
   const manifestEventId = singleTag(event, "manifest");
   const generationRaw = singleTag(event, "generation");
-  const pTags = event.tags.filter(
-    (tag) => tag[0] === "p" && tag.length === 2,
-  );
+  const pTags = event.tags.filter((tag) => tag[0] === "p" && tag.length === 2);
   if (
     !jobId ||
     !UUID.test(jobId) ||
@@ -702,10 +694,7 @@ export class WebsiteHeadsStore {
     };
   };
 
-  channelHeads(
-    communityId: string,
-    channelId: string,
-  ): readonly WebsiteHead[] {
+  channelHeads(communityId: string, channelId: string): readonly WebsiteHead[] {
     return this.buckets.get(bucketKey(communityId, channelId))?.snapshot ?? [];
   }
 

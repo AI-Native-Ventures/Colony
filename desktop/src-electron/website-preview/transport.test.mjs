@@ -20,7 +20,9 @@ function bytes(value) {
 }
 
 function fileEntry(path, content, options = {}) {
-  const contentBytes = Buffer.isBuffer(content) ? content : bytes(content ?? path);
+  const contentBytes = Buffer.isBuffer(content)
+    ? content
+    : bytes(content ?? path);
   return {
     path,
     url: options.url ?? `https://cdn.example.com/assets/${path}`,
@@ -42,8 +44,12 @@ function manifestBytes(files, overrides = {}) {
 }
 
 function reply(options = {}) {
-  const { status = 200, headers = {}, chunks = [], hangAfterChunks = false } =
-    options;
+  const {
+    status = 200,
+    headers = {},
+    chunks = [],
+    hangAfterChunks = false,
+  } = options;
   const state = { destroyed: false };
   return {
     statusCode: status,

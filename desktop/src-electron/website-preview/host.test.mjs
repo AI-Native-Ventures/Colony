@@ -20,7 +20,7 @@ import {
 } from "./host-test-support.mjs";
 
 const INLINE_HTML =
-  "<!doctype html><button onclick=\"window.__n=1\">go</button>" +
+  '<!doctype html><button onclick="window.__n=1">go</button>' +
   "<script>window.__ready = true;</script>";
 
 function hashToken(text) {
@@ -162,7 +162,11 @@ test("a stopped renderer after ready pushes a scoped failed state", async () => 
   assert.equal(states.at(-1).status, "ready");
   assert.equal(states.at(-1).handle, state.handle);
 
-  world.views[0].webContents.emit("render-process-gone", {}, { reason: "crash" });
+  world.views[0].webContents.emit(
+    "render-process-gone",
+    {},
+    { reason: "crash" },
+  );
   const failed = states.at(-1);
   assert.equal(failed.status, "failed");
   assert.equal(failed.error, "renderer_gone");
@@ -573,7 +577,10 @@ test("a stale handle from a closed mount is harmless after reopen", async () => 
 
   const container = window.contentView.children[0];
   assert.equal(container.visible, false);
-  assert.equal(host.stateFor(host.byHandle.get(reopened.handle)).visible, false);
+  assert.equal(
+    host.stateFor(host.byHandle.get(reopened.handle)).visible,
+    false,
+  );
 
   await host.close({ window, handle: reopened.handle });
   assert.equal(host.activeCount, 0);

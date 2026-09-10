@@ -8,9 +8,7 @@
  * never decorate a newer card.
  */
 
-export function scopedKey(
-  ...parts: readonly (string | number)[]
-): string {
+export function scopedKey(...parts: readonly (string | number)[]): string {
   return parts.map((part) => String(part)).join("\u0000");
 }
 

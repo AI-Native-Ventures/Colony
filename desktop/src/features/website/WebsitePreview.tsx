@@ -272,10 +272,7 @@ export function WebsitePreview({
   );
 
   return (
-    <section
-      aria-label={title}
-      className={cn("flex flex-col", className)}
-    >
+    <section aria-label={title} className={cn("flex flex-col", className)}>
       <div className="border-y border-border bg-muted/20 px-3.5 py-2">
         {toolbar(true)}
       </div>
@@ -310,10 +307,7 @@ export function WebsitePreview({
         viewport={viewport}
       />
       <div className="border-b border-border px-3.5 py-2">
-        <SourceCaption
-          record={record}
-          selectedRevision={selectedRevision}
-        />
+        <SourceCaption record={record} selectedRevision={selectedRevision} />
       </div>
 
       <Dialog onOpenChange={setExpanded} open={expanded}>

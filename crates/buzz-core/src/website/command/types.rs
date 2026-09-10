@@ -51,8 +51,7 @@ pub const WEBSITE_REQUEST_CHANGES_ACTION_ID: &str = "website.request-changes";
 /// Deriving the job id from `(community, task, thread)` makes creation
 /// naturally idempotent: two creates for the same canonical task resolve to
 /// one row, and a retry of the same request re-derives the same coordinate.
-pub const WEBSITE_JOB_NAMESPACE: Uuid =
-    Uuid::from_u128(0x7c2a_91d4_5e6f_4a3b_8d0c_2e9f_1a4b_6c7d);
+pub const WEBSITE_JOB_NAMESPACE: Uuid = Uuid::from_u128(0x7c2a_91d4_5e6f_4a3b_8d0c_2e9f_1a4b_6c7d);
 
 /// Maximum accepted raw action content in bytes (128 KiB).
 ///
@@ -235,11 +234,17 @@ impl WebsiteAction {
         push_component(&mut buffer, self.thread_root.as_bytes());
         push_component(
             &mut buffer,
-            self.instance_event_id.as_deref().unwrap_or_default().as_bytes(),
+            self.instance_event_id
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes(),
         );
         push_component(
             &mut buffer,
-            self.manifest_event_id.as_deref().unwrap_or_default().as_bytes(),
+            self.manifest_event_id
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes(),
         );
         push_component(
             &mut buffer,
@@ -547,10 +552,7 @@ pub fn is_reserved_website_action_id(action_id: &str) -> bool {
     )
 }
 
-fn scalar_tag(
-    name: &'static str,
-    value: &str,
-) -> Result<Tag, super::error::WebsiteCommandError> {
+fn scalar_tag(name: &'static str, value: &str) -> Result<Tag, super::error::WebsiteCommandError> {
     Tag::parse([name, value]).map_err(|_| super::error::WebsiteCommandError::InvalidContent)
 }
 

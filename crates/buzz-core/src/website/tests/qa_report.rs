@@ -56,7 +56,10 @@ fn failing_checks_cannot_back_a_passed_flag() {
         false,
     ))
     .expect("valid report parses");
-    assert_eq!(report.agrees_with(true).unwrap_err().code(), "qa_report_inconsistent");
+    assert_eq!(
+        report.agrees_with(true).unwrap_err().code(),
+        "qa_report_inconsistent"
+    );
     assert!(report.agrees_with(false).is_ok());
 }
 
@@ -69,8 +72,14 @@ fn not_applicable_only_reports_carry_no_verdict() {
         false,
     ))
     .expect("valid report parses");
-    assert_eq!(report.agrees_with(true).unwrap_err().code(), "qa_report_inconsistent");
-    assert_eq!(report.agrees_with(false).unwrap_err().code(), "qa_report_inconsistent");
+    assert_eq!(
+        report.agrees_with(true).unwrap_err().code(),
+        "qa_report_inconsistent"
+    );
+    assert_eq!(
+        report.agrees_with(false).unwrap_err().code(),
+        "qa_report_inconsistent"
+    );
 }
 
 #[test]

@@ -21,7 +21,9 @@
 
 use std::sync::Arc;
 
-use buzz_core::kind::{KIND_BLOCK_ACTION, KIND_WEBSITE_ACTION, KIND_WEBSITE_HEAD, KIND_WEBSITE_RECEIPT};
+use buzz_core::kind::{
+    KIND_BLOCK_ACTION, KIND_WEBSITE_ACTION, KIND_WEBSITE_HEAD, KIND_WEBSITE_RECEIPT,
+};
 use buzz_core::tenant::TenantContext;
 use buzz_core::website::{
     is_reserved_website_action_id, parse_qa_report, parse_website_action,
@@ -48,12 +50,12 @@ use crate::state::AppState;
 use crate::website_authority::{
     authorize_create, authorize_update, require_actor_persona, require_decision_instance,
 };
-use crate::website_evidence::{
-    load_task, require_stage_evidence, require_task_report, QaReportBinding,
-};
 use crate::website_events::{
     build_duplicate_receipt, build_head, build_receipt, head_d_tag, insert_event_tx,
     replace_head_tx,
+};
+use crate::website_evidence::{
+    load_task, require_stage_evidence, require_task_report, QaReportBinding,
 };
 
 /// Generic refusal used when a job does not exist or the actor may not see it.
@@ -178,11 +180,8 @@ pub async fn apply_website_action(
     action_event: &Event,
 ) -> Result<WebsiteBrokerOutcome, String> {
     let community = tenant.community();
-    let job_id = WebsiteAction::derive_job_id(
-        *community.as_uuid(),
-        &action.task_id,
-        &action.thread_root,
-    );
+    let job_id =
+        WebsiteAction::derive_job_id(*community.as_uuid(), &action.task_id, &action.thread_root);
     let digest = hex::decode(action.payload_digest())
         .map_err(|_| "website payload digest is not hexadecimal".to_owned())?;
     let actor_bytes = action.actor.to_bytes().to_vec();
@@ -412,26 +411,23 @@ async fn preflight_retry(
     action_event_id: &[u8],
     digest_hex: &str,
 ) -> Result<Option<DuplicateClaim>, String> {
-    let digest =
-        hex::decode(digest_hex).map_err(|_| "website payload digest is not hexadecimal".to_owned())?;
+    let digest = hex::decode(digest_hex)
+        .map_err(|_| "website payload digest is not hexadecimal".to_owned())?;
     let community = tenant.community();
-    if let Some(row) = find_website_action_claim(
-        state.db.pool(),
-        community,
-        actor.as_bytes(),
-        request_id,
-    )
-    .await
-    .map_err(|error| format!("website transaction failed: {error}"))?
+    if let Some(row) =
+        find_website_action_claim(state.db.pool(), community, actor.as_bytes(), request_id)
+            .await
+            .map_err(|error| format!("website transaction failed: {error}"))?
     {
         if row.payload_digest.as_slice() != digest {
             return Err(WEBSITE_REQUEST_REPLAY.to_owned());
         }
         return Ok(Some(claim_of(row)));
     }
-    if let Some(row) = find_website_action_claim_by_event(state.db.pool(), community, action_event_id)
-        .await
-        .map_err(|error| format!("website transaction failed: {error}"))?
+    if let Some(row) =
+        find_website_action_claim_by_event(state.db.pool(), community, action_event_id)
+            .await
+            .map_err(|error| format!("website transaction failed: {error}"))?
     {
         if row.payload_digest.as_slice() != digest {
             return Err(WEBSITE_REQUEST_REPLAY.to_owned());
@@ -467,16 +463,9 @@ async fn preflight_action(
                 return Err(WEBSITE_JOB_UNAVAILABLE.to_owned());
             }
             let task = load_task(tenant, state, &action.task_id).await?;
-            if authorize_update(
-                state,
-                tenant,
-                action,
-                &job,
-                &task,
-                &action.actor.to_bytes(),
-            )
-            .await
-            .is_err()
+            if authorize_update(state, tenant, action, &job, &task, &action.actor.to_bytes())
+                .await
+                .is_err()
             {
                 return Err(WEBSITE_JOB_UNAVAILABLE.to_owned());
             }
@@ -601,8 +590,13 @@ async fn commit_duplicate_receipt(
         .await?;
         return Ok(ApplyResult::Duplicate(claim));
     }
-    let stored_action =
-        insert_event_tx(&mut *tx, tenant.community(), action_event, Some(job.channel_id)).await?;
+    let stored_action = insert_event_tx(
+        &mut *tx,
+        tenant.community(),
+        action_event,
+        Some(job.channel_id),
+    )
+    .await?;
     let stored_receipt =
         insert_event_tx(&mut *tx, tenant.community(), receipt, Some(job.channel_id)).await?;
     Ok(ApplyResult::Committed(Committed {
@@ -755,8 +749,13 @@ async fn apply_create(
     .map_err(|error| format!("website transaction failed: {error}"))?
     .ok_or_else(|| WEBSITE_JOB_TAKEN.to_owned())?;
 
-    let stored_action =
-        insert_event_tx(&mut *tx, tenant.community(), action_event, Some(action.channel_id)).await?;
+    let stored_action = insert_event_tx(
+        &mut *tx,
+        tenant.community(),
+        action_event,
+        Some(action.channel_id),
+    )
+    .await?;
     let stored_head = replace_head_tx(
         &mut *tx,
         tenant.community(),
@@ -765,8 +764,13 @@ async fn apply_create(
         action.channel_id,
     )
     .await?;
-    let stored_receipt =
-        insert_event_tx(&mut *tx, tenant.community(), &receipt, Some(action.channel_id)).await?;
+    let stored_receipt = insert_event_tx(
+        &mut *tx,
+        tenant.community(),
+        &receipt,
+        Some(action.channel_id),
+    )
+    .await?;
 
     Ok(ApplyResult::Committed(Committed {
         job,
@@ -944,7 +948,10 @@ async fn apply_update(
                 note: Some(note.clone()),
             };
             let decision_id = submission.derive_id();
-            match review.apply_decision(submission).map_err(map_website_error)? {
+            match review
+                .apply_decision(submission)
+                .map_err(map_website_error)?
+            {
                 DecisionOutcome::Applied(_) => {
                     let new_revision = i32::try_from(review.current_revision)
                         .map_err(|_| "website revision out of range".to_owned())?;
@@ -1039,7 +1046,9 @@ async fn apply_update(
                 accepted_by: action.actor.to_hex(),
             };
             validate_handover_assets(&handover, bytes).map_err(map_website_error)?;
-            review.record_handover(handover).map_err(map_website_error)?;
+            review
+                .record_handover(handover)
+                .map_err(map_website_error)?;
         }
     }
 
@@ -1113,7 +1122,9 @@ async fn apply_decision_inner(
         note: decision.note.clone(),
     };
     let decision_id = submission.derive_id();
-    let applied = review.apply_decision(submission).map_err(map_website_error)?;
+    let applied = review
+        .apply_decision(submission)
+        .map_err(map_website_error)?;
 
     match applied {
         DecisionOutcome::Applied(_) => {
@@ -1272,9 +1283,13 @@ async fn commit_update(
     .map_err(|error| format!("website transaction failed: {error}"))?
     .ok_or_else(|| WEBSITE_STALE_GENERATION.to_owned())?;
 
-    let stored_action =
-        insert_event_tx(&mut *tx, tenant.community(), action_event, Some(context.channel_id))
-            .await?;
+    let stored_action = insert_event_tx(
+        &mut *tx,
+        tenant.community(),
+        action_event,
+        Some(context.channel_id),
+    )
+    .await?;
     let stored_head = replace_head_tx(
         &mut *tx,
         tenant.community(),
@@ -1283,8 +1298,13 @@ async fn commit_update(
         context.channel_id,
     )
     .await?;
-    let stored_receipt =
-        insert_event_tx(&mut *tx, tenant.community(), &receipt, Some(context.channel_id)).await?;
+    let stored_receipt = insert_event_tx(
+        &mut *tx,
+        tenant.community(),
+        &receipt,
+        Some(context.channel_id),
+    )
+    .await?;
 
     Ok(ApplyResult::Committed(Committed {
         job: updated,
@@ -1416,8 +1436,7 @@ async fn fetch_current_manifest(
     approved_revision: u32,
     approved_manifest_sha256: &str,
 ) -> Result<Vec<u8>, String> {
-    let job_id =
-        WebsiteAction::derive_job_id(*tenant.community().as_uuid(), task_id, thread_root);
+    let job_id = WebsiteAction::derive_job_id(*tenant.community().as_uuid(), task_id, thread_root);
     let job = get_website_job(state.db.pool(), tenant.community(), job_id)
         .await
         .map_err(|error| format!("database error loading the website job: {error}"))?

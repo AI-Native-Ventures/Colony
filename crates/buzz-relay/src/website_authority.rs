@@ -101,20 +101,18 @@ pub(crate) async fn authorize_create(
     if is_human_member(tenant, state, &action.actor).await? {
         owner = actor_bytes.to_vec();
         coordinator_bytes = event_id_bytes(coordinator)?;
-        require_channel_member(
-            tenant,
-            state,
-            action.channel_id,
-            actor_bytes,
-            "the owner",
-        )
-        .await?;
+        require_channel_member(tenant, state, action.channel_id, actor_bytes, "the owner").await?;
         require_coordinator_binding(tenant, state, &owner, &coordinator_bytes).await?;
         let coordinator_key = PublicKey::parse(coordinator)
             .map_err(|_| "the coordinator pubkey is invalid".to_owned())?;
-        coordinator_persona =
-            require_agent_persona_installed(tenant, state, &owner, &coordinator_key, "the coordinator")
-                .await?;
+        coordinator_persona = require_agent_persona_installed(
+            tenant,
+            state,
+            &owner,
+            &coordinator_key,
+            "the coordinator",
+        )
+        .await?;
         require_channel_member(
             tenant,
             state,
@@ -157,17 +155,28 @@ pub(crate) async fn authorize_create(
         .await?;
         owner = agent_owner;
         coordinator_bytes = actor_bytes.to_vec();
-        coordinator_persona =
-            require_agent_persona_installed(tenant, state, &owner, &action.actor, "the coordinator")
-                .await?;
+        coordinator_persona = require_agent_persona_installed(
+            tenant,
+            state,
+            &owner,
+            &action.actor,
+            "the coordinator",
+        )
+        .await?;
     }
 
     require_personas_installed(tenant, state, &owner, research_personas, "researchPersonas")
         .await?;
     require_personas_installed(tenant, state, &owner, build_personas, "buildPersonas").await?;
     require_personas_installed(tenant, state, &owner, review_personas, "reviewPersonas").await?;
-    require_owner_authored_root(tenant, state, &action.thread_root, action.channel_id, &owner)
-        .await?;
+    require_owner_authored_root(
+        tenant,
+        state,
+        &action.thread_root,
+        action.channel_id,
+        &owner,
+    )
+    .await?;
 
     let instance_event_id = event_id_bytes(
         action
@@ -254,9 +263,17 @@ pub(crate) async fn authorize_update(
             let mut allowed = job.research_personas.clone();
             allowed.extend(job.build_personas.iter().cloned());
             allowed.extend(job.review_personas.iter().cloned());
-            require_actor_persona(tenant, state, job, task, &action.actor, &allowed, "stageEvidence")
-                .await
-                .map(|_| ())
+            require_actor_persona(
+                tenant,
+                state,
+                job,
+                task,
+                &action.actor,
+                &allowed,
+                "stageEvidence",
+            )
+            .await
+            .map(|_| ())
         }
         WebsiteActionOp::Handover { .. } => {
             if is_owner || is_coordinator {
@@ -321,7 +338,8 @@ pub(crate) async fn require_decision_instance(
         return Err("the review instance is pinned to a different decision maker".to_owned());
     }
     let manifest_content =
-        require_active_website_manifest(tenant, state, &instance, &action.manifest_event_id).await?;
+        require_active_website_manifest(tenant, state, &instance, &action.manifest_event_id)
+            .await?;
     require_job_instance_data(
         &instance.data,
         &manifest_content,

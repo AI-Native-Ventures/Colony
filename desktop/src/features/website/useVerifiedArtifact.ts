@@ -70,10 +70,7 @@ export function useVerifiedArtifact(options: {
       state: { status: "loading" },
     });
     loader
-      .load(
-        { url: requested.url, sha256: requested.sha256 },
-        controller.signal,
-      )
+      .load({ url: requested.url, sha256: requested.sha256 }, controller.signal)
       .then((verified) => {
         if (controller.signal.aborted) {
           verified.revoke();
@@ -126,8 +123,7 @@ export function useVerifiedArtifact(options: {
           state: {
             status: "error",
             message: "The saved image for this version could not be loaded.",
-            diagnostics:
-              cause instanceof Error ? cause.message : String(cause),
+            diagnostics: cause instanceof Error ? cause.message : String(cause),
           },
         });
       });

@@ -234,9 +234,8 @@ pub async fn get_website_job<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let sql = format!(
-        "SELECT {JOB_COLUMNS} FROM website_jobs WHERE community_id = $1 AND job_id = $2"
-    );
+    let sql =
+        format!("SELECT {JOB_COLUMNS} FROM website_jobs WHERE community_id = $1 AND job_id = $2");
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(community.as_uuid())
         .bind(job_id)
@@ -254,9 +253,8 @@ pub async fn get_website_job_by_task<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    let sql = format!(
-        "SELECT {JOB_COLUMNS} FROM website_jobs WHERE community_id = $1 AND task_id = $2"
-    );
+    let sql =
+        format!("SELECT {JOB_COLUMNS} FROM website_jobs WHERE community_id = $1 AND task_id = $2");
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(community.as_uuid())
         .bind(task_id)
@@ -489,16 +487,17 @@ mod tests {
     }
 
     fn review_bytes(job_id: Uuid) -> Vec<u8> {
-        let review = buzz_core::website::WebsiteReview::new(buzz_core::website::WebsiteReviewInit {
-            job_id,
-            task_id: "task-website".to_owned(),
-            channel: "website-ops".to_owned(),
-            thread_root: "e".repeat(64),
-            owner: "a".repeat(64),
-            coordinator: Some("b".repeat(64)),
-            source_url: "https://source.colony.test/sites/acme".to_owned(),
-        })
-        .expect("valid review");
+        let review =
+            buzz_core::website::WebsiteReview::new(buzz_core::website::WebsiteReviewInit {
+                job_id,
+                task_id: "task-website".to_owned(),
+                channel: "website-ops".to_owned(),
+                thread_root: "e".repeat(64),
+                owner: "a".repeat(64),
+                coordinator: Some("b".repeat(64)),
+                source_url: "https://source.colony.test/sites/acme".to_owned(),
+            })
+            .expect("valid review");
         serde_json::to_vec(&review).expect("review serializes")
     }
 
@@ -675,4 +674,3 @@ mod tests {
         assert_eq!(by_event.receipt_event_id, receipt_event);
     }
 }
-

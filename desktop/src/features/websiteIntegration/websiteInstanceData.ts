@@ -77,10 +77,7 @@ function parseBrief(value: unknown): WebsiteInstanceBrief | null {
   if (value.summary !== undefined && summary === null) return null;
   const preserve = stringList(value.preserve ?? [], MAX_PRESERVE);
   const redesign = stringList(value.redesign ?? [], MAX_REDESIGN);
-  const deliverables = stringList(
-    value.deliverables ?? [],
-    MAX_DELIVERABLES,
-  );
+  const deliverables = stringList(value.deliverables ?? [], MAX_DELIVERABLES);
   if (!preserve || !redesign || !deliverables) return null;
   return {
     ...(summary ? { summary } : {}),

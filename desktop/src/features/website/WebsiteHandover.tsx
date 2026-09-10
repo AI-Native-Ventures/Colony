@@ -99,11 +99,19 @@ function ResourceRow({
     <li className="flex items-center justify-between gap-3 border-t border-border/60 py-2 first:border-t-0 first:pt-0">
       <span className="flex min-w-0 items-center gap-2">
         {resource.kind === "page" ? (
-          <Globe2 aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+          <Globe2
+            aria-hidden="true"
+            className="size-4 shrink-0 text-muted-foreground"
+          />
         ) : (
-          <FileArchive aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+          <FileArchive
+            aria-hidden="true"
+            className="size-4 shrink-0 text-muted-foreground"
+          />
         )}
-        <span className="min-w-0 text-xs text-foreground">{resource.label}</span>
+        <span className="min-w-0 text-xs text-foreground">
+          {resource.label}
+        </span>
       </span>
       {isArtifact ? (
         onDownload ? (
@@ -155,7 +163,8 @@ function HandoverHistory({
           const agent = agents.get(handover.acceptedBy);
           return (
             <li key={`${handover.jobId}:${handover.approvedRevision}`}>
-              Version {handover.approvedRevision} · {handover.assets.length} asset
+              Version {handover.approvedRevision} · {handover.assets.length}{" "}
+              asset
               {handover.assets.length === 1 ? "" : "s"} ·{" "}
               {agent ? agent.name : "accepting agent"}
             </li>
@@ -211,10 +220,7 @@ export function WebsiteHandover({
     : scopedKey(record.channel, record.jobId, record.taskId, "no-handover");
   const scopeRef = React.useRef(scopeKey);
   scopeRef.current = scopeKey;
-  const [local, setLocal] = useScopedState(
-    scopeKey,
-    createHandoverLocalState,
-  );
+  const [local, setLocal] = useScopedState(scopeKey, createHandoverLocalState);
   const copyTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   React.useEffect(() => {
     return () => {
@@ -225,8 +231,7 @@ export function WebsiteHandover({
   const resources = view.kind === "blocked" ? [] : view.resources;
   const technicalResources =
     view.kind === "blocked" ? [] : view.technicalResources;
-  const history =
-    view.kind === "handedOver" ? view.previous : view.history;
+  const history = view.kind === "handedOver" ? view.previous : view.history;
   const approvedRevision =
     view.kind === "handedOver" ? view.revision : undefined;
   const canonicalAccessRequest =
@@ -272,9 +277,7 @@ export function WebsiteHandover({
     )
       .then(() => {
         if (!isScopeCurrent(dispatchScope, scopeRef.current)) return;
-        setLocal((previous) =>
-          completeHandoverDownload(previous, resource.id),
-        );
+        setLocal((previous) => completeHandoverDownload(previous, resource.id));
       })
       .catch((cause: unknown) => {
         if (!isScopeCurrent(dispatchScope, scopeRef.current)) return;
@@ -424,9 +427,7 @@ export function WebsiteHandover({
               <span className="flex items-center gap-2 text-2xs text-muted-foreground">
                 <button
                   className="underline underline-offset-2 hover:text-foreground"
-                  onClick={() =>
-                    copyAccessRequest(canonicalAccessRequest.text)
-                  }
+                  onClick={() => copyAccessRequest(canonicalAccessRequest.text)}
                   type="button"
                 >
                   {local.copied ? "Copied" : "Copy request"}

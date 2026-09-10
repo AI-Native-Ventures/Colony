@@ -213,9 +213,14 @@ export function WebsiteDecisionPanel({
           aria-live="polite"
           className="mt-2 flex items-start gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-2xs text-muted-foreground"
         >
-          <Loader2 aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 animate-spin" />
+          <Loader2
+            aria-hidden="true"
+            className="mt-0.5 size-3.5 shrink-0 animate-spin"
+          />
           <span>
-            {state.receipt ? "Confirming your decision." : "Saving your decision."}
+            {state.receipt
+              ? "Confirming your decision."
+              : "Saving your decision."}
           </span>
         </p>
       ) : null}
@@ -241,7 +246,10 @@ export function WebsiteDecisionPanel({
           role="alert"
         >
           <span className="flex items-start gap-1.5 text-foreground">
-            <CircleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+            <CircleAlert
+              aria-hidden="true"
+              className="mt-0.5 size-3.5 shrink-0"
+            />
             <span>{failureText}</span>
           </span>
           <span className="flex items-center gap-2">

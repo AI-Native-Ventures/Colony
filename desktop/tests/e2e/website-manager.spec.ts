@@ -484,10 +484,9 @@ async function installFixtureLoader(page: Page) {
       }
     ).__BUZZ_E2E_WEBSITE_ARTIFACT_LOADER__ = {
       load: async (ref: { sha256: string }) => {
-        const entry = (entries as Record<
-          string,
-          { base64: string; mime: string }
-        >)[ref.sha256.toLowerCase()];
+        const entry = (
+          entries as Record<string, { base64: string; mime: string }>
+        )[ref.sha256.toLowerCase()];
         if (!entry) throw new Error(`No website fixture for ${ref.sha256}`);
         const binary = atob(entry.base64);
         const bytes = new Uint8Array(binary.length);
@@ -629,9 +628,7 @@ test("mocked Brief state renders the brief and start action", async ({
   await openChannel(page, CHANNEL);
   await seedJob(page, "brief");
   await page.getByTestId("message-timeline").waitFor();
-  const rootAttachment = page
-    .getByTestId("website-root-attachment")
-    .first();
+  const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(rootAttachment).toBeVisible();
   await expect(
     page.getByText("Keep the business facts and useful content."),
@@ -650,9 +647,7 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "working");
-  const rootAttachment = page
-    .getByTestId("website-root-attachment")
-    .first();
+  const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(rootAttachment).toBeVisible();
   await expect(page.getByText("In progress").first()).toBeVisible();
   await expect(page.getByText("Understand the existing site")).toBeVisible();
@@ -671,7 +666,9 @@ test("mocked Working state shows stages and earlier-version inspection", async (
     .getByRole("button", { name: "View" })
     .click();
   await expect(page.getByText(/Read-only view of Version 1/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Close preview" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Close preview" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Close preview" }).click();
   await expect(page.getByText(/Read-only view of Version 1/)).toHaveCount(0);
   await captureBothWidths(page, "working", rootAttachment);
@@ -685,9 +682,7 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "review");
-  const rootAttachment = page
-    .getByTestId("website-root-attachment")
-    .first();
+  const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(page.getByText("Ready for your review").first()).toBeVisible();
   await expect(
     page.getByText("Desktop and mobile layouts reviewed"),
@@ -695,7 +690,10 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   const mobileButton = page.getByRole("button", { name: "Mobile preview" });
   await mobileButton.click();
   await expect(mobileButton).toHaveAttribute("aria-pressed", "true");
-  const beforeButton = page.getByRole("button", { name: "Before", exact: true });
+  const beforeButton = page.getByRole("button", {
+    name: "Before",
+    exact: true,
+  });
   await beforeButton.click();
   await expect(beforeButton).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Redesign", exact: true }).click();
@@ -781,9 +779,7 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   await threadAttachment
     .getByRole("button", { name: "Request changes" })
     .click();
-  await expect(
-    threadAttachment.getByText("network unreachable"),
-  ).toBeVisible();
+  await expect(threadAttachment.getByText("network unreachable")).toBeVisible();
   await expect(
     threadAttachment.getByRole("button", { name: "Try again" }),
   ).toBeVisible();
@@ -812,12 +808,15 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   await expect(page.getByText("Saving your decision.")).toHaveCount(0);
   expect(
     await page.evaluate(
-      () => (window as BlocksE2eWindow).__BUZZ_E2E_PUBLISHED_EVENTS__?.length ?? 0,
+      () =>
+        (window as BlocksE2eWindow).__BUZZ_E2E_PUBLISHED_EVENTS__?.length ?? 0,
     ),
   ).toBeGreaterThan(0);
 });
 
-test("mocked community switch clears pending website state", async ({ page }) => {
+test("mocked community switch clears pending website state", async ({
+  page,
+}) => {
   await seedActiveIdentity(page, "tyler");
   await installFixtureLoader(page);
   await page.addInitScript(

@@ -22,8 +22,8 @@ use super::super::review::{
 use super::error::WebsiteCommandError;
 use super::types::{
     WebsiteAction, WebsiteActionOp, WebsiteDecisionAction, MAX_PERSONAS_PER_ROLE,
-    MAX_PERSONA_ID_CHARS, MAX_TASK_ID_CHARS, MAX_WEBSITE_ACTION_CONTENT_BYTES, WEBSITE_ACTION_SCHEMA,
-    WEBSITE_APPROVE_ACTION_ID, WEBSITE_REQUEST_CHANGES_ACTION_ID,
+    MAX_PERSONA_ID_CHARS, MAX_TASK_ID_CHARS, MAX_WEBSITE_ACTION_CONTENT_BYTES,
+    WEBSITE_ACTION_SCHEMA, WEBSITE_APPROVE_ACTION_ID, WEBSITE_REQUEST_CHANGES_ACTION_ID,
 };
 
 /// Parse and validate one signed website action.
@@ -48,16 +48,16 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
     let request_id = required_tag(event, "request")?
         .parse::<Uuid>()
         .map_err(|_| WebsiteCommandError::InvalidRequestId)?;
-    let instance_event_id = optional_tag(event, "instance")
-        .map_err(|error| map_tag_error("instance", error))?;
+    let instance_event_id =
+        optional_tag(event, "instance").map_err(|error| map_tag_error("instance", error))?;
     if instance_event_id
         .as_deref()
         .is_some_and(|value| !is_lower_hex64(value))
     {
         return Err(WebsiteCommandError::InvalidIdentity("instance"));
     }
-    let manifest_event_id = optional_tag(event, "manifest")
-        .map_err(|error| map_tag_error("manifest", error))?;
+    let manifest_event_id =
+        optional_tag(event, "manifest").map_err(|error| map_tag_error("manifest", error))?;
     if manifest_event_id
         .as_deref()
         .is_some_and(|value| !is_lower_hex64(value))
@@ -475,8 +475,7 @@ fn validate_handover_assets(assets: &[HandoverAsset]) -> Result<(), WebsiteComma
     }
     let mut seen = BTreeSet::new();
     for asset in assets {
-        validate_asset_path(&asset.path)
-            .map_err(|_| WebsiteCommandError::InvalidHandoverAssets)?;
+        validate_asset_path(&asset.path).map_err(|_| WebsiteCommandError::InvalidHandoverAssets)?;
         if !seen.insert(asset.path.as_str()) {
             return Err(WebsiteCommandError::DuplicateAssetPath(asset.path.clone()));
         }

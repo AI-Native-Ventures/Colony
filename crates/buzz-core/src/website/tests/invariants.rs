@@ -479,7 +479,10 @@ fn reopen_preserves_handover_history() {
     assert_eq!(review.handover_history.len(), 1);
     assert_eq!(review.handover_history[0].approved_revision, 1);
     assert_eq!(
-        review.handover.as_ref().map(|handover| handover.approved_revision),
+        review
+            .handover
+            .as_ref()
+            .map(|handover| handover.approved_revision),
         Some(2)
     );
 

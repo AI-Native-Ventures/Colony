@@ -112,7 +112,15 @@ export function isPublicHttpsUrl(value: string): boolean {
   const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
   if (host.length === 0) return false;
   if (host.startsWith("[")) {
-    return host !== "[::1]" && !host.startsWith("[fc") && !host.startsWith("[fd") && !host.startsWith("[fe8") && !host.startsWith("[fe9") && !host.startsWith("[fea") && !host.startsWith("[feb");
+    return (
+      host !== "[::1]" &&
+      !host.startsWith("[fc") &&
+      !host.startsWith("[fd") &&
+      !host.startsWith("[fe8") &&
+      !host.startsWith("[fe9") &&
+      !host.startsWith("[fea") &&
+      !host.startsWith("[feb")
+    );
   }
   if (host === "localhost" || host.endsWith(".localhost")) return false;
   if (

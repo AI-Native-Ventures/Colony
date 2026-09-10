@@ -1,10 +1,5 @@
-import * as React from "react";
-import {
-  CircleCheck,
-  CircleDot,
-  Loader2,
-  PanelsTopLeft,
-} from "lucide-react";
+import type * as React from "react";
+import { CircleCheck, CircleDot, Loader2, PanelsTopLeft } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
 
@@ -147,9 +142,7 @@ export function WebsiteJobCard({
                 : "bg-accent text-accent-foreground",
             )}
           >
-            {coordinator
-              ? websiteAgentInitial(coordinator.name)
-              : "?"}
+            {coordinator ? websiteAgentInitial(coordinator.name) : "?"}
           </span>
           {coordinator
             ? `${coordinator.name} coordinates this job`

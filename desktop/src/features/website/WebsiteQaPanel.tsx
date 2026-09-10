@@ -31,14 +31,20 @@ export type WebsiteQaPanelProps = {
   className?: string;
 };
 
-function ResultIcon({ result }: { result: WebsiteQaView["checks"][number]["result"] }) {
+function ResultIcon({
+  result,
+}: {
+  result: WebsiteQaView["checks"][number]["result"];
+}) {
   if (result === "pass") {
     return <Check aria-hidden="true" className="size-4 text-emerald-600" />;
   }
   if (result === "fail") {
     return <X aria-hidden="true" className="size-4 text-destructive" />;
   }
-  return <MinusCircle aria-hidden="true" className="size-4 text-muted-foreground" />;
+  return (
+    <MinusCircle aria-hidden="true" className="size-4 text-muted-foreground" />
+  );
 }
 
 function EvidenceThumb({
@@ -92,7 +98,11 @@ function ReviewerIdentity({
   reviewer?: string;
 }) {
   if (!reviewer) {
-    return <span className="text-xs text-muted-foreground">No reviewer recorded</span>;
+    return (
+      <span className="text-xs text-muted-foreground">
+        No reviewer recorded
+      </span>
+    );
   }
   const agent = agents.get(reviewer);
   if (!agent) {
@@ -176,7 +186,10 @@ export function WebsiteQaPanel({
 
       {view.present && !view.reportAgrees && view.reportLoaded ? (
         <p className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-2xs text-foreground">
-          <CircleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+          <CircleAlert
+            aria-hidden="true"
+            className="mt-0.5 size-3.5 shrink-0 text-amber-600"
+          />
           <span>
             The reviewer checklist does not agree with the recorded result, so
             this review is not presented as passed.

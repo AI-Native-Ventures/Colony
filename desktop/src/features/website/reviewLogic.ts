@@ -63,9 +63,7 @@ export function findRevision(
 
 export function validateQa(
   revision: WebsiteRevisionRecord,
-):
-  | { ok: true }
-  | { ok: false; code: WebsiteReasonCode; message: string } {
+): { ok: true } | { ok: false; code: WebsiteReasonCode; message: string } {
   const qa = revision.qa;
   if (!qa) {
     return {
@@ -252,11 +250,13 @@ export function buildDecisionRequest(input: {
   manifestSha256: string;
   actor: string;
   note?: string;
-}): { ok: true; request: WebsiteDecisionRequest } | {
-  ok: false;
-  code: WebsiteReasonCode;
-  message: string;
-} {
+}):
+  | { ok: true; request: WebsiteDecisionRequest }
+  | {
+      ok: false;
+      code: WebsiteReasonCode;
+      message: string;
+    } {
   const { record, kind, revision, manifestSha256, actor } = input;
   const note = input.note ?? "";
 
@@ -343,7 +343,8 @@ export function buildDecisionRequest(input: {
       return {
         ok: false,
         code: "invalid_transition",
-        message: "Changes can only be requested while a version is under review.",
+        message:
+          "Changes can only be requested while a version is under review.",
       };
     }
   }
@@ -585,5 +586,9 @@ export function resolveSelectionAfterRecordChange(input: {
       message: "A newer version was recorded. Showing the current version.",
     };
   }
-  return { revision: selectedRevision, invalidated: false, followedHead: false };
+  return {
+    revision: selectedRevision,
+    invalidated: false,
+    followedHead: false,
+  };
 }
