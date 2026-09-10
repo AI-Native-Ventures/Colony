@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { finalizeEvent } from "nostr-tools/pure";
 import { PassThrough } from "node:stream";
 import { once } from "node:events";
+import { runInNewContext } from "node:vm";
+import {
+  installNativePublishObserver,
+  readNativePublishObservations,
+} from "./native-publish-diagnostics.mjs";
 import { waitForTeamPreview } from "./diagnostics.mjs";
 import {
   nativeRequestActor,
@@ -627,4 +632,127 @@ test("preview observation times out truthfully with the last rendered pending st
     error: null,
     elapsedMs: 75_000,
   });
+});
+
+test("native publish observer passively captures false OK and stops before renderer retirement", async () => {
+  const scope = {
+    ownerPubkey: "a".repeat(64),
+    relayUrl: "wss://fixture.invalid",
+  };
+  const callbacks = new Set();
+  let realDeliveries = 0;
+  const api = {
+    subscribe: (callback) => {
+      callbacks.add(callback);
+      return () => callbacks.delete(callback);
+    },
+  };
+  const window = { colonyDesktop: api };
+  runInNewContext(`(${installNativePublishObserver.toString()})(scope)`, {
+    window,
+    scope,
+  });
+  api.subscribe(() => {
+    realDeliveries += 1;
+  });
+  const deliver = (text) => {
+    const message = Object.freeze({
+      type: "channel",
+      id: 12,
+      sequence: 1,
+      payload: Object.freeze({ type: "Text", data: text }),
+    });
+    for (const callback of callbacks) callback(message);
+  };
+  deliver(
+    JSON.stringify([
+      "EVENT",
+      "auth-and-content-must-not-export",
+      "x".repeat(40_000),
+    ]),
+  );
+  deliver(JSON.stringify(["AUTH", "never-export-challenge"]));
+  deliver(JSON.stringify(["OK", "b".repeat(64), true, "never-export-success"]));
+  deliver(
+    JSON.stringify([
+      "OK",
+      "c".repeat(64),
+      false,
+      "no coordination team token=never-export-secret",
+    ]),
+  );
+  deliver('["OK",malformed');
+  deliver(JSON.stringify(["OK", "not-an-id", false, "never-export-invalid"]));
+  const captured = await readNativePublishObservations({
+    evaluate: async (read) =>
+      JSON.parse(
+        JSON.stringify(runInNewContext(`(${read.toString()})()`, { window })),
+      ),
+  });
+  assert.equal(realDeliveries, 6);
+  assert.equal(callbacks.size, 1, "Only the actual app subscriber remains");
+  assert.equal(captured.stopped, true);
+  assert.deepEqual(captured.refusals, [
+    {
+      eventId: "c".repeat(64),
+      message: "no coordination team [redacted-credential]",
+    },
+  ]);
+  assert.deepEqual(Array.from(captured.unavailable), [
+    "ok-message-read",
+    "ok-message-shape",
+  ]);
+  assert.equal(captured.okMessages, 2);
+  assert.doesNotMatch(
+    JSON.stringify(captured),
+    /never-export|auth-and-content/,
+  );
+  deliver(JSON.stringify(["OK", "d".repeat(64), false, "after-stop"]));
+  assert.equal(captured.refusals.length, 1);
+});
+
+test("native publish observation is bounded and never prevents subsequent real delivery", async () => {
+  const callbacks = [];
+  const window = {
+    colonyDesktop: {
+      subscribe: (callback) => {
+        callbacks.push(callback);
+        return () => {};
+      },
+    },
+  };
+  runInNewContext(`(${installNativePublishObserver.toString()})({})`, {
+    window,
+  });
+  let actual = 0;
+  callbacks.push(() => {
+    actual += 1;
+  });
+  const deliver = (data) => {
+    for (const callback of callbacks)
+      callback({ type: "channel", payload: { type: "Text", data } });
+  };
+  deliver('["OK",' + "x".repeat(40_000));
+  for (let i = 0; i < 21; i += 1)
+    deliver(JSON.stringify(["OK", "e".repeat(64), false, "refused"]));
+  assert.equal(actual, 22);
+  const captured = await readNativePublishObservations({
+    evaluate: async (read) =>
+      JSON.parse(
+        JSON.stringify(runInNewContext(`(${read.toString()})()`, { window })),
+      ),
+  });
+  assert.equal(captured.refusals.length, 20);
+  assert.deepEqual(Array.from(captured.unavailable), [
+    "ok-message-limit",
+    "refusal-limit",
+  ]);
+  assert.deepEqual(
+    await readNativePublishObservations({
+      evaluate: async () => {
+        throw new Error("gone");
+      },
+    }),
+    { unavailable: ["renderer-unavailable"], refusals: [] },
+  );
 });

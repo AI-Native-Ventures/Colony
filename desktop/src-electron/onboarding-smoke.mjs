@@ -25,6 +25,7 @@ import { createOnboardingFixtureProxy } from "./onboarding-fixture/proxy.mjs";
 import { startOnboardingFixtureRelay } from "./onboarding-fixture/relay.mjs";
 import { completeFixtureWork } from "./onboarding-fixture/work.mjs";
 import { readIngestFailures } from "./onboarding-fixture/failure-diagnostics.mjs";
+import { readNativePublishObservations } from "./onboarding-fixture/native-publish-diagnostics.mjs";
 
 assert.ok(
   process.argv.includes("--account-only") !==
@@ -133,6 +134,7 @@ const proof = {
       "onboarding-fixture/service-sources.json",
       "onboarding-fixture/diagnostics.mjs",
       "onboarding-fixture/failure-diagnostics.mjs",
+      "onboarding-fixture/native-publish-diagnostics.mjs",
       "onboarding-fixture/tool-result.mjs",
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",
@@ -463,6 +465,7 @@ try {
   if (Array.isArray(error?.startupDiagnostics))
     proof.relayStartupDiagnostics = error.startupDiagnostics;
   if (page && !page.isClosed()) {
+    proof.nativePublishResponses = await readNativePublishObservations(page);
     proof.failureState = await page
       .evaluate(async (owner) => {
         const state = {

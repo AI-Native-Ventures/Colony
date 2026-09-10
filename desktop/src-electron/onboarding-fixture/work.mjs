@@ -17,6 +17,10 @@ import {
 } from "./provider.mjs";
 
 import { readFixtureInstruction } from "./instruction.mjs";
+import {
+  installNativePublishObserver,
+  readNativePublishObservations,
+} from "./native-publish-diagnostics.mjs";
 
 /** Caller owns the real package and services; only model responses and ledger funds are fixtures. */
 export async function completeFixtureWork({
@@ -229,6 +233,13 @@ export async function completeFixtureWork({
     .first()
     .getByRole("button", { name: "Approve team and start", exact: true });
   await expect(start).toBeEnabled();
+  await page.evaluate(installNativePublishObserver, {
+    ownerPubkey: account.ownerPubkey,
+    relayUrl: account.relayUrl,
+    channelId: account.channelId,
+    rootEventId: account.rootEventId,
+    requestId: account.suggestion.requestId,
+  });
   await start.click();
   await readTeam();
   const publicTeam = () =>
@@ -337,6 +348,9 @@ export async function completeFixtureWork({
     )
     .toBe("completed")
     .catch(async (error) => {
+      onEvidence({
+        nativePublishResponses: await readNativePublishObservations(page),
+      });
       const taskFailure = await reader
         .failureEvidence()
         .catch(() => ({ unavailable: true }));
@@ -353,6 +367,9 @@ export async function completeFixtureWork({
       });
       throw error;
     });
+  onEvidence({
+    nativePublishResponses: await readNativePublishObservations(page),
+  });
   const task = await approved.readTask();
   assert.equal(task.status, "completed");
   const actualAgents = await invoke("list_managed_agents");
