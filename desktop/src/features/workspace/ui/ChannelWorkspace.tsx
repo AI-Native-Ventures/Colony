@@ -103,7 +103,7 @@ export function ChannelWorkspace({
             This tab needs a newer version of the app to open.
           </div>
         ) : (
-          <NewTabPage onCreate={handleCreate} />
+          <NewTabPage channelId={channelId} onCreate={handleCreate} />
         )}
       </div>
     </div>
