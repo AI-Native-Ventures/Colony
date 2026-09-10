@@ -71,6 +71,31 @@ pub(super) fn release(slot: &SharedHostSlot) {
     }
 }
 
+/// Release one session's claim, shutting the shared browser down cleanly when
+/// this was the last one.
+///
+/// Chromium only writes a persistent profile's cookies to disk on a normal
+/// shutdown, so the mailbox's Gmail login only survives a restart if the last
+/// release asks the browser to close rather than letting `Drop` fall back to a
+/// signal. Callers on a synchronous path (app shutdown) still use [`release`].
+pub(super) async fn release_gracefully(slot: &SharedHostSlot) {
+    let last = {
+        let mut guard = lock(slot);
+        let Some(shared) = guard.as_mut() else {
+            return;
+        };
+        shared.refcount = shared.refcount.saturating_sub(1);
+        if shared.refcount == 0 {
+            guard.take()
+        } else {
+            None
+        }
+    };
+    if let Some(shared) = last {
+        shared.host.close_gracefully().await;
+    }
+}
+
 /// Holds a claim on the shared host until [`SharedHostReservation::keep`] is
 /// called. Dropping it unclaimed (a failed attach/connect after acquiring)
 /// releases the claim instead of leaking the refcount.
@@ -102,11 +127,24 @@ impl Drop for SharedHostReservation {
 /// comparable across both paths.
 pub(super) async fn acquire_host(
     slot: &SharedHostSlot,
+    profile_dir: &std::path::Path,
 ) -> Result<(BrowserHost, SharedHostReservation), BrowserError> {
+    std::fs::create_dir_all(profile_dir).map_err(|error| {
+        BrowserError::Host(format!(
+            "failed to create browser profile directory {}: {error}",
+            profile_dir.display()
+        ))
+    })?;
     let endpoint = match reuse_existing(slot) {
         Some(endpoint) => endpoint,
         None => {
-            let launched = host::launch(&host::HostConfig::default()).await?;
+            let launched = host::launch(&host::HostConfig {
+                binary: None,
+                profile_dir: profile_dir.to_path_buf(),
+                headless: true,
+                persist_profile: true,
+            })
+            .await?;
             install_or_join(slot, launched)
         }
     };

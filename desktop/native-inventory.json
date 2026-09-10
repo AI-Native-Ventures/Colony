@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 507,
-    "rust_lines": 185594,
+    "rust_lines": 185736,
     "tauri_coupled": 201,
     "portable": 306,
-    "portable_lines": 105038,
+    "portable_lines": 105076,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -541,7 +541,7 @@
     ]
   },
   "params": {
-    "AppHandle": 409,
+    "AppHandle": 410,
     "State": 268,
     "Window": 7,
     "ipc::Request": 1,
@@ -549,7 +549,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 406,
+      "AppHandle": 407,
       "State": 268,
       "Window": 7,
       "ipc::Request": 1,
@@ -582,7 +582,7 @@
     ".run_on_main_thread(": 3,
     ".config()": 5,
     ".env()": 1,
-    ".path()": 30,
+    ".path()": 31,
     ".exit(": 5
   },
   "events": {

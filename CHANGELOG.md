@@ -8,6 +8,7 @@
 - feat(desktop): switch between documents and media in an ordered collection while retaining reading position, and view expandable Mermaid flow, sequence and relationship diagrams inline in channels and threads. Download the originals for editing.
 - feat(agents): describe a Block's active schema and examples in one command, supply custom Question choices and Details, and distinguish a one-off choice from an Interview answered in the thread.
 - fix(desktop): recover from brief relay rate limits without leaving Block actions stuck, preserving the signed event, retry limits and workspace boundary.
+- build(desktop): ship the `buzz-browserd` browser daemon as a packaged sidecar, so the browser MCP server is available to managed agents in installed builds and not only in a source checkout.
 
 ## relay-v0.11.10
 

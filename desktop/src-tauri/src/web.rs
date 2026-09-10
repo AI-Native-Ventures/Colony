@@ -34,8 +34,9 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::{mpsc, oneshot};
+use url::Url;
 
 /// Event emitted for each acknowledged CDP screencast frame.
 pub const WEB_FRAME_EVENT: &str = "workspace-web-frame";
@@ -45,6 +46,49 @@ pub const WEB_ERROR_EVENT: &str = "workspace-web-error";
 pub const WEB_CLOSED_EVENT: &str = "workspace-web-closed";
 
 const SESSION_POLL: Duration = Duration::from_millis(100);
+
+/// Directory segment used when no relay host can be resolved.
+const DEFAULT_PROFILE_KEY: &str = "default";
+
+/// Sanitize a relay host to a safe profile-directory segment.
+///
+/// Everything outside `[A-Za-z0-9._-]` is dropped so the key can never walk
+/// out of the profile root. An empty or dot-only result falls back to
+/// [`DEFAULT_PROFILE_KEY`].
+fn sanitize_profile_key(host: &str) -> String {
+    let key: String = host
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
+        .collect();
+    if key.is_empty() || key.chars().all(|c| c == '.') {
+        DEFAULT_PROFILE_KEY.to_string()
+    } else {
+        key
+    }
+}
+
+/// The persistent mailbox browser profile for the active community.
+///
+/// Keyed by the active relay's host so each community gets its own Chromium
+/// profile, and so a mailbox signed in against one community's relay is never
+/// visible from another. Falls back to a temp directory only when the app has
+/// no resolvable data directory, which is not a state a running app reaches.
+fn mailbox_profile_dir<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
+    let key = app
+        .try_state::<crate::app_state::AppState>()
+        .map(|state| crate::relay::relay_ws_url_with_override(&state))
+        .and_then(|url| {
+            Url::parse(&url)
+                .ok()
+                .and_then(|url| url.host_str().map(sanitize_profile_key))
+        })
+        .unwrap_or_else(|| DEFAULT_PROFILE_KEY.to_string());
+    let root = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("buzz-desktop"));
+    root.join("browser-profiles").join(key).join("mailbox")
+}
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const START_WAIT_TIMEOUT: Duration = Duration::from_secs(25);
 const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -86,12 +130,37 @@ struct WebSession {
     /// keeps the shared browser alive exactly as long as any session still
     /// needs it, and kills it once the last one is gone.
     shared_host: Option<SharedHostSlot>,
+    /// Set once this session's shared-host claim has been given back, so the
+    /// async close path and `Drop` can never release the same claim twice.
+    shared_host_released: AtomicBool,
     shared: shared_endpoint::SharedTabInfo,
+}
+
+impl WebSession {
+    /// Claim the right to release this session's shared-host reservation.
+    /// Returns the slot for whichever caller wins the race, `None` after that.
+    fn take_shared_host_claim(&self) -> Option<&SharedHostSlot> {
+        let shared_host = self.shared_host.as_ref()?;
+        self.shared_host_released
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| shared_host)
+    }
+
+    /// Give the shared-host claim back, letting the browser shut down cleanly
+    /// if this session was the last one holding it. Chromium only flushes a
+    /// persistent profile's cookies on a normal shutdown, so a mailbox login
+    /// survives a restart only through this path; `Drop` is the crash fallback.
+    async fn release_shared_host_gracefully(&self) {
+        if let Some(shared_host) = self.take_shared_host_claim() {
+            shared_host::release_gracefully(shared_host).await;
+        }
+    }
 }
 
 impl Drop for WebSession {
     fn drop(&mut self) {
-        if let Some(shared_host) = &self.shared_host {
+        if let Some(shared_host) = self.take_shared_host_claim() {
             shared_host::release(shared_host);
         }
     }
@@ -195,11 +264,20 @@ impl WebManager {
                 .map_err(|error| error.to_string())?;
             (host, None)
         } else {
-            let (host, reservation) =
-                tokio::time::timeout(START_TIMEOUT, shared_host::acquire_host(&self.shared_host))
-                    .await
-                    .map_err(|_| "browser connection timed out".to_string())?
-                    .map_err(|error| error.to_string())?;
+            let profile_dir = mailbox_profile_dir(&app);
+            std::fs::create_dir_all(&profile_dir).map_err(|error| {
+                format!(
+                    "failed to create mailbox browser profile directory {}: {error}",
+                    profile_dir.display()
+                )
+            })?;
+            let (host, reservation) = tokio::time::timeout(
+                START_TIMEOUT,
+                shared_host::acquire_host(&self.shared_host, &profile_dir),
+            )
+            .await
+            .map_err(|_| "browser connection timed out".to_string())?
+            .map_err(|error| error.to_string())?;
             (host, Some(reservation))
         };
         let host_ready = Instant::now();
@@ -246,6 +324,7 @@ impl WebManager {
             done: Mutex::new(Some(done_receiver)),
             task: Mutex::new(None),
             shared_host: shared_reservation.map(shared_host::SharedHostReservation::keep),
+            shared_host_released: AtomicBool::new(false),
             shared: shared_endpoint::SharedTabInfo {
                 endpoint: host.base_url().to_string(),
                 target_id: target.id.clone(),
@@ -535,13 +614,18 @@ async fn stop_and_wait(session: Arc<WebSession>) -> Result<(), String> {
     let stopped = tokio::task::spawn_blocking(move || wait_for_done(&wait_session))
         .await
         .map_err(|error| format!("web session shutdown task failed: {error}"))?;
-    if stopped {
+    let result = if stopped {
         reap_session_task(&session).await;
         Ok(())
     } else {
         abort_session_task(&session).await;
         Err("timed out stopping web session task".to_string())
-    }
+    };
+    // Both the single-tab close and the community reset land here, and both
+    // can await, so give the shared host back the graceful way: a killed
+    // Chromium never writes the mailbox profile's cookies to disk.
+    session.release_shared_host_gracefully().await;
+    result
 }
 
 fn wait_for_done(session: &WebSession) -> bool {

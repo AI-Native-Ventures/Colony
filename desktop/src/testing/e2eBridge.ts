@@ -6683,6 +6683,9 @@ function buildMockProjectEvents(): RelayEvent[] {
         ["d", "buzz"],
         ["name", "buzz"],
         ["description", "The complete Buzz community platform."],
+        // Makes `general` a project channel in mock mode, which is what gates
+        // the workspace kinds that need a project (factory, project terminal).
+        ["buzz-channel", STARTER_GENERAL_CHANNEL_ID],
         ["a", `${KIND_REPO_ANNOUNCEMENT}:${projectOwner}:buzz`],
         ["a", `${KIND_REPO_ANNOUNCEMENT}:${ALICE_PUBKEY}:relay-tools`],
       ],

@@ -8,6 +8,7 @@ pub mod contracts;
 pub mod host;
 pub mod input;
 pub mod journey;
+pub mod mail;
 pub mod mcp;
 pub mod snapshot;
 
