@@ -175,9 +175,13 @@ fn terminate_child(child: &mut Child) {
     }
     #[cfg(unix)]
     {
-        // Safe: the child has not been reaped yet, so its pid is still ours
-        // and cannot have been recycled onto an unrelated process.
-        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+
+        // The child has not been reaped yet, so its pid is still ours and
+        // cannot have been recycled onto an unrelated process. A failure here
+        // just means the process is already gone, which the wait below sees.
+        let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
         let deadline = std::time::Instant::now() + TERMINATE_GRACE;
         while std::time::Instant::now() < deadline {
             if matches!(child.try_wait(), Ok(Some(_))) {

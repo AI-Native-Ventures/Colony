@@ -32,8 +32,11 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# Safe wrapper around kill(2), for asking Chromium to shut down cleanly so it
+# flushes a persistent profile. Unix-only; terminate_child hard-kills instead
+# on other platforms.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
 tempfile = "3"
