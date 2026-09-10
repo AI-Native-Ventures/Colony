@@ -109,7 +109,10 @@ export function useWebsitePreviewHost(options: {
   occludedRef.current = Boolean(occluded);
   const tabHiddenRef = React.useRef(tabHidden);
   tabHiddenRef.current = tabHidden;
-  const scheduleVisibilityRef = React.useRef<() => void>(() => {});
+  const scheduleVisibilityRef = React.useRef<
+    (occluded: boolean, tabHidden: boolean) => void
+  >(() => {});
+  const attachKeyRef = React.useRef<string | null>(null);
 
   const previewUrl = revision?.preview.url ?? null;
   const previewSha256 = revision?.preview.sha256 ?? null;
@@ -170,9 +173,10 @@ export function useWebsitePreviewHost(options: {
     };
   }, [hostWanted, instanceId]);
 
-  // Visibility-only updates never re-run the attach effect.
+  // Visibility-only updates never re-run the attach effect. The current
+  // values are passed through so the dependency is the real input.
   React.useEffect(() => {
-    scheduleVisibilityRef.current();
+    scheduleVisibilityRef.current(Boolean(occluded), tabHidden);
   }, [occluded, tabHidden]);
 
   const wake = React.useCallback(() => {
@@ -180,6 +184,20 @@ export function useWebsitePreviewHost(options: {
   }, []);
 
   React.useEffect(() => {
+    // Every attach attempt is identified by its scope plus the retry token:
+    // queued bounds work from a superseded attempt is ignored, and a retry
+    // genuinely re-enters this effect with a new attempt key.
+    const attachKey = [
+      communityId,
+      jobId,
+      threadRoot,
+      previewUrl,
+      previewSha256,
+      String(revisionNumber),
+      viewport,
+      String(retryToken),
+    ].join("\u0000");
+    attachKeyRef.current = attachKey;
     if (!enabled) {
       setPhase("idle");
       setAttachError(undefined);
@@ -225,6 +243,7 @@ export function useWebsitePreviewHost(options: {
     const controller = new AbortController();
 
     const updateBounds = () => {
+      if (attachKeyRef.current !== attachKey) return;
       const element = containerRef.current;
       const current = handleRef.current;
       if (!element || !current) return;
@@ -254,7 +273,7 @@ export function useWebsitePreviewHost(options: {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(updateBounds);
     };
-    scheduleVisibilityRef.current = scheduleBounds;
+    scheduleVisibilityRef.current = () => scheduleBounds();
 
     setPhase("attaching");
     setAttachError(undefined);
@@ -329,6 +348,7 @@ export function useWebsitePreviewHost(options: {
       window.removeEventListener("scroll", scheduleBounds, true);
       window.removeEventListener("resize", scheduleBounds);
       scheduleVisibilityRef.current = () => {};
+      if (attachKeyRef.current === attachKey) attachKeyRef.current = null;
       const current = handleRef.current;
       handleRef.current = null;
       if (current) {

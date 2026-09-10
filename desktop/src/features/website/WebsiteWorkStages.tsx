@@ -30,13 +30,20 @@ export type WebsiteWorkStagesProps = {
   defaultCollapsed?: boolean;
 };
 
-const STATE_LABEL: Record<WebsiteStageRow["state"], string> = {
-  done: "Done",
-  working: "Working",
-  next: "Next",
-  then: "Then",
-  blocked: "Needs attention",
-};
+function stateLabel(state: WebsiteStageRow["state"]): string {
+  switch (state) {
+    case "done":
+      return "Done";
+    case "working":
+      return "Working";
+    case "next":
+      return "Next";
+    case "then":
+      return "Then";
+    case "blocked":
+      return "Needs attention";
+  }
+}
 
 function StateIcon({ state }: { state: WebsiteStageRow["state"] }) {
   if (state === "done") {
@@ -129,7 +136,7 @@ function StageRowView({ row }: { row: WebsiteStageRow }) {
           row.state === "working" ? "text-foreground" : "text-muted-foreground",
         )}
       >
-        {STATE_LABEL[row.state]}
+        {stateLabel(row.state)}
       </span>
     </li>
   );

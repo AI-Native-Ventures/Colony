@@ -56,17 +56,23 @@ export function useVerifiedArtifact(options: {
   });
   const [entry, setEntry] = React.useState<LoadedEntry | null>(null);
   const [retryToken, setRetryToken] = React.useState(0);
+  // The attempt key folds the retry token into the request identity, so a
+  // retry is a genuinely new attempt (the effect re-runs), while the same
+  // request and token still render the stored result.
+  const attemptKey =
+    requestKey === null ? null : `${requestKey}\u0000${retryToken}`;
 
   const artifactRef = React.useRef(artifact);
   artifactRef.current = artifact;
 
   React.useEffect(() => {
     const requested = artifactRef.current;
-    if (!requestKey || !loader || !requested) return;
+    if (!attemptKey || !loader || !requested) return;
+    const key = attemptKey;
     let loaded: WebsiteVerifiedArtifact | null = null;
     const controller = new AbortController();
     setEntry({
-      key: requestKey,
+      key,
       state: { status: "loading" },
     });
     loader
@@ -81,7 +87,7 @@ export function useVerifiedArtifact(options: {
         if (actual !== expected) {
           verified.revoke();
           setEntry({
-            key: requestKey,
+            key,
             state: {
               status: "error",
               message:
@@ -96,7 +102,7 @@ export function useVerifiedArtifact(options: {
         if (!isLocalArtifactUrl(verified.objectUrl, requested.url)) {
           verified.revoke();
           setEntry({
-            key: requestKey,
+            key,
             state: {
               status: "error",
               message:
@@ -108,7 +114,7 @@ export function useVerifiedArtifact(options: {
         }
         loaded = verified;
         setEntry({
-          key: requestKey,
+          key,
           state: {
             status: "ready",
             objectUrl: verified.objectUrl,
@@ -119,7 +125,7 @@ export function useVerifiedArtifact(options: {
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;
         setEntry({
-          key: requestKey,
+          key,
           state: {
             status: "error",
             message: "The saved image for this version could not be loaded.",
@@ -132,11 +138,11 @@ export function useVerifiedArtifact(options: {
       loaded?.revoke();
       loaded = null;
     };
-  }, [loader, requestKey, retryToken]);
+  }, [attemptKey, loader]);
 
   const state = ((): VerifiedArtifactState => {
-    if (!requestKey) return { status: "idle" };
-    if (entry && entry.key === requestKey) {
+    if (!attemptKey) return { status: "idle" };
+    if (entry && entry.key === attemptKey) {
       if (entry.state.status !== "error") return entry.state;
       return {
         ...entry.state,
