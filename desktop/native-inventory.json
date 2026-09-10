@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 515,
-    "rust_lines": 187838,
+    "rust_lines": 187836,
     "tauri_coupled": 207,
     "portable": 308,
-    "portable_lines": 105578,
+    "portable_lines": 105576,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",

@@ -32,14 +32,12 @@ mod recipe;
 mod skills;
 
 pub use install::{install_status, install_website_team};
-pub use journal::{journal_path, WebsiteTeamJournalEntry};
+pub use journal::WebsiteTeamJournalEntry;
 pub use recipe::{
-    persona_system_prompt, RecipePersona, RecipeSkill, AVERY_PERSONA_ID, EXAMPLE_PROMPT,
-    INTEGRATION_NOTE, JULES_PERSONA_ID, OUTCOME_SENTENCE, PERSONAS, RECIPE_ID, RECIPE_VERSION,
-    REN_PERSONA_ID, SKILLS, TEAM_DESCRIPTION, TEAM_INSTRUCTIONS, TEAM_NAME, TEAM_SLUG,
-    VERA_PERSONA_ID,
+    EXAMPLE_PROMPT, INTEGRATION_NOTE, OUTCOME_SENTENCE, PERSONAS, RECIPE_ID, RECIPE_VERSION,
+    SKILLS, TEAM_NAME, TEAM_SLUG,
 };
-pub use skills::{install_recipe_skills, InstalledWebsiteSkill};
+pub use skills::InstalledWebsiteSkill;
 
 use serde::{Deserialize, Serialize};
 

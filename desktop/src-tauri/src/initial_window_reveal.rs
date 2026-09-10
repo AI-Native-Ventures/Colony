@@ -13,7 +13,7 @@ use crate::initial_window::{
     wait_for_stable_initial_window_geometry, INITIAL_RENDER_READY_EVENT,
 };
 #[cfg(target_os = "macos")]
-use tauri::Listener;
+use tauri::{Listener, Manager};
 
 pub(crate) fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::<R, ()>::new("initial-window-reveal")
