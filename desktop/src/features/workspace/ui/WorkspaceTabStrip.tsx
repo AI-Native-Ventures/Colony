@@ -11,6 +11,12 @@ type WorkspaceTabStripProps = {
   onClose: (tabId: string) => void;
   onNewTab: () => void;
   onBackToConversation: () => void;
+  /**
+   * Optional: a pointer down on a tab, forwarded so a body that arranges tabs
+   * itself (the factory canvas) can start a drag out of the strip. Selection
+   * still happens on click, so a plain click is unaffected.
+   */
+  onTabPointerDown?: (tabId: string, event: React.PointerEvent) => void;
 };
 
 /**
@@ -24,6 +30,7 @@ export function WorkspaceTabStrip({
   onClose,
   onNewTab,
   onBackToConversation,
+  onTabPointerDown,
 }: WorkspaceTabStripProps): React.JSX.Element {
   return (
     <div
@@ -47,6 +54,10 @@ export function WorkspaceTabStrip({
               aria-selected={tab.id === activeTabId}
               className="max-w-[12rem] truncate outline-none"
               onClick={() => onSelect(tab.id)}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                onTabPointerDown?.(tab.id, event);
+              }}
               role="tab"
               type="button"
             >

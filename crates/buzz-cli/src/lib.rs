@@ -1627,7 +1627,7 @@ pub enum BlocksCmd {
 pub enum MessagesCmd {
     /// Send a message to a channel
     #[command(
-        after_help = "Examples:\n  buzz messages send --channel <UUID> --content \"hello\"\n  buzz messages send --channel <UUID> --content \"@alice check this\"\n  echo \"hello from stdin\" | buzz messages send --channel <UUID> --content -"
+        after_help = "Examples:\n  buzz messages send --channel <UUID> --content \"hello\"\n  buzz messages send --channel <UUID> --content \"@alice check this\"\n  echo \"hello from stdin\" | buzz messages send --channel <UUID> --content -\n  buzz messages send --channel <uuid> --content \"Here they are.\" --discovery campaign_leads:<campaign-id>"
     )]
     Send {
         /// Channel UUID (from 'buzz channels list')
@@ -1651,6 +1651,25 @@ pub enum MessagesCmd {
         /// Pubkey to mention (hex or npub; repeatable). Supplying any explicit identity permits unresolved or ambiguous @Name text as presentation-only; uniquely resolved member names still notify.
         #[arg(long = "mention")]
         mentions: Vec<String>,
+        /// Discovery entity to reference as `<kind>:<id>` (repeatable, max 20)
+        ///
+        /// The desktop renders each reference as a rich tile in the message,
+        /// and a receiving agent resolves it into current Discovery context.
+        /// `<kind>` is one of industry, vertical, campaign, campaign_leads,
+        /// lead, run. `<id>` is the stable id printed by `buzz discovery
+        /// search`; a vertical id is the composite `<industry-id>/<vertical-id>`,
+        /// so only the first `:` separates kind from id.
+        ///
+        /// Every reference is resolved with this identity before the message is
+        /// published, and the entity's current display name becomes the tag's
+        /// label. That label is presentation only: kind and id are what any
+        /// reader resolves. One reference that does not resolve fails the whole
+        /// send. The message text is never modified; write your own prose.
+        ///
+        /// Example: buzz messages send --channel <uuid> --content "Here they
+        /// are." --discovery campaign_leads:<campaign-id>
+        #[arg(long = "discovery")]
+        discovery: Vec<String>,
         /// Company Task this message's work is charged to
         ///
         /// A paid agent turn with no Task is spend that no cost centre, team,

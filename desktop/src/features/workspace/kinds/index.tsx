@@ -24,6 +24,10 @@ import {
   terminalKindDefinition,
 } from "@/features/workspace/kinds/terminalKind";
 import { WebBody, webKindDefinition } from "@/features/workspace/kinds/webKind";
+import {
+  FactoryBody,
+  factoryKindDefinition,
+} from "@/features/workspace/kinds/factoryKind";
 import { getFeature } from "@/shared/features/manifest";
 import { resolveEnabled } from "@/shared/features/resolveEnabled";
 import { getOverrides } from "@/shared/features/store";
@@ -37,8 +41,21 @@ import { getOverrides } from "@/shared/features/store";
 const bodies = new Map<string, React.ComponentType<TabBodyProps>>();
 
 const WEB_TAB_FEATURE_ID = "workspaceWebTab";
+const FACTORY_TAB_FEATURE_ID = "workspaceFactoryTab";
 let stableKindsRegistered = false;
 let webKindRegistered = false;
+let factoryKindRegistered = false;
+
+function workspaceFactoryTabEnabled(): boolean {
+  const feature = getFeature(FACTORY_TAB_FEATURE_ID);
+  return feature
+    ? resolveEnabled(
+        FACTORY_TAB_FEATURE_ID,
+        getOverrides(),
+        feature.defaultEnabled,
+      )
+    : true; // Default on when not in manifest.
+}
 
 function workspaceWebTabEnabled(): boolean {
   // The Electron browser is a shipping surface, independent of the old Tauri preview.
@@ -77,6 +94,11 @@ export function registerAllTabKinds(): void {
     bodies.set(imageKindDefinition.kind, ImageBody);
     registerTabKind(terminalKindDefinition);
     bodies.set(terminalKindDefinition.kind, TerminalBody);
+  }
+  if (!factoryKindRegistered && workspaceFactoryTabEnabled()) {
+    factoryKindRegistered = true;
+    registerTabKind(factoryKindDefinition);
+    bodies.set(factoryKindDefinition.kind, FactoryBody);
   }
   if (!webKindRegistered && workspaceWebTabEnabled()) {
     webKindRegistered = true;

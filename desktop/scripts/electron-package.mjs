@@ -47,6 +47,7 @@ for (const key of Object.keys(buildEnv)) {
 const helpers = [
   "buzz-acp",
   "buzz-agent",
+  "buzz-browserd",
   "buzz-dev-mcp",
   "git-credential-nostr",
   "buzz",
@@ -55,6 +56,7 @@ const helpers = [
 const packages = [
   "buzz-acp",
   "buzz-agent",
+  "buzz-browser",
   "buzz-dev-mcp",
   "git-credential-nostr",
   "buzz-cli",

@@ -52,7 +52,7 @@ rm -f "${CAPABILITY_ACTIVE}"
 # 1. Sidecars: Tauri validates externalBin at build time; real binaries let
 #    flow 04 spawn an actual agent runtime.
 HOST="$(rustc -vV | sed -n 's|host: ||p')"
-SIDECAR_NAMES=(buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz)
+SIDECAR_NAMES=(buzz-acp buzz-agent buzz-browserd buzz-dev-mcp git-credential-nostr buzz)
 missing_sidecars=()
 for bin in "${SIDECAR_NAMES[@]}"; do
   if [[ ! -x "target/release/${bin}" ]]; then
@@ -61,7 +61,7 @@ for bin in "${SIDECAR_NAMES[@]}"; do
 done
 if [[ ${#missing_sidecars[@]} -gt 0 ]]; then
   echo "[real-shell] building missing release sidecars: ${missing_sidecars[*]}"
-  cargo build --release -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+  cargo build --release -p buzz-acp -p buzz-agent -p buzz-browser -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
 fi
 ./scripts/bundle-sidecars.sh "${HOST}"
 
