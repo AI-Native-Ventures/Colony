@@ -31,6 +31,7 @@ pub const TOOL_WAIT: &str = "browser_wait_for";
 pub const TOOL_SCREENSHOT: &str = "browser_screenshot";
 pub const TOOL_TABS: &str = "browser_tabs_list";
 pub const TOOL_BUDGET: &str = "context_budget_report";
+pub const TOOL_MAIL_SEND: &str = "mail_send";
 
 /// Shared state for one browser daemon session.
 #[derive(Default)]
@@ -161,6 +162,24 @@ pub struct ScrollParams {
 pub struct WaitParams {
     pub selector: String,
     pub timeout_ms: Option<u64>,
+}
+
+/// Parameters for the `mail_send` journey.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MailSendParams {
+    /// Recipient email address.
+    pub to: String,
+    /// Email subject line.
+    pub subject: String,
+    /// Email body text.
+    pub body: String,
+    /// Compose URL; defaults to Gmail's standard compose endpoint.
+    #[serde(default = "default_compose_url")]
+    pub compose_url: String,
+}
+
+fn default_compose_url() -> String {
+    "https://mail.google.com/mail/u/0/#inbox?compose=new".to_string()
 }
 
 #[tool_router]
@@ -406,6 +425,32 @@ impl BuzzBrowserMcp {
         )]))
     }
 
+    /// Send an approved email through Gmail's compose form inside the
+    /// active browser tab. Requires `browser_connect` first.
+    #[tool(
+        name = "mail_send",
+        description = "Send a Gmail message from the owner's account by navigating to Gmail compose, filling the form by accessible-name prefix, clicking Send, and confirming the 'Message sent' toast. Returns structured JSON with status, failure reason, sent_at, inputs, and a base64 PNG screenshot."
+    )]
+    async fn mail_send(
+        &self,
+        Parameters(p): Parameters<MailSendParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut state = self.state.lock().await;
+        let client = state.client.as_mut().ok_or_else(|| {
+            ErrorData::invalid_request("no browser connected; call browser_connect first", None)
+        })?;
+        let result =
+            crate::mail::run_mail_send_journey(client, &p.to, &p.subject, &p.body, &p.compose_url)
+                .await;
+        let chars = serde_json::to_string(&result).unwrap_or_default().len();
+        state.ledger.record(TOOL_MAIL_SEND, chars);
+        // Lock is released when `state` goes out of scope on return.
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).unwrap_or_default(),
+        )]))
+    }
+
     #[tool(
         name = "context_budget_report",
         description = "Return the per-task context budget ledger."
@@ -507,6 +552,7 @@ mod tests {
         assert_eq!(TOOL_CLICK, "browser_click");
         assert_eq!(TOOL_TYPE, "browser_type");
         assert_eq!(TOOL_BUDGET, "context_budget_report");
+        assert_eq!(TOOL_MAIL_SEND, "mail_send");
     }
 
     fn target(id: &str) -> TargetInfo {

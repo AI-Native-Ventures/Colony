@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gmail Compose Fixture (No Send)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f6f8fc; color: #202124; margin: 0; padding: 20px; }
+  .compose-box { max-width: 640px; margin: 20px auto; background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 16px 20px; }
+  label { display: block; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #5f6368; margin-bottom: 4px; }
+  .field { width: 100%; padding: 8px 10px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box; }
+  [contenteditable="true"] { min-height: 120px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="compose-box">
+    <h2>Compose message (no send button)</h2>
+    <label for="to">To recipients</label>
+    <input id="to" class="field" type="text" aria-label="To recipients" placeholder="Recipients">
+
+    <label for="subject">Subject</label>
+    <input id="subject" class="field" type="text" aria-label="Subject" placeholder="Subject">
+
+    <label for="body">Message Body</label>
+    <div id="body" class="field" contenteditable="true" aria-label="Message Body" role="textbox"></div>
+  </div>
+</body>
+</html>
