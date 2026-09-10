@@ -318,9 +318,10 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
   async resolveEntities(
     refs: readonly DiscoveryEntityRef[],
   ): Promise<ResolvedDiscoveryEntity[]> {
+    const takenSeeds = new Set<number>();
     return refs
       .slice(0, DISCOVERY_RESOLVE_MAX_REFS)
-      .map((ref) => resolveFixtureDiscoveryEntity(ref));
+      .map((ref) => resolveFixtureDiscoveryEntity(ref, takenSeeds));
   }
 
   async getEntitlement(): Promise<DiscoveryEntitlement> {

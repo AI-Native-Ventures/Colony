@@ -107,9 +107,22 @@ function hashId(value: string): number {
   return hash;
 }
 
-function seedFor(id: string, offset = 0): FixtureLeadSeed {
-  const index = (hashId(id) + offset) % FIXTURE_LEAD_SEEDS.length;
-  return FIXTURE_LEAD_SEEDS[index] as FixtureLeadSeed;
+/**
+ * The seed for one reference ID, avoiding any seed already used in the same
+ * request. Two lead IDs whose hashes collide would otherwise render as the
+ * same business side by side, which reads as a rendering bug rather than as
+ * fixture data.
+ */
+function seedFor(id: string, taken?: Set<number>): FixtureLeadSeed {
+  const start = hashId(id) % FIXTURE_LEAD_SEEDS.length;
+  for (let step = 0; step < FIXTURE_LEAD_SEEDS.length; step += 1) {
+    const index = (start + step) % FIXTURE_LEAD_SEEDS.length;
+    if (!taken?.has(index)) {
+      taken?.add(index);
+      return FIXTURE_LEAD_SEEDS[index] as FixtureLeadSeed;
+    }
+  }
+  return FIXTURE_LEAD_SEEDS[start] as FixtureLeadSeed;
 }
 
 function fixtureLead(
@@ -170,6 +183,7 @@ function resolveVertical(ref: DiscoveryEntityRef): ResolvedDiscoveryEntity {
 /** Resolve one reference against the fixture workspace. */
 export function resolveFixtureDiscoveryEntity(
   ref: DiscoveryEntityRef,
+  takenSeeds?: Set<number>,
 ): ResolvedDiscoveryEntity {
   switch (ref.kind) {
     case "industry":
@@ -203,7 +217,7 @@ export function resolveFixtureDiscoveryEntity(
     case "lead":
       return {
         resolved: "lead",
-        lead: fixtureLead(ref.id, ref.id, seedFor(ref.id)),
+        lead: fixtureLead(ref.id, ref.id, seedFor(ref.id, takenSeeds)),
       };
     case "run":
       return {

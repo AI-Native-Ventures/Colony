@@ -44,6 +44,7 @@ import { useMessageEmoji } from "@/features/messages/lib/useMessageEmoji";
 import { parseWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedBy";
 import { useMessageMentionNames } from "@/features/messages/lib/useMessageMentionNames";
+import { DiscoveryEntityTiles } from "./DiscoveryEntityTiles";
 import { MessageProse } from "./MessageProse";
 import type {
   MessageRowProps,
@@ -637,6 +638,11 @@ export const MessageRow = React.memo(
         <SentFromThreadLine channelId={channelId} tags={message.tags} />
         <ReplyModelRequestLabel tags={message.tags} />
         {renderBody()}
+        {/* Block messages render their own instance and own everything under
+            it, so the tile strip stays out of them. */}
+        {isBlockMessage(message) ? null : (
+          <DiscoveryEntityTiles tags={message.tags} />
+        )}
         {continuationMetadataNode}
         <MessageReactions
           messageId={message.id}
