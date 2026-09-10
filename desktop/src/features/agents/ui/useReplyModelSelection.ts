@@ -49,6 +49,12 @@ export function useReplyModelSelection(input: {
     }
   }
   currentConversation.current = conversation;
+  const live = React.useRef({
+    scopeKey,
+    targetPubkey: target?.pubkey,
+    authorizedKey,
+  });
+  live.current = { scopeKey, targetPubkey: target?.pubkey, authorizedKey };
   const discovery = useQuery({
     queryKey: ["reply-models", relayUrl, input.scope, target?.pubkey],
     queryFn: () => getAgentModels(target?.pubkey ?? "", true),
@@ -88,18 +94,20 @@ export function useReplyModelSelection(input: {
   );
   const restore = React.useCallback(
     (tag: string[]) => {
+      const liveNow = live.current;
       if (
         currentConversation.current === conversation &&
-        target?.pubkey === tag[2]
+        liveNow.targetPubkey === tag[2]
       ) {
-        const newerAuthExists = authorizedKey && authorizedKey !== scopeKey;
+        const newerAuthExists =
+          liveNow.authorizedKey && liveNow.authorizedKey !== liveNow.scopeKey;
         if (!newerAuthExists) {
-          setAuthorizedKey(scopeKey);
+          setAuthorizedKey(liveNow.scopeKey);
         }
         setSelection((current) => restoreReplyModelSelection(current, tag));
       }
     },
-    [conversation, target, authorizedKey, scopeKey],
+    [conversation],
   );
   return {
     visible: input.enabled && targets.length > 0,

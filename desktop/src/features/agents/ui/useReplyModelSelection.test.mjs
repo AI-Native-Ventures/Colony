@@ -62,9 +62,7 @@ function HarnessComponent({ props, controlRef }) {
 }
 
 async function setupHarness(props, controlRef) {
-  const { act, render, waitFor, cleanup } = await import(
-    "@testing-library/react"
-  );
+  const { act, render, cleanup } = await import("@testing-library/react");
   const { QueryClient, QueryClientProvider } = await import(
     "@tanstack/react-query"
   );
@@ -109,7 +107,7 @@ async function setupHarness(props, controlRef) {
 test("initial laziness: no discovery before open, exactly one after open for A", async () => {
   discoveryCalls.length = 0;
   const ref = { current: null };
-  const { act, result, rerender } = await setupHarness(
+  const { act, result } = await setupHarness(
     { scope: "chan-1", enabled: true, recipientPubkeys: [agentA.pubkey] },
     ref,
   );
@@ -364,6 +362,128 @@ test("restore does not clobber a newer opening: open for A, choose, capture tag,
     null,
     "selection untouched (remains for current context)",
   );
+
+  result.unmount();
+});
+
+test("stale send-time restore does not clobber a newer opening for B", async () => {
+  discoveryCalls.length = 0;
+  const ref = { current: null };
+  const { act, result, rerender } = await setupHarness(
+    { scope: "chan-1", enabled: true, recipientPubkeys: [agentA.pubkey] },
+    ref,
+  );
+  await act(async () => ref.current.open());
+  await waitFor(() => assert.equal(discoveryCalls.length, 1), {
+    timeout: 1000,
+  });
+  await act(async () => ref.current.choose("model-1"));
+  const tag = ref.current.capture();
+  assert.ok(tag, "tag captured before rerenders");
+
+  // Capture the restore closure at send time (before any rerender changes state)
+  const restoreAtSend = ref.current.restore;
+
+  // Mentions removed, then B selected and opened (newer user action)
+  await act(async () =>
+    rerender({ scope: "chan-1", enabled: true, recipientPubkeys: [] }),
+  );
+  await act(async () =>
+    rerender({
+      scope: "chan-1",
+      enabled: true,
+      recipientPubkeys: [agentB.pubkey],
+    }),
+  );
+  await act(async () => {});
+  await act(async () => ref.current.open());
+  await waitFor(() => assert.equal(discoveryCalls.length, 2), {
+    timeout: 1000,
+  });
+  assert.equal(discoveryCalls[1].pubkey, agentB.pubkey, "new discovery for B");
+  assert.equal(ref.current?.opened, true, "B authorized before stale restore");
+
+  // Stale send-time restore for A fires: must not change authorization or selection
+  await act(async () => restoreAtSend(tag));
+  await act(async () => {});
+  assert.equal(
+    discoveryCalls.length,
+    2,
+    "no extra discovery call for A from stale restore",
+  );
+  assert.equal(
+    ref.current?.opened,
+    true,
+    "B authorization untouched by stale restore",
+  );
+  assert.equal(
+    ref.current?.selection,
+    null,
+    "B selection untouched by stale restore",
+  );
+
+  result.unmount();
+});
+
+test("stale send-time restore still re-enables the same target", async () => {
+  discoveryCalls.length = 0;
+  const ref = { current: null };
+  const { act, result, rerender } = await setupHarness(
+    { scope: "chan-1", enabled: true, recipientPubkeys: [agentA.pubkey] },
+    ref,
+  );
+  await act(async () => ref.current.open());
+  await waitFor(() => assert.equal(discoveryCalls.length, 1), {
+    timeout: 1000,
+  });
+  await act(async () => ref.current.choose("model-1"));
+  const tag = ref.current.capture();
+  const restoreAtSend = ref.current.restore;
+
+  // Mentions removed, then restored to same target A
+  await act(async () =>
+    rerender({ scope: "chan-1", enabled: true, recipientPubkeys: [] }),
+  );
+  await act(async () =>
+    rerender({
+      scope: "chan-1",
+      enabled: true,
+      recipientPubkeys: [agentA.pubkey],
+    }),
+  );
+  await act(async () => {});
+
+  // Before restore: authorization cleared by transition, selection null
+  assert.equal(
+    ref.current?.opened,
+    false,
+    "auth cleared after removal and restore of mentions",
+  );
+  assert.equal(ref.current?.selection, null, "selection null before restore");
+
+  await act(async () => restoreAtSend(tag));
+  await waitFor(() => assert.equal(discoveryCalls.length, 2), {
+    timeout: 1000,
+  });
+  assert.equal(
+    ref.current?.selection?.targetPubkey,
+    agentA.pubkey,
+    "selection reinstated for A",
+  );
+  assert.equal(ref.current?.selection?.modelId, "model-1", "model reinstated");
+  assert.equal(
+    ref.current?.opened,
+    true,
+    "authorization reinstated by stale restore for same target",
+  );
+  assert.equal(
+    discoveryCalls[1].pubkey,
+    agentA.pubkey,
+    "new discovery call for A after restore",
+  );
+
+  const restoredTag = ref.current.capture();
+  assert.deepEqual(restoredTag, tag, "capture returns same tag after restore");
 
   result.unmount();
 });
