@@ -368,6 +368,10 @@ export function ChannelMenuButton({
       </span>
       {trailingMeta ? (
         <span
+          // Decorative context, not part of the row's accessible name: the
+          // row is "general", not "general main", and a screen reader gets
+          // the branch from the channel header instead.
+          aria-hidden="true"
           className={cn(
             "ml-auto max-w-24 shrink truncate text-2xs font-normal leading-none",
             isActive
@@ -428,11 +432,9 @@ export function SidebarSection({
   emptyState,
   items,
   channelLabels,
-  channelMetaById,
   isCollapsed,
   isActiveChannel,
   presenceByChannelId,
-  projectChannelIds,
   selectedChannelId,
   title,
   testId,
@@ -454,13 +456,9 @@ export function SidebarSection({
   emptyState?: React.ReactNode;
   items: Channel[];
   channelLabels?: Record<string, string>;
-  /** Muted trailing meta per channel row (e.g. a project's default branch). */
-  channelMetaById?: Record<string, string>;
   isCollapsed?: boolean;
   isActiveChannel: boolean;
   presenceByChannelId?: Record<string, PresenceStatus>;
-  /** Channels owned by a project — these render a repository icon. */
-  projectChannelIds?: ReadonlySet<string>;
   selectedChannelId: string | null;
   title: string;
   testId: string;
@@ -535,13 +533,11 @@ export function SidebarSection({
                       hasUnread={unreadChannelIds.has(channel.id)}
                       unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                       isMuted={mutedChannelIds?.has(channel.id)}
-                      isProjectChannel={projectChannelIds?.has(channel.id)}
                       isActive={
                         isActiveChannel && selectedChannelId === channel.id
                       }
                       label={channelLabels?.[channel.id] ?? channel.name}
                       presenceStatus={presenceByChannelId?.[channel.id]}
-                      trailingMeta={channelMetaById?.[channel.id]}
                       onSelectChannel={onSelectChannel}
                     />
                     {channel.channelType === "dm" &&

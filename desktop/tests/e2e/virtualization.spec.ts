@@ -36,6 +36,11 @@ async function dragOver(page: Page, source: Locator, target: Locator) {
   // header. Scroll the drag source into the scroll viewport before using its
   // geometry; boundingBox() alone still returns coordinates hidden underneath
   // that header.
+  // Both ends must be inside the scroll viewport, not just the source: with
+  // the sidebar's full set of sections the lower header can sit behind the
+  // pinned profile footer, and a drop released over that footer reaches no
+  // droppable, so the reorder silently does not commit.
+  await target.scrollIntoViewIfNeeded();
   await source.scrollIntoViewIfNeeded();
   const from = await source.boundingBox();
   const to = await target.boundingBox();

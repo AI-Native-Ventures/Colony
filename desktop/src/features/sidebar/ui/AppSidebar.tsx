@@ -43,7 +43,7 @@ import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
 import { DirectMessageSection } from "@/features/sidebar/ui/DirectMessageSection";
 import {
   ProjectChannelSection,
-  useProjectChannelIds,
+  useProjectChannelPlacement,
 } from "@/features/sidebar/ui/ProjectChannelSection";
 import { StarredChannelSection } from "@/features/sidebar/ui/StarredChannelSection";
 import {
@@ -363,9 +363,12 @@ export function AppSidebar({
     () => channels.filter((channel) => channel.channelType === "stream"),
     [channels],
   );
-  // Channels a project owns leave the plain channel sections for their own
-  // Projects section (a starred one still shows up under Starred).
-  const projectChannelIds = useProjectChannelIds();
+  // Channels a project owns leave the plain sections for their own Projects
+  // section (a starred one still shows under Starred); until membership is
+  // known the sections stay behind the skeleton, so no row hops sections a
+  // frame after it first paints. See `useProjectChannels`.
+  const { channelIds: projectChannelIds, settled: projectChannelsSettled } =
+    useProjectChannelPlacement();
 
   const sectionBuckets = React.useMemo(() => {
     const bySection: Record<string, Channel[]> = {};
@@ -615,11 +618,11 @@ export function AppSidebar({
                 selectedView={selectedView}
               />
 
-              {isLoading ? (
+              {isLoading || !projectChannelsSettled ? (
                 <SidebarLoadingContent shape={sidebarLoadingShape} />
               ) : null}
 
-              {!isLoading ? (
+              {!isLoading && projectChannelsSettled ? (
                 <>
                   <StarredChannelSection
                     activeWorkingByChannelId={activeWorkingByChannelId}
@@ -650,12 +653,16 @@ export function AppSidebar({
                     isActiveChannel={selectedView === "channel"}
                     isCollapsed={collapsedGroups.projects}
                     mutedChannelIds={mutedChannelIds}
+                    onDeleteChannel={requestDeleteChannel}
+                    onLeaveChannel={requestLeaveChannel}
                     onMarkChannelRead={onMarkChannelRead}
                     onMarkChannelUnread={onMarkChannelUnread}
                     onMuteChannel={onMuteChannel}
                     onSelectChannel={onSelectChannel}
+                    onStarChannel={onStarChannel}
                     onToggleCollapsed={() => toggleCollapsedGroup("projects")}
                     onUnmuteChannel={onUnmuteChannel}
+                    onUnstarChannel={onUnstarChannel}
                     projectChannelIds={projectChannelIds}
                     selectedChannelId={selectedChannelId}
                     sortMode={sortModeFor("channels")}
