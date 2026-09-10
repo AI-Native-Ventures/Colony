@@ -551,11 +551,15 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
         );
       }
     } finally {
+      // A release failure after a crash or mid-navigation must not replace
+      // the original assertion error.
       if (!page.isClosed())
-        await page.evaluate(
-          (value) => window.__BUZZ_E2E_RELEASE_BLOCK_DATA__?.(value),
-          url,
-        );
+        await page
+          .evaluate(
+            (value) => window.__BUZZ_E2E_RELEASE_BLOCK_DATA__?.(value),
+            url,
+          )
+          .catch(() => {});
     }
   });
 }

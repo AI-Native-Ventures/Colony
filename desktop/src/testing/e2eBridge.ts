@@ -11515,7 +11515,10 @@ export function maybeInstallE2eTauriMocks() {
   for (const [url, response] of Object.entries(
     config.mock?.blockDataResponses ?? {},
   )) {
-    if (!response.hold || blockDataHolds.size >= 10) continue;
+    if (!response.hold) continue;
+    if (blockDataHolds.size >= 10) {
+      throw new Error(`E2E block data hold cap (10) exceeded at ${url}`);
+    }
     let release = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;

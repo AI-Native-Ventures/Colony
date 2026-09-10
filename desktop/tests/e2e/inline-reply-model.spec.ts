@@ -100,6 +100,9 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
           "/#/channels/9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50?messageId=mock-general-welcome&thread=mock-general-welcome",
         );
         await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+        // The app rewrites its own URL once the deep-linked row settles; an
+        // evaluate in flight during that rewrite dies with a destroyed context.
+        await expect.poll(() => page.url()).not.toContain("messageId");
       }
       const composer =
         surface === "thread"
