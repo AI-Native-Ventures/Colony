@@ -27,7 +27,7 @@ export function useReplyModelSelection(input: {
   const target =
     targets.find((agent) => agent.pubkey === chosenTarget) ??
     (targets.length === 1 ? targets[0] : undefined);
-  const [opened, setOpened] = React.useState(false);
+  const [authorizedKey, setAuthorizedKey] = React.useState<string | null>(null);
   const [selection, setSelection] = React.useState<ReplyModelSelection | null>(
     null,
   );
@@ -38,6 +38,7 @@ export function useReplyModelSelection(input: {
   // Clear only a local unsent choice when the actual conversation/recipient changes.
   if (previousScope.current !== scopeKey) {
     previousScope.current = scopeKey;
+    setAuthorizedKey((prev) => (prev === scopeKey ? prev : null));
     // Restoring mentions after a failed send can happen one render after the
     // captured selection. Keep it when it belongs to the restored recipient.
     if (
@@ -51,7 +52,7 @@ export function useReplyModelSelection(input: {
   const discovery = useQuery({
     queryKey: ["reply-models", relayUrl, input.scope, target?.pubkey],
     queryFn: () => getAgentModels(target?.pubkey ?? "", true),
-    enabled: input.enabled && opened && !!target,
+    enabled: input.enabled && authorizedKey === scopeKey && !!target,
     retry: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -87,19 +88,26 @@ export function useReplyModelSelection(input: {
   );
   const restore = React.useCallback(
     (tag: string[]) => {
-      if (currentConversation.current === conversation) {
+      if (
+        currentConversation.current === conversation &&
+        target?.pubkey === tag[2]
+      ) {
+        const newerAuthExists = authorizedKey && authorizedKey !== scopeKey;
+        if (!newerAuthExists) {
+          setAuthorizedKey(scopeKey);
+        }
         setSelection((current) => restoreReplyModelSelection(current, tag));
       }
     },
-    [conversation],
+    [conversation, target, authorizedKey, scopeKey],
   );
   return {
     visible: input.enabled && targets.length > 0,
     targets,
     target,
     selectTarget: setChosenTarget,
-    open: () => setOpened(true),
-    opened,
+    open: () => setAuthorizedKey(scopeKey),
+    opened: authorizedKey === scopeKey,
     loading: discovery.isFetching,
     error: discovery.isError
       ? `Model choices could not be loaded. ${discovery.error instanceof Error ? discovery.error.message : "Try again."}`
