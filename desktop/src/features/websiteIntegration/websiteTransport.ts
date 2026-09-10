@@ -193,7 +193,7 @@ function waitForHead(
     const finish = (value: WebsiteHead | null) => {
       if (settled) return;
       settled = true;
-      window.clearTimeout(timer);
+      globalThis.clearTimeout(timer);
       unsubscribe();
       resolve(value);
     };
@@ -206,7 +206,7 @@ function waitForHead(
       if (candidate && predicate(candidate)) finish(candidate);
     };
     const unsubscribe = websiteHeadsStore.subscribe(check);
-    const timer = window.setTimeout(() => finish(null), timeoutMs);
+    const timer = globalThis.setTimeout(() => finish(null), timeoutMs);
     check();
   });
 }

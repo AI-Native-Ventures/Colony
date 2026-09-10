@@ -789,11 +789,11 @@ export class WebsiteHeadsStore {
       const settle = (receipt: WebsiteReceiptView | null) => {
         if (settled) return;
         settled = true;
-        window.clearTimeout(timer);
+        globalThis.clearTimeout(timer);
         waiters.delete(settle);
         resolve(receipt);
       };
-      const timer = window.setTimeout(() => settle(null), timeoutMs);
+      const timer = globalThis.setTimeout(() => settle(null), timeoutMs);
       waiters.add(settle);
       this.receiptWaiters.set(actionEventId, waiters);
     });

@@ -150,8 +150,10 @@ test("receipts parse for the relay signer and resolve waiters", async () => {
       created_at: 1_800_000_000,
       tags: [
         ["h", CHANNEL],
-        ["e", actionId, "", "website-action"],
+        ["task", "website-task"],
+        ["thread", "c".repeat(64)],
         ["p", OWNER],
+        ["e", actionId, "", "website-action"],
       ],
       content: JSON.stringify({
         schema: "colony.website-receipt/v1",
