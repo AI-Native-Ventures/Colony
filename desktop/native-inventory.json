@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 514,
-    "rust_lines": 187792,
-    "tauri_coupled": 206,
+    "rust_total": 515,
+    "rust_lines": 187807,
+    "tauri_coupled": 207,
     "portable": 308,
     "portable_lines": 105570,
     "tauri_coupled_list": [
@@ -146,6 +146,7 @@
       "src-tauri/src/huddle/tts_voice_transition.rs",
       "src-tauri/src/huddle/window.rs",
       "src-tauri/src/initial_window.rs",
+      "src-tauri/src/initial_window_reveal.rs",
       "src-tauri/src/lib.rs",
       "src-tauri/src/linux_media.rs",
       "src-tauri/src/macos_notifications.rs",
