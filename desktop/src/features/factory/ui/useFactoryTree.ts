@@ -44,6 +44,16 @@ export function useFactoryTree(
       ? committed.state
       : reconciled;
 
+  // Reconciliation is what adopts a newly opened workspace tab into a pane, so
+  // it has to reach the payload: the workspace shell reads `ownedTabIds` from
+  // there to keep an owned tab out of the top strip. `reconcileTree` returns
+  // its input unchanged when there is nothing to adopt or drop, so this
+  // settles after one write.
+  React.useEffect(() => {
+    if (reconciled === baseState) return;
+    updateTabPayload(channelId, factoryTab.id, serializeTileTree(reconciled));
+  }, [reconciled, baseState, channelId, factoryTab.id]);
+
   const commit = React.useCallback(
     (next: TileTreeState) => {
       const payload = serializeTileTree(next);

@@ -128,9 +128,12 @@ function Splitter({
     <div
       className={cn(
         "relative z-10 flex-shrink-0 bg-transparent transition-colors hover:bg-primary",
+        // `self-stretch` is load-bearing: an auto margin on the cross axis
+        // collapsed the handle to zero height (row) or width (column), so it
+        // rendered nothing and no pointer could ever land on it.
         isRow
-          ? "w-[6px] cursor-col-resize -mx-[3px] my-auto"
-          : "h-[6px] cursor-row-resize -my-[3px] mx-auto",
+          ? "w-[6px] cursor-col-resize -mx-[3px] self-stretch"
+          : "h-[6px] cursor-row-resize -my-[3px] self-stretch",
         dragging ? "bg-primary" : "",
       )}
       data-testid={`factory-splitter-${groupId}-${index}`}
@@ -199,7 +202,7 @@ function renderNode(
     <div
       key={pathKey}
       className={cn(
-        "flex min-h-0 min-w-0 overflow-hidden",
+        "flex min-h-0 min-w-0 flex-1 overflow-hidden",
         isRow ? "flex-row" : "flex-col",
       )}
       data-testid={`factory-group-${group.id}`}
@@ -216,7 +219,10 @@ function renderNode(
             />
           )}
           <div
-            className="min-h-0 min-w-0 overflow-hidden"
+            // A flex container, so the pane or group inside it fills the
+            // slot: as a plain block the child sized to its content and the
+            // panes stopped short of the canvas.
+            className="flex min-h-0 min-w-0 overflow-hidden"
             style={{
               flexBasis: `${(sizes[index] ?? 1 / group.children.length) * 100}%`,
               flexShrink: 0,
@@ -269,7 +275,7 @@ export function FactoryCanvas({
 
   return (
     <div
-      className="min-h-0 min-w-0 flex-1 overflow-hidden p-2"
+      className="flex min-h-0 min-w-0 flex-1 overflow-hidden p-2"
       data-testid="factory-canvas"
     >
       {renderNode(
