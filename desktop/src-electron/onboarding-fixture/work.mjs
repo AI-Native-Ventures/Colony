@@ -4,7 +4,11 @@ import path from "node:path";
 import { expect } from "@playwright/test";
 import { waitForAnimations } from "../../tests/helpers/animations.ts";
 import { nativeProofReader, verifySigned } from "./native-team.mjs";
-import { readPendingAttempt, readRenderedCompany } from "./diagnostics.mjs";
+import {
+  readPendingAttempt,
+  readRenderedCompany,
+  waitForTeamPreview,
+} from "./diagnostics.mjs";
 import {
   FIRST_JOB_BRIEF,
   INSTAGRAM_DRAFTS,
@@ -120,12 +124,41 @@ export async function completeFixtureWork({
   );
   assert.equal((await reader.events(30181)).length, 0);
   assert.equal(provider.receivedCallCount, 0);
-  await expect(
-    cards.first().getByTestId("first-job-team-proposal"),
-  ).toContainText("Sarah");
-  await expect(
-    cards.first().getByTestId("first-job-team-proposal"),
-  ).toContainText("Content & Campaign Specialist");
+  const teamPreviews = {};
+  const waitForProposal = async (phase, startedAt = Date.now()) => {
+    await waitForTeamPreview({
+      startedAt,
+      readState: () =>
+        cards.first().evaluate((card) => {
+          const panel = card.querySelector(
+            '[data-testid="first-job-team-proposal"]',
+          );
+          const pending =
+            panel?.querySelector('[role="status"]')?.textContent ===
+            "Checking your team…";
+          const retryAvailable = Array.from(
+            panel?.querySelectorAll("button") ?? [],
+          ).some((button) => button.textContent === "Check team");
+          return {
+            pending,
+            ready: !!panel && !panel.querySelector('[role="status"]'),
+            retryAvailable,
+            error: card.querySelector('[role="alert"]')?.textContent ?? null,
+          };
+        }),
+      onObservation: (observation) => {
+        teamPreviews[phase] = observation;
+        onEvidence({ teamPreviews: { ...teamPreviews } });
+      },
+    });
+    await expect(
+      cards.first().getByTestId("first-job-team-proposal"),
+    ).toContainText("Sarah");
+    await expect(
+      cards.first().getByTestId("first-job-team-proposal"),
+    ).toContainText("Content & Campaign Specialist");
+  };
+  await waitForProposal("beforeFunding");
   // Only this isolated ledger is seeded, through the existing real operator CLI.
   await relay.seedCredits(account.ownerPubkey);
   const initialCredits = await invoke("get_colony_credits_account");
@@ -146,13 +179,12 @@ export async function completeFixtureWork({
   });
   assert.equal(saved.failed_restart_count, 0);
   assert.equal(saved.restarted_count, 0);
+  const reloadStartedAt = Date.now();
   await reloadWelcome();
   assert.equal(provider.receivedCallCount, 0);
   assert.equal((await readPendingAttempt(page, account)).exists, false);
   await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
-  await expect(
-    cards.first().getByTestId("first-job-team-proposal"),
-  ).toContainText("Sarah");
+  await waitForProposal("afterReload", reloadStartedAt);
   const unstaffed = {
     modelCalls: 0,
     tasks: 0,

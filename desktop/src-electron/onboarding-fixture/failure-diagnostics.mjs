@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { open } from "node:fs/promises";
 
-const redactReason = (reason) =>
+/** Bound and redact diagnostic text before it enters a public proof artifact. */
+export const redactReason = (reason) =>
   Array.from(reason, (char) =>
     char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? " " : char,
   )

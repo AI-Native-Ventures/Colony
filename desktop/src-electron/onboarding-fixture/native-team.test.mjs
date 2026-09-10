@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { finalizeEvent } from "nostr-tools/pure";
 import { PassThrough } from "node:stream";
 import { once } from "node:events";
+import { waitForTeamPreview } from "./diagnostics.mjs";
 import {
   nativeRequestActor,
   personaAuthority,
@@ -553,4 +554,77 @@ test("an early rejected provider request still counts as a received call", async
   } finally {
     await provider.close();
   }
+});
+
+test("preview observation waits beyond five seconds without issuing a query retry", async () => {
+  let elapsed = 0;
+  let evidence;
+  await waitForTeamPreview({
+    now: () => elapsed,
+    delay: async (ms) => {
+      elapsed += ms;
+    },
+    readState: async () => ({
+      pending: elapsed < 10_000,
+      ready: elapsed >= 10_000,
+    }),
+    onObservation: (value) => {
+      evidence = value;
+    },
+  });
+  assert.deepEqual(evidence, {
+    status: "ready",
+    error: null,
+    elapsedMs: 10_000,
+  });
+});
+
+test("preview observation fails immediately on a real error or unavailable proposal", async () => {
+  for (const state of [
+    { error: "Native request failed token=never-export-this" },
+    { retryAvailable: true },
+  ]) {
+    let reads = 0;
+    let evidence;
+    await assert.rejects(
+      waitForTeamPreview({
+        now: () => 0,
+        delay: async () => assert.fail("Terminal errors must not be retried"),
+        readState: async () => {
+          reads += 1;
+          return state;
+        },
+        onObservation: (value) => {
+          evidence = value;
+        },
+      }),
+      /Team preview (failed|finished)/,
+    );
+    assert.equal(reads, 1);
+    assert.doesNotMatch(JSON.stringify(evidence), /never-export-this/);
+    assert.equal(evidence.elapsedMs, 0);
+  }
+});
+
+test("preview observation times out truthfully with the last rendered pending state", async () => {
+  let elapsed = 0;
+  let evidence;
+  await assert.rejects(
+    waitForTeamPreview({
+      now: () => elapsed,
+      delay: async (ms) => {
+        elapsed += ms;
+      },
+      readState: async () => ({ pending: true }),
+      onObservation: (value) => {
+        evidence = value;
+      },
+    }),
+    /did not settle within 75s \(pending\)/,
+  );
+  assert.deepEqual(evidence, {
+    status: "pending",
+    error: null,
+    elapsedMs: 75_000,
+  });
 });
