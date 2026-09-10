@@ -346,8 +346,12 @@ impl WebsiteAction {
     }
 
     /// JSON content for the signed event, in the parser's exact wire shape.
+    ///
+    /// `generation` is deliberately absent: it travels as the `generation`
+    /// event tag (see [`WebsiteAction::event_tags`]), and the parser's
+    /// `deny_unknown_fields` content structs reject it in the body.
     pub fn content_value(&self) -> Value {
-        let mut value = match &self.op {
+        match &self.op {
             WebsiteActionOp::Create {
                 coordinator,
                 source_url,
@@ -438,11 +442,7 @@ impl WebsiteAction {
                 "assets": assets,
                 "accessRequest": access_request,
             }),
-        };
-        if let (Value::Object(object), Some(generation)) = (&mut value, self.generation) {
-            object.insert("generation".to_owned(), json!(generation));
         }
-        value
     }
 
     /// Event tags for the signed action, in the parser's exact wire shape.
