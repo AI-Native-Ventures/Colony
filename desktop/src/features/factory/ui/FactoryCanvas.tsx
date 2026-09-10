@@ -24,6 +24,7 @@ function Splitter({
 }) {
   const isRow = direction === "horizontal";
   const [dragging, setDragging] = React.useState(false);
+  const dragStateRef = React.useRef<TileTreeState | null>(null);
   const startSizesRef = React.useRef<ReadonlyArray<number>>([]);
   const startPosRef = React.useRef(0);
   const groupSizeRef = React.useRef(0);
@@ -52,10 +53,11 @@ function Splitter({
       target.setPointerCapture(e.pointerId);
       target.classList.add("dragging");
       setDragging(true);
+      dragStateRef.current = state;
+
       const parent = target.parentElement;
       const rect = parent?.getBoundingClientRect();
-      const groupPixelSize = isRow ? rect?.width ?? 0 : rect?.height ?? 0;
-      groupSizeRef.current = groupPixelSize;
+      groupSizeRef.current = isRow ? rect?.width ?? 0 : rect?.height ?? 0;
       const groupNode = findGroup(state.root, groupId);
       startSizesRef.current = groupNode ? sizesForGroup(state.sizesByGroupId, groupNode) : [];
       const startPos = isRow
@@ -67,40 +69,44 @@ function Splitter({
   );
 
   const handlePointerMove = React.useCallback(
-    (e: PointerEvent) => {
-      if (!dragging || groupSizeRef.current <= 0) return;
-      const parent = (e.target as HTMLElement)?.parentElement;
-      const rect = parent?.getBoundingClientRect();
-      const currentPos = isRow ? e.clientX - (rect?.left ?? 0) : e.clientY - (rect?.top ?? 0);
-      const delta = (currentPos - startPosRef.current) / groupSizeRef.current;
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!dragging || groupSizeRef.current <= 0 || !dragStateRef.current) return;
+      const rect = e.currentTarget.parentElement?.getBoundingClientRect();
+      const currentPosFixed = isRow ? e.clientX - (rect?.left ?? 0) : e.clientY - (rect?.top ?? 0);
+      const delta = (currentPosFixed - startPosRef.current) / groupSizeRef.current;
       const newSizes = resizePair(startSizesRef.current, index, delta);
-      const updated = setGroupSizes(state, groupId, newSizes);
-      commit(updated);
+      dragStateRef.current = setGroupSizes(dragStateRef.current, groupId, newSizes);
     },
-    [dragging, isRow, index, groupId, state, commit],
+    [dragging, isRow, index, groupId],
   );
 
   const handlePointerUp = React.useCallback(
-    (e: PointerEvent) => {
-      const target = e.currentTarget as HTMLDivElement;
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const target = e.currentTarget;
+      if (dragStateRef.current && dragStateRef.current !== state) {
+        commit(dragStateRef.current);
+      }
       target.releasePointerCapture(e.pointerId);
       target.classList.remove("dragging");
       setDragging(false);
-      document.removeEventListener("pointermove", handlePointerMove);
-      document.removeEventListener("pointerup", handlePointerUp);
+      dragStateRef.current = null;
     },
-    [handlePointerMove],
+    [state, commit],
+  );
+
+  const handlePointerCancel = React.useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const target = e.currentTarget;
+      target.releasePointerCapture(e.pointerId);
+      target.classList.remove("dragging");
+      setDragging(false);
+      dragStateRef.current = null;
+    },
+    [],
   );
 
   React.useEffect(() => {
-    if (dragging) {
-      document.addEventListener("pointermove", handlePointerMove);
-      document.addEventListener("pointerup", handlePointerUp);
-      return () => {
-        document.removeEventListener("pointermove", handlePointerMove);
-        document.removeEventListener("pointerup", handlePointerUp);
-      };
-    }
+    // No document-level listeners needed; React element-level events handle drag.
   }, [dragging, handlePointerMove, handlePointerUp]);
 
   return (
@@ -114,6 +120,9 @@ function Splitter({
       )}
       data-testid={`factory-splitter-${groupId}-${index}`}
       onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       style={{
         userSelect: "none",
         touchAction: "none",

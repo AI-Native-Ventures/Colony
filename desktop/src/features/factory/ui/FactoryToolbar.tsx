@@ -6,6 +6,7 @@ import {
   applyPreset,
   collectPanes,
   type TileTreeState,
+  type TileLayoutNode,
 } from "@/features/factory/lib/tileTree";
 import { projectChipLabel } from "../lib/projectChannel";
 import { useProjectsQuery } from "@/features/projects/hooks";
@@ -31,9 +32,7 @@ export function FactoryToolbar({
 
   const paneCount = collectPanes(state.root).length;
   const tabIdsInTree: string[] = [];
-  function collectTabs(
-    node: import("@/features/factory/lib/tileTree").TileLayoutNode,
-  ): void {
+  function collectTabs(node: TileLayoutNode): void {
     if (node.kind === "pane") {
       tabIdsInTree.push(...node.tabIds);
     } else {
