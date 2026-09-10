@@ -100,3 +100,21 @@ Full unit tests, Rust lint, desktop core, both server architectures, relay/backe
 The broad Blocks browser test correctly rejected its old placeholder signature. The fixture now selects the existing real test-key signer and grants its seeded channel membership; signature and signed-receipt checks are retained. Cases skipped after that assertion still need the next GitHub run.
 
 The isolated real-relay gate timed out while publishing the second Agent Proposal's Decline action. A later unrelated publish was acknowledged, so the connection was not globally dead. The trace contains earlier rate limiting but no WebSocket frames to attribute this specific action. The configured relay log was omitted from CI artifacts by an incorrect filename. Preserve bounded action/acknowledgement metadata and failure-path receipt evidence on the next run; do not raise quotas, lengthen the production timeout, or count the earlier successful run as proof for this head. Auto-merge is temporarily disabled until this action gate is resolved and the final head is green.
+
+
+## Confirmed action back-pressure defect and bounded correction
+
+Run `34488617722` at `3f143240b4ee42fdc299860e6d76bcce90eccc1e` again passed all 62 approved cases and produced 131 distinct captures. The corrected broad browser fixture passed its real-signature and signed-receipt assertions. The next table-filter assertion exposed a copy defect (`1 of 20 row`), corrected using the total row count for pluralization. A separate retry trace proves the timeline evicted a target between count and scroll; the helper now rescans within a 20-second budget with one-second scroll attempts, preserving the 120-second test deadline and all trust/screenshot assertions. Six later serial cases still require execution.
+
+The new live-gate diagnostics establish the action failure precisely: agent.create and its receipt received matching positive acknowledgements; agent.decline was sent at 2622ms and received a quota NOTICE 5ms later with a one-second retry hint. No acknowledgement, socket close, decline storage entry or receipt followed, and the diagnostic buffer dropped no entries. This confirms the relay EVENT admission path's NOTICE-only rejection, rather than a missing browser socket or diagram-related failure.
+
+The correction phase has these acceptance gates:
+
+- [ ] Relay EVENT quota/admission/capacity rejection returns an exact-event negative OK while retaining NOTICE for existing client backoff; authentication, quotas, REQ CLOSED and other message behavior stay intact.
+- [ ] Client retries only an explicit matching negative ACK with a rate-limit prefix, using the same signed event and bounded attempts within one publish deadline, including initial and retry backoff. Community changes, deadline expiry, invalid/auth errors and unrelated rejections cannot cause a delayed send.
+- [x] Focused client fault tests fail against the previous publisher and pass against the correction. New relay response tests run in GitHub CI; no local Rust compilation or app build.
+- [ ] Fresh hosted Blocks proof demonstrates accepted create/decline actions and receipts, and the complete browser suite passes without weakening filtered-table, signed-answer, trust, visibility or screenshot assertions.
+
+The release remains held at PR #682 until these gates and the remaining final-head checks pass. Compatible desktop publication, protected promotion and authenticated production proof remain separate as specified above.
+
+Focused correction proof: eight of the initial thirteen new client regressions failed on the previous publisher. The final focused run passed 61 tests, including seventeen publisher regressions, four existing session-publish tests, twenty-six shared gate tests and fourteen Block-action tests. It covers exact-ID negative ACKs, duplicate ACKs, late native send/reconnect completion, retry budgets, workspace changes and the real Question offline classifier. Independent source review found no remaining actionable issue. The deterministic hosted relay regression sets only its generated owner’s Redis counter, requires rejection before storage, waits for natural expiry and resends the identical signed event; its execution and the full live Blocks loop await GitHub CI.

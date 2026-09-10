@@ -1296,6 +1296,7 @@ jobs:
           cargo test -p buzz-test-client --test e2e_persona --test e2e_nostr_interop -- --ignored --nocapture
           cargo test -p buzz-test-client --test e2e_relay invite -- --ignored --nocapture
           cargo test -p buzz-test-client --test e2e_relay nip43_membership_snapshots_are_rejected -- --ignored --nocapture
+          cargo test -p buzz-test-client --test e2e_relay ws_quota_rejection_retries_identical_event_after_expiry -- --ignored --nocapture
           # Full interrupt-core climb (worker -> leader -> executive -> owner)
           # against the live relay. Like interrupt_gate, this suite had never
           # run in any CI job. It seeds its owner directly in Postgres, so it
