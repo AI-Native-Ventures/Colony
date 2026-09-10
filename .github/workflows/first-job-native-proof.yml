@@ -1,0 +1,102 @@
+name: Native first-job proof
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - desktop/src-electron/**
+      - desktop/src-tauri/**
+      - desktop/src/features/onboarding/**
+      - desktop/scripts/build-onboarding-services.sh
+      - desktop/scripts/electron-*
+      - crates/buzz-acp/**
+      - crates/buzz-agent/**
+      - crates/buzz-relay/**
+      - crates/buzz-core/**
+      - crates/buzz-db/**
+      - migrations/**
+      - .github/workflows/first-job-native-proof.yml
+
+permissions:
+  contents: read
+concurrency:
+  group: first-job-native-proof-${{ github.ref }}
+  cancel-in-progress: ${{ github.base_ref != 'main' }}
+
+jobs:
+  joined:
+    name: Packaged first-job preparation and work
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Select private runner tool directory
+        run: echo "COLONY_FIXTURE_TOOLS=$RUNNER_TEMP/colony-native-services" >> "$GITHUB_ENV"
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+          shared-key: electron-beta-release
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - name: Install renderer dependencies
+        run: just desktop-install-ci
+      - name: Validate joined fixture entry syntax
+        run: node --check desktop/src-electron/onboarding-fixture/work.mjs
+      - name: Validate proof authority and service contract
+        run: node --test desktop/src-electron/onboarding-fixture/native-publish-diagnostics.test.mjs desktop/src-electron/onboarding-fixture/failure-diagnostics.test.mjs desktop/src-electron/onboarding-fixture/provider.test.mjs desktop/src-electron/onboarding-fixture/native-team.test.mjs desktop/src-electron/onboarding-fixture/team-recovery.test.mjs desktop/src-electron/onboarding-fixture/instruction.test.mjs desktop/src-electron/onboarding-fixture/task-head.test.mjs desktop/src-electron/onboarding-fixture/tool-result.test.mjs
+      - name: Install PostgreSQL build prerequisite
+        run: brew install openssl@3
+      - name: Restore pinned native service tools
+        id: services
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ${{ env.COLONY_FIXTURE_TOOLS }}/bin
+            ${{ env.COLONY_FIXTURE_TOOLS }}/postgres
+            ${{ env.COLONY_FIXTURE_TOOLS }}/service-sources.json
+          key: native-services-macos15-arm64-${{ hashFiles('desktop/src-electron/onboarding-fixture/service-sources.json', 'desktop/scripts/build-onboarding-services.sh') }}
+      - name: Build checksum-pinned PostgreSQL Redis and MinIO
+        id: build-services
+        if: steps.services.outputs.cache-hit != 'true'
+        run: bash desktop/scripts/build-onboarding-services.sh
+      - name: Save successfully built pinned native service tools
+        if: steps.services.outputs.cache-hit != 'true' && steps.build-services.outcome == 'success'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ${{ env.COLONY_FIXTURE_TOOLS }}/bin
+            ${{ env.COLONY_FIXTURE_TOOLS }}/postgres
+            ${{ env.COLONY_FIXTURE_TOOLS }}/service-sources.json
+          key: ${{ steps.services.outputs.cache-primary-key }}
+      - name: Build real relay and operator CLI
+        run: cargo build --release -p buzz-relay -p buzz-admin
+      - name: Build isolated native onboarding package
+        run: pnpm --dir desktop electron:package --onboarding-fixture
+      - name: Prove actual approval native worker and Scout review
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version desktop/package.json)
+          MANIFEST="desktop/electron-dist/${VERSION}-release-arm64-onboarding-fixture/manifest.json"
+          jq -e '.onboardingFixture == true' "$MANIFEST"
+          export COLONY_SMOKE_APP="$(jq -r .app "$MANIFEST")"
+          export COLONY_SMOKE_RELAY_BINARY="$GITHUB_WORKSPACE/target/release/buzz-relay"
+          export COLONY_SMOKE_ADMIN_BINARY="$GITHUB_WORKSPACE/target/release/buzz-admin"
+          export COLONY_SMOKE_PROOF_DIR="$RUNNER_TEMP/colony-first-job-proof"
+          node desktop/src-electron/onboarding-smoke.mjs --with-work
+          jq -e '.completed == true and .accountCompleted == true and .workerCompletion.status == "completed" and .workerCompletion.teamRecovery.status == "recovered-before-task" and .cleanup == "complete" and .backingServices.cleanup.complete == true' "$COLONY_SMOKE_PROOF_DIR/account-proof.json"
+      - name: Preserve synthetic provider real native proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: colony-first-job-native-proof
+          path: |
+            ${{ runner.temp }}/colony-first-job-proof
+            desktop/electron-dist/**/manifest.json
+          if-no-files-found: warn
+          retention-days: 7

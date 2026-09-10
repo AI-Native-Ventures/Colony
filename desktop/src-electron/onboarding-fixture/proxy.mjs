@@ -6,6 +6,10 @@ import { createServer } from "node:https";
 import { createSecureContext } from "node:tls";
 import path from "node:path";
 import { createFixtureCertificates } from "./certificates.mjs";
+import {
+  observeEventRequest,
+  observeEventResponse,
+} from "./failure-diagnostics.mjs";
 
 function loopbackUpstream(value) {
   const url = new URL(value);
@@ -119,8 +123,24 @@ export async function createOnboardingFixtureProxy({
         return;
       }
       const entry = remember(request, null);
+      const observeEvent =
+        entry.host === businessHost &&
+        entry.path === "/events" &&
+        entry.method === "POST";
+      if (observeEvent) {
+        entry.eventRequest = { unavailable: "request-pending" };
+        observeEventRequest(request, (value) => {
+          entry.eventRequest = value;
+        });
+      }
       const forwarded = httpRequest(options(request, upstream), (result) => {
         entry.status = result.statusCode;
+        if (observeEvent) {
+          entry.eventResponse = { unavailable: "response-pending" };
+          observeEventResponse(result, (value) => {
+            entry.eventResponse = value;
+          });
+        }
         response.writeHead(result.statusCode, result.headers);
         result.pipe(response);
         result.once("error", () => response.destroy());

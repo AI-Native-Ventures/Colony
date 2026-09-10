@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 504,
-    "rust_lines": 184669,
-    "tauri_coupled": 200,
-    "portable": 304,
-    "portable_lines": 104491,
+    "rust_total": 507,
+    "rust_lines": 185594,
+    "tauri_coupled": 201,
+    "portable": 306,
+    "portable_lines": 105038,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -58,6 +58,7 @@
       "src-tauri/src/commands/identity_archive.rs",
       "src-tauri/src/commands/initiative.rs",
       "src-tauri/src/commands/initiative_scope.rs",
+      "src-tauri/src/commands/initiative_team_readiness.rs",
       "src-tauri/src/commands/join_policy.rs",
       "src-tauri/src/commands/ledger.rs",
       "src-tauri/src/commands/legacy_storage.rs",
@@ -253,6 +254,8 @@
       "src-tauri/src/commands/identity_key_backup_tests.rs",
       "src-tauri/src/commands/initiative_dispatch_binding.rs",
       "src-tauri/src/commands/initiative_scope_tests.rs",
+      "src-tauri/src/commands/initiative_team_readiness_policy.rs",
+      "src-tauri/src/commands/initiative_team_readiness_tests.rs",
       "src-tauri/src/commands/initiative_tests.rs",
       "src-tauri/src/commands/ledger/usage_records.rs",
       "src-tauri/src/commands/link_preview_rate_limit.rs",
@@ -538,7 +541,7 @@
     ]
   },
   "params": {
-    "AppHandle": 403,
+    "AppHandle": 409,
     "State": 268,
     "Window": 7,
     "ipc::Request": 1,
@@ -546,7 +549,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 400,
+      "AppHandle": 406,
       "State": 268,
       "Window": 7,
       "ipc::Request": 1,
@@ -579,7 +582,7 @@
     ".run_on_main_thread(": 3,
     ".config()": 5,
     ".env()": 1,
-    ".path()": 29,
+    ".path()": 30,
     ".exit(": 5
   },
   "events": {

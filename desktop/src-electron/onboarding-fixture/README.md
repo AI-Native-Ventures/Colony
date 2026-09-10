@@ -76,49 +76,76 @@ COLONY_SMOKE_PROOF_DIR="/absolute/path/proof" \
 node desktop/src-electron/onboarding-smoke.mjs --account-only
 ```
 
-Use `--with-work` instead of `--account-only` for the complete gate. After the
-real account/business path and zero-credit check, the fixture owner approves a
-company profile with `buzz company put`. The existing admin CLI then adds five
-fixture dollars to the isolated ledger. Before any worker approval, the actual
-Start must show the unavailable-worker state with its retry action, preserve the
-shared brief, and create no Task, instruction or model call. The fixture then
-approves the native personas and team and enrolls both stopped agents. This is
-balance/gateway proof, not a payment-settlement test. The normal Start control
-must create the canonical Task,
-start both real ACP processes, and produce the worker's signed output and the
-Chief of Staff's review/completion report in the same thread. Reload must retain
-one Task and one initial instruction. Before any reload, both visible cards must
-show `Completed` within 30 seconds of the verified current relay head and the
-Chief's finished review turn. A completed relay record with a stale live card
-fails this gate; persistence after reload alone does not pass it. Separate,
-distinct screenshots capture the returned work and the completed state after
-reload.
+Use `--with-work` instead of `--account-only` for the complete gate. The new
+GitHub `Native first-job proof` job builds the release fixture and pinned backing
+services. All checks run on GitHub, not on the user's Mac.
 
-The relay keeps its default owner HTTP limit of 300 calls per minute. After
-rapid fixture approval and readback, the driver waits one 60-second admission
-window before both the unstaffed check and staffed Start, verifying no saved
-attempt, instruction or model work during setup. The unstaffed window also
-checks zero Task records before and after. Its completion wait observes actual
-persisted Task status through read-only SQL every two seconds;
-it does not publish or substitute state. The provider's command preparation and
-final completion checks still fetch and verify the real relay-signed Task head.
-This avoids the test observer competing with normal app queries for that quota;
-there is no quota override or blanket retry of HTTP 429 responses.
+The app creates the account, exports its real encrypted recovery checkpoint,
+creates the business, reads the real Credits catalog in Power, and publishes the
+canonical company profile. Before funding or approval, Scout is the only native
+agent, there is no Task, and the provider has received no model calls. The driver
+then seeds only the isolated ledger through the real operator CLI, displays the
+actual proposed Sarah teammate, and clicks **Approve team and start**. It never
+calls persona, worker, rank, membership or company-writing APIs to pre-staff the
+business. Old manual preparation helpers are not part of this gate.
 
-The provider supplies deterministic model responses; its shell tools execute the
-real bundled CLI, including canonical Task/team tags. A refusal, failed tool,
-missing signed head, or unavailable approved team fails the gate. The proof
-records public staffing evidence, model stages and tool commands, exact fixture
-script hashes, and separate account/work completion fields. Fixture approval does
-not establish that a new production business is automatically staffed.
-The fixture explicitly approves each agent's `OPENAI_COMPAT_BASE_URL` as the
-canonical business `/gateway/openai/v1` URL. Isolation validates that SDK base
-before ACP replaces it with the real local meter; leaving the public vendor
-default would correctly fail the fixture's private destination map. No vendor
-host is redirected or allowed. The proof retains the approved public base and
-checks gateway token minting plus a matching canonical gateway request for every
-model response. This proves the configured provisioned-meter/gateway path, not
-an untouched default provider base.
+The actual signed approval and receipt identify the newly created worker.
+Assertions check the owner-signed worker definition and managed heads, manager, role,
+inherited provider/model, real channel membership, isolated live ACP processes,
+signed owner instruction, worker output and Scout review. The canonical Task
+must complete in both live panes and stay completed after reload, with one
+logical Task, instruction, worker and approval receipt and no extra model turn.
+The provider matches the exact own persona section against Scout’s unchanged
+native built-in definition and the worker’s owner-signed definition. Both identities
+are bound by their signed managed heads; no nonexistent built-in persona head is
+fabricated. It never guesses from names or quoted message history. ACP presently derives
+rank context only from employee30190, so absent model rank lines for this
+managed-agent30177 path remain a documented product limitation.
+
+## Hosted services and safety boundary
+
+GitHub ARM macOS cannot supply the old nested Docker VM path. The explicit
+`COLONY_FIXTURE_TOOLS` path selects runner-only native processes: PostgreSQL17.6,
+Redis7.4.2 and MinIO at immutable commit07c3a429. `service-sources.json` pins the
+source archives and Go1.24.7 compiler by published SHA256 or commit. The build
+uses Go's public module checksum database; no latest images or server binaries
+are downloaded. Each run has fresh data, loopback ports, owned process groups,
+reverse cleanup receipts and binary hashes. PostgreSQL uses TCP only, avoiding
+Unix socket path limits. Its real pgcrypto extension is built too.
+
+MinIO is real. An ordinary signed S3 request creates its private bucket, and the
+relay's conditional-write conformance and deletion-storage admission run as
+usual. No admission flag is disabled. The original exact-host `.invalid` TLS
+routing and private native CA remain in use. Chromium's private SPKI exception
+is separately constrained by its request allowlist; it is not proof of normal
+Chromium CA trust. No system DNS/trust changes, personal profiles, vendor
+credentials, live accounts or payment providers are accessed.
+
+The model responses and ledger funds are synthetic. Bundled CLI tools, native
+signatures, relay authorization, metering, task transitions and process isolation
+are real. This proves workflow wiring, not model quality, a paid subscription or
+payment settlement. `account-proof.json` and screenshots carry that distinction.
+Service startup, assertion and cleanup failures all fail the workflow. All
+execution and validation run on GitHub, not on the user's Mac.
+
+Official inputs: [PostgreSQL17.6](https://ftp.postgresql.org/pub/source/v17.6/),
+[Redis hashes](https://github.com/redis/redis-hashes),
+[Go downloads](https://go.dev/dl/), and
+[MinIO source](https://github.com/minio/minio/tree/07c3a429bfed433e49018cb0f78a52145d4bedeb).
+
+The relay retains its default owner HTTP quota. The completion observer reads
+only this isolated database every two seconds. A single explicit retry is allowed
+only for a bounded server-specified cooldown before any instruction or model work;
+there is no quota override or blanket429 retry. Preparation readback retries for
+30seconds and preserves the actual last assertion as its failure diagnostic.
+
+The fixture explicitly sets the global `OPENAI_COMPAT_BASE_URL` to the canonical
+business `/gateway/openai/v1` URL. The worker must inherit it; no individual
+worker override is written. Isolation validates that SDK base before ACP replaces
+it with the real local meter. Leaving a public vendor base would correctly fail
+the private destination map. The proof checks gateway token minting and one
+canonical gateway call per model response. This proves the configured provisioned
+meter/gateway path, not an untouched default direct-provider address.
 
 The launcher passes a short environment allowlist. It preserves the OS `HOME`
 needed to find the real default macOS Keychain and the normal `TMPDIR` needed by

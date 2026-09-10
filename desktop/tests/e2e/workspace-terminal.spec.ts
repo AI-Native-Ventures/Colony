@@ -17,6 +17,21 @@ async function terminalCommands(page: Parameters<typeof installMockBridge>[0]) {
   );
 }
 
+type TerminalDims = { cols: number; rows: number } | null;
+
+async function terminalDims(
+  page: Parameters<typeof installMockBridge>[0],
+): Promise<TerminalDims> {
+  return page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __BUZZ_E2E_TERMINAL_DIMS__?: () => TerminalDims;
+        }
+      ).__BUZZ_E2E_TERMINAL_DIMS__?.() ?? null,
+  );
+}
+
 async function dispatchPrimaryShortcut(
   page: Parameters<typeof installMockBridge>[0],
   key: string,
@@ -114,6 +129,30 @@ test.describe("terminal workspace tab", () => {
         "workspace_terminal_write",
       ]),
     );
+
+    // The pane is far wider than the 80-column default the PTY starts with:
+    // xterm must have been fitted to it, and the PTY told the fitted size.
+    await page.waitForFunction(
+      () =>
+        typeof (window as Window & { __BUZZ_E2E_TERMINAL_DIMS__?: unknown })
+          .__BUZZ_E2E_TERMINAL_DIMS__ === "function",
+    );
+    await expect
+      .poll(async () => (await terminalDims(page))?.cols ?? 0)
+      .toBeGreaterThan(80);
+    const fittedDims = await terminalDims(page);
+    expect(fittedDims).not.toBeNull();
+    await expect
+      .poll(async () => {
+        const resizes = (await terminalCommands(page)).filter(
+          (entry) => entry.command === "workspace_terminal_resize",
+        );
+        const last = resizes.at(-1)?.payload as
+          | { cols?: number; rows?: number }
+          | undefined;
+        return last ? { cols: last.cols, rows: last.rows } : null;
+      })
+      .toEqual({ cols: fittedDims?.cols, rows: fittedDims?.rows });
 
     await page.getByTestId("workspace-new-tab").click();
     await page.getByTestId("workspace-create-scratchpad").click();
