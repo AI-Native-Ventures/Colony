@@ -19,9 +19,7 @@ export function reconcileTree(
   factoryTabId?: string,
 ): TileTreeState {
   const factoryId = factoryTabId ?? "";
-  const liveIds = new Set(
-    workspaceTabIds.filter((id) => id !== factoryId),
-  );
+  const liveIds = new Set(workspaceTabIds.filter((id) => id !== factoryId));
 
   // Drop missing tabs from all panes.
   let result: TileTreeState = state;

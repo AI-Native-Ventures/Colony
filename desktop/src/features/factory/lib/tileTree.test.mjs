@@ -477,7 +477,11 @@ test("insertPaneAtEdge allows null tabId to create empty pane", async () => {
   const target = makePane("a", ["t-a"]);
   const sibling = makePane("b", ["t-b"]);
   const tree = makeGroup("g", "horizontal", [target, sibling]);
-  const state = { root: tree, sizesByGroupId: { g: [0.5, 0.5] }, focusedPaneId: "a" };
+  const state = {
+    root: tree,
+    sizesByGroupId: { g: [0.5, 0.5] },
+    focusedPaneId: "a",
+  };
   const result = m.insertPaneAtEdge(state, "a", "right", "new-empty", null);
   assert.notStrictEqual(result, null);
   // Find the new pane by id in the result tree.

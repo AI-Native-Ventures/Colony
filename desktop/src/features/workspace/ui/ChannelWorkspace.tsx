@@ -81,9 +81,10 @@ export function ChannelWorkspace({
   const factoryOwnedTabIds = activeFactoryDef?.ownedTabIds
     ? activeFactoryDef.ownedTabIds(activeTab)
     : [];
-  const visibleTabs = factoryOwnedTabIds.length > 0
-    ? tabs.filter((t) => !factoryOwnedTabIds.includes(t.id))
-    : tabs;
+  const visibleTabs =
+    factoryOwnedTabIds.length > 0
+      ? tabs.filter((t) => !factoryOwnedTabIds.includes(t.id))
+      : tabs;
 
   return (
     <div

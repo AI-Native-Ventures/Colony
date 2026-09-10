@@ -1,6 +1,9 @@
 import * as React from "react";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
-import type { TabKindDefinition, TabKindContext } from "@/features/workspace/lib/tabKindRegistry";
+import type {
+  TabKindDefinition,
+  TabKindContext,
+} from "@/features/workspace/lib/tabKindRegistry";
 import {
   parseTileTree,
   createInitialTree,
@@ -16,15 +19,9 @@ import {
 import { useFactoryTree } from "@/features/factory/ui/useFactoryTree";
 import { FactoryCanvas } from "@/features/factory/ui/FactoryCanvas";
 import { FactoryToolbar } from "@/features/factory/ui/FactoryToolbar";
-import {
-  isProjectChannel,
-} from "@/features/factory/lib/projectChannel";
+import { isProjectChannel } from "@/features/factory/lib/projectChannel";
 import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
-import {
-  useWorkspace,
-  closeTab,
-} from "@/features/workspace/lib/workspaceTabs";
-
+import { useWorkspace, closeTab } from "@/features/workspace/lib/workspaceTabs";
 
 export const factoryKindDefinition: TabKindDefinition = {
   kind: "factory",
@@ -116,7 +113,11 @@ export function FactoryBody({
           const paneIndex = panePath[panePath.length - 1];
           for (let i = 0; i < parentNode.children.length; i++) {
             if (i !== paneIndex && parentNode.children[i].kind === "pane") {
-              siblingPaneId = (parentNode.children[i] as import("@/features/factory/lib/tileTree").TilePane).id;
+              siblingPaneId = (
+                parentNode.children[
+                  i
+                ] as import("@/features/factory/lib/tileTree").TilePane
+              ).id;
               break;
             }
           }
@@ -131,7 +132,9 @@ export function FactoryBody({
           const workspaceTab = workspace.tabs.find((t) => t.id === tabId);
           if (workspaceTab) {
             const definition = getTabKind(workspaceTab.kind);
-            void Promise.resolve(definition?.dispose?.(workspaceTab)).catch(() => {});
+            void Promise.resolve(definition?.dispose?.(workspaceTab)).catch(
+              () => {},
+            );
           }
           closeTab(channelId, tabId);
         }
@@ -152,7 +155,8 @@ export function FactoryBody({
       // apply final commit with the updated tree.
       commit({
         ...nextState,
-        focusedPaneId: nextState.focusedPaneId ?? siblingPaneId ?? nextState.focusedPaneId,
+        focusedPaneId:
+          nextState.focusedPaneId ?? siblingPaneId ?? nextState.focusedPaneId,
       });
     },
     [state, commit, workspace.tabs, channelId],
@@ -163,7 +167,7 @@ export function FactoryBody({
     (paneId: string, tabId: string | null) => {
       const newRoot = replacePane(state.root, paneId, (pane) => ({
         ...pane,
-        activeTabId: tabId ?? (pane.tabIds[0] ?? null),
+        activeTabId: tabId ?? pane.tabIds[0] ?? null,
       }));
       commit({ ...state, root: newRoot });
     },
@@ -176,7 +180,9 @@ export function FactoryBody({
       const workspaceTab = workspace.tabs.find((t) => t.id === tabId);
       if (workspaceTab) {
         const definition = getTabKind(workspaceTab.kind);
-        void Promise.resolve(definition?.dispose?.(workspaceTab)).catch(() => {});
+        void Promise.resolve(definition?.dispose?.(workspaceTab)).catch(
+          () => {},
+        );
       }
       closeTab(channelId, tabId);
     },
@@ -216,13 +222,16 @@ export function FactoryBody({
         }
       }
       // Fallback for delta-style updates: adjust current sizes proportionally.
-      const currentSizes: ReadonlyArray<number> = state.sizesByGroupId[groupId] ?? [];
+      const currentSizes: ReadonlyArray<number> =
+        state.sizesByGroupId[groupId] ?? [];
       if (currentSizes.length === 0) return;
       const updated = {
         ...state,
         sizesByGroupId: {
           ...state.sizesByGroupId,
-          [groupId]: currentSizes.map((s: number, i: number) => Math.max(0.05, s + (sizes[i] ?? 0))),
+          [groupId]: currentSizes.map((s: number, i: number) =>
+            Math.max(0.05, s + (sizes[i] ?? 0)),
+          ),
         },
       };
       commit(updated);
@@ -231,7 +240,10 @@ export function FactoryBody({
   );
 
   return (
-    <div className="flex h-full flex-col overflow-hidden" data-testid="workspace-factory-body">
+    <div
+      className="flex h-full flex-col overflow-hidden"
+      data-testid="workspace-factory-body"
+    >
       <FactoryToolbar channelId={channelId} state={state} commit={commit} />
       <FactoryCanvas
         state={state}

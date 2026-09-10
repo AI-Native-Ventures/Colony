@@ -1,8 +1,12 @@
-import * as React from "react";
+import type * as React from "react";
 import { LayoutGrid, Columns2, Rows2, Focus } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
-import { applyPreset, collectPanes, type TileTreeState } from "@/features/factory/lib/tileTree";
+import {
+  applyPreset,
+  collectPanes,
+  type TileTreeState,
+} from "@/features/factory/lib/tileTree";
 import { projectChipLabel } from "../lib/projectChannel";
 import { useProjectsQuery } from "@/features/projects/hooks";
 import { findProjectForChannel } from "@/features/factory/lib/projectChannel";
@@ -23,7 +27,9 @@ export function FactoryToolbar({
 
   const paneCount = collectPanes(state.root).length;
   const tabIdsInTree: string[] = [];
-  function collectTabs(node: import("@/features/factory/lib/tileTree").TileLayoutNode): void {
+  function collectTabs(
+    node: import("@/features/factory/lib/tileTree").TileLayoutNode,
+  ): void {
     if (node.kind === "pane") {
       tabIdsInTree.push(...node.tabIds);
     } else {
@@ -32,7 +38,9 @@ export function FactoryToolbar({
   }
   collectTabs(state.root);
 
-  const chipText = project ? projectChipLabel(project) : "Unknown project · main";
+  const chipText = project
+    ? projectChipLabel(project)
+    : "Unknown project · main";
 
   return (
     <div className="flex shrink-0 items-center gap-3 border-b border-border bg-muted/30 px-3 py-2">
@@ -42,8 +50,12 @@ export function FactoryToolbar({
       >
         {chipText}
       </span>
-      <span className="text-xs text-muted-foreground" data-testid="factory-tile-count">
-        {paneCount} pane{paneCount !== 1 ? "s" : ""} · {tabIdsInTree.length} tile{tabIdsInTree.length !== 1 ? "s" : ""}
+      <span
+        className="text-xs text-muted-foreground"
+        data-testid="factory-tile-count"
+      >
+        {paneCount} pane{paneCount !== 1 ? "s" : ""} · {tabIdsInTree.length}{" "}
+        tile{tabIdsInTree.length !== 1 ? "s" : ""}
       </span>
       <div className="flex-1" />
       <div className="flex items-center gap-2">

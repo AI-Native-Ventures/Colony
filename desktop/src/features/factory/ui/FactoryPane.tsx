@@ -1,4 +1,4 @@
-import * as React from "react";
+import type * as React from "react";
 import { X, SplitSquareVertical, SplitSquareHorizontal } from "lucide-react";
 import { getTabBody } from "@/features/workspace/kinds";
 import { cn } from "@/shared/lib/cn";
@@ -69,7 +69,9 @@ export function FactoryPane({
                 type="button"
                 data-testid={`factory-tab-${tabId}`}
               >
-                <span className="max-w-[8rem] truncate">{tab?.title ?? tabId}</span>
+                <span className="max-w-[8rem] truncate">
+                  {tab?.title ?? tabId}
+                </span>
                 <span
                   className={cn(
                     "inline-flex h-3.5 w-3.5 items-center justify-center rounded-sm text-[9px] font-medium opacity-0 transition-opacity hover:opacity-100",

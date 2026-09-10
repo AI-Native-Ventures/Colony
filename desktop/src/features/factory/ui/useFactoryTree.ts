@@ -1,8 +1,16 @@
 import * as React from "react";
 import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
 import { reconcileTree } from "../lib/reconcileTree";
-import { parseTileTree, createInitialTree, serializeTileTree, type TileTreeState } from "../lib/tileTree";
-import { useWorkspace, updateTabPayload } from "@/features/workspace/lib/workspaceTabs";
+import {
+  parseTileTree,
+  createInitialTree,
+  serializeTileTree,
+  type TileTreeState,
+} from "../lib/tileTree";
+import {
+  useWorkspace,
+  updateTabPayload,
+} from "@/features/workspace/lib/workspaceTabs";
 
 export function useFactoryTree(
   channelId: string,
@@ -13,7 +21,8 @@ export function useFactoryTree(
 } {
   const workspace = useWorkspace(channelId);
 
-  const [explicitState, setExplicitState] = React.useState<TileTreeState | null>(null);
+  const [explicitState, setExplicitState] =
+    React.useState<TileTreeState | null>(null);
 
   const baseState = React.useMemo(() => {
     const parsed = parseTileTree(factoryTab.payload);

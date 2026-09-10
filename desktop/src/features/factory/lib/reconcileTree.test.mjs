@@ -22,26 +22,38 @@ function makeGroup(id, dir, children) {
 
 test("reconcileTree drops missing tabs", async () => {
   const m = await load();
-  const { createInitialTree } = await import("./tileTree.ts?test=" + Math.random());
+  const { createInitialTree } = await import(
+    "./tileTree.ts?test=" + Math.random()
+  );
   const state = createInitialTree("main");
-  const withTab = (await import("./tileTree.ts?test=" + Math.random())).addTabToPane(state, "main", "t-1");
+  const withTab = (
+    await import("./tileTree.ts?test=" + Math.random())
+  ).addTabToPane(state, "main", "t-1");
   const reconciled = m.reconcileTree(withTab, ["t-1", "t-2"], "factory");
   assert.deepEqual(reconciled.root.tabIds, ["t-1", "t-2"]);
 });
 
 test("reconcileTree excludes factory tab id", async () => {
   const m = await load();
-  const { createInitialTree, addTabToPane } = await import("./tileTree.ts?test=" + Math.random());
+  const { createInitialTree, addTabToPane } = await import(
+    "./tileTree.ts?test=" + Math.random()
+  );
   let state = createInitialTree("main");
   state = addTabToPane(state, "main", "factory-tab");
-  const reconciled = m.reconcileTree(state, ["factory-tab", "t-1"], "factory-tab");
+  const reconciled = m.reconcileTree(
+    state,
+    ["factory-tab", "t-1"],
+    "factory-tab",
+  );
   assert.strictEqual(reconciled.root.tabIds.length, 1);
   assert.strictEqual(reconciled.root.tabIds[0], "t-1");
 });
 
 test("reconcileTree keeps empty root pane when emptied", async () => {
   const m = await load();
-  const { createInitialTree, addTabToPane, removeTab } = await import("./tileTree.ts?test=" + Math.random());
+  const { createInitialTree, addTabToPane, removeTab } = await import(
+    "./tileTree.ts?test=" + Math.random()
+  );
   let state = createInitialTree("main");
   state = addTabToPane(state, "main", "t-1");
   const reconciled = m.reconcileTree(state, [], "factory");

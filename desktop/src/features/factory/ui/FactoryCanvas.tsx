@@ -1,7 +1,15 @@
 import * as React from "react";
 import { cn } from "@/shared/lib/cn";
-import type { TileLayoutNode, TileGroup, TileTreeState } from "@/features/factory/lib/tileTree";
-import { sizesForGroup, setGroupSizes, MIN_SPLIT_SIZE } from "@/features/factory/lib/tileTree";
+import type {
+  TileLayoutNode,
+  TileGroup,
+  TileTreeState,
+} from "@/features/factory/lib/tileTree";
+import {
+  sizesForGroup,
+  setGroupSizes,
+  MIN_SPLIT_SIZE,
+} from "@/features/factory/lib/tileTree";
 import { FactoryPane } from "./FactoryPane";
 import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
 
@@ -24,12 +32,17 @@ function Splitter({
     target.classList.add("dragging");
 
     const rect = target.parentElement?.getBoundingClientRect();
-    const startPos = isRow ? e.clientX - (rect?.left ?? 0) : e.clientY - (rect?.top ?? 0);
+    const startPos = isRow
+      ? e.clientX - (rect?.left ?? 0)
+      : e.clientY - (rect?.top ?? 0);
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       if (!rect) return;
-      const currentPos = isRow ? moveEvent.clientX - rect.left : moveEvent.clientY - rect.top;
-      const delta = (currentPos - startPos) / (isRow ? rect.width : rect.height);
+      const currentPos = isRow
+        ? moveEvent.clientX - rect.left
+        : moveEvent.clientY - rect.top;
+      const delta =
+        (currentPos - startPos) / (isRow ? rect.width : rect.height);
       // We don't have easy access to current group sizes here without passing state.
       // For this step, we'll implement basic resize logic through a callback that
       // updates the full tree state externally.
@@ -51,7 +64,9 @@ function Splitter({
     <div
       className={cn(
         "relative z-10 flex-shrink-0 bg-transparent transition-colors hover:bg-primary",
-        isRow ? "w-[6px] cursor-col-resize -mx-[3px] my-auto" : "h-[6px] cursor-row-resize -my-[3px] mx-auto",
+        isRow
+          ? "w-[6px] cursor-col-resize -mx-[3px] my-auto"
+          : "h-[6px] cursor-row-resize -my-[3px] mx-auto",
       )}
       data-testid={`factory-splitter-${groupId}-${index}`}
       onPointerDown={handlePointerDown}
@@ -97,7 +112,9 @@ function renderNode(
         onSplitDown={() => props.onPaneSplitDown(node.id)}
         onClosePane={() => props.onPaneClose(node.id)}
         onCloseTab={(tabId: string) => props.onPaneCloseTab(node.id, tabId)}
-        onSetActiveTab={(tabId: string | null) => props.onPaneActiveTabChange(node.id, tabId)}
+        onSetActiveTab={(tabId: string | null) =>
+          props.onPaneActiveTabChange(node.id, tabId)
+        }
       />
     );
   }
@@ -109,7 +126,10 @@ function renderNode(
   return (
     <div
       key={pathKey}
-      className={cn("flex min-h-0 min-w-0 overflow-hidden", isRow ? "flex-row" : "flex-col")}
+      className={cn(
+        "flex min-h-0 min-w-0 overflow-hidden",
+        isRow ? "flex-row" : "flex-col",
+      )}
       data-testid={`factory-group-${group.id}`}
     >
       {group.children.map((child, index) => (
@@ -124,9 +144,17 @@ function renderNode(
           )}
           <div
             className="min-h-0 min-w-0 overflow-hidden"
-            style={{ flexBasis: `${(sizes[index] ?? 1 / group.children.length) * 100}%`, flexShrink: 0 }}
+            style={{
+              flexBasis: `${(sizes[index] ?? 1 / group.children.length) * 100}%`,
+              flexShrink: 0,
+            }}
           >
-            {renderNode(child, workspaceTabs, props, `${pathKey}-${group.id}-${index}`)}
+            {renderNode(
+              child,
+              workspaceTabs,
+              props,
+              `${pathKey}-${group.id}-${index}`,
+            )}
           </div>
         </React.Fragment>
       ))}
@@ -150,7 +178,8 @@ export function FactoryCanvas({
 }: FactoryCanvasProps): React.JSX.Element {
   const handleResize = React.useCallback(
     (groupId: string, deltaSizes: ReadonlyArray<number>) => {
-      const currentSizes: ReadonlyArray<number> = state.sizesByGroupId[groupId] ?? [];
+      const currentSizes: ReadonlyArray<number> =
+        state.sizesByGroupId[groupId] ?? [];
       const newSizes = [...currentSizes].map((s: number, i: number) =>
         Math.max(MIN_SPLIT_SIZE, s + (deltaSizes[i] ?? 0)),
       );
@@ -162,21 +191,29 @@ export function FactoryCanvas({
   );
 
   return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-2" data-testid="factory-canvas">
-      {renderNode(state.root, workspaceTabs, {
-        state,
+    <div
+      className="min-h-0 min-w-0 flex-1 overflow-hidden p-2"
+      data-testid="factory-canvas"
+    >
+      {renderNode(
+        state.root,
         workspaceTabs,
-        channelId,
-        isFocusedPaneId,
-        onPaneFocus,
-        onPaneSplitRight,
-        onPaneSplitDown,
-        onPaneClose,
-        onPaneActiveTabChange,
-        onPaneCloseTab,
-        onGroupResize: handleResize,
-        commit,
-      }, "root")}
+        {
+          state,
+          workspaceTabs,
+          channelId,
+          isFocusedPaneId,
+          onPaneFocus,
+          onPaneSplitRight,
+          onPaneSplitDown,
+          onPaneClose,
+          onPaneActiveTabChange,
+          onPaneCloseTab,
+          onGroupResize: handleResize,
+          commit,
+        },
+        "root",
+      )}
     </div>
   );
 }
