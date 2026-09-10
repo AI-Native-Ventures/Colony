@@ -28,6 +28,10 @@ import {
   FactoryBody,
   factoryKindDefinition,
 } from "@/features/workspace/kinds/factoryKind";
+import {
+  CommGraphBody,
+  commGraphKindDefinition,
+} from "@/features/workspace/kinds/commGraphKind";
 import { getFeature } from "@/shared/features/manifest";
 import { resolveEnabled } from "@/shared/features/resolveEnabled";
 import { getOverrides } from "@/shared/features/store";
@@ -99,6 +103,9 @@ export function registerAllTabKinds(): void {
     factoryKindRegistered = true;
     registerTabKind(factoryKindDefinition);
     bodies.set(factoryKindDefinition.kind, FactoryBody);
+    // The graph is part of the factory surface, so it rides the same flag.
+    registerTabKind(commGraphKindDefinition);
+    bodies.set(commGraphKindDefinition.kind, CommGraphBody);
   }
   if (!webKindRegistered && workspaceWebTabEnabled()) {
     webKindRegistered = true;

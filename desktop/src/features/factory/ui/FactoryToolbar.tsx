@@ -1,19 +1,33 @@
-import type * as React from "react";
-import { LayoutGrid, Columns2, Rows2, Focus } from "lucide-react";
+import * as React from "react";
+import { LayoutGrid, Columns2, Rows2, Focus, Network } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import {
+  addTabToPane,
   applyPreset,
   collectPanes,
+  findPaneByTabId,
+  replacePane,
   type TileTreeState,
   type TileLayoutNode,
 } from "@/features/factory/lib/tileTree";
+import {
+  COMM_GRAPH_TAB_KIND,
+  COMM_GRAPH_TAB_TITLE,
+} from "@/features/factory/lib/commGraphTab";
+import {
+  openTab,
+  setActiveTab,
+  useWorkspace,
+} from "@/features/workspace/lib/workspaceTabs";
 import { projectChipLabel } from "../lib/projectChannel";
 import { useProjectsQuery } from "@/features/projects/hooks";
 import { findProjectForChannel } from "@/features/factory/lib/projectChannel";
 
 export type FactoryToolbarProps = {
   channelId: string;
+  /** The factory tab itself, which has to stay the active workspace tab. */
+  factoryTabId: string;
   state: TileTreeState;
   commit: (next: TileTreeState) => void;
   preset: "single" | "columns" | "grid" | "focus" | null;
@@ -24,6 +38,7 @@ export type FactoryToolbarProps = {
 
 export function FactoryToolbar({
   channelId,
+  factoryTabId,
   state,
   commit,
   preset,
@@ -31,6 +46,49 @@ export function FactoryToolbar({
 }: FactoryToolbarProps): React.JSX.Element {
   const projects = useProjectsQuery();
   const project = findProjectForChannel(projects.data, channelId);
+  const workspace = useWorkspace(channelId);
+
+  // Open the graph, or focus the one that is already open. A second graph tile
+  // would show the same derived view twice, so the button is idempotent.
+  //
+  // Every path ends by making the factory tab active again: `openTab` activates
+  // what it creates, and an active graph tab would render standalone in the
+  // workspace shell instead of inside the pane that now owns it.
+  const openGraph = React.useCallback(() => {
+    const existing = workspace.tabs.find(
+      (tab) => tab.kind === COMM_GRAPH_TAB_KIND,
+    );
+    if (existing) {
+      const pane = findPaneByTabId(state.root, existing.id);
+      if (pane) {
+        commit({
+          ...state,
+          root: replacePane(state.root, pane.id, (candidate) => ({
+            ...candidate,
+            activeTabId: existing.id,
+          })),
+          focusedPaneId: pane.id,
+        });
+        setActiveTab(channelId, factoryTabId);
+        return;
+      }
+      commit(
+        addTabToPane(state, state.focusedPaneId, existing.id, {
+          activate: true,
+        }),
+      );
+      setActiveTab(channelId, factoryTabId);
+      return;
+    }
+    const tabId = openTab(channelId, {
+      kind: COMM_GRAPH_TAB_KIND,
+      title: COMM_GRAPH_TAB_TITLE,
+      createdBy: "local",
+      payload: {},
+    });
+    commit(addTabToPane(state, state.focusedPaneId, tabId, { activate: true }));
+    setActiveTab(channelId, factoryTabId);
+  }, [workspace.tabs, state, commit, channelId, factoryTabId]);
 
   const paneCount = collectPanes(state.root).length;
   const tabIdsInTree: string[] = [];
@@ -118,6 +176,16 @@ export function FactoryToolbar({
           </TabsList>
         </Tabs>
       </div>
+      <Button
+        size="xs"
+        variant="outline"
+        title="Communication graph"
+        data-testid="factory-open-graph"
+        onClick={openGraph}
+      >
+        <Network className="mr-1 h-3 w-3" />
+        Graph
+      </Button>
       <Button
         size="xs"
         variant="outline"

@@ -74,6 +74,7 @@ export default defineConfig({
         "**/workspace-message-link.spec.ts",
         "**/workspace-terminal.spec.ts",
         "**/workspace-factory.spec.ts",
+        "**/workspace-factory-graph.spec.ts",
         "**/workspace-web.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",
