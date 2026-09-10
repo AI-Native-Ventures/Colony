@@ -396,4 +396,13 @@ test("revision view reports requested versus addressed", () => {
   assert.equal(view.targetRevision, 1);
 
   assert.equal(resolveRevisionView(makeRecord()).kind, "none");
+
+  // Approvals alone never produce a revision section; the thread attachment
+  // must render nothing rather than an empty change-request block.
+  const approvedOnly = makeRecord({
+    status: "approved",
+    approvals: [approval(1, SHA_1)],
+    activeApprovalId: "approval-1",
+  });
+  assert.equal(resolveRevisionView(approvedOnly).kind, "none");
 });

@@ -562,14 +562,14 @@ function stageFacts(
         : {}),
     },
     designBuild: {
-      done: revisions > 0 && later,
+      done: (revisions > 0 && later) || completed.has("designBuild"),
       detail:
         revisions > 0
           ? `${revisions} recorded revision${revisions === 1 ? "" : "s"}; ${designBuild.length} work evidence record${designBuild.length === 1 ? "" : "s"}.`
           : "No revision recorded yet.",
     },
     review: {
-      done: qaValid && later,
+      done: (qaValid && later) || completed.has("review"),
       detail: head?.qa
         ? `Independent QA ${head.qa.passed ? "passed" : "did not pass"} for version ${head.qa.revision}.`
         : "No independent QA recorded yet.",
@@ -582,7 +582,7 @@ function stageFacts(
           : "No revision recorded yet.",
     },
     approval: {
-      done: Boolean(activeApproval),
+      done: Boolean(activeApproval) || completed.has("approval"),
       detail: activeApproval
         ? `Approval recorded for version ${activeApproval.revision}.`
         : record.approvals.length > 0
@@ -590,7 +590,9 @@ function stageFacts(
           : "No approval recorded yet.",
     },
     handover: {
-      done: record.status === "handedOver" && Boolean(record.handover),
+      done:
+        (record.status === "handedOver" && Boolean(record.handover)) ||
+        completed.has("handover"),
       detail: record.handover
         ? `Handover accepted for version ${record.handover.approvedRevision}.`
         : "No handover recorded yet.",

@@ -248,6 +248,21 @@ function recordFixture(input: {
           note: REQUEST_NOTE,
         }),
       ],
+      // Relay-validated research completion plus a build checkpoint that keeps
+      // design/build in progress rather than done.
+      stageEvidence: [
+        {
+          stage: "research",
+          kind: "taskReport",
+          eventId: HEX64("research-task-report"),
+        },
+        {
+          stage: "designBuild",
+          kind: "jobCheckpoint",
+          eventId: HEX64("build-checkpoint"),
+          revision: 2,
+        },
+      ],
     };
   }
   if (state === "review") {
@@ -641,6 +656,10 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   await expect(rootAttachment).toBeVisible();
   await expect(page.getByText("In progress").first()).toBeVisible();
   await expect(page.getByText("Understand the existing site")).toBeVisible();
+  const stageRow = (label: string) =>
+    rootAttachment.locator("li").filter({ hasText: label });
+  await expect(stageRow("Understand the existing site")).toContainText("Done");
+  await expect(stageRow("Design and build")).toContainText("Working");
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = page.getByTestId("website-thread-attachment");
   const versionHistory = threadAttachment.getByRole("region", {

@@ -172,6 +172,8 @@ placement is by event id, not by composite rendering.
 | `websiteInstanceData.ts` | Parses and verifies the coordinator card's inline `website-job` data (`taskId`, `threadRoot`, `sourceUrl`, `brief`), requiring id === head `instance`, signer === head coordinator, manifest match, and record match. Supplies `WebsiteBriefView`. |
 | `websiteTransport.ts` | Builds the exact reserved Block actions (`website.approve`, `website.request-changes`) and kind-40027 `beginWork`; deterministic idempotency UUID; confirms from the canonical head or a matching receipt. |
 | `nativePreviewAdapter.ts` | Feature host adapter over `createWebsitePreviewAdapter`, artifact loader over `createWebsiteArtifactLoader`, handover download over `downloadWebsiteHandover`, error-code mapping. |
+| `clipBounds.ts` | `useAttachmentClipBounds`: walks to the nearest scrolling ancestor (or the document scrolling element), intersects its client rect with the viewport, and returns window CSS-pixel clip bounds. Channel and thread panes each resolve their own scroller. |
+| `websiteProgress.ts` | `deriveWebsiteProgress` / `deriveWebsiteStageAgents` from the relay-signed record: task report/outcome completes a stage, work event/checkpoint means in progress, revision/QA/approval/handover completion follow the record, and stage agents come only from canonical identity fields. |
 | `websiteAttachments.tsx` | `WebsiteMessageAttachment`: channel root (id === head `thread`) renders the brief/working/review projection; thread card (id === head `instance`) renders QA, version history, decisions, and handover. Builds the agent directory from profiles plus the identity colour hash. |
 | `resetWebsiteIntegrationState.ts` | One `resetCommunityState()` entry clearing heads, receipt waiters, and cached instance refs. |
 
@@ -186,6 +188,10 @@ Seams used:
   trust the card's data; the Blocks module is not edited.
 - `useRelaySelfQuery` and `useCommunities` for the trust anchor and community
   boundary; `MessageRow.tsx` gains one import and one JSX line.
+- The attachment element itself for clip bounds: the nearest computed
+  `overflow-y: auto/scroll/overlay` ancestor (otherwise the document scrolling
+  element) is intersected with the viewport, so no app-shell provider is
+  required and the right thread clips to its own scroller.
 
 The head confirmation is canonical: a lost receipt resolves once the head store
 shows the decision or the started status. The decision panel's selected version
@@ -204,16 +210,14 @@ disables both controls until the current version is selected again.
 3. **Live agent work.** Heads, instance data, receipts, and handover access
    requests are consumed from the relay. Real crawl, build, QA, and revision
    execution belong to the backend and managed-agent workers.
-4. **Progress facets.** `progress` (active stage, completed stages) still needs
-   canonical task data from the backend's typed same-task evidence; until then
-   stage rows show unconfirmed completion.
+4. **Progress evidence coverage.** Brief and research completion and build-stage
+   activity derive from relay-validated `stageEvidence`; approval, QA, revision,
+   and handover derive from the record. Any additional granularity (for example
+   a research agent identity that evidence does not name) still needs canonical
+   data rather than inference.
 5. **Agent roles.** Role titles come from the profile directory (`role`);
    communities that do not publish kind-0 roles show "Role not recorded" rather
    than an invented title.
-6. **`getClipBounds`.** The attachment does not yet receive the app shell's
-   clip provider, so in production a partially visible native view falls back
-   to the safe hidden state. Root wiring should pass it when the channel shell
-   exposes one.
 
 ## Tests
 
@@ -236,13 +240,22 @@ Nothing was executed in this session.
   async guards, retry payloads, and read-only version inspection.
 - `artifactVerification.test.mjs`, `useSurfaceOcclusion.test.mjs` local URL
   policy and occlusion exemption rules.
+- `websiteHeads.test.mjs` relay-signer trust, tag/record cross-checks,
+  generation guard, instance index, receipt waiters.
+- `clipBounds.test.mjs` nearest nested scroller, viewport clamping, document
+  fallback, and the no-scroller null case.
+- `websiteProgress.test.mjs` fresh draft, checkpoint-only in-progress,
+  revision/QA completion, change-request reset, pinned approval, handover,
+  and canonical-only stage agents.
 - `desktop/tests/e2e/website-manager.spec.ts` (mocked proof): five states x
   1280x720 and 1440x900 screenshots asserted byte-distinct, desktop/mobile and
   Before/Redesign switching, expand and close with a dialog-count zero check,
   earlier-version inspection, stale-selection approval disabled, request
   changes failing then retrying to a canonical head confirmation, reload
-  recovery, community-switch clearing, and the honest browser native-unavailable
-  state. The spec installs the mock-only artifact loader described below.
+  recovery, community-switch clearing, the honest browser native-unavailable
+  state, and the Working stage rows showing research Done with design/build
+  still in progress from a checkpoint. The spec installs the mock-only artifact
+  loader described below.
 
 Mock-only seam: `__BUZZ_E2E_WEBSITE_ARTIFACT_LOADER__` is read by
 `createWebsiteArtifactLoaderAdapter`. Playwright installs fixture bytes under

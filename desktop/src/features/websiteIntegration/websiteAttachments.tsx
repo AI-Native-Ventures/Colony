@@ -46,11 +46,16 @@ import {
   createWebsiteDownloadAdapter,
   createWebsiteHostAdapter,
 } from "./nativePreviewAdapter";
+import { useAttachmentClipBounds } from "./clipBounds";
 import { useWebsiteHeads } from "./useWebsiteHeads";
 import {
   briefViewFromInstanceData,
   useWebsiteInstanceData,
 } from "./websiteInstanceData";
+import {
+  deriveWebsiteProgress,
+  deriveWebsiteStageAgents,
+} from "./websiteProgress";
 import {
   submitWebsiteBeginWork,
   submitWebsiteDecision,
@@ -155,6 +160,16 @@ function WebsiteRootAttachment({
   profiles: UserProfileLookup | undefined;
 }) {
   const record = head.record;
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const getClipBounds = useAttachmentClipBounds(rootRef);
+  const progress = React.useMemo(
+    () => deriveWebsiteProgress(record),
+    [record],
+  );
+  const stageAgents = React.useMemo(
+    () => deriveWebsiteStageAgents(head),
+    [head],
+  );
   const agents = React.useMemo(
     () => buildWebsiteAgentDirectory({ profiles, record, head }),
     [head, profiles, record],
@@ -186,14 +201,23 @@ function WebsiteRootAttachment({
     record.status === "handedOver";
 
   return (
-    <div className="mt-2" data-testid="website-root-attachment">
+    <div
+      className="mt-2"
+      data-testid="website-root-attachment"
+      ref={rootRef}
+    >
       <WebsiteJobCard agents={agents} brief={brief} record={record}>
         {record.status === "draft" ? (
           <WebsiteBrief brief={brief} onStart={onStart} record={record} />
         ) : null}
         {record.status === "working" ||
         record.status === "changesRequested" ? (
-          <WebsiteWorking agents={agents} record={record} />
+          <WebsiteWorking
+            agents={agents}
+            progress={progress}
+            record={record}
+            stageAgents={stageAgents}
+          />
         ) : null}
         {isReviewState ? (
           <WebsiteReview
@@ -201,6 +225,7 @@ function WebsiteRootAttachment({
             agents={agents}
             artifactLoader={artifactLoader}
             communityId={communityId}
+            getClipBounds={getClipBounds}
             hostAdapter={hostAdapter}
             record={record}
             showDecisionControls={false}
@@ -227,6 +252,8 @@ function WebsiteThreadAttachment({
   currentPubkey: string | undefined;
 }) {
   const record = head.record;
+  const threadRef = React.useRef<HTMLElement | null>(null);
+  const getClipBounds = useAttachmentClipBounds(threadRef);
   const agents = React.useMemo(
     () => buildWebsiteAgentDirectory({ profiles, record, head }),
     [head, profiles, record],
@@ -271,6 +298,7 @@ function WebsiteThreadAttachment({
       aria-label="Website review details"
       className={cn("mt-2 overflow-hidden rounded-xl border border-border bg-card")}
       data-testid="website-thread-attachment"
+      ref={threadRef}
     >
       {inspection !== null ? (
         <>
@@ -290,6 +318,7 @@ function WebsiteThreadAttachment({
           <WebsitePreview
             artifactLoader={artifactLoader}
             communityId={communityId}
+            getClipBounds={getClipBounds}
             hostAdapter={hostAdapter}
             onSelectRevision={setInspection}
             record={record}
