@@ -319,8 +319,19 @@ export function createWebsitePreviewAdapter(
   };
 }
 
-function toUint8Array(value: unknown): Uint8Array {
-  if (value instanceof Uint8Array) return value;
+/**
+ * Normalize any transport byte shape into a `Uint8Array` backed by a real
+ * `ArrayBuffer`. TypeScript 5.7+ distinguishes `Uint8Array<ArrayBufferLike>`
+ * from `Uint8Array<ArrayBuffer>`, and WebCrypto plus `Blob` require the
+ * latter, so the decode helper copies once here. Verification semantics are
+ * unchanged: the copy holds the exact same bytes the digest check covers.
+ */
+function toUint8Array(value: unknown): Uint8Array<ArrayBuffer> {
+  if (value instanceof Uint8Array) {
+    const copy = new Uint8Array(new ArrayBuffer(value.byteLength));
+    copy.set(value);
+    return copy;
+  }
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (Array.isArray(value)) return Uint8Array.from(value as number[]);
   // Tolerate a Node Buffer shape if a transport ever serializes it as
