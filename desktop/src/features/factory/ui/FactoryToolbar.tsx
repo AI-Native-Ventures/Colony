@@ -49,6 +49,13 @@ export type FactoryToolbarProps = {
   onPresetChange: (
     preset: "single" | "columns" | "grid" | "focus" | null,
   ) => void;
+  /**
+   * The launcher is opened from the toolbar and from a tile's "New agent…",
+   * so the body owns whether it is open and what the brief starts as.
+   */
+  launchOpen: boolean;
+  launchBriefPrefill: string;
+  onLaunchOpenChange: (open: boolean) => void;
 };
 
 export function FactoryToolbar({
@@ -58,11 +65,13 @@ export function FactoryToolbar({
   commit,
   preset,
   onPresetChange,
+  launchOpen,
+  launchBriefPrefill,
+  onLaunchOpenChange,
 }: FactoryToolbarProps): React.JSX.Element {
   const projects = useProjectsQuery();
   const project = findProjectForChannel(projects.data, channelId);
   const workspace = useWorkspace(channelId);
-  const [launchOpen, setLaunchOpen] = React.useState(false);
 
   // Open the graph, or focus the one that is already open. A second graph tile
   // would show the same derived view twice, so the button is idempotent.
@@ -257,16 +266,17 @@ export function FactoryToolbar({
       <Button
         size="xs"
         variant="outline"
-        onClick={() => setLaunchOpen(true)}
+        onClick={() => onLaunchOpenChange(true)}
         title="Launch an agent into this project"
         data-testid="factory-add-agent-btn"
       >
         + Agent
       </Button>
       <LaunchAgentDialog
+        briefPrefill={launchBriefPrefill}
         channelId={channelId}
         onLaunched={handleLaunched}
-        onOpenChange={setLaunchOpen}
+        onOpenChange={onLaunchOpenChange}
         open={launchOpen}
       />
     </div>

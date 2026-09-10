@@ -1,18 +1,19 @@
 import * as React from "react";
-import { supportsInlineFilePreview } from "@/shared/ui/file-preview/filePreviewModel";
 import {
   classifyChildren,
   hasBlockMedia,
   isImageOnlyParagraph,
 } from "../markdownUtils";
 import { resolveFileCard } from "../markdownFileCard";
-import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { MediaCollection } from "../media-preview/MediaCollection";
 import {
-  AudioPlayer,
-  ImagePreview,
-  type MediaPreviewImage,
-} from "@/shared/ui/media-preview";
-import { isAudioMedia, isRelayDownloadable, isVideoMedia } from "./mediaEntry";
+  groupMarkdownMedia,
+  markdownCollectionItem,
+} from "./mediaCollectionChildren";
+import { VideoReviewMarkdownContext } from "./MarkdownVideoPlayer";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { AudioPlayer, ImagePreview } from "@/shared/ui/media-preview";
+import { isRelayDownloadable } from "./mediaEntry";
 import { useMarkdownRuntime } from "./runtimeContext";
 import { dimensionsFromDim, getReactNodeText } from "./utils";
 
@@ -92,34 +93,17 @@ export function MarkdownImageSurface({
   );
 }
 
-/** Related image children become one ordered carousel; mixed media retain their players. */
+/** Related media children become one ordered collection. */
 export function ImageMosaic({ children }: { children: React.ReactNode[] }) {
   const { imetaByUrl, relayOrigin } = useMarkdownRuntime();
-  const items: MediaPreviewImage[] = [];
+  const reviewContext = React.useContext(VideoReviewMarkdownContext);
+  const entries = [];
   for (const child of children) {
-    if (
-      !React.isValidElement<{ src?: string; alt?: string }>(child) ||
-      !child.props.src
-    )
-      return <div className="space-y-2">{children}</div>;
-    const { src, alt } = child.props;
-    const entry = imetaByUrl?.get(src);
-    // Related images share a carousel; mixed video/image output keeps its players.
-    if (isVideoMedia(src, entry?.m) || isAudioMedia(src, entry?.m))
-      return <div className="space-y-2">{children}</div>;
-    items.push({
-      src: rewriteRelayUrl(src),
-      originalUrl: src,
-      thumbnailSrc: entry?.thumb ? rewriteRelayUrl(entry.thumb) : undefined,
-      alt: alt ?? "Image",
-      filename: entry?.filename,
-      downloadUrl: isRelayDownloadable(src, relayOrigin ?? undefined)
-        ? src
-        : undefined,
-      ...dimensionsFromDim(entry?.dim),
-    });
+    const item = markdownCollectionItem(child, imetaByUrl, relayOrigin);
+    if (!item) return <div className="space-y-2">{children}</div>;
+    entries.push({ item });
   }
-  return <ImagePreview items={items} />;
+  return <MediaCollection entries={entries} reviewContext={reviewContext} />;
 }
 
 /** Promote paragraphs containing rich attachments to valid block markup. */
@@ -128,11 +112,24 @@ export function MarkdownMediaParagraph({
 }: {
   children?: React.ReactNode;
 }) {
-  const { imetaByUrl } = useMarkdownRuntime();
+  const { imetaByUrl, relayOrigin } = useMarkdownRuntime();
+  const reviewContext = React.useContext(VideoReviewMarkdownContext);
   const childArray = React.Children.toArray(children);
   const { imageChildren } = classifyChildren(childArray);
   if (isImageOnlyParagraph(childArray))
     return <ImageMosaic>{imageChildren}</ImageMosaic>;
+  const grouped = groupMarkdownMedia(
+    childArray,
+    (child) => markdownCollectionItem(child, imetaByUrl, relayOrigin),
+    (entries, key) => (
+      <MediaCollection
+        key={key}
+        entries={entries}
+        reviewContext={reviewContext}
+      />
+    ),
+  );
+  if (grouped.grouped) return <div>{grouped.children}</div>;
   const hasDocument = (child: React.ReactNode): boolean => {
     if (
       !React.isValidElement<{ href?: string; children?: React.ReactNode }>(
@@ -146,10 +143,7 @@ export function MarkdownMediaParagraph({
       href,
       getReactNodeText(nested),
     );
-    return (
-      Boolean(card && supportsInlineFilePreview(card.filename, card.mime)) ||
-      React.Children.toArray(nested).some(hasDocument)
-    );
+    return Boolean(card) || React.Children.toArray(nested).some(hasDocument);
   };
   return hasBlockMedia(childArray) || childArray.some(hasDocument) ? (
     <div>{children}</div>

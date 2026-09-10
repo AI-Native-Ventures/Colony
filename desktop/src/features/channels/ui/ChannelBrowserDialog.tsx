@@ -95,7 +95,7 @@ type ChannelBrowserDialogProps = {
    * dialog surfaces a "Create …" affordance (Are.na style) so search and
    * create live behind a single entry point.
    */
-  onCreateChannel?: (input: CreateChannelInput) => Promise<void>;
+  onCreateChannel?: (input: CreateChannelInput) => Promise<string | undefined>;
   isCreatingChannel?: boolean;
 };
 
@@ -152,7 +152,7 @@ export function ChannelBrowserDialog({
       : "Search channels by name or description";
   const entityLabel = isForumMode ? "forum" : "channel";
 
-  const noopCreate = React.useCallback(async () => {}, []);
+  const noopCreate = React.useCallback(async () => undefined, []);
   const createForm = useCreateChannelForm({
     channelKind: createKind,
     active: open && mode === "create",

@@ -21,6 +21,7 @@ async function openDocuments(page: Page) {
   await page.getByTestId("open-settings").click();
   await page.getByTestId("profile-popover-settings").click();
   await page.getByTestId("settings-nav-blocks").click();
+  await page.getByRole("tab", { name: "Examples", exact: true }).click();
   await page
     .getByTestId("rich-preview-gallery")
     .getByRole("tab", { name: "Documents", exact: true })

@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "brainstorm",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Brainstorm",
   "description": "A structured multi-select question with selectable ideas and custom input.",
   "origin": "core",
@@ -37,7 +37,8 @@
     "children": [
       {
         "type": "section",
-        "title": "{{title}}"
+        "title": "{{title}}",
+        "presentation": "lead"
       },
       {
         "type": "question",

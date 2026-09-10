@@ -1,0 +1,40 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "details",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Details",
+  "description": "Compact label-value information.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["label", "value"],
+    "properties": {
+      "label": { "type": "string", "maxLength": 120 },
+      "value": { "type": "string", "maxLength": 500 }
+    }
+  },
+  "tree": {
+    "type": "details",
+    "items": [
+      { "label": "{{label}}", "value": "{{value}}" }
+    ]
+  },
+  "actions": [],
+  "permissions": [],
+  "fallback_template": "**{{label}}:** {{value}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "details": 1 },
+  "examples": [
+    {
+      "name": "Owner",
+      "data": {
+        "label": "Owner",
+        "value": "Jordan Lee"
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}

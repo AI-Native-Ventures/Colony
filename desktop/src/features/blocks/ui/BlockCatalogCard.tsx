@@ -1,38 +1,12 @@
 import { ChevronRight, TriangleAlert } from "lucide-react";
 
-import type { BlockNode } from "@/features/blocks/contracts";
 import {
   type BlockCatalogItem,
   parseBlockWorkshopDestination,
 } from "@/features/blocks/blockCatalog";
-import { InlineFilePreview } from "@/shared/ui/file-preview/InlineFilePreview";
-import { ImagePreview } from "@/shared/ui/media-preview";
 import { Button } from "@/shared/ui/button";
 
-import { BlockPrimitive } from "./primitives";
-import type { BlockPrimitiveNode } from "./primitives";
-
-const PREVIEW_ENVIRONMENT = {
-  origin: "core" as const,
-  trusted: false,
-  declaredActionIds: new Set<string>(),
-  disabledReason: "Actions are available in the conversation.",
-};
-
-function ReadonlyBlockPreview({
-  data,
-  node,
-}: {
-  data: unknown;
-  node: BlockNode;
-}) {
-  return (
-    <BlockPrimitive
-      context={{ data, actionEnvironment: PREVIEW_ENVIRONMENT }}
-      node={node as BlockPrimitiveNode}
-    />
-  );
-}
+import { ReadonlyBlockPreview } from "./ReadonlyBlockPreview";
 
 /**
  * The shelf shows a block, not a dossier. Only the two facts that could change
@@ -61,7 +35,7 @@ function BlockConcerns({
         </p>
       ) : null}
       {permissionLabels.length > 0 ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="break-words text-xs text-muted-foreground">
           Requires {permissionLabels.join(", ")}
         </p>
       ) : null}
@@ -69,6 +43,7 @@ function BlockConcerns({
   );
 }
 
+/** One full native preview with its publisher concerns and conversation handoff. */
 export function BlockCatalogCard({
   item,
   onSelect,
@@ -84,20 +59,29 @@ export function BlockCatalogCard({
 
   return (
     <article
-      className="@container min-w-0 space-y-5 rounded-xl border border-border bg-card p-5 text-card-foreground"
+      className="@container min-w-0 space-y-6 rounded-xl border border-border bg-card p-5 text-card-foreground @sm/catalog:p-6"
       data-block-catalog-handle={item.handle}
       data-testid={`block-catalog-card-${item.handle}`}
     >
       <div className="min-w-0">
-        <h2 className="text-base font-semibold tracking-tight text-foreground">
+        <h2 className="break-words text-xl font-semibold tracking-tight text-foreground">
           {item.name}
         </h2>
-        <p className="mt-0.5 font-mono text-xs text-primary">@{item.handle}</p>
-        <p className="mt-2.5 max-w-[44ch] text-sm leading-5 text-muted-foreground">
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <p className="break-all font-mono text-xs text-muted-foreground">
+            @{item.handle}
+          </p>
+          {item.status === "deprecated" ? (
+            <span className="rounded border border-border px-2 py-0.5 text-xs text-muted-foreground">
+              Deprecated
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-3 break-words text-sm leading-relaxed text-muted-foreground">
           {item.summary}
         </p>
         <Button
-          className="mt-4 h-auto p-0 font-medium text-foreground"
+          className="mt-4 h-auto p-0 text-sm font-medium text-foreground"
           data-testid={`open-block-workshop-${item.handle}`}
           onClick={() => onSelect(item)}
           size="sm"
@@ -113,31 +97,19 @@ export function BlockCatalogCard({
         />
       </div>
 
-      <figure className="min-w-0 rounded-lg bg-background p-3">
+      <figure
+        aria-label={`${item.name} read-only preview`}
+        className="min-w-0 rounded-lg bg-background p-3 @sm/catalog:p-5"
+      >
         <figcaption className="sr-only">
           {item.name} read-only preview
         </figcaption>
-        {trust === "core" && item.handle === "media" ? (
-          <ImagePreview
-            items={[
-              {
-                src: "/rich-previews/launch-01.svg",
-                downloadUrl: "/rich-previews/launch-01.svg",
-                filename: "launch-01.svg",
-                alt: "Launch campaign preview",
-                width: 1080,
-                height: 1080,
-              },
-            ]}
-          />
-        ) : trust === "core" && item.handle === "artifact" ? (
-          <InlineFilePreview
-            href="/rich-previews/service-report.pdf"
-            filename="service-report.pdf"
-          />
-        ) : (
-          <ReadonlyBlockPreview data={item.preview} node={manifest.tree} />
-        )}
+        <ReadonlyBlockPreview
+          data={item.preview}
+          node={manifest.tree}
+          origin={item.origin}
+          trust={trust}
+        />
       </figure>
     </article>
   );

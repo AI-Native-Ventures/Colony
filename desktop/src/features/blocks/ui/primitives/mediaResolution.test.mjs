@@ -99,12 +99,30 @@ test("root descriptors work without changing the media node contract", () => {
   assert.equal(result[0].item.filename, "Recording.wav");
 });
 
-test("legacy string and URL arrays stay supported with a bounded preview", () => {
+test("legacy URL arrays preserve the first 24 items and report every omitted file", () => {
   const urls = Array.from(
     { length: 40 },
     (_, i) => `https://example.test/${i}.png`,
   );
-  assert.equal(resolveMedia(node, { items: urls }).length, 24);
+  for (const count of [24, 25, 40]) {
+    const result = resolveMedia(node, { items: urls.slice(0, count) });
+    assert.deepEqual(
+      result.flatMap(({ item }) => (item ? [item.url] : [])),
+      urls.slice(0, 24),
+    );
+    const unavailable = result.filter(({ item }) => !item);
+    assert.deepEqual(
+      unavailable,
+      count === 24
+        ? []
+        : [
+            {
+              reason: `Showing the first 24 files. ${count - 24} additional files are not previewed.`,
+              omittedCount: count - 24,
+            },
+          ],
+    );
+  }
   assert.equal(
     resolveMedia(
       { type: "media", url: "https://example.test/cover.png", alt: "Cover" },

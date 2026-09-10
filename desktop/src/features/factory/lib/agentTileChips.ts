@@ -91,11 +91,25 @@ export function applyEffortToEnvVars(
   return next;
 }
 
-/** The worktree chip's label: the leaf directory name, or null when unset. */
+/**
+ * The worktree chip's label: the leaf directory name, or null when unset.
+ *
+ * The record's own `workingDir` is authoritative — it is what the spawn
+ * actually runs in. `COLONY_WORKTREE` is the mirror the agent's own process
+ * reads, and stays the fallback for records written before the field existed.
+ */
 export function resolveAgentWorktreeLabel(
-  envVars: Record<string, string> | null | undefined,
+  agent:
+    | {
+        workingDir?: string | null;
+        envVars?: Record<string, string> | null;
+      }
+    | null
+    | undefined,
 ): string | null {
-  const raw = envVars?.[COLONY_WORKTREE_ENV_VAR]?.trim();
+  const raw =
+    agent?.workingDir?.trim() ||
+    agent?.envVars?.[COLONY_WORKTREE_ENV_VAR]?.trim();
   if (!raw) return null;
   const leaf = raw
     .replace(/[\\/]+$/, "")

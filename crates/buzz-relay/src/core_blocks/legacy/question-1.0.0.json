@@ -1,0 +1,76 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "question",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Question",
+  "description": "Structured single-select, multi-select, and custom input.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "context": { "type": "string", "maxLength": 2000 }
+    }
+  },
+  "tree": {
+    "type": "question",
+    "prompt": "Which direction should we take?",
+    "mode": "multi-select",
+    "options": [
+      { "id": "quality", "label": "Prioritize quality" },
+      { "id": "speed", "label": "Prioritize speed" },
+      { "id": "reach", "label": "Prioritize reach" }
+    ],
+    "min_selections": 1,
+    "max_selections": 3,
+    "allow_custom": true,
+    "require_custom_input": false,
+    "submit_action": "question.submit"
+  },
+  "actions": [
+    {
+      "id": "question.submit",
+      "label": "Submit",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["selected"],
+        "properties": {
+          "selected": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["quality", "speed", "reach"]
+            }
+          },
+          "custom_input": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "question.submit",
+        "resolves_attention": false
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "Question: Which direction should we take? Options: quality, speed, reach. You may add your own input.",
+  "supported_clients": ["desktop"],
+  "primitive_versions": { "question": 1 },
+  "examples": [
+    {
+      "name": "Strategy prompt",
+      "data": {
+        "context": "Choose one or more priorities for the next iteration."
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": false }
+}
