@@ -29,6 +29,10 @@ import {
   factoryKindDefinition,
 } from "@/features/workspace/kinds/factoryKind";
 import {
+  AgentBody,
+  agentKindDefinition,
+} from "@/features/workspace/kinds/agentKind";
+import {
   CommGraphBody,
   commGraphKindDefinition,
 } from "@/features/workspace/kinds/commGraphKind";
@@ -103,7 +107,11 @@ export function registerAllTabKinds(): void {
     factoryKindRegistered = true;
     registerTabKind(factoryKindDefinition);
     bodies.set(factoryKindDefinition.kind, FactoryBody);
-    // The graph is part of the factory surface, so it rides the same flag.
+    // The agent tile is a Factory surface: it rides the same flag, so a build
+    // without the Factory tab cannot restore an agent tab it cannot render.
+    registerTabKind(agentKindDefinition);
+    bodies.set(agentKindDefinition.kind, AgentBody);
+    // The graph is part of the same surface, on the same flag.
     registerTabKind(commGraphKindDefinition);
     bodies.set(commGraphKindDefinition.kind, CommGraphBody);
   }
