@@ -52,17 +52,17 @@ export function parseTileTree(unknownValue: unknown): TileTreeState | null {
     Array.isArray(sizesRaw)
   )
     return null;
-  const sizesObj: SizesByGroupId = {};
+  const mutableSizes: Record<string, ReadonlyArray<number> | undefined> = {};
   for (const [key, value] of Object.entries(
     sizesRaw as Record<string, unknown>,
   )) {
     if (value === undefined) {
-      sizesObj[key] = undefined;
+      mutableSizes[key] = undefined;
     } else if (
       Array.isArray(value) &&
       value.every((v) => typeof v === "number")
     ) {
-      sizesObj[key] = value as ReadonlyArray<number>;
+      mutableSizes[key] = value as ReadonlyArray<number>;
     } else {
       return null;
     }
@@ -73,7 +73,7 @@ export function parseTileTree(unknownValue: unknown): TileTreeState | null {
 
   return {
     root: parsedRoot,
-    sizesByGroupId: sizesObj,
+    sizesByGroupId: mutableSizes as SizesByGroupId,
     focusedPaneId,
   };
 }

@@ -5,7 +5,12 @@
  * Copyright (c) 2026 Traycer AI. MIT License, see desktop/THIRD_PARTY_NOTICES.md.
  */
 
-import type { TileLayoutNode, TilePane, TileTreeState } from "./tileTree";
+import type {
+  TileLayoutNode,
+  TilePane,
+  TileGroup,
+  TileTreeState,
+} from "./tileTree";
 
 function makePane(id: string, tabIds: readonly string[]): TilePane {
   return {
