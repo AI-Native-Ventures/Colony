@@ -17,6 +17,7 @@ fn snapshot(
 
 fn record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        working_dir: None,
         tier: None,
         manager: None,
         pubkey: "p".repeat(64),

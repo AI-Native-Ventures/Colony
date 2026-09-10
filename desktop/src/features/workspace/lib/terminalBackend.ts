@@ -10,6 +10,11 @@ import { rustTerminalBackend } from "./rustTerminalBackend";
 
 export type TerminalStartRequest = {
   channelId: string;
+  /**
+   * Explicit working directory (an agent's worktree). Used verbatim when the
+   * path exists; the project checkout is the fallback.
+   */
+  cwd: string | null;
   projectDtag: string | null;
   cloneUrl: string | null;
   reposDir: string | null;

@@ -98,6 +98,7 @@ impl AgentDefinition {
     /// event coordinate (`d_tag = slug`) across the fold.
     pub fn into_agent_record(self) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            working_dir: None,
             tier: None,
             manager: None,
             pubkey: String::new(),
@@ -201,7 +202,33 @@ impl ManagedAgentRecord {
             updated_at: self.updated_at.clone(),
         })
     }
+
+    /// Set the agent's worktree and keep `COLONY_WORKTREE` in step with it.
+    ///
+    /// The agent tile's worktree chip reads the record's `env_vars`, while the
+    /// harness process reads the env var this writes; mirroring here is what
+    /// keeps the chip and the child from disagreeing after an edit.
+    pub fn set_working_dir(&mut self, working_dir: Option<String>) {
+        let working_dir = working_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        match &working_dir {
+            Some(path) => {
+                self.env_vars
+                    .insert(COLONY_WORKTREE_ENV_KEY.to_string(), path.clone());
+            }
+            None => {
+                self.env_vars.remove(COLONY_WORKTREE_ENV_KEY);
+            }
+        }
+        self.working_dir = working_dir;
+    }
 }
+
+/// Environment variable naming the worktree an agent runs in.
+pub const COLONY_WORKTREE_ENV_KEY: &str = "COLONY_WORKTREE";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayAgentInfo {
@@ -340,6 +367,13 @@ pub struct ManagedAgentRecord {
     /// To "override" a persona env var: set the same key here.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env_vars: BTreeMap<String, String>,
+    /// Absolute directory the agent's harness process runs in — the git
+    /// worktree the Software Factory created for it. `None` (and a path that
+    /// no longer exists) falls back to `default_agent_workdir`, so a deleted
+    /// worktree degrades to the previous behaviour instead of refusing to
+    /// spawn. Exported to the child as `COLONY_WORKTREE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
     #[serde(default = "default_start_on_app_launch")]
     pub start_on_app_launch: bool,
     /// Auto-restart this agent when its effective spawn config drifts from
@@ -609,6 +643,10 @@ pub struct ManagedAgentSummary {
     pub restart_diff: Vec<super::spawn_snapshot::RestartDiffEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env_vars: BTreeMap<String, String>,
+    /// Mirror of `ManagedAgentRecord.working_dir` — the git worktree the agent
+    /// runs in, so the tile can show which branch it is working on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
     pub backend: BackendKind,
     pub backend_agent_id: Option<String>,
     pub status: String,

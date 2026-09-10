@@ -244,6 +244,10 @@ pub struct CreateManagedAgentRequest {
     /// Environment variables for this agent. Layered on top of persona env.
     #[serde(default)]
     pub env_vars: BTreeMap<String, String>,
+    /// Absolute directory the harness runs in — the agent's git worktree.
+    /// Absent keeps the historical home-directory default.
+    #[serde(default)]
+    pub working_dir: Option<String>,
     #[serde(default)]
     pub spawn_after_create: bool,
     #[serde(default = "default_start_on_app_launch")]
@@ -327,6 +331,10 @@ pub struct UpdateManagedAgentRequest {
     /// normalized server-side).
     #[serde(default)]
     pub respond_to_allowlist: Option<Vec<String>>,
+    /// Absent = don't touch. null = clear the worktree (back to the home
+    /// default). A path re-points the agent at that worktree.
+    #[serde(default, deserialize_with = "crate::util::double_option")]
+    pub working_dir: Option<Option<String>>,
 }
 
 #[cfg(test)]

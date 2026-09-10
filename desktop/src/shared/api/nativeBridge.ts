@@ -119,6 +119,32 @@ export interface NativeTerminalApi {
   ): NativeUnlisten;
 }
 
+/** Request for the per-agent worktree the Software Factory creates. */
+export interface NativeFactoryWorktreeRequest {
+  reposDir: string | null;
+  projectDtag: string;
+  cloneUrl: string | null;
+  branch: string;
+  from: string | null;
+}
+
+/** The worktree an agent runs in, created or reused. */
+export interface NativeFactoryWorktreeResult {
+  path: string;
+  branch: string;
+  created: boolean;
+}
+
+/**
+ * Software Factory operations the shell owns. Both shells forward to the same
+ * Rust command, so the two lanes cannot drift on where a worktree lands.
+ */
+export interface NativeFactoryApi {
+  createWorktree(
+    request: NativeFactoryWorktreeRequest,
+  ): Promise<NativeFactoryWorktreeResult>;
+}
+
 /**
  * The shell surface the frontend may touch. One implementation is installed
  * per runtime: `tauriNativeBridge.ts` in the Tauri app, the e2e mock in
@@ -192,6 +218,8 @@ export interface NativeBridge {
   setWebviewZoom(value: number): Promise<void>;
   /** Shell-owned PTYs. Present only where the shell hosts them (Electron). */
   terminal?: NativeTerminalApi;
+  /** Software Factory worktrees. Implemented by every shell. */
+  factory: NativeFactoryApi;
 }
 
 let installed: NativeBridge | null = null;
@@ -346,4 +374,29 @@ export function setWebviewZoom(value: number): Promise<void> {
 /** The shell-owned PTY surface, or undefined when the shell has none. */
 export function nativeTerminal(): NativeTerminalApi | undefined {
   return getNativeBridge().terminal;
+}
+
+/** The Software Factory surface. Every shell implements it. */
+export function nativeFactory(): NativeFactoryApi {
+  return getNativeBridge().factory;
+}
+
+/**
+ * The one implementation both shells (and the e2e mock) share: the worktree is
+ * created by the Rust host, reached through whatever `invoke` the shell has.
+ */
+export function createNativeFactoryApi(
+  invokeCommand: <T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ) => Promise<T>,
+): NativeFactoryApi {
+  return {
+    createWorktree(request: NativeFactoryWorktreeRequest) {
+      return invokeCommand<NativeFactoryWorktreeResult>(
+        "factory_worktree_create",
+        { request },
+      );
+    },
+  };
 }
