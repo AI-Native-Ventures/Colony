@@ -106,11 +106,14 @@ function manifestRef(world, body, url = MANIFEST_URL) {
 }
 
 async function expectCode(operation, code) {
-  // `assert.rejects` only runs its validator when the operation rejects
-  // asynchronously; a synchronous throw escapes validation entirely. Wrap
-  // the call so sync parse failures and async load failures are checked
-  // against the same real error shape.
-  await assert.rejects(Promise.resolve().then(operation), (error) => {
+  // Accept both shapes: a thunk (wrap it so a synchronous throw becomes a
+  // rejection `assert.rejects` can validate) and an already-created promise
+  // (pass it through unchanged).
+  const rejection =
+    typeof operation === "function"
+      ? Promise.resolve().then(operation)
+      : operation;
+  await assert.rejects(rejection, (error) => {
     assert.ok(
       error instanceof PreviewArtifactError,
       `expected PreviewArtifactError, got ${error?.name}: ${error?.message}`,

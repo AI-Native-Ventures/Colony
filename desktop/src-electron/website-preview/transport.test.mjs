@@ -107,7 +107,13 @@ function manifestRef(world, body, url = MANIFEST_URL) {
 }
 
 async function expectCode(operation, code, check) {
-  await assert.rejects(operation, (error) => {
+  // Accept both shapes: a thunk (wrapped so a synchronous throw is
+  // validated) and an already-created promise (passed through unchanged).
+  const rejection =
+    typeof operation === "function"
+      ? Promise.resolve().then(operation)
+      : operation;
+  await assert.rejects(rejection, (error) => {
     assert.equal(
       error?.code,
       code,
