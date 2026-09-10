@@ -10,6 +10,7 @@ import {
   useWorkspace,
 } from "@/features/workspace/lib/workspaceTabs";
 import { closeWorkspaceTab } from "@/features/workspace/lib/closeWorkspaceTab";
+import { getStripDragHandler } from "@/features/factory/lib/factoryDragBridge";
 import { getTabBody } from "@/features/workspace/kinds";
 import { NewTabPage } from "@/features/workspace/ui/NewTabPage";
 import { WorkspaceTabStrip } from "@/features/workspace/ui/WorkspaceTabStrip";
@@ -71,13 +72,25 @@ export function ChannelWorkspace({
   // tab is active. They remain in the store and reappear when the factory
   // tab is closed.
   const activeFactoryDef = activeTab ? getTabKind(activeTab.kind) : undefined;
-  const factoryOwnedTabIds = activeTab && activeFactoryDef?.ownedTabIds
-    ? activeFactoryDef.ownedTabIds(activeTab)
-    : [];
+  const factoryOwnedTabIds =
+    activeTab && activeFactoryDef?.ownedTabIds
+      ? activeFactoryDef.ownedTabIds(activeTab)
+      : [];
   const visibleTabs =
     factoryOwnedTabIds.length > 0
       ? tabs.filter((t) => !factoryOwnedTabIds.includes(t.id))
       : tabs;
+
+  // A kind that owns tabs of its own can accept one dragged out of the strip.
+  // The shell only forwards the pointer down; the mounted body decides what a
+  // drag means, so nothing here knows which kind is active.
+  const activeKindArrangesTabs = Boolean(activeFactoryDef?.ownedTabIds);
+  const handleTabPointerDown = React.useCallback(
+    (tabId: string, event: React.PointerEvent) => {
+      getStripDragHandler()?.(tabId, event);
+    },
+    [],
+  );
 
   return (
     <div
@@ -95,6 +108,9 @@ export function ChannelWorkspace({
         onClose={handleClose}
         onNewTab={handleNewTab}
         onSelect={(tabId) => setActiveTab(channelId, tabId)}
+        onTabPointerDown={
+          activeKindArrangesTabs ? handleTabPointerDown : undefined
+        }
         tabs={visibleTabs}
       />
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">

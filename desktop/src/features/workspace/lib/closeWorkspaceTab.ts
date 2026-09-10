@@ -1,7 +1,4 @@
-import {
-  closeTab,
-  getWorkspace,
-} from "@/features/workspace/lib/workspaceTabs";
+import { closeTab, getWorkspace } from "@/features/workspace/lib/workspaceTabs";
 import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 
 export async function closeWorkspaceTab(

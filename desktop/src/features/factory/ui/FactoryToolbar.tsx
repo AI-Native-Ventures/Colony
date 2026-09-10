@@ -17,7 +17,9 @@ export type FactoryToolbarProps = {
   state: TileTreeState;
   commit: (next: TileTreeState) => void;
   preset: "single" | "columns" | "grid" | "focus" | null;
-  onPresetChange: (preset: "single" | "columns" | "grid" | "focus" | null) => void;
+  onPresetChange: (
+    preset: "single" | "columns" | "grid" | "focus" | null,
+  ) => void;
 };
 
 export function FactoryToolbar({
@@ -62,7 +64,20 @@ export function FactoryToolbar({
       </span>
       <div className="flex-1" />
       <div className="flex items-center gap-2">
-        <Tabs value={preset ?? "single"} onValueChange={(v) => { onPresetChange(v as "single" | "columns" | "grid" | "focus"); const tabIds = tabIdsInTree; const updated = applyPreset(state, v as "single" | "columns" | "grid" | "focus", tabIds); commit(updated); }} className="w-auto">
+        <Tabs
+          value={preset ?? "single"}
+          onValueChange={(v) => {
+            onPresetChange(v as "single" | "columns" | "grid" | "focus");
+            const tabIds = tabIdsInTree;
+            const updated = applyPreset(
+              state,
+              v as "single" | "columns" | "grid" | "focus",
+              tabIds,
+            );
+            commit(updated);
+          }}
+          className="w-auto"
+        >
           <TabsList className="h-7 bg-muted p-0.5">
             <TabsTrigger
               value="single"

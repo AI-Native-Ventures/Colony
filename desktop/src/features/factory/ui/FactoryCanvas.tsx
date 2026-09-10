@@ -1,14 +1,25 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/shared/lib/cn";
 import { resizePair } from "@/features/factory/lib/splitterMath";
 import {
+  collectPanes,
   sizesForGroup,
   setGroupSizes,
   MIN_SPLIT_SIZE,
 } from "@/features/factory/lib/tileTree";
 import { FactoryPane } from "./FactoryPane";
-import type { TileLayoutNode, TileGroup, TileTreeState } from "@/features/factory/lib/tileTree";
+import type { TabDragController } from "./useTabDrag";
+import type {
+  TileLayoutNode,
+  TileGroup,
+  TilePane,
+  TileTreeState,
+} from "@/features/factory/lib/tileTree";
 import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
+
+/** Offset so the ghost trails the pointer instead of sitting under it. */
+const GHOST_OFFSET_PX = 12;
 
 function Splitter({
   direction,
@@ -31,10 +42,7 @@ function Splitter({
   const groupSizeRef = React.useRef(0);
 
   const findGroup = React.useCallback(
-    (
-      root: import("@/features/factory/lib/tileTree").TileLayoutNode,
-      gid: string,
-    ): import("@/features/factory/lib/tileTree").TileGroup | null => {
+    (root: TileLayoutNode, gid: string): TileGroup | null => {
       if (root.kind === "group" && root.id === gid) return root;
       if (root.kind === "group") {
         for (const child of root.children) {
@@ -58,9 +66,11 @@ function Splitter({
 
       const parent = target.parentElement;
       const rect = parent?.getBoundingClientRect();
-      groupSizeRef.current = isRow ? rect?.width ?? 0 : rect?.height ?? 0;
+      groupSizeRef.current = isRow ? (rect?.width ?? 0) : (rect?.height ?? 0);
       const groupNode = findGroup(state.root, groupId);
-      startSizesRef.current = groupNode ? sizesForGroup(state.sizesByGroupId, groupNode) : [];
+      startSizesRef.current = groupNode
+        ? sizesForGroup(state.sizesByGroupId, groupNode)
+        : [];
       const startPos = isRow
         ? e.clientX - (rect?.left ?? 0)
         : e.clientY - (rect?.top ?? 0);
@@ -71,12 +81,20 @@ function Splitter({
 
   const handlePointerMove = React.useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragging || groupSizeRef.current <= 0 || !dragStateRef.current) return;
+      if (!dragging || groupSizeRef.current <= 0 || !dragStateRef.current)
+        return;
       const rect = e.currentTarget.parentElement?.getBoundingClientRect();
-      const currentPosFixed = isRow ? e.clientX - (rect?.left ?? 0) : e.clientY - (rect?.top ?? 0);
-      const delta = (currentPosFixed - startPosRef.current) / groupSizeRef.current;
+      const currentPosFixed = isRow
+        ? e.clientX - (rect?.left ?? 0)
+        : e.clientY - (rect?.top ?? 0);
+      const delta =
+        (currentPosFixed - startPosRef.current) / groupSizeRef.current;
       const newSizes = resizePair(startSizesRef.current, index, delta);
-      dragStateRef.current = setGroupSizes(dragStateRef.current, groupId, newSizes);
+      dragStateRef.current = setGroupSizes(
+        dragStateRef.current,
+        groupId,
+        newSizes,
+      );
     },
     [dragging, isRow, index, groupId],
   );
@@ -106,10 +124,6 @@ function Splitter({
     [],
   );
 
-  React.useEffect(() => {
-    // No document-level listeners needed; React element-level events handle drag.
-  }, [dragging, handlePointerMove, handlePointerUp]);
-
   return (
     <div
       className={cn(
@@ -136,6 +150,7 @@ export type FactoryCanvasProps = {
   state: TileTreeState;
   workspaceTabs: WorkspaceTab[];
   channelId: string;
+  drag: TabDragController;
   isFocusedPaneId?: string;
   onPaneFocus: (paneId: string) => void;
   onPaneSplitRight: (paneId: string) => void;
@@ -151,6 +166,7 @@ function renderNode(
   node: TileLayoutNode,
   workspaceTabs: WorkspaceTab[],
   props: FactoryCanvasProps,
+  panes: ReadonlyArray<TilePane>,
   pathKey: string,
 ): React.ReactNode {
   if (node.kind === "pane") {
@@ -158,6 +174,8 @@ function renderNode(
       <FactoryPane
         key={pathKey}
         pane={node}
+        panes={panes}
+        drag={props.drag}
         workspaceTabs={workspaceTabs}
         channelId={props.channelId}
         isFocused={props.isFocusedPaneId === node.id}
@@ -187,7 +205,7 @@ function renderNode(
       data-testid={`factory-group-${group.id}`}
     >
       {group.children.map((child, index) => (
-        <React.Fragment key={`${pathKey}-${group.id}-${index}`}>
+        <React.Fragment key={child.id}>
           {index > 0 && (
             <Splitter
               direction={group.direction}
@@ -208,6 +226,7 @@ function renderNode(
               child,
               workspaceTabs,
               props,
+              panes,
               `${pathKey}-${group.id}-${index}`,
             )}
           </div>
@@ -221,6 +240,7 @@ export function FactoryCanvas({
   state,
   workspaceTabs,
   channelId,
+  drag,
   isFocusedPaneId,
   onPaneFocus,
   onPaneSplitRight,
@@ -245,6 +265,8 @@ export function FactoryCanvas({
     [state, commit, onGroupResize],
   );
 
+  const panes = React.useMemo(() => collectPanes(state.root), [state.root]);
+
   return (
     <div
       className="min-h-0 min-w-0 flex-1 overflow-hidden p-2"
@@ -257,6 +279,7 @@ export function FactoryCanvas({
           state,
           workspaceTabs,
           channelId,
+          drag,
           isFocusedPaneId,
           onPaneFocus,
           onPaneSplitRight,
@@ -267,8 +290,23 @@ export function FactoryCanvas({
           onGroupResize: handleResize,
           commit,
         },
+        panes,
         "root",
       )}
+      {drag.ghost !== null &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-50 rounded-md border border-border bg-popover px-2 py-1 text-xs shadow-lg"
+            data-testid="factory-drag-ghost"
+            style={{
+              left: drag.ghost.x + GHOST_OFFSET_PX,
+              top: drag.ghost.y + GHOST_OFFSET_PX,
+            }}
+          >
+            {drag.ghost.title}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

@@ -17,6 +17,12 @@ import {
   type TileLayoutNode,
 } from "@/features/factory/lib/tileTree";
 import { useFactoryTree } from "@/features/factory/ui/useFactoryTree";
+import { useTabDrag } from "@/features/factory/ui/useTabDrag";
+import {
+  clearStripDragHandler,
+  setStripDragHandler,
+  type StripDragHandler,
+} from "@/features/factory/lib/factoryDragBridge";
 import { FactoryCanvas } from "@/features/factory/ui/FactoryCanvas";
 import { FactoryToolbar } from "@/features/factory/ui/FactoryToolbar";
 import { isProjectChannel } from "@/features/factory/lib/projectChannel";
@@ -62,11 +68,35 @@ export function FactoryBody({
     "single" | "columns" | "grid" | "focus" | null
   >(null);
 
+  // A drop rearranges the tree by hand, so no preset describes the layout
+  // any more.
+  const handleDrop = React.useCallback(() => setPreset(null), []);
+  const drag = useTabDrag({ state, commit, onDrop: handleDrop });
+
+  // Let the workspace tab strip start a drag into a pane. The strip knows
+  // nothing about panes; it forwards a pointer down to whatever body is
+  // mounted, which is this one while the factory tab is active.
+  const workspaceTabsRef = React.useRef(workspace.tabs);
+  workspaceTabsRef.current = workspace.tabs;
+  const startTabDrag = drag.startTabDrag;
+  React.useEffect(() => {
+    const handler: StripDragHandler = (tabId, event) => {
+      const tab = workspaceTabsRef.current.find(
+        (candidate) => candidate.id === tabId,
+      );
+      startTabDrag(tabId, tab?.title ?? tabId, event);
+    };
+    setStripDragHandler(handler);
+    return () => clearStripDragHandler(handler);
+  }, [startTabDrag]);
+
   // Handle pane focus.
   const handlePaneFocus = React.useCallback(
     (paneId: string) => {
-      const updated = { ...state, focusedPaneId: paneId };
-      commit(updated);
+      // Focus follows the pointer, so this runs on every press in a pane:
+      // only write when it actually changes something.
+      if (state.focusedPaneId === paneId) return;
+      commit({ ...state, focusedPaneId: paneId });
     },
     [state, commit],
   );
@@ -254,11 +284,18 @@ export function FactoryBody({
       className="flex h-full flex-col overflow-hidden"
       data-testid="workspace-factory-body"
     >
-      <FactoryToolbar channelId={channelId} state={state} commit={commit} preset={preset} onPresetChange={setPreset} />
+      <FactoryToolbar
+        channelId={channelId}
+        state={state}
+        commit={commit}
+        preset={preset}
+        onPresetChange={setPreset}
+      />
       <FactoryCanvas
         state={state}
         workspaceTabs={workspace.tabs}
         channelId={channelId}
+        drag={drag}
         isFocusedPaneId={state.focusedPaneId}
         onPaneFocus={handlePaneFocus}
         onPaneSplitRight={handlePaneSplitRight}

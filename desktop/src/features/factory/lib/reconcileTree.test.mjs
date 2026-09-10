@@ -23,11 +23,11 @@ function makeGroup(id, dir, children) {
 test("reconcileTree drops missing tabs", async () => {
   const m = await load();
   const { createInitialTree } = await import(
-    "./tileTree.ts?test=" + Math.random()
+    `./tileTree.ts?test=${Math.random()}`
   );
   const state = createInitialTree("main");
   const withTab = (
-    await import("./tileTree.ts?test=" + Math.random())
+    await import(`./tileTree.ts?test=${Math.random()}`)
   ).addTabToPane(state, "main", "t-1");
   const reconciled = m.reconcileTree(withTab, ["t-1", "t-2"], "factory");
   assert.deepEqual(reconciled.root.tabIds, ["t-1", "t-2"]);
@@ -35,7 +35,9 @@ test("reconcileTree drops missing tabs", async () => {
 
 test("reconcileTree does not duplicate tabs already in another pane", async () => {
   const m = await load();
-  const { createInitialTree, addTabToPane, insertPaneAtEdge } = await import("./tileTree.ts?test=" + Math.random());
+  const { createInitialTree, addTabToPane, insertPaneAtEdge } = await import(
+    `./tileTree.ts?test=${Math.random()}`
+  );
   let state = createInitialTree("main");
   state = addTabToPane(state, "main", "t-1");
   const splitResult = insertPaneAtEdge(state, "main", "right", "pane-b", "t-2");
@@ -58,7 +60,7 @@ test("reconcileTree does not duplicate tabs already in another pane", async () =
 test("reconcileTree excludes factory tab id", async () => {
   const m = await load();
   const { createInitialTree, addTabToPane } = await import(
-    "./tileTree.ts?test=" + Math.random()
+    `./tileTree.ts?test=${Math.random()}`
   );
   let state = createInitialTree("main");
   state = addTabToPane(state, "main", "factory-tab");
@@ -73,8 +75,8 @@ test("reconcileTree excludes factory tab id", async () => {
 
 test("reconcileTree keeps empty root pane when emptied", async () => {
   const m = await load();
-  const { createInitialTree, addTabToPane, removeTab } = await import(
-    "./tileTree.ts?test=" + Math.random()
+  const { createInitialTree, addTabToPane } = await import(
+    `./tileTree.ts?test=${Math.random()}`
   );
   let state = createInitialTree("main");
   state = addTabToPane(state, "main", "t-1");

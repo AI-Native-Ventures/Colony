@@ -21,8 +21,13 @@ export function useFactoryTree(
 } {
   const workspace = useWorkspace(channelId);
 
-  const [explicitState, setExplicitState] =
-    React.useState<TileTreeState | null>(null);
+  // The tree we last wrote, tagged with the payload we wrote it as. It wins
+  // over the parsed payload only while that payload is still the current one,
+  // so a change from anywhere else takes over without an effect to clear it.
+  const [committed, setCommitted] = React.useState<{
+    payload: unknown;
+    state: TileTreeState;
+  } | null>(null);
 
   const baseState = React.useMemo(() => {
     const parsed = parseTileTree(factoryTab.payload);
@@ -34,18 +39,16 @@ export function useFactoryTree(
     return reconcileTree(baseState, workspaceIds, factoryTab.id);
   }, [baseState, workspace.tabs, factoryTab.id]);
 
-  // When the payload changes externally (e.g. from a commit), drop any
-  // explicit override so we stay in sync.
-  React.useEffect(() => {
-    setExplicitState(null);
-  }, [factoryTab.payload]);
-
-  const state = explicitState ?? reconciled;
+  const state =
+    committed !== null && committed.payload === factoryTab.payload
+      ? committed.state
+      : reconciled;
 
   const commit = React.useCallback(
     (next: TileTreeState) => {
-      updateTabPayload(channelId, factoryTab.id, serializeTileTree(next));
-      setExplicitState(next);
+      const payload = serializeTileTree(next);
+      updateTabPayload(channelId, factoryTab.id, payload);
+      setCommitted({ payload, state: next });
     },
     [channelId, factoryTab.id],
   );
