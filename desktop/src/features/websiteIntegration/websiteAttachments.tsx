@@ -88,10 +88,7 @@ function WebsiteRootAttachment({
   const record = head.record;
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const getClipBounds = useAttachmentClipBounds(rootRef);
-  const progress = React.useMemo(
-    () => deriveWebsiteProgress(record),
-    [record],
-  );
+  const progress = React.useMemo(() => deriveWebsiteProgress(record), [record]);
   const stageAgents = React.useMemo(
     () => deriveWebsiteStageAgents(head),
     [head],
@@ -136,17 +133,12 @@ function WebsiteRootAttachment({
     record.status === "handedOver";
 
   return (
-    <div
-      className="mt-2"
-      data-testid="website-root-attachment"
-      ref={rootRef}
-    >
+    <div className="mt-2" data-testid="website-root-attachment" ref={rootRef}>
       <WebsiteJobCard agents={agents} brief={brief} record={record}>
         {record.status === "draft" ? (
           <WebsiteBrief brief={brief} onStart={onStart} record={record} />
         ) : null}
-        {record.status === "working" ||
-        record.status === "changesRequested" ? (
+        {record.status === "working" || record.status === "changesRequested" ? (
           <WebsiteWorking
             agents={agents}
             progress={progress}

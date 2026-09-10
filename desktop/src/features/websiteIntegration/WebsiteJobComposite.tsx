@@ -70,10 +70,7 @@ export default function WebsiteJobComposite({
 
   // Own this instance's presentation for as long as the composite is mounted,
   // so the plain thread attachment never renders a second control set.
-  React.useEffect(
-    () => markWebsiteCompositeRendered(message.id),
-    [message.id],
-  );
+  React.useEffect(() => markWebsiteCompositeRendered(message.id), [message.id]);
 
   const showBody = Boolean(head && inThread && communityId);
   return (
