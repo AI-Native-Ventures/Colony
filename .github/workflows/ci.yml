@@ -1313,6 +1313,13 @@ jobs:
           # for the owner seed, RELAY_HTTP_URL for the NIP-11 lookup), and
           # single-threaded because it arbitrates on shared thread rows.
           cargo test -p buzz-test-client --test e2e_thread_tasks -- --ignored --nocapture --test-threads 1
+          # Website Manager jobs: owner and coordinator creates, the
+          # schema-valid review-card Block instance, beginWork generation CAS,
+          # duplicate/conflict retries, and non-participant refusals against
+          # the live relay. Same fixture shape as e2e_thread_tasks (DATABASE_URL
+          # for the member/channel seeds, RELAY_HTTP_URL for the NIP-11 and
+          # bundled-manifest lookups), single-threaded for shared job rows.
+          cargo test -p buzz-test-client --test e2e_website -- --ignored --nocapture --test-threads 1
           # Discovery entity mention hydration against the live relay: strict
           # ["discovery", kind, id] message tags, permission-checked
           # resolve_entities, and the opaque cross-community refusal. This

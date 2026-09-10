@@ -1,0 +1,160 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "website-job",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Website job",
+  "description": "One owner-reviewed website redesign job: brief, stages, preview, and decisions.",
+  "origin": "core",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["taskId", "threadRoot", "sourceUrl", "brief"],
+    "properties": {
+      "taskId": { "type": "string", "minLength": 1, "maxLength": 256 },
+      "threadRoot": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+      "sourceUrl": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "^https://"
+      },
+      "brief": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary", "preserve", "redesign", "deliverables"],
+        "properties": {
+          "summary": { "type": "string", "minLength": 1, "maxLength": 600 },
+          "preserve": {
+            "type": "array",
+            "maxItems": 8,
+            "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+          },
+          "redesign": {
+            "type": "array",
+            "maxItems": 8,
+            "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+          },
+          "deliverables": {
+            "type": "array",
+            "maxItems": 6,
+            "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+          }
+        }
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "Website job",
+    "description": "{{sourceUrl}}",
+    "children": [
+      {
+        "type": "details",
+        "items": [
+          { "label": "Task", "value": "{{taskId}}" },
+          { "label": "Thread", "value": "{{threadRoot}}" }
+        ]
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Approve design",
+            "interaction": {
+              "type": "signed",
+              "action_id": "website.approve",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Request changes",
+            "interaction": {
+              "type": "signed",
+              "action_id": "website.request-changes",
+              "resolves_attention": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "website.approve",
+      "label": "Approve design",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "jobId", "taskId", "generation", "revision", "manifestSha256"],
+        "properties": {
+          "schema": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "jobId": { "type": "string", "minLength": 36, "maxLength": 36 },
+          "taskId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "generation": { "type": "integer", "minimum": 1 },
+          "revision": { "type": "integer", "minimum": 1 },
+          "manifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "note": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "website.approve",
+        "resolves_attention": true
+      },
+      "permissions": []
+    },
+    {
+      "id": "website.request-changes",
+      "label": "Request changes",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "jobId", "taskId", "generation", "revision", "manifestSha256"],
+        "properties": {
+          "schema": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "jobId": { "type": "string", "minLength": 36, "maxLength": 36 },
+          "taskId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "generation": { "type": "integer", "minimum": 1 },
+          "revision": { "type": "integer", "minimum": 1 },
+          "manifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "note": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "website.request-changes",
+        "resolves_attention": true
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "Website job for {{taskId}} ({{sourceUrl}})",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "details": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "Acme redesign",
+      "data": {
+        "taskId": "thread-task:acme",
+        "threadRoot": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "sourceUrl": "https://source.colony.test/sites/acme",
+        "brief": {
+          "summary": "Lift the existing identity while fixing the mobile conversion path.",
+          "preserve": ["wordmark", "core palette"],
+          "redesign": ["hero hierarchy", "pricing layout"],
+          "deliverables": ["preview", "source archive", "access request"]
+        }
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": true }
+}

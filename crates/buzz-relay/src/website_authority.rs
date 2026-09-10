@@ -320,8 +320,14 @@ pub(crate) async fn require_decision_instance(
     if instance.attention_pubkey.as_deref() != Some(job.owner.as_slice()) {
         return Err("the review instance is pinned to a different decision maker".to_owned());
     }
-    require_active_website_manifest(tenant, state, &instance, &action.manifest_event_id).await?;
-    require_job_instance_data(&instance.data, &job.task_id, &job.thread_root)?;
+    let manifest_content =
+        require_active_website_manifest(tenant, state, &instance, &action.manifest_event_id).await?;
+    require_job_instance_data(
+        &instance.data,
+        &manifest_content,
+        &job.task_id,
+        &job.thread_root,
+    )?;
     if !instance_in_job_thread(&stored.event, &job.thread_root) {
         return Err("the website review instance is not inside the job thread".to_owned());
     }
@@ -363,8 +369,14 @@ async fn require_review_instance(
     if instance.attention_pubkey.as_deref() != Some(owner) {
         return Err("the review card instance is pinned to a different decision maker".to_owned());
     }
-    require_active_website_manifest(tenant, state, &instance, manifest_event_id).await?;
-    require_job_instance_data(&instance.data, &action.task_id, &action.thread_root)?;
+    let manifest_content =
+        require_active_website_manifest(tenant, state, &instance, manifest_event_id).await?;
+    require_job_instance_data(
+        &instance.data,
+        &manifest_content,
+        &action.task_id,
+        &action.thread_root,
+    )?;
     if !instance_in_job_thread(&stored.event, &action.thread_root) {
         return Err("the review card instance is not inside the job thread".to_owned());
     }
@@ -372,13 +384,13 @@ async fn require_review_instance(
 }
 
 /// Require the instance's manifest to be the active, relay-authored catalog
-/// entry for the reviewed `website-job` handle.
+/// entry for the reviewed `website-job` handle, returning its parsed content.
 async fn require_active_website_manifest(
     tenant: &TenantContext,
     state: &Arc<AppState>,
     instance: &crate::blocks::InstanceEnvelope,
     manifest_event_id: &[u8],
-) -> Result<(), String> {
+) -> Result<Value, String> {
     if instance.handle != WEBSITE_JOB_BLOCK_HANDLE {
         return Err("the review card is not a website-job Block instance".to_owned());
     }
@@ -389,18 +401,26 @@ async fn require_active_website_manifest(
     if !manifest_is_trusted_active(tenant, state, &manifest, manifest_event_id).await? {
         return Err("the website-job Block manifest is not the active trusted manifest".to_owned());
     }
-    Ok(())
+    Ok(manifest.content)
 }
 
-/// Require inline instance data that binds this exact task and thread.
-fn require_job_instance_data(
+/// Require inline instance data that validates against the manifest schema and
+/// binds this exact task and thread.
+pub(crate) fn require_job_instance_data(
     data: &InstanceData,
+    manifest_content: &Value,
     task_id: &str,
     thread_root: &str,
 ) -> Result<(), String> {
     let InstanceData::Inline(value) = data else {
         return Err("the review card data must be inline to bind the job identity".to_owned());
     };
+    let Some(schema) = manifest_content.get("input_schema") else {
+        return Err("the website-job manifest has no input schema".to_owned());
+    };
+    buzz_core::block::validate_instance(schema, value).map_err(|error| {
+        format!("the review card data does not match the website-job schema: {error}")
+    })?;
     let Value::Object(object) = value else {
         return Err("the review card data must be a JSON object".to_owned());
     };
