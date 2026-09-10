@@ -37,6 +37,7 @@ import {
 } from "@/shared/constants/kinds";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
 import { cn } from "@/shared/lib/cn";
+import { useMeasuredCssVariable } from "@/shared/layout/useMeasuredCssVariable";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
@@ -175,6 +176,19 @@ export const MessageRow = React.memo(
     } = useReactionHandler(message, onToggleReaction);
     const { openReminder, activeReminderEventIds } = useRemindLater();
     const hasActiveReminder = activeReminderEventIds.has(message.id);
+    // The hover/focus action rail is absolutely positioned over the row, so it
+    // takes no layout space of its own. Measure its rendered footprint and
+    // reserve it in the message-header row (see `headerNode`) so a long author
+    // name ellipsizes before the rail instead of painting underneath it. The
+    // reservation is unconditional — the rail appears on hover AND
+    // focus-within, and padding must not reflow the header mid-interaction.
+    const articleRef = React.useRef<HTMLElement | null>(null);
+    const actionRailMeasureRef = useMeasuredCssVariable({
+      cssVariable: "--message-action-rail-width",
+      dimension: "inline",
+      resetValue: "0px",
+      targetRef: articleRef,
+    });
     const handleRemindLater = React.useCallback(
       (msg: TimelineMessage) => {
         openReminder({
@@ -541,6 +555,7 @@ export const MessageRow = React.memo(
       >
         <MessageActionBar
           channelId={channelId}
+          ref={actionRailMeasureRef}
           isFollowingThread={isFollowingThread}
           isUnread={isUnread}
           message={message}
@@ -606,7 +621,9 @@ export const MessageRow = React.memo(
       ) : null;
 
     const headerNode = isDisplayedAsContinuation ? null : (
-      <MessageHeaderRow className="colony-message-header">
+      // pe reserves the measured action-rail footprint (0px until measured) so
+      // header content ends before the rail's left edge in every rail state.
+      <MessageHeaderRow className="colony-message-header pe-[var(--message-action-rail-width,0px)]">
         {message.pubkey ? (
           <UserProfilePopover
             pubkey={message.pubkey}
@@ -871,6 +888,7 @@ export const MessageRow = React.memo(
           data-open-thread-root={isOpenThreadRoot || undefined}
           data-testid="message-row"
           onAnimationEnd={handleEntranceAnimationEnd}
+          ref={articleRef}
         >
           {isThreadReplyLayout ? (
             <>
