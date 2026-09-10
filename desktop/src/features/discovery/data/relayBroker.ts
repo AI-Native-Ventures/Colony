@@ -15,6 +15,10 @@ import {
 
 import type { LeadCounts, LeadDetail } from "../types";
 import type {
+  DiscoveryEntitySummary,
+  ResolvedDiscoveryEntity,
+} from "./DiscoveryDataSource";
+import type {
   CampaignBudgetProjection,
   CampaignProjection,
   LeadProjection,
@@ -68,22 +72,16 @@ export type WorkspaceResult =
   | {
       result: "entity_search";
       entities: DiscoveryEntitySummary[];
+    }
+  | {
+      result: "resolved_entities";
+      entities: ResolvedDiscoveryEntity[];
     };
 
-/** One mention-directory row returned by `search_entities`. */
-export type DiscoveryEntitySummary = {
-  kind:
-    | "industry"
-    | "vertical"
-    | "campaign"
-    | "campaign_leads"
-    | "lead"
-    | "run";
-  id: string;
-  label: string;
-  context_id?: string;
-  detail?: string;
-};
+export type {
+  DiscoveryEntitySummary,
+  ResolvedDiscoveryEntity,
+} from "./DiscoveryDataSource";
 
 export type WorkspaceOperation =
   | "access"
@@ -98,6 +96,7 @@ export type WorkspaceOperation =
   | "list_leads"
   | "list_lead_counts"
   | "search_entities"
+  | "resolve_entities"
   | "get_lead"
   | "update_lead";
 export type RunOperation = "start" | "status" | "cancel";
