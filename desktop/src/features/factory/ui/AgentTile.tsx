@@ -24,7 +24,7 @@ import { useThreadReplies } from "@/features/messages/useThreadReplies";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
 import { setChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMode";
 import { updateTabPayload } from "@/features/workspace/lib/workspaceTabs";
-import { normalizePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 /**
  * One agent, as a workspace tile: who it is and how it is configured, the work
@@ -72,7 +72,7 @@ export function AgentTile({ channelId, tab }: TabBodyProps): React.JSX.Element {
       const tile = (tileActions?.agents ?? []).find(
         (candidate) => normalizePubkey(candidate.pubkey) === wanted,
       );
-      return tile?.title ?? `${pubkey.slice(0, 8)}…`;
+      return tile?.title ?? truncatePubkey(pubkey);
     },
     [agentsQuery.data, tileActions?.agents],
   );
