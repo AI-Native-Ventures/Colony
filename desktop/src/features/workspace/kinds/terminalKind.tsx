@@ -1,22 +1,63 @@
 import * as React from "react";
 import "@xterm/xterm/css/xterm.css";
+import { Search, ArrowUp, ArrowDown, X } from "lucide-react";
 
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useProjectsQuery, type Project } from "@/features/projects/hooks";
 import type { TabKindDefinition } from "@/features/workspace/lib/tabKindRegistry";
 import {
+  ackTerminalOutput,
   disposeTerminalSession,
   ensureTerminalSession,
   getTerminalSession,
   resizeTerminal,
+  subscribeTerminalOutput,
   subscribeTerminalSession,
   writeTerminalInput,
 } from "@/features/workspace/lib/terminalSessions";
-import type { TerminalStartRequest } from "@/features/workspace/lib/terminalSessions";
+import type {
+  TerminalChunk,
+  TerminalStartRequest,
+} from "@/features/workspace/lib/terminalSessions";
+import { openUrl } from "@/shared/api/nativeBridge";
+import { resolveTerminalKey } from "./terminalKeys";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
 
 const TERMINAL_FONT_SCALE = 7 / 8;
 type TerminalInstance = import("@xterm/xterm").Terminal;
+
+const terminalMap = new Map<string, TerminalInstance>();
+
+function isE2eMode(): boolean {
+  return import.meta.env?.MODE === "e2e";
+}
+
+let e2eTerminalTextHookInstalled = false;
+
+/** Installs the e2e-only terminal buffer reader, once, on first mount. */
+function installE2eTerminalTextHook(): void {
+  if (e2eTerminalTextHookInstalled) return;
+  if (!isE2eMode()) return;
+  e2eTerminalTextHookInstalled = true;
+  (
+    globalThis as { __BUZZ_E2E_TERMINAL_TEXT__?: (tabId?: string) => string }
+  ).__BUZZ_E2E_TERMINAL_TEXT__ = (tabId?: string) => {
+    const actualTabId = tabId ?? "";
+    const instance =
+      terminalMap.get(actualTabId) ?? [...terminalMap.values()][0] ?? null;
+    if (!instance) return "";
+    const buffer = instance.buffer?.active ?? null;
+    if (!buffer) return "";
+    const lines: string[] = [];
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        lines.push(line.translateToString(true));
+      }
+    }
+    return lines.join("\n");
+  };
+}
 
 export const terminalKindDefinition: TabKindDefinition = {
   kind: "terminal",
@@ -26,6 +67,10 @@ export const terminalKindDefinition: TabKindDefinition = {
   canCreateFromNewTabPage: true,
   dispose: (tab) => disposeTerminalSession(tab.id),
 };
+
+function chunkLength(chunk: TerminalChunk): number {
+  return typeof chunk === "string" ? chunk.length : chunk.byteLength;
+}
 
 function computedTerminalFontSize(): number {
   const rootSize = Number.parseFloat(
@@ -38,10 +83,6 @@ function computedTerminalFontSize(): number {
 
 /**
  * Build the one native start request allowed for a terminal body.
- *
- * The project query must settle first: an unresolved query is not evidence
- * that the channel has no linked project, so starting then would permanently
- * pin the PTY to the home directory.
  */
 export function buildTerminalStartRequest({
   channelId,
@@ -78,8 +119,9 @@ export function TerminalBody({
 }: TabBodyProps): React.JSX.Element {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const terminalRef = React.useRef<TerminalInstance | null>(null);
-  const renderedOutputLengthRef = React.useRef(0);
-  const latestOutputRef = React.useRef("");
+  React.useEffect(() => {
+    installE2eTerminalTextHook();
+  }, []);
   const { activeCommunity } = useCommunities();
   const projects = useProjectsQuery();
   const session = React.useSyncExternalStore(
@@ -90,7 +132,6 @@ export function TerminalBody({
     React.useCallback(() => getTerminalSession(tab.id), [tab.id]),
     React.useCallback(() => getTerminalSession(tab.id), [tab.id]),
   );
-  latestOutputRef.current = session.output;
   const project = projects.data?.find(
     (candidate) => candidate.projectChannelId === channelId,
   );
@@ -110,6 +151,14 @@ export function TerminalBody({
     void ensureTerminalSession(tab.id, request);
   }, [request, tab.id]);
 
+  // Search state
+  const [searchOpen, setSearchOpen] = React.useState(false);
+  const [searchTerm, setSearchTerm] = React.useState("");
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+  const searchAddonRef = React.useRef<
+    import("@xterm/addon-search").SearchAddon | null
+  >(null);
+
   React.useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -117,102 +166,325 @@ export function TerminalBody({
     let terminal: TerminalInstance | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let rootObserver: MutationObserver | null = null;
+    let unsubscribeOutput: (() => void) | null = null;
+    let unsubscribeResults: { dispose(): void } | null = null;
     let onData: { dispose(): void } | null = null;
+
+    let lastCols: number | null = null;
+    let lastRows: number | null = null;
+    let resizeRafPending = false;
+
     const cleanup = () => {
       disposed = true;
+      unsubscribeOutput?.();
+      unsubscribeResults?.dispose();
       onData?.dispose();
       resizeObserver?.disconnect();
       rootObserver?.disconnect();
       terminal?.dispose();
       terminalRef.current = null;
+      terminalMap.delete(tab.id);
     };
+
     void (async () => {
-      const [{ Terminal }, { FitAddon }] = await Promise.all([
+      const [
+        { Terminal },
+        { FitAddon },
+        { Unicode11Addon },
+        { WebLinksAddon },
+        { ClipboardAddon },
+        { SearchAddon },
+        { WebglAddon },
+      ] = await Promise.all([
         import("@xterm/xterm"),
         import("@xterm/addon-fit"),
+        import("@xterm/addon-unicode11"),
+        import("@xterm/addon-web-links"),
+        import("@xterm/addon-clipboard"),
+        import("@xterm/addon-search"),
+        import("@xterm/addon-webgl"),
       ]);
       if (disposed) return;
+
       terminal = new Terminal({
+        allowProposedApi: true,
         convertEol: true,
         cursorBlink: true,
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontFamily:
+          '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: computedTerminalFontSize(),
-        scrollback: 5000,
+        scrollback: 10000,
+        macOptionIsMeta: true,
         theme: {
           background: "#101217",
           foreground: "#e6e8ee",
         },
       });
+
       const fit = new FitAddon();
       terminal.loadAddon(fit);
       terminal.open(host);
       terminalRef.current = terminal;
-      const syncSize = () => {
-        fit.fit();
-        const dimensions = fit.proposeDimensions();
-        if (dimensions) {
-          void resizeTerminal(tab.id, dimensions.cols, dimensions.rows);
-        }
+      terminalMap.set(tab.id, terminal);
+
+      // Addons loaded after open as per spec
+      const unicodeAddon = new Unicode11Addon();
+      terminal.loadAddon(unicodeAddon);
+      if (terminal.unicode) {
+        terminal.unicode.activeVersion = "11";
+      }
+
+      const linksAddon = new WebLinksAddon(
+        (_event: MouseEvent, uri: string) => {
+          void openUrl(uri);
+        },
+      );
+      terminal.loadAddon(linksAddon);
+
+      const clipboardAddon = new ClipboardAddon();
+      terminal.loadAddon(clipboardAddon);
+
+      const searchAddon = new SearchAddon();
+      searchAddonRef.current = searchAddon;
+      terminal.loadAddon(searchAddon);
+
+      try {
+        const webglAddon = new WebglAddon();
+        terminal.loadAddon(webglAddon);
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose();
+        });
+      } catch {
+        // Missing or lost WebGL context falls back silently.
+      }
+
+      const coalesceSync = () => {
+        if (resizeRafPending) return;
+        resizeRafPending = true;
+        requestAnimationFrame(() => {
+          resizeRafPending = false;
+          const dimensions = fit.proposeDimensions();
+          if (dimensions) {
+            if (dimensions.cols !== lastCols || dimensions.rows !== lastRows) {
+              lastCols = dimensions.cols;
+              lastRows = dimensions.rows;
+              void resizeTerminal(tab.id, dimensions.cols, dimensions.rows);
+            }
+          }
+        });
       };
-      resizeObserver = new ResizeObserver(syncSize);
+
+      resizeObserver = new ResizeObserver(coalesceSync);
       resizeObserver.observe(host);
+
+      document.fonts.ready.then(() => {
+        if (disposed) return;
+        coalesceSync();
+      });
+
       rootObserver = new MutationObserver(() => {
         const fontSize = computedTerminalFontSize();
         if (terminal) terminal.options.fontSize = fontSize;
         host.dataset.terminalFontSize = String(fontSize);
         host.dataset.terminalRootFontSize =
           document.documentElement.style.fontSize;
-        syncSize();
+        coalesceSync();
       });
       rootObserver.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ["style", "class"],
       });
+
+      terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform);
+        const selection = terminal ? terminal.getSelection().length > 0 : false;
+        const platform = isMac ? "mac" : "other";
+        const action = resolveTerminalKey(
+          {
+            metaKey: event.metaKey ?? false,
+            ctrlKey: event.ctrlKey ?? false,
+            key: event.key ?? "",
+            shiftKey: event.shiftKey ?? false,
+          },
+          { hasSelection: selection, platform },
+        );
+        if (action === "copy") {
+          if (selection && terminal) {
+            const text = terminal.getSelection();
+            if (text.length > 0) {
+              navigator.clipboard.writeText(text).catch(() => {});
+            }
+          }
+          return false; // Custom handled; don't send to PTY
+        }
+        if (action === "paste") {
+          navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (terminal) terminal.paste(text);
+            })
+            .catch(() => {});
+          return false;
+        }
+        if (action === "search") {
+          setSearchOpen(true);
+          setTimeout(() => searchInputRef.current?.focus(), 0);
+          return false;
+        }
+        if (action === "clear") {
+          if (terminal) terminal.clear();
+          return false;
+        }
+        return true; // Pass through to terminal / PTY
+      });
+
+      unsubscribeResults = searchAddon?.onDidChangeResults(
+        (_event: { resultIndex: number; resultCount: number }) => {
+          // We could use this to show match count; kept minimal.
+        },
+      );
+
       onData = terminal.onData((data) => {
         void writeTerminalInput(tab.id, data);
       });
+
       host.dataset.terminalRootFontSize = getComputedStyle(
         document.documentElement,
       ).fontSize;
       host.dataset.terminalFontSize = String(computedTerminalFontSize());
-      syncSize();
+
+      // Initial sync after fonts ready
+      document.fonts.ready.then(() => {
+        if (!disposed) coalesceSync();
+      });
+
+      coalesceSync();
       terminal.focus();
-      if (latestOutputRef.current) {
-        terminal.write(latestOutputRef.current);
-        renderedOutputLengthRef.current = latestOutputRef.current.length;
-      }
+      const sink = terminal;
+      unsubscribeOutput = subscribeTerminalOutput(tab.id, (chunk) => {
+        sink.write(chunk, () => {
+          void ackTerminalOutput(tab.id, chunkLength(chunk));
+        });
+      });
     })();
     return cleanup;
   }, [tab.id]);
 
-  React.useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    const previousLength = renderedOutputLengthRef.current;
-    if (session.output.length < previousLength) {
-      terminal.clear();
-      renderedOutputLengthRef.current = 0;
+  // Restart handler for exited state
+  const handleRestart = React.useCallback(async () => {
+    await disposeTerminalSession(tab.id);
+    if (request) {
+      void ensureTerminalSession(tab.id, request);
     }
-    const start = renderedOutputLengthRef.current;
-    if (session.output.length > start) {
-      terminal.write(session.output.slice(start));
-      renderedOutputLengthRef.current = session.output.length;
-    }
-  }, [session.output]);
+  }, [tab.id, request]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="flex h-full min-h-0 flex-col bg-background relative">
       <div
         className="xterm-host min-h-0 flex-1 overflow-hidden"
         aria-label="Workspace terminal"
         data-cwd={session.cwd ?? undefined}
-        data-output={session.output}
         data-pid={session.pid?.toString() ?? undefined}
         data-status={session.status}
         data-testid="workspace-terminal-body"
         role="application"
         ref={hostRef}
       />
+      {searchOpen && (
+        <div
+          className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-md border border-border bg-card/95 px-2 py-1 shadow-lg"
+          data-testid="workspace-terminal-search-bar"
+        >
+          <Search className="h-3.5 w-3.5 text-muted-foreground" />
+          <input
+            ref={searchInputRef}
+            className="h-6 w-32 rounded-sm border-0 bg-transparent px-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              if (searchAddonRef.current) {
+                searchAddonRef.current.findNext(e.target.value, {
+                  incremental: true,
+                });
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setSearchOpen(false);
+                setSearchTerm("");
+                if (searchAddonRef.current) {
+                  searchAddonRef.current.clearDecorations();
+                }
+                e.preventDefault();
+                return;
+              }
+              if (e.key === "Enter") {
+                if (searchAddonRef.current && searchTerm) {
+                  searchAddonRef.current.findNext(searchTerm, {
+                    incremental: true,
+                  });
+                }
+                e.preventDefault();
+              }
+              if (e.key === "Enter" && e.shiftKey) {
+                if (searchAddonRef.current && searchTerm) {
+                  searchAddonRef.current.findPrevious(searchTerm, {
+                    incremental: true,
+                  });
+                }
+                e.preventDefault();
+              }
+            }}
+            placeholder="Find..."
+            data-testid="workspace-terminal-search-input"
+          />
+          <button
+            type="button"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
+            onClick={() => {
+              if (searchAddonRef.current && searchTerm) {
+                searchAddonRef.current.findNext(searchTerm, {
+                  incremental: true,
+                });
+              }
+            }}
+            aria-label="Next match"
+            data-testid="workspace-terminal-search-next"
+          >
+            <ArrowUp className="h-3 w-3 rotate-[-90deg]" />
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
+            onClick={() => {
+              if (searchAddonRef.current && searchTerm) {
+                searchAddonRef.current.findPrevious(searchTerm, {
+                  incremental: true,
+                });
+              }
+            }}
+            aria-label="Previous match"
+            data-testid="workspace-terminal-search-prev"
+          >
+            <ArrowDown className="h-3 w-3 rotate-[90deg]" />
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
+            onClick={() => {
+              setSearchOpen(false);
+              setSearchTerm("");
+              if (searchAddonRef.current) {
+                searchAddonRef.current.clearDecorations();
+              }
+            }}
+            aria-label="Close search"
+            data-testid="workspace-terminal-search-close"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       {session.status === "error" ? (
         <div
           className="shrink-0 border-t border-destructive/30 px-3 py-1 text-xs text-destructive"
@@ -222,10 +494,18 @@ export function TerminalBody({
         </div>
       ) : session.status === "exited" ? (
         <div
-          className="shrink-0 border-t border-border px-3 py-1 text-xs text-muted-foreground"
+          className="shrink-0 flex items-center justify-between border-t border-border px-3 py-1 text-xs text-muted-foreground"
           data-testid="workspace-terminal-exited"
         >
-          Terminal exited
+          <span>Shell exited</span>
+          <button
+            type="button"
+            className="rounded-sm px-2 py-0.5 text-xs font-medium text-foreground hover:bg-muted"
+            onClick={() => void handleRestart()}
+            data-testid="workspace-terminal-restart"
+          >
+            Restart
+          </button>
         </div>
       ) : null}
     </div>

@@ -106,6 +106,8 @@ async fn proxy_handler(AxumState(state): AxumState<ProxyState>, req: Request) ->
         }
     }
 
+    copy_media_security_headers(resp.headers(), &mut headers);
+
     // OOM guard for non-range full GETs (same 20 MB cap as the protocol handler).
     if !has_range {
         if let Some(cl) = headers.get("content-length") {
@@ -271,6 +273,8 @@ pub async fn handle_buzz_media(
                 }
             }
 
+            let mut security_headers = HeaderMap::new();
+            copy_media_security_headers(resp.headers(), &mut security_headers);
             match resp.bytes().await {
                 Ok(bytes) => {
                     let mut builder = http::Response::builder()
@@ -294,6 +298,9 @@ pub async fn handle_buzz_media(
                     if let Some(ref lm) = last_modified {
                         builder = builder.header("last-modified", lm);
                     }
+                    if let Some(headers) = builder.headers_mut() {
+                        headers.extend(security_headers);
+                    }
                     builder
                         .body(bytes.to_vec())
                         .unwrap_or_else(|_| error_response(500, "response build failed"))
@@ -316,4 +323,58 @@ fn error_response(status: u16, msg: &str) -> http::Response<Vec<u8>> {
                 .body(Vec::new())
                 .unwrap()
         })
+}
+
+// Both proxy transports must retain the relay's inert-download policy. SVG
+// receives an explicit fallback even if an older relay omitted those headers.
+fn copy_media_security_headers(source: &HeaderMap, target: &mut HeaderMap) {
+    for name in [
+        "content-disposition",
+        "content-security-policy",
+        "x-content-type-options",
+    ] {
+        if let Some(value) = source.get(name) {
+            target.insert(name, value.clone());
+        }
+    }
+    if source
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/svg+xml"))
+    {
+        target.insert(
+            "content-disposition",
+            HeaderValue::from_static("attachment"),
+        );
+        target.insert(
+            "content-security-policy",
+            HeaderValue::from_static("default-src 'none'"),
+        );
+        target.insert(
+            "x-content-type-options",
+            HeaderValue::from_static("nosniff"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod svg_header_tests {
+    use super::*;
+
+    #[test]
+    fn svg_protection_survives_both_native_proxy_transports() {
+        let mut source = HeaderMap::new();
+        source.insert(
+            "content-type",
+            HeaderValue::from_static("image/svg+xml; charset=utf-8"),
+        );
+        // An upstream omission or weak disposition cannot make SVG active.
+        source.insert("content-disposition", HeaderValue::from_static("inline"));
+        let mut target = HeaderMap::new();
+        copy_media_security_headers(&source, &mut target);
+        assert_eq!(target["content-disposition"], "attachment");
+        assert_eq!(target["content-security-policy"], "default-src 'none'");
+        assert_eq!(target["x-content-type-options"], "nosniff");
+    }
 }

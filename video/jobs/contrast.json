@@ -1,0 +1,15 @@
+{
+  "hook": "AI bots use your logins. I have my own.",
+  "hue": "green",
+  "lines": [
+    {"who":"owner", "text":"What's the difference between an AI bot and an AI employee?"},
+    {"who":"scout", "text":"A bot borrows your login. I have my own identity, my own work, and my own approval chain."}
+  ],
+  "results": [
+    {"name":"Bryanston Business Park", "detail":"Facilities manager: Thabo M."},
+    {"name":"Sandton Medical Suites", "detail":"Practice manager: Lerato K."},
+    {"name":"Grayston Office Tower", "detail":"Building manager: Pieter V."}
+  ],
+  "approval": {"question":"Send 20 intro emails from your address?", "fine":"You can read each one before it goes."},
+  "endCard": {"title":"Give your business a team.", "url":"colony.ainative.ventures"}
+}

@@ -369,6 +369,7 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
   referenceTags: string[][];
   linkPreviewTags: string[][];
   workTags: string[][];
+  replyModelTags: string[][];
 } {
   const mediaTags: string[][] = [];
   const emojiTags: string[][] = [];
@@ -376,6 +377,7 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
   const referenceTags: string[][] = [];
   const linkPreviewTags: string[][] = [];
   const workTags: string[][] = [];
+  const replyModelTags: string[][] = [];
   for (const tag of tags ?? []) {
     if (tag[0] === "emoji") {
       emojiTags.push(tag);
@@ -388,6 +390,8 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
       (tag[0] === "discovery" && tag.length >= 3)
     ) {
       referenceTags.push(tag);
+    } else if (tag[0] === "agent-reply") {
+      replyModelTags.push(tag);
     } else if (isWorkContextTag(tag)) {
       workTags.push(tag);
     } else {
@@ -401,6 +405,7 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
     referenceTags,
     linkPreviewTags,
     workTags,
+    replyModelTags,
   };
 }
 

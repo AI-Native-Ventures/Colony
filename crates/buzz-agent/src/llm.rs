@@ -104,6 +104,7 @@ impl Llm {
                     &cfg.openrouter_fallback_models,
                     cfg.openrouter_deny_training,
                 );
+                crate::session_models::enforce_model_request(cfg, &mut body);
                 self.post_openrouter(cfg, &body)
                     .await
                     .and_then(parse_openai_with_reasoning_details)
@@ -2671,6 +2672,7 @@ mod tests {
     fn cfg(provider: Provider) -> Config {
         Config {
             provider,
+            enforce_session_model: false,
             system_prompt: "system".into(),
             max_rounds: 10,
             max_output_tokens: 1024,

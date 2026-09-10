@@ -31,6 +31,7 @@ use crate::{
 #[tauri::command]
 pub async fn get_agent_models(
     pubkey: String,
+    reply_scope: Option<bool>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AgentModelsResponse, String> {
@@ -85,6 +86,19 @@ pub async fn get_agent_models(
         command: _,
     } = discovery;
 
+    if reply_scope == Some(true) {
+        return reply::discover(
+            &app,
+            &state,
+            resolved_acp,
+            agent_command,
+            agent_args,
+            persisted_model,
+            saved_provider,
+            merged_env,
+        )
+        .await;
+    }
     if load_global_agent_config(&app)?.credential_mode == CredentialMode::ColonyCredits {
         return discover_credits_models(&app, &state, persisted_model).await;
     }
@@ -147,13 +161,8 @@ pub async fn get_agent_models(
     .await
 }
 
-/// Use the same readable dangling-harness error as spawn and summary rows.
-fn model_discovery_error(pubkey: &str, error: &str) -> String {
-    format!(
-        "cannot discover models for {pubkey}: {}",
-        crate::managed_agents::user_facing_harness_error(error)
-    )
-}
+#[path = "agent_models_reply.rs"]
+mod reply;
 
 #[path = "agent_models_credits.rs"]
 mod credits;
@@ -162,29 +171,11 @@ use credits::discover_credits_models;
 #[path = "agent_models_discovery_config.rs"]
 mod discovery_config;
 use discovery_config::{
-    agent_model_discovery_config, draft_agent_model_discovery_env, AgentModelDiscoveryConfig,
+    agent_model_discovery_config, draft_agent_model_discovery_env, model_discovery_error,
+    AgentModelDiscoveryConfig,
 };
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiscoverAgentModelsInput {
-    #[serde(default)]
-    pub acp_command: Option<String>,
-    /// Selected payment route; Credits discovery stays inside the native host.
-    #[serde(default)]
-    pub credential_mode: CredentialMode,
-    pub agent_command: String,
-    #[serde(default)]
-    pub agent_args: Vec<String>,
-    #[serde(default)]
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub env_vars: BTreeMap<String, String>,
-    /// Definition-level env from the harness definition (custom/preset).
-    /// Merged below user `env_vars` so user overrides always win.
-    #[serde(default)]
-    pub definition_env: BTreeMap<String, String>,
-}
+pub use discovery_config::DiscoverAgentModelsInput;
 
 /// Query an unsaved configuration; Credits reads the host-owned gateway catalog.
 #[tauri::command]

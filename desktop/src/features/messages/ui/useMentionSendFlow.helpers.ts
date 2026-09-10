@@ -46,6 +46,7 @@ export type SendMessageWithMentionFlowInput = {
   pendingImeta: ImetaMedia[];
   queuedAttachments?: QueuedMediaAttachment[];
   linkPreviewTags?: string[][];
+  replyModelTag?: string[];
   sentDraftKey: string | null | undefined;
   recoveryDraftKey: string | null | undefined;
   spoileredAttachmentUrls?: ReadonlySet<string>;

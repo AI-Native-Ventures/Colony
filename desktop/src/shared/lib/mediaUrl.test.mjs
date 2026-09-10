@@ -365,3 +365,28 @@ test("rewriteRelayUrl: still passes external Blossom URLs through unchanged", as
     assert.equal(mediaUrl.rewriteRelayUrl(externalUrl), externalUrl);
   }
 });
+
+test("rewriteRelayUrl: authenticated audio and SVG use the same relay-only proxy path", async () => {
+  setNativeBridge(
+    createMockNativeBridge((command) => {
+      if (command === "get_media_proxy_port") return Promise.resolve(54321);
+      if (command === "get_relay_http_url")
+        return Promise.resolve("https://relay.example");
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    }),
+  );
+  const mediaUrl = await import(`./mediaUrl.ts?richMedia=${Date.now()}`);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (const extension of ["svg", "mp3", "m4a", "wav", "ogg", "opus", "flac"]) {
+    assert.equal(
+      mediaUrl.rewriteRelayUrl(
+        `https://relay.example/media/${HASH}.${extension}`,
+      ),
+      `http://127.0.0.1:54321/media/${HASH}.${extension}`,
+    );
+    const external = `https://external.example/media/${HASH}.${extension}`;
+    assert.equal(mediaUrl.rewriteRelayUrl(external), external);
+  }
+  const disguised = `https://relay.example/media/${HASH}.svg.exe`;
+  assert.equal(mediaUrl.rewriteRelayUrl(disguised), disguised);
+});

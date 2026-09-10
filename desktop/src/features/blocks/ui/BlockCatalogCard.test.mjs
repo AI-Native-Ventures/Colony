@@ -108,7 +108,8 @@ test("catalog row shows the block and its capability ask, nothing else", () => {
   assert.match(html, /@lead-card/);
   assert.match(html, /lead\.read/);
   assert.match(html, /Review evidence/);
-  assert.equal(html.match(/<button/g)?.length, 1);
+  assert.equal(html.match(/<button/g)?.length, 2);
+  assert.match(html, /disabled=""/);
   assert.doesNotMatch(html, />Create</);
   assert.doesNotMatch(html, />Edit</);
   assert.doesNotMatch(html, /Active version/);

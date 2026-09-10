@@ -2,9 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { isRelayDownloadable, isVideoMedia } from "./mediaEntry.ts";
+import * as mediaEntry from "./mediaEntry.ts";
 
 const RELAY = "https://relay.example.com";
 const relayUrl = (name) => `${RELAY}/media/${name}`;
+
+test("audio uploads are playable even when relay URLs have no extension", () => {
+  assert.equal(typeof mediaEntry.isAudioMedia, "function");
+  assert.equal(mediaEntry.isAudioMedia(relayUrl("hash"), "audio/mpeg"), true);
+  assert.equal(mediaEntry.isAudioMedia(relayUrl("voice.M4A")), true);
+  assert.equal(
+    mediaEntry.isAudioMedia(relayUrl("voice.mp3"), "image/png"),
+    false,
+  );
+  assert.equal(mediaEntry.isAudioMedia(relayUrl("voice.mp3.exe")), false);
+});
 
 // ── isVideoMedia: MIME-first classification ──────────────────────────────
 

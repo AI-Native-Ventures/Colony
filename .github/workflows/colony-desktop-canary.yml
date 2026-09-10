@@ -278,13 +278,21 @@ jobs:
     name: Publish canary macOS (Apple Silicon)
     needs: [decide, relay-parity]
     if: needs.decide.outputs.should_build == 'true'
-    # The same self-hosted Mac the stable release uses. A canary rebuilds the
-    # whole Rust workspace exactly like a release does, and the persistent
-    # cargo cache on this runner is the difference between ~20 minutes and an
-    # hour. macOS aarch64 only in v1: Windows and Intel canaries would each
-    # need their own asset names and manifest entries, and nobody is testing
-    # on them yet.
-    runs-on: [self-hosted, macOS, colony-builder]
+    # GitHub-hosted Apple Silicon, not the owner's Mac. This used to run on the
+    # self-hosted `colony-builder` runner for its warm cargo cache, but that
+    # machine is also somebody's development machine: under local load it drops
+    # offline and the canary dies with no build error to read. This repository
+    # is public, so macos-15 minutes are free, and a nightly build that always
+    # runs beats a faster one that silently does not.
+    #
+    # The trade is wall clock: expect ~1 hour cold against ~20 minutes warm.
+    # The rust-cache step below narrows that on subsequent nights; timeout-
+    # minutes stays at 150 so a fully cold rebuild still has room.
+    #
+    # macOS aarch64 only in v1: Windows and Intel canaries would each need
+    # their own asset names and manifest entries, and nobody is testing on
+    # them yet.
+    runs-on: macos-15
     timeout-minutes: 150
     env:
       VERSION: ${{ needs.decide.outputs.version }}
@@ -302,25 +310,38 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Same guard as the release lane, and for the same reason: this runner's
-      # disk is shared with development worktrees, and a cold build that dies
-      # 20 minutes in on ENOSPC reads like a build bug rather than a full disk.
+      # Hermit owns the toolchain (rustc, cargo, node, pnpm, just), so the
+      # build uses the versions this ref pins rather than whatever a runner
+      # image happens to ship.
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      # Replaces the persistent cargo cache the self-hosted Mac used to
+      # provide. Its own shared-key, so the canary and the stable release do
+      # not evict each other's cache.
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+          shared-key: canary-macos
+
+      # A hosted runner starts with plenty of disk, so this is no longer the
+      # shared-machine guard it was: it is a cheap assertion that the image has
+      # not shrunk and that a restored cargo cache has not filled the volume. A
+      # cold build that dies 20 minutes in on ENOSPC reads like a build bug
+      # rather than a full disk.
       - name: Check the runner has room to build
         env:
-          MIN_FREE_GIB: "25"
+          MIN_FREE_GIB: "20"
         run: |
           set -euo pipefail
           AVAIL_GIB=$(($(df -Pk . | awk 'NR==2 {print $4}') / 1024 / 1024))
-          echo "Free space on the release volume: ${AVAIL_GIB} GiB (minimum ${MIN_FREE_GIB} GiB)"
+          echo "Free space on the build volume: ${AVAIL_GIB} GiB (minimum ${MIN_FREE_GIB} GiB)"
           if [ "$AVAIL_GIB" -ge "$MIN_FREE_GIB" ]; then
             exit 0
           fi
-          echo "::error::Only ${AVAIL_GIB} GiB free on the release runner, and a canary build needs at least ${MIN_FREE_GIB} GiB. Failing now instead of part way through the build."
-          echo "Largest cargo target directories under ${HOME} (usually one per git worktree):"
-          find "$HOME" -maxdepth 6 -type d -name target -prune 2>/dev/null \
-            | while read -r d; do du -sk "$d" 2>/dev/null; done \
-            | sort -rn | head -10 \
-            | awk '{printf "  %7.1f GiB  %s\n", $1/1024/1024, $2}'
+          echo "::error::Only ${AVAIL_GIB} GiB free on the build runner, and a canary build needs at least ${MIN_FREE_GIB} GiB. Failing now instead of part way through the build."
+          df -h
           exit 1
 
       # This list must cover every entry in tauri.conf.json's externalBin:
@@ -328,8 +349,6 @@ jobs:
       # refuses to package one that is not bundled.
       - name: Build sidecar binaries
         run: |
-          . ./bin/activate-hermit
-          export PATH="$HOME/.cargo/bin:$PATH"
           cargo build --release --target aarch64-apple-darwin \
             -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp \
             -p git-credential-nostr -p buzz-cli
@@ -361,9 +380,7 @@ jobs:
           BUZZ_CANARY_VERSION: ${{ needs.decide.outputs.version }}
           BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
           BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
-        run: |
-          . ./bin/activate-hermit
-          cd desktop && node scripts/build-release-config.mjs
+        run: cd desktop && node scripts/build-release-config.mjs
 
       - name: Build desktop app
         env:
@@ -388,21 +405,21 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          . ./bin/activate-hermit
-          export PATH="$HOME/.cargo/bin:$PATH"
+          set -euo pipefail
           # Presence, never the values.
           echo "updater public key present: ${BUZZ_UPDATER_PUBLIC_KEY:+yes}"
           echo "updater endpoint present:   ${BUZZ_UPDATER_ENDPOINT:+yes}"
-          # A self-hosted runner may retain ambient environment variables.
-          # Fail-safe into community selection, exactly like stable.
+          # Fail-safe into community selection, exactly like stable, whatever
+          # the runner image happens to export.
           unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
 
-          # The stable release workflow builds into this same shared target
-          # directory on this same runner, so an updater archive left behind by
-          # either side can be picked up by the other. That is how v0.11.8
-          # published a canary build as the stable macOS update. Purge before
-          # building, so the only archive present afterwards is this build's.
+          # A restored rust-cache can carry a previous canary's bundle output
+          # into this build's target directory, so an updater archive left
+          # behind by an earlier run could be picked up as this run's. That is
+          # how v0.11.8 published a canary build as the stable macOS update.
+          # Purge before building, so the only archive present afterwards is
+          # this build's.
           PRE_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || echo desktop/src-tauri/target)"
           PRE_MACOS="$PRE_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos"
           if [ -d "$PRE_MACOS" ]; then
@@ -412,9 +429,9 @@ jobs:
 
           just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
-          # Resolve the target directory here, where hermit has put cargo on
-          # PATH. Later steps do not source hermit, and a `cargo metadata`
-          # there silently falls back to the wrong path.
+          # Resolve the target directory once and hand it to the later steps
+          # through $GITHUB_ENV, so nothing downstream has to re-derive it and
+          # silently fall back to the wrong path.
           TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
           [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
           echo "TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT" >> "$GITHUB_ENV"

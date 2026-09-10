@@ -208,13 +208,15 @@ for (const mode of ["light", "dark"] as const) {
       .toBeNull();
 
     await page.setViewportSize({ width: 860, height: 960 });
-    await expect(page.getByTestId("message-thread-panel")).toBeVisible();
-    const narrowChannel = page.getByTestId("channel-drop-zone");
-    if (await narrowChannel.isVisible()) {
-      await expect
-        .poll(async () => (await narrowChannel.boundingBox())?.width ?? 0)
-        .toBeGreaterThanOrEqual(300);
-    }
+    // ResizeObserver switches this width to a standalone thread. Sampling
+    // channel visibility once can race that update and then measure a removed
+    // channel as zero forever. Wait for the intended narrow layout instead.
+    await expect(page.getByTestId("channel-drop-zone")).toHaveCount(0);
+    const narrowThread = page.getByTestId("message-thread-panel");
+    await expect(narrowThread).toBeVisible();
+    await expect
+      .poll(async () => (await narrowThread.boundingBox())?.width ?? 0)
+      .toBeGreaterThanOrEqual(300);
     await page.setViewportSize({ width: 1440, height: 960 });
     await expectNativeSplit(page, rootId);
 
