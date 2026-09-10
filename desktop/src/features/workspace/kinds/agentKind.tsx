@@ -25,17 +25,24 @@ export const agentKindDefinition: TabKindDefinition = {
     isProjectChannel(context.projects, context.channelId),
 };
 
-/** Open a tab bound to a managed agent. Returns the new tab id. */
+/**
+ * Open a tab bound to a managed agent. Returns the new tab id.
+ *
+ * `threadRootId` binds the tile to a thread that already exists — the launcher
+ * posts the brief first, so the tile opens onto that thread rather than
+ * creating a second one on its first send.
+ */
 export function openAgentTab(
   channelId: string,
   agentPubkey: string,
   title: string,
+  threadRootId: string | null = null,
 ): string {
   return openTab(channelId, {
     kind: agentKindDefinition.kind,
     title,
     createdBy: "local",
-    payload: createAgentTabPayload(agentPubkey),
+    payload: createAgentTabPayload(agentPubkey, threadRootId),
   });
 }
 

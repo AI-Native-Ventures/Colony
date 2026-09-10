@@ -45,6 +45,28 @@ export function parseAgentTabPayload(value: unknown): AgentTabPayload | null {
   return { v: 1, agentPubkey, threadRootId };
 }
 
+/**
+ * The agents on show in a set of tabs, in tab order.
+ *
+ * `tabIds` scopes it to what a Factory tree actually holds, so an agent tab
+ * that has been dragged out of the tree is not counted by the toolbar.
+ */
+export function collectAgentTabPubkeys(
+  tabs: ReadonlyArray<{ id: string; kind: string; payload: unknown }>,
+  tabIds: ReadonlyArray<string>,
+): string[] {
+  const inTree = new Set(tabIds);
+  const pubkeys: string[] = [];
+  for (const tab of tabs) {
+    if (tab.kind !== "agent" || !inTree.has(tab.id)) continue;
+    const payload = parseAgentTabPayload(tab.payload);
+    if (payload && !pubkeys.includes(payload.agentPubkey)) {
+      pubkeys.push(payload.agentPubkey);
+    }
+  }
+  return pubkeys;
+}
+
 /** Bind a payload to a thread root. Returns the same object when unchanged. */
 export function withThreadRootId(
   payload: AgentTabPayload,

@@ -74,3 +74,22 @@ test("withThreadRootId binds a thread and is identity when unchanged", async () 
   });
   assert.strictEqual(m.withThreadRootId(bound, "root"), bound);
 });
+
+test("collectAgentTabPubkeys counts agent tabs the tree holds, once each", async () => {
+  const m = await load();
+  const tabs = [
+    { id: "t1", kind: "agent", payload: m.createAgentTabPayload("aa") },
+    { id: "t2", kind: "terminal", payload: { sessionKey: null } },
+    { id: "t3", kind: "agent", payload: m.createAgentTabPayload("bb") },
+    // Same agent in a second tile: one agent, not two.
+    { id: "t4", kind: "agent", payload: m.createAgentTabPayload("aa") },
+    // In the workspace but dragged out of this tree.
+    { id: "t5", kind: "agent", payload: m.createAgentTabPayload("cc") },
+    { id: "t6", kind: "agent", payload: { broken: true } },
+  ];
+  assert.deepStrictEqual(
+    m.collectAgentTabPubkeys(tabs, ["t1", "t2", "t3", "t4", "t6"]),
+    ["aa", "bb"],
+  );
+  assert.deepStrictEqual(m.collectAgentTabPubkeys(tabs, []), []);
+});

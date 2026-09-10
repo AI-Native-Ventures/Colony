@@ -98,7 +98,12 @@ export function AgentTileHeader({
           >
             {agent.name}
           </span>
-          <AgentRoleSubtitle pubkey={agent.pubkey} />
+          {/* The subtitle claims a whole flex line of its own, which is right
+              in a message row and wrong here: wrapping it keeps the name, the
+              role and the pill on one line. */}
+          <span className="flex min-w-0 truncate">
+            <AgentRoleSubtitle pubkey={agent.pubkey} />
+          </span>
           <span
             className={cn(
               "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-medium",

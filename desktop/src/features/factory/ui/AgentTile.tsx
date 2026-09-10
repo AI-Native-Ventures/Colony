@@ -66,7 +66,8 @@ export function AgentTile({ channelId, tab }: TabBodyProps): React.JSX.Element {
   return (
     <div
       className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
-      data-testid="agent-tile"
+      data-agent-pubkey={agent.pubkey}
+      data-testid="factory-agent-tile"
     >
       <AgentTileHeader agent={agent} status={status} />
       <ManagedAgentSessionPanel
