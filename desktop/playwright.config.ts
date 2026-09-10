@@ -76,6 +76,7 @@ export default defineConfig({
         "**/workspace-factory.spec.ts",
         "**/workspace-factory-agent.spec.ts",
         "**/workspace-factory-asks.spec.ts",
+        "**/workspace-factory-graph.spec.ts",
         "**/workspace-web.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",
