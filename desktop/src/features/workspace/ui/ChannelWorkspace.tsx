@@ -78,7 +78,7 @@ export function ChannelWorkspace({
   // tab is active. They remain in the store and reappear when the factory
   // tab is closed.
   const activeFactoryDef = activeTab ? getTabKind(activeTab.kind) : undefined;
-  const factoryOwnedTabIds = activeFactoryDef?.ownedTabIds
+  const factoryOwnedTabIds = activeTab && activeFactoryDef?.ownedTabIds
     ? activeFactoryDef.ownedTabIds(activeTab)
     : [];
   const visibleTabs =
