@@ -3,16 +3,29 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
-import { installBlocksLiveDiagnostics } from "../helpers/blocksLiveDiagnostics";
+import {
+  captureBlocksManifestQueryState,
+  installBlocksLiveDiagnostics,
+  installBlocksManifestDiagnostics,
+} from "../helpers/blocksLiveDiagnostics";
 import { installBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const execFile = promisify(execFileCallback);
 const enabled = process.env.BUZZ_E2E_BLOCKS_LIVE === "1";
 
 type CommandResult = Record<string, unknown>;
+
+const manifestDiagnosticsByPage = new WeakMap<
+  Page,
+  {
+    directory: string;
+    manifestIds: string[];
+    observer: ReturnType<typeof installBlocksManifestDiagnostics>;
+  }
+>();
 
 function required(name: string, value: string | undefined): string {
   if (!value)
@@ -196,6 +209,25 @@ test.describe("Blocks live Gate C", () => {
     !enabled,
     "set BUZZ_E2E_BLOCKS_LIVE=1 to run the harness-owned live gate",
   );
+
+  test.afterEach(async ({ page }) => {
+    const diagnostics = manifestDiagnosticsByPage.get(page);
+    if (!diagnostics) return;
+    manifestDiagnosticsByPage.delete(page);
+    const transport = diagnostics.observer.snapshot();
+    diagnostics.observer.stop();
+    // Persist initial-load evidence even when the test never reaches actions.
+    await writeEvidence(
+      diagnostics.directory,
+      "manifest-transport.json",
+      transport,
+    );
+    await writeEvidence(
+      diagnostics.directory,
+      "manifest-query-state.json",
+      await captureBlocksManifestQueryState(page, diagnostics.manifestIds),
+    );
+  });
 
   test("persists the chat-native Blocks loop with signed relay evidence", async ({
     page,
@@ -501,6 +533,19 @@ test.describe("Blocks live Gate C", () => {
       proposalIds,
     );
     page.once("close", () => proposalDiagnostics.stop());
+    const manifestIds = [String(oldLead.manifest_id ?? ""), draftId];
+    const manifestDiagnostics = installBlocksManifestDiagnostics(
+      page,
+      relayWsUrl,
+      { manifestIds, relaySelfPubkey: relaySelf },
+    );
+    manifestDiagnosticsByPage.set(page, {
+      directory: evidence,
+      manifestIds,
+      observer: manifestDiagnostics,
+    });
+    manifestDiagnostics.start();
+    page.once("close", () => manifestDiagnostics.stop());
     await writeEvidence(evidence, "cli.json", {
       created,
       databaseUrl,
