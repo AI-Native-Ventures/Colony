@@ -86,17 +86,22 @@ export function collectInlineAuthorizations(
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new TypeError("limit must be a positive integer");
   }
-  const text = Buffer.from(bytes).toString("latin1");
+  // Script content is sliced by raw byte offset, so scan a one-byte-per-char
+  // latin1 view for those. Handlers are hashed from their decoded UTF-8
+  // value, so scan the document as UTF-8; scanning handlers as latin1 would
+  // hash mojibake instead of the served source.
+  const bytesAsLatin1 = Buffer.from(bytes).toString("latin1");
+  const bytesAsUtf8 = Buffer.from(bytes).toString("utf8");
   const scriptHashes = [];
   const seenScripts = new Set();
   const closePattern = /<\/script\b/gi;
   let truncated = false;
 
-  for (const match of text.matchAll(SCRIPT_TAG_PATTERN)) {
+  for (const match of bytesAsLatin1.matchAll(SCRIPT_TAG_PATTERN)) {
     if (SRC_ATTRIBUTE_PATTERN.test(match[1])) continue;
     const contentStart = match.index + match[0].length;
     closePattern.lastIndex = contentStart;
-    const close = closePattern.exec(text);
+    const close = closePattern.exec(bytesAsLatin1);
     if (close === null) break;
     if (scriptHashes.length >= limit) {
       truncated = true;
@@ -110,7 +115,7 @@ export function collectInlineAuthorizations(
 
   const handlerHashes = [];
   const seenHandlers = new Set();
-  for (const match of text.matchAll(EVENT_HANDLER_PATTERN)) {
+  for (const match of bytesAsUtf8.matchAll(EVENT_HANDLER_PATTERN)) {
     if (handlerHashes.length >= limit) {
       truncated = true;
       break;

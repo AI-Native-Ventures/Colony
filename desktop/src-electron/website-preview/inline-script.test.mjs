@@ -41,12 +41,21 @@ test("hashes byte-exact content even when it is not valid UTF-8", () => {
 });
 
 test("hashes CRLF and UTF-8 handler text as the served bytes", () => {
-  const html =
-    "<script>line1\r\nline2</script>" +
-    '<button onclick="caf\u00e9()">x</button>';
-  const result = collectInlineAuthorizations(Buffer.from(html, "utf8"));
-  assert.deepEqual(result.scriptHashes, [tokenFor("line1\r\nline2")]);
-  assert.deepEqual(result.handlerHashes, [tokenFor("caf\u00e9()")]);
+  const scriptBytes = Buffer.from("line1\r\nline2", "utf8");
+  const handlerBytes = Buffer.from("caf\u00e9()", "utf8");
+  const htmlBytes = Buffer.concat([
+    Buffer.from("<script>", "utf8"),
+    scriptBytes,
+    Buffer.from("</script>", "utf8"),
+    Buffer.from('<button onclick="', "utf8"),
+    handlerBytes,
+    Buffer.from('">x</button>', "utf8"),
+  ]);
+  const result = collectInlineAuthorizations(htmlBytes);
+  // Expected tokens are derived from the same raw fixture bytes at test
+  // time, so this proves byte hashing rather than a fixed constant.
+  assert.deepEqual(result.scriptHashes, [tokenFor(scriptBytes)]);
+  assert.deepEqual(result.handlerHashes, [tokenFor(handlerBytes)]);
 });
 
 test("decodes character entities and clamps invalid numerics", () => {

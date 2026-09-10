@@ -13,6 +13,7 @@ import {
   PREVIEW_SCHEMA,
   sha256Hex,
 } from "./artifact.mjs";
+import { PreviewArtifactError } from "./errors.mjs";
 
 const PUBLIC_ADDRESS = "93.184.216.34";
 const OTHER_ADDRESS = "93.184.216.35";
@@ -105,7 +106,15 @@ function manifestRef(world, body, url = MANIFEST_URL) {
 }
 
 async function expectCode(operation, code) {
-  await assert.rejects(operation, (error) => {
+  // `assert.rejects` only runs its validator when the operation rejects
+  // asynchronously; a synchronous throw escapes validation entirely. Wrap
+  // the call so sync parse failures and async load failures are checked
+  // against the same real error shape.
+  await assert.rejects(Promise.resolve().then(operation), (error) => {
+    assert.ok(
+      error instanceof PreviewArtifactError,
+      `expected PreviewArtifactError, got ${error?.name}: ${error?.message}`,
+    );
     assert.equal(
       error?.code,
       code,
