@@ -343,6 +343,9 @@ fn create_agent_input(
         model: trim_optional(&action.definition.model),
         provider: trim_optional(&action.definition.provider),
         env_vars: BTreeMap::new(),
+        // A proposal-approved hire has no factory worktree; it runs in the
+        // default agent workdir like every pre-worktree agent.
+        working_dir: None,
         spawn_after_create: true,
         start_on_app_launch: local,
         backend,

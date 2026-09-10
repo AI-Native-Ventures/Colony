@@ -26,13 +26,17 @@ function terminal(): NativeTerminalApi {
 
 export const electronTerminalBackend: TerminalBackend = {
   async start(request: TerminalStartRequest): Promise<TerminalStartResult> {
-    const cwd = await invoke<string>("workspace_terminal_resolve_cwd", {
-      request: {
-        reposDir: request.reposDir,
-        projectDtag: request.projectDtag,
-        cloneUrl: request.cloneUrl,
-      },
-    });
+    // An explicit cwd is already a resolved path, so it skips the Rust lookup
+    // the project lane needs.
+    const cwd =
+      request.cwd?.trim() ||
+      (await invoke<string>("workspace_terminal_resolve_cwd", {
+        request: {
+          reposDir: request.reposDir,
+          projectDtag: request.projectDtag,
+          cloneUrl: request.cloneUrl,
+        },
+      }));
     const started = await terminal().start({
       cwd,
       cols: request.cols,

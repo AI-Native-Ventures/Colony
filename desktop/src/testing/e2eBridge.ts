@@ -37,10 +37,12 @@ import {
 } from "./e2eBridgeCustomHarnesses.ts";
 
 import {
+  createNativeFactoryApi,
   NativeChannel,
   setNativeBridge,
   type NativeBridge,
   type NativeEvent,
+  type NativeFactoryApi,
   type NativeNotificationAction,
   type NativeUnlisten,
   type NativeUpdate,
@@ -4005,6 +4007,10 @@ type MockCommandHandler = (
  * answers (and throws) exactly where the old library calls landed.
  */
 class E2eNativeBridge implements NativeBridge {
+  readonly factory: NativeFactoryApi = createNativeFactoryApi((command, args) =>
+    this.invoke(command, args),
+  );
+
   private readonly mockCommand: MockCommandHandler;
 
   constructor(mockCommand: MockCommandHandler) {

@@ -757,6 +757,7 @@ fn summary_fixture(
     restart_diff: Vec<crate::managed_agents::spawn_snapshot::RestartDiffEntry>,
 ) -> super::ManagedAgentSummary {
     super::ManagedAgentSummary {
+        working_dir: None,
         owner_identified: false,
         isolated: false,
         browser_generation: None,
