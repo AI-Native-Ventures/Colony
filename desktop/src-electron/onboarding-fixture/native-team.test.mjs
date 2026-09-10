@@ -753,6 +753,6 @@ test("native publish observation is bounded and never prevents subsequent real d
         throw new Error("gone");
       },
     }),
-    { unavailable: ["renderer-unavailable"], refusals: [] },
+    { unavailable: ["renderer-unavailable"], lifecycle: [], refusals: [] },
   );
 });
