@@ -46,6 +46,11 @@ jobs:
         run: |
           (cd desktop && pnpm exec biome check --write . || true)
           (cd web && pnpm exec biome check --write . || true)
+      - name: Regenerate generated desktop files
+        # native-inventory.json is generated from desktop/src-tauri and CI
+        # refuses a stale copy; regenerating it here puts the exact generator
+        # output into the same patch as the formatter changes.
+        run: (cd desktop && pnpm generate:native-inventory)
       - name: Report remaining error-level biome diagnostics
         # `just desktop-check` caps output at 20 diagnostics and warnings can
         # crowd out the errors that actually fail the job; this prints every
