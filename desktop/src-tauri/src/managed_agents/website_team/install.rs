@@ -461,6 +461,8 @@ async fn ensure_agent(
                 team_id: Some(ctx.team_id.clone()),
                 relay_url: Some(ctx.relay_url.clone()),
                 acp_command: None,
+                // Managed agents run in their nest; no per-agent override here.
+                working_dir: None,
                 // Inherit the persona's harness and the saved global defaults:
                 // the recipe must not pin a model, provider, or credential.
                 agent_command: None,
