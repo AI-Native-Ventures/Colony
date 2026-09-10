@@ -32,6 +32,10 @@ import {
   AgentBody,
   agentKindDefinition,
 } from "@/features/workspace/kinds/agentKind";
+import {
+  BoardBody,
+  boardKindDefinition,
+} from "@/features/workspace/kinds/boardKind";
 import { getFeature } from "@/shared/features/manifest";
 import { resolveEnabled } from "@/shared/features/resolveEnabled";
 import { getOverrides } from "@/shared/features/store";
@@ -107,6 +111,10 @@ export function registerAllTabKinds(): void {
     // without the Factory tab cannot restore an agent tab it cannot render.
     registerTabKind(agentKindDefinition);
     bodies.set(agentKindDefinition.kind, AgentBody);
+    // The tickets board is a Factory surface too: same flag, same project
+    // channel rule as the canvas it is opened from.
+    registerTabKind(boardKindDefinition);
+    bodies.set(boardKindDefinition.kind, BoardBody);
   }
   if (!webKindRegistered && workspaceWebTabEnabled()) {
     webKindRegistered = true;

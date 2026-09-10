@@ -18,7 +18,9 @@ import {
   SheetTrigger,
 } from "@/shared/ui/sheet";
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+/** One labelled fact. Exported so surfaces that show the same task detail
+ * outside a sheet (the Factory board's detail pane) read identically. */
+export function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid gap-1 border-b border-border/60 py-3 last:border-0">
       <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -29,7 +31,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ArtifactRow({
+export function ArtifactRow({
   artifact,
   primary,
 }: {
@@ -52,7 +54,7 @@ function ArtifactRow({
   );
 }
 
-function keyedArtifacts(artifacts: TaskArtifact[]) {
+export function keyedArtifacts(artifacts: TaskArtifact[]) {
   const occurrences = new Map<string, number>();
   return artifacts.map((artifact) => {
     const identity = `${artifact.kind}:${artifact.reference}:${artifact.label ?? ""}`;

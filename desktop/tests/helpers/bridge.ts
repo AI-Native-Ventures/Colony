@@ -281,6 +281,7 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
       status?: string;
       threadRoot?: string | null;
       sourceChannelId?: string;
+      assigneePersonaIds?: string[];
     }>;
     /** Refuse the kind 30180 read, so the Initiatives tab fails on its own. */
     refuseInitiativeRead?: boolean;
