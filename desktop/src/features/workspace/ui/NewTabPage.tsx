@@ -1,14 +1,23 @@
 import type * as React from "react";
 
 import { listCreatableTabKinds } from "@/features/workspace/lib/tabKindRegistry";
+import { useProjectsQuery } from "@/features/projects/hooks";
 
 type NewTabPageProps = {
+  channelId: string;
   onCreate: (kind: string) => void;
 };
 
-/** Empty state: the kinds this build can create. */
-export function NewTabPage({ onCreate }: NewTabPageProps): React.JSX.Element {
-  const kinds = listCreatableTabKinds();
+/** Empty state: the kinds this build can create, filtered by availability. */
+export function NewTabPage({
+  channelId,
+  onCreate,
+}: NewTabPageProps): React.JSX.Element {
+  const projects = useProjectsQuery();
+  const kinds = listCreatableTabKinds({
+    channelId,
+    projects: projects.data,
+  });
   return (
     <div
       className="flex h-full flex-col items-center justify-center gap-4 p-8"

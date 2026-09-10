@@ -9,6 +9,7 @@ pub mod content;
 pub mod credits;
 pub mod decisions;
 pub mod discovery;
+pub mod discovery_refs;
 pub mod dms;
 pub mod emoji;
 pub mod employees;

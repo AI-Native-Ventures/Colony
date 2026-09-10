@@ -1,4 +1,5 @@
 import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
+import type { Project } from "@/features/projects/projectModels";
 
 /**
  * What the workspace needs to know about a tab kind.
@@ -7,6 +8,11 @@ import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
  * looks a kind up, asks it for a title and an initial payload, and renders the
  * body registered for it. It never branches on the kind string itself.
  */
+export type TabKindContext = {
+  channelId: string;
+  projects: readonly Project[] | undefined;
+};
+
 export type TabKindDefinition = {
   /** Stable identifier stored on the tab. Never renamed once shipped. */
   kind: string;
@@ -21,9 +27,13 @@ export type TabKindDefinition = {
    * fully functional while staying out of shipped UI, which is how the
    * kind-agnostic contract is proven without building a second surface.
    */
+  /** Optional: whether this kind is available for the given channel/project context. */
+  isAvailable?: (context: TabKindContext) => boolean;
   canCreateFromNewTabPage: boolean;
   /** Optional kind-owned cleanup before the shell removes a tab. */
   dispose?: (tab: WorkspaceTab) => void | Promise<void>;
+  /** Optional: the tab ids this kind owns (e.g. factory tiles). */
+  ownedTabIds?: (tab: WorkspaceTab) => string[];
 };
 
 const registry = new Map<string, TabKindDefinition>();
@@ -42,11 +52,17 @@ export function getTabKind(kind: string): TabKindDefinition | undefined {
   return registry.get(kind);
 }
 
-/** Kinds the new-tab page should offer, in registration order. */
-export function listCreatableTabKinds(): TabKindDefinition[] {
-  return [...registry.values()].filter(
-    (definition) => definition.canCreateFromNewTabPage,
-  );
+/** Kinds the new-tab page should offer, in registration order.
+ *  When `context` is provided, kinds whose `isAvailable` returns false are hidden. */
+export function listCreatableTabKinds(
+  context?: TabKindContext,
+): TabKindDefinition[] {
+  return [...registry.values()].filter((definition) => {
+    if (!definition.canCreateFromNewTabPage) return false;
+    if (context && definition.isAvailable && !definition.isAvailable(context))
+      return false;
+    return true;
+  });
 }
 
 /** Test-only: empty the registry between cases. */
