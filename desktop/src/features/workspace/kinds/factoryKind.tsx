@@ -6,16 +6,27 @@ import type {
 } from "@/features/workspace/lib/tabKindRegistry";
 import {
   parseTileTree,
+  addTabToPane,
   createInitialTree,
   serializeTileTree,
   insertPaneAtEdge,
   findPaneById,
+  findPaneByTabId,
   findPanePath,
   moveTabToPane,
   getNodeAtPath,
+  paneRightOf,
   replacePane,
   type TileLayoutNode,
 } from "@/features/factory/lib/tileTree";
+import { parseAgentTabPayload } from "@/features/factory/lib/agentTabPayload";
+import {
+  FactoryTileProvider,
+  type FactoryTileActions,
+} from "@/features/factory/ui/FactoryTileContext";
+import { openAgentTab } from "@/features/workspace/kinds/agentKind";
+import { openTerminalTab } from "@/features/workspace/kinds/terminalKind";
+import { setActiveTab } from "@/features/workspace/lib/workspaceTabs";
 import { useFactoryTree } from "@/features/factory/ui/useFactoryTree";
 import { useTabDrag } from "@/features/factory/ui/useTabDrag";
 import {
@@ -67,6 +78,10 @@ export function FactoryBody({
   const [preset, setPreset] = React.useState<
     "single" | "columns" | "grid" | "focus" | null
   >(null);
+  const [launcher, setLauncher] = React.useState<{
+    open: boolean;
+    briefPrefill: string;
+  }>({ open: false, briefPrefill: "" });
 
   // A drop rearranges the tree by hand, so no preset describes the layout
   // any more.
@@ -228,6 +243,136 @@ export function FactoryBody({
     [workspace.tabs, channelId],
   );
 
+  // The seam every tile inside the canvas reaches the tree through. A tile is
+  // rendered by the kind registry, far below this component, so the delegate
+  // menu cannot be handed the tree by props.
+  const stateRef = React.useRef(state);
+  stateRef.current = state;
+  const factoryTabId = tab.id;
+  const agentsInTree = React.useMemo(() => {
+    const inTree = new Set<string>();
+    (function collect(node: TileLayoutNode): void {
+      if (node.kind === "pane") {
+        for (const tabId of node.tabIds) inTree.add(tabId);
+      } else {
+        for (const child of node.children) collect(child);
+      }
+    })(state.root);
+    return workspace.tabs
+      .filter(
+        (candidate) => candidate.kind === "agent" && inTree.has(candidate.id),
+      )
+      .flatMap((candidate) => {
+        const payload = parseAgentTabPayload(candidate.payload);
+        return payload
+          ? [
+              {
+                tabId: candidate.id,
+                pubkey: payload.agentPubkey,
+                title: candidate.title,
+              },
+            ]
+          : [];
+      });
+  }, [state.root, workspace.tabs]);
+
+  const openAgentBeside = React.useCallback<
+    FactoryTileActions["openAgentBeside"]
+  >(
+    (sourceTabId, agent) => {
+      const current = stateRef.current;
+      const sourcePane = findPaneByTabId(current.root, sourceTabId);
+      if (!sourcePane) return;
+      setPreset(null);
+
+      // An agent already on a tile is focused rather than opened twice: two
+      // tiles for one agent would each own a composer bound to the same thread.
+      const existing = agentsInTree.find(
+        (candidate) => candidate.pubkey === agent.pubkey,
+      );
+      if (existing) {
+        const pane = findPaneByTabId(current.root, existing.tabId);
+        if (!pane) return;
+        commit({
+          ...current,
+          root: replacePane(current.root, pane.id, (target) => ({
+            ...target,
+            activeTabId: existing.tabId,
+          })),
+          focusedPaneId: pane.id,
+        });
+        return;
+      }
+
+      const tabId = openAgentTab(
+        channelId,
+        agent.pubkey,
+        agent.name,
+        agent.threadRootId,
+      );
+      // `openTab` activates the new tab in the workspace, which would replace
+      // the canvas with the bare tile; the canvas owns it instead.
+      setActiveTab(channelId, factoryTabId);
+
+      const neighbour = paneRightOf(current.root, sourcePane.id);
+      if (neighbour) {
+        const next = addTabToPane(current, neighbour.id, tabId, {
+          activate: true,
+        });
+        if (next) commit({ ...next, focusedPaneId: neighbour.id });
+        return;
+      }
+      const newPaneId = `pane-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
+      const result = insertPaneAtEdge(
+        current,
+        sourcePane.id,
+        "right",
+        newPaneId,
+        tabId,
+      );
+      if (!result) return;
+      commit({
+        ...current,
+        root: result.root,
+        sizesByGroupId: result.sizesByGroupId,
+        focusedPaneId: newPaneId,
+      });
+    },
+    [agentsInTree, channelId, commit, factoryTabId],
+  );
+
+  const openTerminalHere = React.useCallback<
+    FactoryTileActions["openTerminalHere"]
+  >(
+    (sourceTabId, { cwd, title }) => {
+      const current = stateRef.current;
+      const sourcePane = findPaneByTabId(current.root, sourceTabId);
+      if (!sourcePane) return;
+      setPreset(null);
+      const tabId = openTerminalTab(channelId, { cwd, title });
+      setActiveTab(channelId, factoryTabId);
+      const next = addTabToPane(current, sourcePane.id, tabId, {
+        activate: true,
+      });
+      if (next) commit({ ...next, focusedPaneId: sourcePane.id });
+    },
+    [channelId, commit, factoryTabId],
+  );
+
+  const openLauncher = React.useCallback((briefPrefill: string) => {
+    setLauncher({ open: true, briefPrefill });
+  }, []);
+
+  const tileActions = React.useMemo<FactoryTileActions>(
+    () => ({
+      agents: agentsInTree,
+      openAgentBeside,
+      openLauncher,
+      openTerminalHere,
+    }),
+    [agentsInTree, openAgentBeside, openLauncher, openTerminalHere],
+  );
+
   // Handle group resize from splitters.
   const handleGroupResize = React.useCallback(
     (groupId: string, sizes: ReadonlyArray<number>) => {
@@ -291,22 +436,29 @@ export function FactoryBody({
         commit={commit}
         preset={preset}
         onPresetChange={setPreset}
+        launchOpen={launcher.open}
+        launchBriefPrefill={launcher.briefPrefill}
+        onLaunchOpenChange={(open) =>
+          setLauncher((current) => ({ ...current, open }))
+        }
       />
-      <FactoryCanvas
-        state={state}
-        workspaceTabs={workspace.tabs}
-        channelId={channelId}
-        drag={drag}
-        isFocusedPaneId={state.focusedPaneId}
-        onPaneFocus={handlePaneFocus}
-        onPaneSplitRight={handlePaneSplitRight}
-        onPaneSplitDown={handlePaneSplitDown}
-        onPaneClose={handlePaneClose}
-        onPaneActiveTabChange={handlePaneActiveTabChange}
-        onPaneCloseTab={handlePaneCloseTab}
-        onGroupResize={handleGroupResize}
-        commit={commit}
-      />
+      <FactoryTileProvider actions={tileActions}>
+        <FactoryCanvas
+          state={state}
+          workspaceTabs={workspace.tabs}
+          channelId={channelId}
+          drag={drag}
+          isFocusedPaneId={state.focusedPaneId}
+          onPaneFocus={handlePaneFocus}
+          onPaneSplitRight={handlePaneSplitRight}
+          onPaneSplitDown={handlePaneSplitDown}
+          onPaneClose={handlePaneClose}
+          onPaneActiveTabChange={handlePaneActiveTabChange}
+          onPaneCloseTab={handlePaneCloseTab}
+          onGroupResize={handleGroupResize}
+          commit={commit}
+        />
+      </FactoryTileProvider>
     </div>
   );
 }
