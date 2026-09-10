@@ -714,9 +714,16 @@ pub(crate) async fn write_task_head(
 /// - the head is relay-authored, exactly like every other thread task head;
 ///   no agent gains owner keys and no platform-wide gate changes.
 ///
-/// `reopen` additionally moves a terminal task back to `in_progress`, clears
-/// its completion reports (a revision request is new work, not a stale
-/// completion), and re-claims the thread slot so dispatch can find it.
+/// `reopen` additionally bounces a completed task back to `ready` with the
+/// validated reason and `bounceCount + 1`, clears its completion reports (a
+/// revision request is new work, not a stale completion), and re-claims the
+/// thread slot so dispatch can find it.
+///
+/// Idempotent: when the assignment already covers every participant, the QA
+/// persona already matches, and no reopen is needed, it returns the current
+/// task without writing a head, so `apply_create` may call it again after a
+/// lost race without side effects.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn reconcile_website_task(
     tenant: &TenantContext,
     state: &Arc<AppState>,

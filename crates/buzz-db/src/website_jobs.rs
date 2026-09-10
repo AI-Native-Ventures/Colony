@@ -78,7 +78,7 @@ pub async fn lock_website_job_tx(
         "SELECT {JOB_COLUMNS} FROM website_jobs \
          WHERE community_id = $1 AND job_id = $2 FOR UPDATE"
     );
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(community.as_uuid())
         .bind(job_id)
         .fetch_optional(&mut **tx)
@@ -184,6 +184,10 @@ const JOB_COLUMNS: &str = "job_id, task_id, channel_id, thread_root, instance_ev
      source_url, status, current_revision, review, research_personas, build_personas, \
      review_personas, head_event_id, generation, head_at, created_at, updated_at";
 
+// Every `sqlx::query` built with a `format!` below wraps the string in
+// `sqlx::AssertSqlSafe`: the only dynamic text is `JOB_COLUMNS` above and all
+// values are bound parameters, so the statement shape is const.
+
 fn row_to_job(row: sqlx::postgres::PgRow) -> Result<WebsiteJobRow> {
     Ok(WebsiteJobRow {
         job_id: row.try_get("job_id")?,
@@ -233,7 +237,7 @@ where
     let sql = format!(
         "SELECT {JOB_COLUMNS} FROM website_jobs WHERE community_id = $1 AND job_id = $2"
     );
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(community.as_uuid())
         .bind(job_id)
         .fetch_optional(executor)
@@ -253,7 +257,7 @@ where
     let sql = format!(
         "SELECT {JOB_COLUMNS} FROM website_jobs WHERE community_id = $1 AND task_id = $2"
     );
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(community.as_uuid())
         .bind(task_id)
         .fetch_optional(executor)
@@ -274,7 +278,7 @@ where
         "SELECT {JOB_COLUMNS} FROM website_jobs WHERE community_id = $1 \
          ORDER BY created_at DESC, job_id ASC LIMIT $2"
     );
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(community.as_uuid())
         .bind(limit.clamp(1, 1000))
         .fetch_all(executor)
@@ -304,7 +308,7 @@ pub async fn insert_website_job_tx(
          ON CONFLICT DO NOTHING \
          RETURNING {JOB_COLUMNS}"
     );
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(community.as_uuid())
         .bind(job.job_id)
         .bind(job.task_id)
@@ -347,7 +351,7 @@ pub async fn update_website_job_cas(
           WHERE community_id = $1 AND job_id = $2 AND generation = $3 \
       RETURNING {JOB_COLUMNS}"
     );
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(community.as_uuid())
         .bind(job_id)
         .bind(expected_generation)

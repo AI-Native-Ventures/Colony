@@ -6,7 +6,7 @@
 //! coordinator (or owner) requests changes through `request-changes`, which is
 //! the ordinary action path.
 
-use buzz_core::kind::{KIND_TASK_REPORT, KIND_WEBSITE_ACTION, KIND_WEBSITE_HEAD};
+use buzz_core::kind::KIND_WEBSITE_HEAD;
 use buzz_core::website::{
     sha256_hex, HandoverAccessRequest, HandoverAsset, PreviewArtifactRef, Stage,
     StageEvidenceKind, WebsiteAction, WebsiteActionOp, WebsiteCaptures, MAX_ACCESS_REQUEST_CHARS,
@@ -149,6 +149,7 @@ fn build_action(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_create(
     client: &BuzzClient,
     channel: &str,
@@ -259,6 +260,7 @@ async fn cmd_mutation(
     submit(client, action_builder(&action)?).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_qa(
     client: &BuzzClient,
     channel: &str,
@@ -663,6 +665,7 @@ pub async fn dispatch(cmd: WebsiteCmd, client: &BuzzClient) -> Result<(), CliErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use buzz_core::kind::{KIND_TASK_REPORT, KIND_WEBSITE_ACTION};
     use nostr::{Kind, Tag};
 
     #[test]

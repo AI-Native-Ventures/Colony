@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 507,
-    "rust_lines": 185736,
-    "tauri_coupled": 201,
-    "portable": 306,
-    "portable_lines": 105076,
+    "rust_total": 514,
+    "rust_lines": 187792,
+    "tauri_coupled": 206,
+    "portable": 308,
+    "portable_lines": 105570,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -108,6 +108,7 @@
       "src-tauri/src/commands/terminal.rs",
       "src-tauri/src/commands/updater.rs",
       "src-tauri/src/commands/web.rs",
+      "src-tauri/src/commands/website_team.rs",
       "src-tauri/src/commands/window_chrome.rs",
       "src-tauri/src/commands/window_vibrancy.rs",
       "src-tauri/src/commands/workflows.rs",
@@ -175,6 +176,10 @@
       "src-tauri/src/managed_agents/storage.rs",
       "src-tauri/src/managed_agents/subscriptions/codex_account.rs",
       "src-tauri/src/managed_agents/teams.rs",
+      "src-tauri/src/managed_agents/website_team/install.rs",
+      "src-tauri/src/managed_agents/website_team/journal.rs",
+      "src-tauri/src/managed_agents/website_team/recipe.rs",
+      "src-tauri/src/managed_agents/website_team/tests.rs",
       "src-tauri/src/media_proxy.rs",
       "src-tauri/src/mesh_llm/coordinator.rs",
       "src-tauri/src/mesh_llm/progress.rs",
@@ -474,6 +479,8 @@
       "src-tauri/src/managed_agents/types/requests.rs",
       "src-tauri/src/managed_agents/types/respond_to.rs",
       "src-tauri/src/managed_agents/types/tests.rs",
+      "src-tauri/src/managed_agents/website_team/mod.rs",
+      "src-tauri/src/managed_agents/website_team/skills.rs",
       "src-tauri/src/mesh_llm/catalog.rs",
       "src-tauri/src/mesh_llm/discovery.rs",
       "src-tauri/src/mesh_llm/identity.rs",
@@ -521,10 +528,10 @@
     ]
   },
   "commands": {
-    "registered": 371,
-    "defined": 371,
+    "registered": 374,
+    "defined": 374,
     "by_reach": {
-      "frontend": 360,
+      "frontend": 363,
       "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
@@ -541,16 +548,16 @@
     ]
   },
   "params": {
-    "AppHandle": 410,
-    "State": 268,
+    "AppHandle": 420,
+    "State": 270,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 407,
-      "State": 268,
+      "AppHandle": 417,
+      "State": 270,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -670,6 +677,7 @@
     "src-tauri/src/electron_host/updater.rs": 3,
     "src-tauri/src/huddle/agent_voice.rs": 3,
     "src-tauri/src/huddle/audio_output.rs": 3,
+    "src-tauri/src/commands/website_team.rs": 3,
     "src-tauri/src/huddle/commands.rs": 3,
     "src-tauri/src/commands/ledger.rs": 3,
     "src-tauri/src/macos_notifications.rs": 3,
@@ -2542,6 +2550,15 @@
         "src/shared/api/tauriSubscriptionConnections.ts:57"
       ]
     },
+    "install_website_team": {
+      "defining_file": "src-tauri/src/commands/website_team.rs",
+      "module": "website_team",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriWebsiteTeam.ts:139"
+      ]
+    },
     "interrupt_huddle_speech": {
       "defining_file": "src-tauri/src/huddle/commands.rs",
       "module": "commands",
@@ -4258,6 +4275,24 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/tauriIdentity.ts:152"
+      ]
+    },
+    "website_team_install_status": {
+      "defining_file": "src-tauri/src/commands/website_team.rs",
+      "module": "website_team",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriWebsiteTeam.ts:126"
+      ]
+    },
+    "website_team_recipe": {
+      "defining_file": "src-tauri/src/commands/website_team.rs",
+      "module": "website_team",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriWebsiteTeam.ts:117"
       ]
     },
     "workspace_terminal_close": {

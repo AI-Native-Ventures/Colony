@@ -613,6 +613,7 @@ async fn commit_duplicate_receipt(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn apply_create(
     state: &Arc<AppState>,
     tenant: &TenantContext,
