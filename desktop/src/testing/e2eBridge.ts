@@ -290,10 +290,11 @@ type E2eConfig = {
       channelName: string;
       event: RelayEvent;
     }>;
-    /** Native external-Block fetch outcomes keyed by exact HTTPS URL. */
+    /** Native external-Block fetch outcomes keyed by exact HTTPS URL.
+     * `hold` waits for `__BUZZ_E2E_RELEASE_BLOCK_DATA__(url)` before returning. */
     blockDataResponses?: Record<
       string,
-      { body?: string; bytes?: number[]; error?: string }
+      { body?: string; bytes?: number[]; error?: string; hold?: boolean }
     >;
     /** Reject successive kind-40010 publications, then resume. */
     blockActionPublishErrors?: string[];
@@ -1321,6 +1322,10 @@ declare global {
       kind: number;
     }) => boolean;
     __BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__?: () => void;
+    __BUZZ_E2E_BLOCK_DATA_HOLD_STATE__?: (
+      url: string,
+    ) => { observed: boolean; held: boolean } | null;
+    __BUZZ_E2E_RELEASE_BLOCK_DATA__?: (url: string) => void;
     __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -11493,6 +11498,37 @@ export function maybeInstallE2eTauriMocks() {
   resetMockSaveSubscriptions(config);
   resetMockThreadCanvases(config);
   resetObserverArchivePolicyGate();
+  // Per-page, exact-fixture gates keep loading captures independent of runner
+  // speed. Releasing before a lookup is safe; no production transport changes.
+  const blockDataHolds = new Map<
+    string,
+    {
+      gate: Promise<void>;
+      release: () => void;
+      observed: boolean;
+      held: boolean;
+    }
+  >();
+  for (const [url, response] of Object.entries(
+    config.mock?.blockDataResponses ?? {},
+  )) {
+    if (!response.hold || blockDataHolds.size >= 10) continue;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    blockDataHolds.set(url, { gate, release, observed: false, held: true });
+  }
+  window.__BUZZ_E2E_BLOCK_DATA_HOLD_STATE__ = (url) => {
+    const hold = blockDataHolds.get(url);
+    return hold ? { observed: hold.observed, held: hold.held } : null;
+  };
+  window.__BUZZ_E2E_RELEASE_BLOCK_DATA__ = (url) => {
+    const hold = blockDataHolds.get(url);
+    if (!hold) return;
+    hold.held = false;
+    hold.release();
+  };
   resetMockPendingCommunityDeepLinks(config);
   initializeMockHuddle(config.mock?.huddle, config);
   mockWebsocketSendMutexWedged = false;
@@ -13444,6 +13480,11 @@ export function maybeInstallE2eTauriMocks() {
         const response = activeConfig?.mock?.blockDataResponses?.[url];
         if (!response) {
           throw new Error(`mock Block data is unavailable for ${url}`);
+        }
+        const hold = blockDataHolds.get(url);
+        if (hold) {
+          hold.observed = true;
+          await hold.gate;
         }
         if (response.error) {
           throw new Error(response.error);

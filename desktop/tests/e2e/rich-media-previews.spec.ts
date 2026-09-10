@@ -76,6 +76,10 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     const mediaResponses = await installMediaFixtures(page);
     await installMockBridge(page);
     await page.goto("/");
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-buzz-theme",
+      theme,
+    );
     const gallery = await openGallery(page);
     await gallery.getByRole("tab", { name: "Images", exact: true }).click();
     const singleImage = gallery
@@ -123,6 +127,10 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
       .getByTestId("message-image-lightbox-trigger")
       .locator("img")
       .getAttribute("src");
+    await waitForAnimations(page);
+    await carousel.screenshot({
+      path: testInfo.outputPath(`image-carousel-inline-${theme}.png`),
+    });
     await carousel.getByRole("button", { name: "Expand image" }).click();
     const expanded = page.getByRole("dialog");
     await expect(expanded).toBeVisible();

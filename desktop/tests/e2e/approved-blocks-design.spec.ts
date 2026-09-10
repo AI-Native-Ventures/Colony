@@ -207,6 +207,7 @@ async function openApprovedExamples(
   await seedApprovedAppearance(page, theme);
   await installMockBridge(page, { activeIdentityInDefaultChannels: true });
   await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-buzz-theme", theme);
   await page.getByTestId("open-settings").click();
   await page.getByTestId("profile-popover-settings").click();
   await page.getByTestId("settings-nav-blocks").click();
@@ -216,82 +217,93 @@ async function openApprovedExamples(
   return gallery;
 }
 
-test("approved catalogue inventory has every source manifest and useful filters", async ({
-  page,
-}, info) => {
-  await seedApprovedAppearance(page, "buzz");
-  await installApprovedExampleMedia(page);
-  const blockEvents = approvedCoreManifests.flatMap(({ manifest }) => {
-    assertApprovedFixture(manifest);
-    const event = signManifest(manifest);
-    return [event, signCatalog(event, manifest)];
-  });
-  await installMockBridge(page, {
-    activeIdentityInDefaultChannels: true,
-    blockEvents,
-    relaySelf: OWNER_PUBKEY,
-  });
-  await page.goto("/");
-  await page.getByTestId("open-settings").click();
-  await page.getByTestId("profile-popover-settings").click();
-  await page.getByTestId("settings-nav-blocks").click();
-  await expect(
-    page.getByRole("tab", { name: "Workspace", exact: true }),
-  ).toHaveAttribute("data-state", "active");
-  await expect(page.getByTestId("rich-preview-gallery")).toHaveCount(0);
-  const catalog = page.getByTestId("blocks-workspace-catalog");
-  const tiles = catalog.locator('[data-testid^="select-block-preview-"]');
-  await expect(tiles).toHaveCount(24);
-  expect(
-    (
-      await tiles.evaluateAll((nodes) =>
-        nodes.map((node) =>
-          node
-            .getAttribute("data-testid")
-            ?.replace("select-block-preview-", ""),
+for (const theme of ["buzz", "buzz-dark"] as const) {
+  test(`approved catalogue inventory has every source manifest and useful filters in ${theme}`, async ({
+    page,
+  }, info) => {
+    await seedApprovedAppearance(page, theme);
+    await installApprovedExampleMedia(page);
+    const blockEvents = approvedCoreManifests.flatMap(({ manifest }) => {
+      assertApprovedFixture(manifest);
+      const event = signManifest(manifest);
+      return [event, signCatalog(event, manifest)];
+    });
+    await installMockBridge(page, {
+      activeIdentityInDefaultChannels: true,
+      blockEvents,
+      relaySelf: OWNER_PUBKEY,
+    });
+    await page.goto("/");
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-buzz-theme",
+      theme,
+    );
+    await page.getByTestId("open-settings").click();
+    await page.getByTestId("profile-popover-settings").click();
+    await page.getByTestId("settings-nav-blocks").click();
+    await expect(
+      page.getByRole("tab", { name: "Workspace", exact: true }),
+    ).toHaveAttribute("data-state", "active");
+    await expect(page.getByTestId("rich-preview-gallery")).toHaveCount(0);
+    const catalog = page.getByTestId("blocks-workspace-catalog");
+    const tiles = catalog.locator('[data-testid^="select-block-preview-"]');
+    await expect(tiles).toHaveCount(24);
+    expect(
+      (
+        await tiles.evaluateAll((nodes) =>
+          nodes.map((node) =>
+            node
+              .getAttribute("data-testid")
+              ?.replace("select-block-preview-", ""),
+          ),
+        )
+      ).sort(),
+    ).toEqual(
+      approvedCoreManifests.map(({ manifest }) => manifest.handle).sort(),
+    );
+    await expect(catalog.locator("[data-block-catalog-handle]")).toHaveCount(1);
+    await catalog.getByRole("button", { name: /^Composed\b/ }).click();
+    await expect(tiles).toHaveCount(13);
+    await catalog.getByRole("button", { name: /^Foundation\b/ }).click();
+    await expect(tiles).toHaveCount(11);
+    await catalog.getByRole("button", { name: /^Custom\b/ }).click();
+    await expect(tiles).toHaveCount(0);
+    await expect(catalog).toContainText("No Blocks match these filters.");
+    await catalog.getByRole("button", { name: /^All\b/ }).click();
+    await catalog
+      .getByRole("searchbox", { name: "Search Blocks" })
+      .fill("interview");
+    await expect(tiles).toHaveCount(1);
+    await tiles.click();
+    const preview = catalog.getByRole("figure", {
+      name: "Interview read-only preview",
+    });
+    await expect(preview).toContainText("What do you charge");
+    await expect(preview).toContainText("Question 3 of 6");
+    await captureApproved(
+      page,
+      catalog,
+      info,
+      `catalogue-search-interview-${theme}.png`,
+    );
+    await info.attach(`catalogue-inventory-${theme}.json`, {
+      body: Buffer.from(
+        JSON.stringify(
+          approvedCoreManifests.map(({ source, sha256, manifest }) => ({
+            source,
+            sha256,
+            handle: manifest.handle,
+            name: manifest.name,
+            version: manifest.version,
+          })),
+          null,
+          2,
         ),
-      )
-    ).sort(),
-  ).toEqual(
-    approvedCoreManifests.map(({ manifest }) => manifest.handle).sort(),
-  );
-  await expect(catalog.locator("[data-block-catalog-handle]")).toHaveCount(1);
-  await catalog.getByRole("button", { name: /^Composed\b/ }).click();
-  await expect(tiles).toHaveCount(13);
-  await catalog.getByRole("button", { name: /^Foundation\b/ }).click();
-  await expect(tiles).toHaveCount(11);
-  await catalog.getByRole("button", { name: /^Custom\b/ }).click();
-  await expect(tiles).toHaveCount(0);
-  await expect(catalog).toContainText("No Blocks match these filters.");
-  await catalog.getByRole("button", { name: /^All\b/ }).click();
-  await catalog
-    .getByRole("searchbox", { name: "Search Blocks" })
-    .fill("interview");
-  await expect(tiles).toHaveCount(1);
-  await tiles.click();
-  const preview = catalog.getByRole("figure", {
-    name: "Interview read-only preview",
-  });
-  await expect(preview).toContainText("What do you charge");
-  await expect(preview).toContainText("Question 3 of 6");
-  await captureApproved(page, catalog, info, "catalogue-search-interview.png");
-  await info.attach("catalogue-inventory.json", {
-    body: Buffer.from(
-      JSON.stringify(
-        approvedCoreManifests.map(({ source, sha256, manifest }) => ({
-          source,
-          sha256,
-          handle: manifest.handle,
-          name: manifest.name,
-          version: manifest.version,
-        })),
-        null,
-        2,
       ),
-    ),
-    contentType: "application/json",
+      contentType: "application/json",
+    });
   });
-});
+}
 
 for (const theme of ["buzz", "buzz-dark"] as const) {
   test(`approved documents keep independent PDF, workbook and CSV positions in ${theme}`, async ({
@@ -344,8 +356,20 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     await expect(
       preview.getByRole("combobox", { name: "Worksheet", exact: true }),
     ).toHaveValue("1");
+    const workbookProof = await captureApproved(
+      page,
+      pack,
+      info,
+      `collection-workbook-retained-${theme}.png`,
+    );
     await choose("service-ledger.csv");
     await expect(preview).toContainText("Rows 26–33");
+    const csvProof = await captureApproved(
+      page,
+      pack,
+      info,
+      `collection-csv-retained-${theme}.png`,
+    );
     await choose("campaign-report.pdf");
     await expect(preview.getByTestId("pdf-page-position")).toHaveText("2 / 2");
     await expect(preview).toContainText("125%");
@@ -375,12 +399,15 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
         ),
       ),
     ).toBe(true);
-    await captureApproved(
+    const pdfProof = await captureApproved(
       page,
       pack,
       info,
       `collection-documents-retained-${theme}.png`,
     );
+    expect(
+      new Set([workbookProof.sha256, csvProof.sha256, pdfProof.sha256]).size,
+    ).toBe(3);
   });
 
   test(`approved video and mixed collections release inactive players in ${theme}`, async ({
