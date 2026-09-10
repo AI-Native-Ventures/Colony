@@ -243,6 +243,16 @@ pub const KIND_COHORT: u32 = 30201;
 /// (30175–30201) rather than an arbitrary gap further out.
 pub const KIND_TEMPLATE: u32 = 30202;
 
+/// Canonical relay-owned head for one Website Manager job (parameterized
+/// replaceable, relay-authored).
+///
+/// The `website_jobs` row is the authority: the head is a relay-signed
+/// projection of the current review record, addressed by `d` = job UUID, and
+/// receipted by [`KIND_WEBSITE_RECEIPT`]. Clients never author this kind; the
+/// generic NIP-33 path could not enforce the participant and revision rules
+/// the `website_broker` applies under one transaction.
+pub const KIND_WEBSITE_HEAD: u32 = 30203;
+
 /// Canonical external Organization or Person, and the aliases retired handles
 /// leave behind (parameterized replaceable, relay-authored canonical head).
 ///
@@ -476,6 +486,27 @@ pub const KIND_CONTENT_DECISION: u32 = 40025;
 /// of one moment, and the durable state it produces lives on the relay's own
 /// task head, not on the report.
 pub const KIND_TASK_REPORT: u32 = 40026;
+
+/// Client-signed command for one Website Manager job.
+///
+/// Append-only evidence of one requested transition (create, begin work,
+/// record a revision, record QA, stage evidence, ready for review, handover).
+/// The relay-owned `website_broker` parses the signed event, checks the pinned
+/// owner, coordinator, and assigned personas against the canonical job row,
+/// and commits the row, head ([`KIND_WEBSITE_HEAD`]), and receipt
+/// ([`KIND_WEBSITE_RECEIPT`]) in one transaction. Owner approve/request-changes
+/// decisions deliberately do not use this kind: they arrive as reserved
+/// signed Block actions (`website.approve` / `website.requestChanges`) so the
+/// Blocks validation and receipt pipeline stays the single decision path.
+pub const KIND_WEBSITE_ACTION: u32 = 40027;
+
+/// Relay-signed result of a Website Manager action.
+///
+/// Channel-readable evidence that one action was applied (or returned as an
+/// exact duplicate), carrying the committed generation, site revision, and
+/// head event id. Clients never author it; a forged receipt would let an
+/// actor fabricate a state change the canonical row never made.
+pub const KIND_WEBSITE_RECEIPT: u32 = 40028;
 
 /// Kinds that use the author-only-unless-shared read model.
 ///
@@ -1022,6 +1053,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_TASK,
     KIND_COHORT,
     KIND_TEMPLATE,
+    KIND_WEBSITE_HEAD,
     KIND_BLOCK_ACTION,
     KIND_BLOCK_RECEIPT,
     KIND_BLOCK_MANIFEST,
@@ -1064,6 +1096,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_ASK_STATE,
     KIND_CONTENT_DECISION,
     KIND_TASK_REPORT,
+    KIND_WEBSITE_ACTION,
+    KIND_WEBSITE_RECEIPT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_TEAM_CATALOG,
@@ -1245,6 +1279,7 @@ pub const fn is_command_kind(kind: u32) -> bool {
             | KIND_DISCOVERY_WORKER_ACTION
             | KIND_DISCOVERY_WORKSPACE_ACTION
             | KIND_WORKSPACE_TAB_ACTION
+            | KIND_WEBSITE_ACTION
     )
 }
 
@@ -1279,6 +1314,8 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_DISCOVERY_WORKSPACE_RECEIPT
             | KIND_WORKSPACE_TAB_RECEIPT
             | KIND_WORKSPACE_TAB_HEAD
+            | KIND_WEBSITE_HEAD
+            | KIND_WEBSITE_RECEIPT
             | KIND_ASK_STATE
     )
 }
@@ -1319,6 +1356,7 @@ const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_LIBRARY)); // 30
 const _: () = assert!(is_parameterized_replaceable(KIND_ASK_STATE)); // 30200 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD)); // 30192 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_WEBSITE_HEAD)); // 30203 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_THREAD_SUMMARY)); // 39005 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WINDOW_BOUNDS)); // 39006 ∈ 30000–39999
 
@@ -1348,6 +1386,15 @@ const _: () = assert!(KIND_DISCOVERY_WORKER_RECEIPT <= u16::MAX as u32);
 const _: () = assert!(KIND_WORKSPACE_TAB_ACTION <= u16::MAX as u32);
 const _: () = assert!(KIND_WORKSPACE_TAB_RECEIPT <= u16::MAX as u32);
 const _: () = assert!(KIND_WORKSPACE_TAB_HEAD <= u16::MAX as u32);
+const _: () = assert!(KIND_WEBSITE_HEAD <= u16::MAX as u32);
+const _: () = assert!(KIND_WEBSITE_ACTION <= u16::MAX as u32);
+const _: () = assert!(KIND_WEBSITE_RECEIPT <= u16::MAX as u32);
+const _: () = assert!(!is_ephemeral(KIND_WEBSITE_HEAD));
+const _: () = assert!(!is_ephemeral(KIND_WEBSITE_ACTION));
+const _: () = assert!(!is_ephemeral(KIND_WEBSITE_RECEIPT));
+const _: () = assert!(is_command_kind(KIND_WEBSITE_ACTION));
+const _: () = assert!(is_relay_only_kind(KIND_WEBSITE_HEAD));
+const _: () = assert!(is_relay_only_kind(KIND_WEBSITE_RECEIPT));
 const _: () = assert!(KIND_JOB_CHECKPOINT <= u16::MAX as u32);
 const _: () = assert!(!is_ephemeral(KIND_COMPANY_PROFILE));
 const _: () = assert!(!is_ephemeral(KIND_INITIATIVE));
@@ -1769,6 +1816,34 @@ mod tests {
         for &k in ALL_KINDS {
             assert!(seen.insert(k), "duplicate kind value: {k}");
         }
+    }
+
+    #[test]
+    fn website_kinds_have_exact_classifications() {
+        assert_eq!(KIND_WEBSITE_HEAD, 30203);
+        assert_eq!(KIND_WEBSITE_ACTION, 40027);
+        assert_eq!(KIND_WEBSITE_RECEIPT, 40028);
+
+        for kind in [KIND_WEBSITE_HEAD, KIND_WEBSITE_ACTION, KIND_WEBSITE_RECEIPT] {
+            assert!(ALL_KINDS.contains(&kind));
+            assert!(!is_ephemeral(kind));
+        }
+
+        // The action is client-authored and brokered; the head and receipt are
+        // relay-authored and must be refused from any client.
+        assert!(is_command_kind(KIND_WEBSITE_ACTION));
+        assert!(!is_relay_only_kind(KIND_WEBSITE_ACTION));
+        assert!(!is_command_kind(KIND_WEBSITE_HEAD));
+        assert!(is_relay_only_kind(KIND_WEBSITE_HEAD));
+        assert!(!is_command_kind(KIND_WEBSITE_RECEIPT));
+        assert!(is_relay_only_kind(KIND_WEBSITE_RECEIPT));
+
+        // Only the relay-owned head is a NIP-33 projection.
+        assert!(is_parameterized_replaceable(KIND_WEBSITE_HEAD));
+        assert!(!is_parameterized_replaceable(KIND_WEBSITE_ACTION));
+        assert!(!is_parameterized_replaceable(KIND_WEBSITE_RECEIPT));
+        assert!(!is_replaceable(KIND_WEBSITE_ACTION));
+        assert!(!is_replaceable(KIND_WEBSITE_RECEIPT));
     }
 
     #[test]

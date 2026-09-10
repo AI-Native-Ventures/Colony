@@ -1,0 +1,61 @@
+name: Website preview native proof
+# Real-Electron proof for the isolated website preview host. It mounts a
+# fixture artifact through real View/WebContentsView/session objects and
+# measures rendered CSS geometry, denial behavior, lifecycle, and, when the
+# OS permits window capture, container clipping. This is host-fixture proof:
+# it does not prove packaged Colony adoption, relay integration, or that the
+# production loader fetched a remote artifact.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - desktop/src-electron/website-preview/**
+      - desktop/src-electron/main.mjs
+      - desktop/src-electron/preload.cjs
+      - desktop/src/shared/api/websitePreview.ts
+      - desktop/src/shared/api/electronNativeBridge.ts
+      - .github/workflows/website-preview-native-proof.yml
+
+permissions:
+  contents: read
+concurrency:
+  group: website-preview-native-proof-${{ github.ref }}
+  cancel-in-progress: ${{ github.base_ref != 'main' }}
+
+jobs:
+  proof:
+    name: Real Electron preview host
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - name: Install renderer dependencies
+        run: just desktop-install-ci
+      - name: Validate proof syntax and host source tests
+        run: |
+          node --check desktop/src-electron/website-preview/proof.mjs
+          pnpm --dir desktop electron:test
+      - name: Run real Electron preview host proof
+        env:
+          COLONY_PREVIEW_PROOF_DIR: ${{ runner.temp }}/colony-website-preview-proof
+        run: pnpm --dir desktop exec electron src-electron/website-preview/proof.mjs
+      - name: Report proof and reject a failed clip result
+        if: always()
+        env:
+          PROOF: ${{ runner.temp }}/colony-website-preview-proof/proof.json
+        run: |
+          test -f "$PROOF"
+          jq '{complete, clip: .clip.status, geometry, failures: [.checks[] | select(.ok != true) | .name]}' "$PROOF"
+          jq -e '.clip.status != "failed"' "$PROOF" > /dev/null
+      - name: Preserve preview host proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: colony-website-preview-host-proof
+          path: ${{ runner.temp }}/colony-website-preview-proof
+          if-no-files-found: warn

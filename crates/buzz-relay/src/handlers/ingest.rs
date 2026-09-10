@@ -38,10 +38,10 @@ use buzz_core::kind::{
     KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE,
     KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TASK_REPORT, KIND_TEAM, KIND_TEXT_NOTE,
-    KIND_USAGE_RECORD, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
-    KIND_WORKSPACE_TAB_ACTION, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
-    RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,     KIND_TASK_REPORT, KIND_TEAM, KIND_TEXT_NOTE, KIND_USAGE_RECORD, KIND_USER_STATUS,
+    KIND_WEBSITE_ACTION, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, KIND_WORKSPACE_TAB_ACTION,
+    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -666,6 +666,10 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // message-shaped write rather than an owner-authority one; the
         // assignment check is the report handler's.
         KIND_TASK_REPORT => Ok(Scope::MessagesWrite),
+        // Colony website actions (40027): client-signed, channel-scoped
+        // commands. The relay-owned website broker parses the signed event
+        // itself and applies the participant, generation, and revision rules.
+        KIND_WEBSITE_ACTION => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -755,6 +759,7 @@ pub(crate) fn takes_generic_command_branch(kind: u32) -> bool {
         && kind != KIND_DISCOVERY_WORKER_ACTION
         && kind != KIND_DISCOVERY_WORKSPACE_ACTION
         && kind != KIND_WORKSPACE_TAB_ACTION
+        && kind != KIND_WEBSITE_ACTION
         && kind != KIND_DM_OPEN
         && kind != KIND_DM_ADD_MEMBER
 }
@@ -912,6 +917,10 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
             // Workspace-tab actions carry the channel UUID in their h tag;
             // relay-only heads and receipts never enter this client registry.
             | KIND_WORKSPACE_TAB_ACTION
+            // Website actions are channel-scoped commands; their relay-only
+            // head (30203) and receipt (40028) are refused earlier by the
+            // relay-only registry, so they never reach this classifier.
+            | KIND_WEBSITE_ACTION
     )
 }
 
@@ -2733,6 +2742,53 @@ async fn ingest_event_inner(
         }
     }
 
+    // Reserved website decisions are channel-scoped Block actions that must
+    // reach the website broker before generic Block validation: the shared
+    // website-job Block composite does not exist yet, so the broker verifies
+    // the pinned review instance and decision maker itself and commits the
+    // canonical state plus its own relay receipt.
+    if crate::website_broker::is_reserved_website_candidate(&event) {
+        let Some(channel_id) = channel_id else {
+            return Err(IngestError::Rejected(
+                "invalid: channel-scoped events must include an h tag".into(),
+            ));
+        };
+        let outcome = crate::website_broker::handle_website_block_action(state, tenant, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
+        return match outcome {
+            crate::website_broker::WebsiteBrokerOutcome::Applied { head, receipt, .. } => {
+                let receipt_event_id = receipt.event.id.to_hex();
+                let head_event_id = head.as_ref().map(|head| head.event.id.to_hex());
+                emit(
+                    tracer,
+                    TraceAction::WriteInsert {
+                        msg_id: msg_id_label(event.id.as_bytes()),
+                        channel: channel_label(channel_id),
+                        claimed_community: claimed_community_from_event(&event),
+                    },
+                    state_for_request(tenant, auth.pubkey()),
+                );
+                Ok(IngestResult::stored_with_message(
+                    event_id_hex,
+                    serde_json::json!({
+                        "receipt_event_id": receipt_event_id,
+                        "head_event_id": head_event_id,
+                    })
+                    .to_string(),
+                ))
+            }
+            crate::website_broker::WebsiteBrokerOutcome::Duplicate {
+                original_action_event_id,
+                ..
+            } => Ok(broker_duplicate_result(
+                event_id_hex,
+                hex::encode(original_action_event_id),
+                "action",
+            )),
+        };
+    }
+
     let validated_block_event = crate::blocks::validate_public_envelope(tenant, state, &event)
         .await
         .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
@@ -3314,6 +3370,56 @@ async fn ingest_event_inner(
             event_id_hex,
             serde_json::json!({"receipt_event_id": receipt_event_id}).to_string(),
         ));
+    }
+
+    // Website actions are client-signed requests, but the canonical job row,
+    // submitted action, relay-signed head, and relay-signed receipt must be
+    // committed by the broker's single transaction. The broker parses the
+    // signed event itself, fetches artifact bytes through the bounded public
+    // transport, and refuses any event whose actor is not the pinned owner,
+    // coordinator, or an assigned participant.
+    if kind_u32 == KIND_WEBSITE_ACTION {
+        let Some(channel_id) = channel_id else {
+            return Err(IngestError::Rejected(
+                "invalid: channel-scoped events must include an h tag".into(),
+            ));
+        };
+        let outcome = crate::website_broker::handle_website_action(state, tenant, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
+        match outcome {
+            crate::website_broker::WebsiteBrokerOutcome::Applied { head, receipt, .. } => {
+                let receipt_event_id = receipt.event.id.to_hex();
+                let head_event_id = head.as_ref().map(|head| head.event.id.to_hex());
+                emit(
+                    tracer,
+                    TraceAction::WriteInsert {
+                        msg_id: msg_id_label(event.id.as_bytes()),
+                        channel: channel_label(channel_id),
+                        claimed_community: claimed_community_from_event(&event),
+                    },
+                    state_for_request(tenant, auth.pubkey()),
+                );
+                return Ok(IngestResult::stored_with_message(
+                    event_id_hex,
+                    serde_json::json!({
+                        "receipt_event_id": receipt_event_id,
+                        "head_event_id": head_event_id,
+                    })
+                    .to_string(),
+                ));
+            }
+            crate::website_broker::WebsiteBrokerOutcome::Duplicate {
+                original_action_event_id,
+                ..
+            } => {
+                return Ok(broker_duplicate_result(
+                    event_id_hex,
+                    hex::encode(original_action_event_id),
+                    "action",
+                ));
+            }
+        }
     }
 
     buzz_core::agent_reply::parse_agent_reply(&event)
@@ -4297,6 +4403,7 @@ mod tests {
             KIND_BLOCK_MANIFEST,
             KIND_BLOCK_ACTION,
             KIND_BLOCK_RECEIPT,
+            KIND_WEBSITE_ACTION,
         ];
         for kind in migrated {
             assert!(

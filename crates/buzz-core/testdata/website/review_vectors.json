@@ -1,0 +1,428 @@
+{
+  "schema": "colony.website-review-vectors/1",
+  "cases": [
+    {
+      "name": "happy_path",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "expect_status", "status": "readyForReview"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "expect_status", "status": "approved"},
+        {"op": "expect_active_approval", "activeApproval": true},
+        {"op": "expect_decisions", "count": 1},
+        {"op": "expect_current_revision", "revision": 1},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner"},
+        {"op": "expect_status", "status": "handedOver"},
+        {"op": "expect_handover", "handover": true},
+        {"op": "expect_handover_history", "count": 0},
+        {"op": "check_assets"},
+        {"op": "parse"}
+      ]
+    },
+    {
+      "name": "parse_draft",
+      "steps": [
+        {"op": "parse"}
+      ]
+    },
+    {
+      "name": "revision_from_draft",
+      "steps": [
+        {"op": "record_revision", "expect": "invalid_transition"}
+      ]
+    },
+    {
+      "name": "revision_number_mismatch",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision", "revision": 2, "expect": "revision_number_mismatch"}
+      ]
+    },
+    {
+      "name": "manifest_hash_mismatch_revision",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision", "manifestHash": "wrong", "expect": "manifest_hash_mismatch"}
+      ]
+    },
+    {
+      "name": "revision_while_under_review",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "record_revision", "expect": "revision_while_under_review"}
+      ]
+    },
+    {
+      "name": "revision_after_approval",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "record_revision", "expect": "revision_after_approval"}
+      ]
+    },
+    {
+      "name": "revision_after_handover",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner"},
+        {"op": "record_revision", "expect": "revision_after_handover"}
+      ]
+    },
+    {
+      "name": "qa_missing",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "mark_ready", "expect": "qa_missing"}
+      ]
+    },
+    {
+      "name": "qa_not_independent",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa", "reviewer": "builder", "expect": "qa_not_independent"}
+      ]
+    },
+    {
+      "name": "qa_not_passed",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa", "passed": false},
+        {"op": "mark_ready", "expect": "qa_not_passed"}
+      ]
+    },
+    {
+      "name": "qa_hash_mismatch",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa", "qaHash": "wrong", "expect": "qa_mismatch"}
+      ]
+    },
+    {
+      "name": "qa_stale_revision",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa", "revision": 5, "expect": "stale_revision"}
+      ]
+    },
+    {
+      "name": "duplicate_qa",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "record_qa", "expect": "qa_already_recorded"}
+      ]
+    },
+    {
+      "name": "approve_requires_ready",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "not_ready_for_review"}
+      ]
+    },
+    {
+      "name": "approve_only_owner",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "coordinator", "expect": "not_pinned_owner"}
+      ]
+    },
+    {
+      "name": "approve_hash_mismatch",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "manifestHash": "wrong", "expect": "manifest_hash_mismatch"}
+      ]
+    },
+    {
+      "name": "approve_then_request_changes",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied", "status": "approved", "activeApproval": true, "count": 1},
+        {"op": "decide", "kind": "requestChanges", "actor": "coordinator", "expect": "applied", "status": "changesRequested", "activeApproval": false, "count": 2}
+      ]
+    },
+    {
+      "name": "duplicate_decision",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "duplicate", "status": "approved", "count": 1}
+      ]
+    },
+    {
+      "name": "duplicate_retry_after_state_change",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "requestChanges", "actor": "coordinator", "expect": "applied", "status": "changesRequested", "count": 1},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "requestChanges", "actor": "coordinator", "revision": 1, "expect": "duplicate", "count": 1}
+      ]
+    },
+    {
+      "name": "conflicting_decision",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "requestChanges", "actor": "coordinator", "expect": "applied", "status": "changesRequested"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "conflicting_decision", "count": 1}
+      ]
+    },
+    {
+      "name": "not_authorized_request_changes",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "requestChanges", "actor": "stranger", "expect": "not_authorized"}
+      ]
+    },
+    {
+      "name": "scope_mismatch",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "scope": {"taskId": "other-task"}, "expect": "scope_mismatch"}
+      ]
+    },
+    {
+      "name": "stale_revision",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "requestChanges", "actor": "coordinator", "expect": "applied"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "revision": 1, "expect": "stale_revision"}
+      ]
+    },
+    {
+      "name": "decide_unknown_revision",
+      "steps": [
+        {"op": "decide", "kind": "approve", "actor": "owner", "revision": 1, "expect": "revision_unknown"}
+      ]
+    },
+    {
+      "name": "handover_requires_approval",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "record_handover", "acceptedBy": "owner", "expect": "invalid_transition"}
+      ]
+    },
+    {
+      "name": "handover_hash_mismatch",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner", "handoverHash": "wrong", "expect": "handover_mismatch"}
+      ]
+    },
+    {
+      "name": "handover_no_assets",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner", "handoverAssets": false, "expect": "invalid_handover"}
+      ]
+    },
+    {
+      "name": "reopen_after_handover",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied", "status": "approved", "count": 1},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner"},
+        {"op": "expect_status", "status": "handedOver"},
+        {"op": "expect_handover", "handover": true},
+        {"op": "expect_handover_history", "count": 0},
+        {"op": "decide", "kind": "requestChanges", "actor": "coordinator", "note": "reopen", "expect": "applied", "status": "changesRequested", "activeApproval": false, "count": 2},
+        {"op": "expect_handover", "handover": true},
+        {"op": "record_revision"},
+        {"op": "expect_status", "status": "working"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied", "status": "approved", "count": 3},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner"},
+        {"op": "expect_status", "status": "handedOver"},
+        {"op": "expect_handover_history", "count": 1},
+        {"op": "parse"}
+      ]
+    },
+    {
+      "name": "request_changes_requires_note",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "requestChanges", "actor": "owner", "note": "", "expect": "note_empty"}
+      ]
+    },
+    {
+      "name": "changed_note_retry_rejected",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "note": "first", "expect": "applied", "count": 1},
+        {"op": "decide", "kind": "approve", "actor": "owner", "note": "second", "expect": "decision_payload_mismatch", "count": 1}
+      ]
+    },
+    {
+      "name": "handover_source_url_mismatch",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner", "handoverSourceUrl": "https://other.colony.test/site", "expect": "handover_mismatch"}
+      ]
+    },
+    {
+      "name": "handover_archive_mismatch",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner", "handoverArchiveHash": "wrong", "expect": "handover_mismatch"}
+      ]
+    },
+    {
+      "name": "handover_wrong_revision",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner", "handoverRevision": 0, "expect": "handover_mismatch"}
+      ]
+    },
+    {
+      "name": "handover_wrong_actor",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "stranger", "expect": "not_authorized"}
+      ]
+    },
+    {
+      "name": "handover_missing_builder_evidence",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "record_handover", "acceptedBy": "owner", "expect": "invalid_handover"}
+      ]
+    },
+    {
+      "name": "handover_asset_not_in_manifest",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision", "manifest": {"schema": "colony.website-preview/1", "entrypoint": "main.html", "files": [{"path": "main.html", "url": "https://cdn.colony.test/sites/fixture/main.html", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "mime": "text/html", "size": 10}]}},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner"},
+        {"op": "check_assets", "expect": "asset_not_in_manifest"}
+      ]
+    },
+    {
+      "name": "check_assets_hash_mismatch",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "record_qa"},
+        {"op": "mark_ready"},
+        {"op": "decide", "kind": "approve", "actor": "owner", "expect": "applied"},
+        {"op": "attach_evidence"},
+        {"op": "record_handover", "acceptedBy": "owner"},
+        {"op": "check_assets", "source": "other", "expect": "manifest_hash_mismatch"}
+      ]
+    },
+    {
+      "name": "evidence_unknown_revision",
+      "steps": [
+        {"op": "begin_work"},
+        {"op": "record_revision"},
+        {"op": "attach_evidence", "revision": 5, "expect": "revision_unknown"}
+      ]
+    }
+  ]
+}

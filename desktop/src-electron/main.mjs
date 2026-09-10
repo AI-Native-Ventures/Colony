@@ -4,10 +4,14 @@ import { SignInImport } from "./browser-import/manager.mjs";
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   nativeTheme,
   protocol,
   net,
+  session,
+  View,
+  WebContentsView,
 } from "electron";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
@@ -23,6 +27,10 @@ import { shellCommand } from "./shell-commands.mjs";
 import { ManagedBrowser, normalizeRelay } from "./browser/managed-workers.mjs";
 import { runtimePaths } from "./runtime-paths.mjs";
 import { DesktopDeepLinks } from "./deep-links.mjs";
+import { createWebsitePreviewHost } from "./website-preview/host.mjs";
+import { loadVerifiedArtifact } from "./website-preview/artifacts.mjs";
+import { downloadHandover } from "./website-preview/handover.mjs";
+import { PREVIEW_SCHEME_DESCRIPTOR } from "./website-preview/scheme.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const packageMetadata = JSON.parse(
@@ -63,6 +71,7 @@ protocol.registerSchemesAsPrivileged([
       stream: true,
     },
   },
+  PREVIEW_SCHEME_DESCRIPTOR,
 ]);
 
 const resources = new Cleanup();
@@ -153,6 +162,55 @@ async function boot() {
   const send = (message) => {
     if (!window.isDestroyed()) window.webContents.send("colony:event", message);
   };
+  let businessContext = null;
+  // Isolated website previews. The host owns its own ephemeral session per
+  // preview and never touches the application session or its cookies.
+  const previews = createWebsitePreviewHost({
+    WebContentsView,
+    View,
+    session,
+  });
+  previews.subscribe((state) =>
+    send({ type: "website-preview", payload: state }),
+  );
+  // Business generation and abort. Every async website operation captures
+  // the context it started under; any business change, reload, sign-out, or
+  // app cleanup rotates the generation and aborts the in-flight requests, so
+  // a late artifact read or handover write can never land under the next
+  // business.
+  let businessGeneration = 0;
+  let businessAbort = new AbortController();
+  const invalidatePreviews = () => {
+    businessGeneration += 1;
+    const previous = businessAbort;
+    businessAbort = new AbortController();
+    previous.abort(new Error("The business context changed"));
+    void previews.invalidateAll().catch(() => {});
+  };
+  const requireBusiness = (payload) => {
+    if (!businessContext) {
+      throw new Error("No active business for this request");
+    }
+    if (payload?.communityId !== businessContext.id) {
+      throw new Error("The request is for another community");
+    }
+    return { context: businessContext, generation: businessGeneration };
+  };
+  const assertSameBusiness = (guard) => {
+    if (
+      guard.context === null ||
+      guard.context !== businessContext ||
+      guard.generation !== businessGeneration
+    ) {
+      throw new Error("The business context changed during the request");
+    }
+  };
+  resources.add(() => {
+    const previous = businessAbort;
+    businessAbort = new AbortController();
+    previous.abort(new Error("The preview host is closing"));
+    return previews.closeAll();
+  });
   const views = new BrowserViews(window, (payload) =>
     send({ type: "browser", payload }),
   );
@@ -183,7 +241,6 @@ async function boot() {
   };
   let imports = createImports();
   const socketPath = path.join(runtime, "browser.sock");
-  let businessContext = null;
   const managedBrowser = new ManagedBrowser({
     root: runtime,
     socketPath,
@@ -243,6 +300,7 @@ async function boot() {
       }
       // Revocation is synchronous; cleanup fences new native calls until all
       // resources from the previous renderer have been retired.
+      invalidatePreviews();
       businessContext = null;
       views.setBusiness(null);
       const resetting = rendererHost.reset();
@@ -275,6 +333,7 @@ async function boot() {
       type === "invoke" &&
       ["import_identity", "sign_out"].includes(payload.command)
     ) {
+      invalidatePreviews();
       businessContext = null;
       views.setBusiness(null);
     }
@@ -293,6 +352,11 @@ async function boot() {
         businessContext?.id !== payload.id ||
         businessContext?.relay !== relay
       ) {
+        // Rotates the business generation, aborts in-flight website work,
+        // and synchronously detaches every live preview before the new
+        // context is installed. Only the new businessContext may open or
+        // address a preview after this point.
+        invalidatePreviews();
         views.setBusiness(null);
         businessContext = payload.id ? { id: payload.id, relay } : null;
       }
@@ -324,6 +388,70 @@ async function boot() {
         env: { ELECTRON_RUN_AS_NODE: "1" },
         adapter: path.join(desktop, "src-electron/browser/mcp.mjs"),
       };
+    }
+    // Website previews ride the same trusted dispatch as every other native
+    // call: the sender, main frame, and trusted URL were checked above. No
+    // separate IPC channel and no preload bridge is added for them. Every
+    // request carries the expected community, the trusted window is applied
+    // last so a payload can never substitute another window, and async work
+    // is aborted and re-checked against the captured business generation.
+    if (
+      type.startsWith("website-preview:") ||
+      type.startsWith("website-artifact:") ||
+      type === "website-handover:download"
+    ) {
+      const guard = requireBusiness(payload);
+      if (type === "website-preview:open") {
+        return previews.open({ ...payload, window });
+      }
+      if (type === "website-preview:bounds") {
+        const result = previews.updateBounds({ ...payload, window });
+        assertSameBusiness(guard);
+        return result;
+      }
+      if (type === "website-preview:visible") {
+        const result = previews.setVisible({ ...payload, window });
+        assertSameBusiness(guard);
+        return result;
+      }
+      if (type === "website-preview:close") {
+        return previews.close({ ...payload, window });
+      }
+      if (type === "website-artifact:load") {
+        const artifact = await loadVerifiedArtifact({
+          ref: payload.manifest,
+          signal: businessAbort.signal,
+        });
+        assertSameBusiness(guard);
+        return {
+          sha256: artifact.sha256,
+          size: artifact.size,
+          contentType: artifact.contentType,
+          bytes: artifact.bytes,
+        };
+      }
+      if (type === "website-handover:download") {
+        const result = await downloadHandover({
+          window,
+          items: payload.items,
+          signal: businessAbort.signal,
+          assertCurrent: () => assertSameBusiness(guard),
+          chooseDirectory: async (owner) => {
+            const result = await dialog.showOpenDialog(owner, {
+              title: "Choose where to save the approved handover",
+              properties: [
+                "openDirectory",
+                "createDirectory",
+                "promptToCreate",
+              ],
+            });
+            if (result.canceled || result.filePaths.length === 0) return null;
+            return result.filePaths[0];
+          },
+        });
+        assertSameBusiness(guard);
+        return result;
+      }
     }
     throw new Error("Unsupported desktop request");
   };

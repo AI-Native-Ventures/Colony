@@ -77,6 +77,32 @@ impl ThreadClaim {
     }
 }
 
+/// Read the owner recorded for one task's live thread slot, if any.
+///
+/// The slot row is deleted when a task closes, so `None` means either the task
+/// never held a slot or it closed. Callers that need owner authority on a
+/// terminal task verify the task's relay-minted identity and thread binding
+/// instead (see the website broker's reconcile path).
+pub async fn find_thread_task_owner<'e, E>(
+    executor: E,
+    community: CommunityId,
+    task_id: &str,
+) -> Result<Option<String>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let owner = sqlx::query_scalar(
+        "SELECT owner_pubkey FROM thread_open_tasks \
+         WHERE community_id = $1 AND task_id = $2 \
+         ORDER BY updated_at DESC LIMIT 1",
+    )
+    .bind(community.as_uuid())
+    .bind(task_id)
+    .fetch_optional(executor)
+    .await?;
+    Ok(owner)
+}
+
 /// Claim a thread's slot, or read back whoever already holds it.
 ///
 /// `force_new` is the composer's explicit "start a second task" switch: the

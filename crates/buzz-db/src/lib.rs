@@ -79,6 +79,8 @@ pub mod user;
 pub mod workflow;
 /// Relay-owned channel workspace tab state and driver compare-and-swap.
 pub mod workspace_tabs;
+/// Website Manager jobs: canonical review rows and once-only action claims.
+pub mod website_jobs;
 
 pub use error::{DbError, Result};
 pub use event::{

@@ -104,6 +104,12 @@ pub mod webhook_secret;
 pub mod workflow_sink;
 /// Relay-owned channel workspace-tab ownership broker.
 pub mod workspace_tab_broker;
+/// Relay-owned Website Manager job broker (actions, heads, receipts, decisions).
+pub mod website_broker;
+/// Assigned-agent evidence and authority checks for Website Manager actions.
+mod website_evidence;
+/// Bounded, DNS-pinned artifact fetch for Website Manager actions.
+pub(crate) mod website_fetch;
 
 pub use config::Config;
 pub use error::{RelayError, Result};

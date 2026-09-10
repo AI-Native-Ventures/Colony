@@ -735,7 +735,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 70);
+        assert_eq!(migrations.len(), 71);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1457,6 +1457,26 @@ mod tests {
         // The grant is stored, never recomputed: a price edit mid-flight must
         // not change what an already-paid purchase is worth.
         assert!(packs.contains("ADD COLUMN grant_nanousd BIGINT"));
+
+        // Website Manager jobs (0071): the row is the authority, `(community,
+        // task)` is unique, and the action claim table is the per-actor
+        // request boundary. Both are community-scoped and separately fenced.
+        let website_jobs = migrations
+            .iter()
+            .find(|migration| migration.version == 71)
+            .expect("website jobs migration")
+            .sql
+            .as_str();
+        assert!(website_jobs.contains("CREATE TABLE IF NOT EXISTS website_jobs"));
+        assert!(website_jobs.contains("CREATE TABLE IF NOT EXISTS website_actions"));
+        assert!(website_jobs.contains("PRIMARY KEY (community_id, job_id)"));
+        assert!(website_jobs.contains("UNIQUE (community_id, task_id)"));
+        assert!(website_jobs
+            .contains("PRIMARY KEY (community_id, actor, request_id)"));
+        assert!(website_jobs.contains("UNIQUE (community_id, action_event_id)"));
+        assert!(website_jobs.contains("attach_community_write_fence('website_jobs'"));
+        assert!(website_jobs.contains("attach_community_write_fence('website_actions'"));
+        assert!(!website_jobs.contains("_operator_global_tables"));
     }
     #[test]
     fn block_action_claim_migration_is_community_scoped() {
