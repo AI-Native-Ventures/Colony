@@ -1,8 +1,9 @@
-import type * as React from "react";
+import * as React from "react";
 import { LayoutGrid, Columns2, Rows2, Focus } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import {
+  addTabToPane,
   applyPreset,
   collectPanes,
   type TileTreeState,
@@ -11,9 +12,29 @@ import {
 import { projectChipLabel } from "../lib/projectChannel";
 import { useProjectsQuery } from "@/features/projects/hooks";
 import { findProjectForChannel } from "@/features/factory/lib/projectChannel";
+import { collectAgentTabPubkeys } from "@/features/factory/lib/agentTabPayload";
+import {
+  LaunchAgentDialog,
+  type LaunchedAgent,
+} from "@/features/factory/ui/LaunchAgentDialog";
+import {
+  getActiveTurnsForAgent,
+  subscribeActiveAgentTurns,
+} from "@/features/agents/activeAgentTurnsStore";
+import { openAgentTab } from "@/features/workspace/kinds/agentKind";
+import {
+  setActiveTab,
+  useWorkspace,
+} from "@/features/workspace/lib/workspaceTabs";
+
+function hasActiveTurn(pubkey: string): boolean {
+  return getActiveTurnsForAgent(pubkey).length > 0;
+}
 
 export type FactoryToolbarProps = {
   channelId: string;
+  /** The factory tab itself, so opening a tile can hand focus back to it. */
+  factoryTabId: string;
   state: TileTreeState;
   commit: (next: TileTreeState) => void;
   preset: "single" | "columns" | "grid" | "focus" | null;
@@ -24,6 +45,7 @@ export type FactoryToolbarProps = {
 
 export function FactoryToolbar({
   channelId,
+  factoryTabId,
   state,
   commit,
   preset,
@@ -31,6 +53,8 @@ export function FactoryToolbar({
 }: FactoryToolbarProps): React.JSX.Element {
   const projects = useProjectsQuery();
   const project = findProjectForChannel(projects.data, channelId);
+  const workspace = useWorkspace(channelId);
+  const [launchOpen, setLaunchOpen] = React.useState(false);
 
   const paneCount = collectPanes(state.root).length;
   const tabIdsInTree: string[] = [];
@@ -42,6 +66,37 @@ export function FactoryToolbar({
     }
   }
   collectTabs(state.root);
+
+  const agentPubkeys = collectAgentTabPubkeys(workspace.tabs, tabIdsInTree);
+  // A joined key so the snapshot reader is stable while the tiles are: a fresh
+  // array every render would resubscribe the store on every render.
+  const agentKey = agentPubkeys.join(",");
+  const readWorkingCount = React.useCallback(
+    () =>
+      agentKey
+        .split(",")
+        .filter((pubkey) => pubkey.length > 0 && hasActiveTurn(pubkey)).length,
+    [agentKey],
+  );
+  const workingCount = React.useSyncExternalStore(
+    subscribeActiveAgentTurns,
+    readWorkingCount,
+  );
+
+  const handleLaunched = React.useCallback(
+    ({ name, pubkey, threadRootId }: LaunchedAgent) => {
+      const tabId = openAgentTab(channelId, pubkey, name, threadRootId);
+      // `openTab` makes the new tab the workspace's active one, which would
+      // replace the canvas with the bare tile. The canvas owns it instead.
+      setActiveTab(channelId, factoryTabId);
+      // Adopting it here rather than leaving it to the tree reconcile is what
+      // makes the new tile the focused pane's visible tab.
+      commit(
+        addTabToPane(state, state.focusedPaneId, tabId, { activate: true }),
+      );
+    },
+    [channelId, commit, factoryTabId, state],
+  );
 
   const chipText = project
     ? projectChipLabel(project)
@@ -62,6 +117,15 @@ export function FactoryToolbar({
         {paneCount} pane{paneCount !== 1 ? "s" : ""} · {tabIdsInTree.length}{" "}
         tile{tabIdsInTree.length !== 1 ? "s" : ""}
       </span>
+      {agentPubkeys.length > 0 ? (
+        <span
+          className="text-xs text-muted-foreground"
+          data-testid="factory-agent-count"
+        >
+          {agentPubkeys.length} agent{agentPubkeys.length !== 1 ? "s" : ""} ·{" "}
+          {workingCount} working
+        </span>
+      ) : null}
       <div className="flex-1" />
       <div className="flex items-center gap-2">
         <Tabs
@@ -121,12 +185,18 @@ export function FactoryToolbar({
       <Button
         size="xs"
         variant="outline"
-        disabled
-        title="Coming soon"
+        onClick={() => setLaunchOpen(true)}
+        title="Launch an agent into this project"
         data-testid="factory-add-agent-btn"
       >
         + Agent
       </Button>
+      <LaunchAgentDialog
+        channelId={channelId}
+        onLaunched={handleLaunched}
+        onOpenChange={setLaunchOpen}
+        open={launchOpen}
+      />
     </div>
   );
 }

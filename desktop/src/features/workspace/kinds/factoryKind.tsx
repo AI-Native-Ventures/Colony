@@ -286,6 +286,7 @@ export function FactoryBody({
     >
       <FactoryToolbar
         channelId={channelId}
+        factoryTabId={tab.id}
         state={state}
         commit={commit}
         preset={preset}
