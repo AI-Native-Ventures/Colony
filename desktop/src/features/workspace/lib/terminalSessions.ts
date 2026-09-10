@@ -35,6 +35,14 @@ type PendingStart = {
 
 type ReplayBuffer = { chunks: TerminalChunk[]; bytes: number };
 
+/**
+ * The pane size the renderer last fitted to, per tab. A terminal body fits
+ * itself as soon as it mounts, which is normally before the native session
+ * exists, so the size is recorded here and replayed the moment the session
+ * starts rather than dropped.
+ */
+const desiredSizes = new Map<string, { cols: number; rows: number }>();
+
 const starts = new Map<string, PendingStart>();
 const tabEpochs = new Map<string, number>();
 const listeners = new Map<string, Set<() => void>>();
@@ -275,6 +283,33 @@ function adoptSession(
 }
 
 /**
+ * Push the pane size the renderer already fitted to onto a session that has
+ * only just reached "running". `startedWith` is the size the session was
+ * created with, so an already-correct PTY is not resized twice; a reattached
+ * session has no such size and is always squared with the pane.
+ */
+async function applyDesiredSize(
+  tabId: string,
+  startedWith: { cols: number; rows: number } | null,
+): Promise<void> {
+  const desired = desiredSizes.get(tabId);
+  const sessionId = sessions.get(tabId)?.sessionId;
+  if (!desired || !sessionId) return;
+  if (
+    startedWith &&
+    startedWith.cols === desired.cols &&
+    startedWith.rows === desired.rows
+  ) {
+    return;
+  }
+  try {
+    await backend().resize(sessionId, desired.cols, desired.rows, 0, 0);
+  } catch {
+    // A session that died between adopt and resize cannot be resized.
+  }
+}
+
+/**
  * Pick a shell back up after a renderer reload. Electron keeps the PTY in its
  * main process, so a remembered id that is still alive is reattached and its
  * ring buffer replayed instead of starting a second shell.
@@ -301,6 +336,7 @@ async function reattachRememberedSession(
       pid: live.pid ?? null,
     });
     if (buffer && buffer.byteLength > 0) deliverOutput(tabId, buffer);
+    await applyDesiredSize(tabId, null);
     return true;
   } catch {
     forgetSession(tabId);
@@ -352,7 +388,11 @@ export async function ensureTerminalSession(
     try {
       await ensureNativeListeners();
       if (await reattachRememberedSession(tabId, pendingStart)) return;
-      const result = await backend().start(request);
+      const desired = desiredSizes.get(tabId);
+      const startRequest = desired
+        ? { ...request, cols: desired.cols, rows: desired.rows }
+        : request;
+      const result = await backend().start(startRequest);
       if (!isCurrentStart(tabId, pendingStart)) {
         await closeLateNativeSession(result.sessionId);
         return;
@@ -361,6 +401,10 @@ export async function ensureTerminalSession(
         sessionId: result.sessionId,
         cwd: result.cwd,
         pid: result.pid ?? null,
+      });
+      await applyDesiredSize(tabId, {
+        cols: startRequest.cols,
+        rows: startRequest.rows,
       });
     } catch (cause: unknown) {
       if (!isCurrentStart(tabId, pendingStart)) return;
@@ -399,7 +443,14 @@ export async function writeTerminalInput(
   }
 }
 
-/** Keep the native PTY dimensions aligned with the xterm renderer. */
+/**
+ * Keep the native PTY dimensions aligned with the xterm renderer.
+ *
+ * The size is always recorded, even with no session yet: the first fit happens
+ * while the shell is still being spawned, and the renderer will not repeat a
+ * size it has already sent. A recorded size is replayed by
+ * `ensureTerminalSession` once the session is running.
+ */
 export async function resizeTerminal(
   tabId: string,
   cols: number,
@@ -407,9 +458,17 @@ export async function resizeTerminal(
   pixelWidth = 0,
   pixelHeight = 0,
 ): Promise<void> {
-  const sessionId = sessions.get(tabId)?.sessionId;
-  if (!sessionId || cols < 2 || rows < 2) return;
-  await backend().resize(sessionId, cols, rows, pixelWidth, pixelHeight);
+  if (cols < 2 || rows < 2) return;
+  desiredSizes.set(tabId, { cols, rows });
+  const current = sessions.get(tabId);
+  if (!current?.sessionId || current.status !== "running") return;
+  await backend().resize(
+    current.sessionId,
+    cols,
+    rows,
+    pixelWidth,
+    pixelHeight,
+  );
 }
 
 /** Close one session when its tab is closed. */
@@ -448,6 +507,7 @@ export async function disposeTerminalSession(tabId: string): Promise<void> {
     }
     sessions.delete(tabId);
     replay.delete(tabId);
+    desiredSizes.delete(tabId);
     forgetSession(tabId);
   }
   emit(tabId);
@@ -479,6 +539,7 @@ export function resetTerminalSessions(): Promise<void> {
     starts.clear();
     tabEpochs.clear();
     replay.clear();
+    desiredSizes.clear();
     forgetEverySession();
     for (const tabId of listeners.keys()) emit(tabId);
     if (failure) throw failure;

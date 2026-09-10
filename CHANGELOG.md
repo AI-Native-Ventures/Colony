@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.16.12
+
+- fix(desktop): prepare and verify the business coordination Team before starting a first job, including recovery when its relay projection is missing. Preserve existing team choices and owner approvals.
+- fix(desktop): fit the terminal tab to its pane and apply the pane size once the shell starts. In 0.16.11 the terminal stayed an 80x24 grid in the corner of the pane and the shell never learned the real size.
+
 ## v0.16.11
 
 - feat(desktop): view Excel, CSV and PDF files inline, browse images and SVG carousels, play audio, and preview videos with useful posters. Share the same theme-aware viewers across conversations and the Blocks catalog, with original downloads and scoped next-reply model/reasoning requests.

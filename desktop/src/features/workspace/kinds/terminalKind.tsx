@@ -34,17 +34,30 @@ function isE2eMode(): boolean {
 
 let e2eTerminalTextHookInstalled = false;
 
-/** Installs the e2e-only terminal buffer reader, once, on first mount. */
+function e2eTerminalInstance(tabId?: string): TerminalInstance | null {
+  const actualTabId = tabId ?? "";
+  return terminalMap.get(actualTabId) ?? [...terminalMap.values()][0] ?? null;
+}
+
+/** Installs the e2e-only terminal buffer and geometry readers, once. */
 function installE2eTerminalTextHook(): void {
   if (e2eTerminalTextHookInstalled) return;
   if (!isE2eMode()) return;
   e2eTerminalTextHookInstalled = true;
   (
+    globalThis as {
+      __BUZZ_E2E_TERMINAL_DIMS__?: (
+        tabId?: string,
+      ) => { cols: number; rows: number } | null;
+    }
+  ).__BUZZ_E2E_TERMINAL_DIMS__ = (tabId?: string) => {
+    const instance = e2eTerminalInstance(tabId);
+    return instance ? { cols: instance.cols, rows: instance.rows } : null;
+  };
+  (
     globalThis as { __BUZZ_E2E_TERMINAL_TEXT__?: (tabId?: string) => string }
   ).__BUZZ_E2E_TERMINAL_TEXT__ = (tabId?: string) => {
-    const actualTabId = tabId ?? "";
-    const instance =
-      terminalMap.get(actualTabId) ?? [...terminalMap.values()][0] ?? null;
+    const instance = e2eTerminalInstance(tabId);
     if (!instance) return "";
     const buffer = instance.buffer?.active ?? null;
     if (!buffer) return "";
@@ -119,6 +132,7 @@ export function TerminalBody({
 }: TabBodyProps): React.JSX.Element {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const terminalRef = React.useRef<TerminalInstance | null>(null);
+  const syncSizeRef = React.useRef<(() => void) | null>(null);
   React.useEffect(() => {
     installE2eTerminalTextHook();
   }, []);
@@ -182,6 +196,7 @@ export function TerminalBody({
       resizeObserver?.disconnect();
       rootObserver?.disconnect();
       terminal?.dispose();
+      syncSizeRef.current = null;
       terminalRef.current = null;
       terminalMap.delete(tab.id);
     };
@@ -263,15 +278,28 @@ export function TerminalBody({
         resizeRafPending = true;
         requestAnimationFrame(() => {
           resizeRafPending = false;
-          const dimensions = fit.proposeDimensions();
-          if (dimensions) {
-            if (dimensions.cols !== lastCols || dimensions.rows !== lastRows) {
-              lastCols = dimensions.cols;
-              lastRows = dimensions.rows;
-              void resizeTerminal(tab.id, dimensions.cols, dimensions.rows);
-            }
+          if (disposed || !terminal) return;
+          try {
+            // Resize xterm to the host first; the PTY follows what xterm
+            // actually adopted, not what the addon merely proposed.
+            fit.fit();
+          } catch {
+            // A host detached mid-frame has no measurable size.
+            return;
+          }
+          const cols = terminal.cols;
+          const rows = terminal.rows;
+          if (cols !== lastCols || rows !== lastRows) {
+            lastCols = cols;
+            lastRows = rows;
+            void resizeTerminal(tab.id, cols, rows);
           }
         });
+      };
+      syncSizeRef.current = () => {
+        lastCols = null;
+        lastRows = null;
+        coalesceSync();
       };
 
       resizeObserver = new ResizeObserver(coalesceSync);
@@ -374,7 +402,9 @@ export function TerminalBody({
   const handleRestart = React.useCallback(async () => {
     await disposeTerminalSession(tab.id);
     if (request) {
-      void ensureTerminalSession(tab.id, request);
+      await ensureTerminalSession(tab.id, request);
+      // Dispose forgot the pane size, so the restarted shell is re-fitted.
+      syncSizeRef.current?.();
     }
   }, [tab.id, request]);
 
