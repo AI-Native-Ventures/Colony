@@ -1,3 +1,5 @@
+import { redactReason } from "./failure-diagnostics.mjs";
+
 // Read-only diagnostics from the exact loaded production module, not a fixture
 // replacement for company reads. Used only after the real Start has failed.
 export async function readRenderedCompany(page, moduleUrls = []) {
@@ -80,4 +82,44 @@ export async function readPendingAttempt(page, account) {
       acknowledged: value.acknowledged === true,
     };
   }, tuple);
+}
+
+/** Observe the real preview without retrying its query or changing owner state. */
+export async function waitForTeamPreview({
+  readState,
+  onObservation = () => {},
+  now = Date.now,
+  delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  startedAt = now(),
+}) {
+  // This is a fixture observation budget, not a product latency guarantee.
+  // Native IPC may take 60s; relay auth and history each allow 25s.
+  const deadline = now() + 75_000;
+  let state = { status: "not-observed" };
+  try {
+    while (true) {
+      const observed = await readState();
+      state = {
+        status: observed.error
+          ? "error"
+          : observed.pending
+            ? "pending"
+            : observed.ready
+              ? "ready"
+              : "unavailable",
+        error: observed.error ? redactReason(observed.error) : null,
+      };
+      if (state.error) throw new Error(`Team preview failed: ${state.error}`);
+      if (state.status === "ready") return;
+      if (observed.retryAvailable)
+        throw new Error("Team preview finished without a usable proposal");
+      if (now() >= deadline)
+        throw new Error(
+          `Team preview did not settle within 75s (${state.status})`,
+        );
+      await delay(250);
+    }
+  } finally {
+    onObservation({ ...state, elapsedMs: now() - startedAt });
+  }
 }

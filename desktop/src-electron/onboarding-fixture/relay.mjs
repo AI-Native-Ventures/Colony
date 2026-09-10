@@ -8,6 +8,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { startNativeBackingServices } from "./native-services.mjs";
+
 const exec = promisify(execFile);
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -81,11 +83,14 @@ export async function startOnboardingFixtureRelay({
         maxBuffer: 8 * 1024 * 1024,
       })
     ).stdout.trim();
-  assert.equal(
-    await compose("ps", "--all", "--quiet"),
-    "",
-    "Never reuse another fixture project",
-  );
+  const nativeTools = process.env.COLONY_FIXTURE_TOOLS;
+  let nativeServices;
+  if (!nativeTools)
+    assert.equal(
+      await compose("ps", "--all", "--quiet"),
+      "",
+      "Never reuse another fixture project",
+    );
   let started = false;
   let child;
   let log;
@@ -103,18 +108,33 @@ export async function startOnboardingFixtureRelay({
       }
     }
     if (log) await new Promise((resolve) => log.end(resolve));
+    if (nativeServices) {
+      await nativeServices.close();
+      nativeServices = undefined;
+    }
     if (started) {
       await compose("down", "--volumes", "--remove-orphans");
       started = false;
     }
   }
   try {
-    started = true;
-    // The bucket initializer is a successful one-shot, not a service that
-    // should remain running for Compose's --wait health gate.
-    await compose("up", "--detach", "--wait", "postgres", "redis", "minio");
-    await compose("run", "--rm", "--no-deps", "minio-init");
+    if (nativeTools) {
+      nativeServices = await startNativeBackingServices({
+        directory,
+        tools: nativeTools,
+      });
+    } else {
+      started = true;
+      // The bucket initializer is a successful one-shot, not a service that
+      // should remain running for Compose's --wait health gate.
+      await compose("up", "--detach", "--wait", "postgres", "redis", "minio");
+      await compose("run", "--rm", "--no-deps", "minio-init");
+    }
     const mapped = async (service, internal) => {
+      if (nativeServices)
+        return nativeServices[
+          { postgres: "pg", redis: "redis", minio: "minio" }[service]
+        ];
       const mapping = await compose("port", service, String(internal));
       assert.match(mapping, /^127\.0\.0\.1:\d+$/);
       return mapping;
@@ -162,20 +182,22 @@ export async function startOnboardingFixtureRelay({
       maxBuffer: 8 * 1024 * 1024,
     });
     const query = (sql) =>
-      compose(
-        "exec",
-        "-T",
-        "postgres",
-        "psql",
-        "-U",
-        "buzz",
-        "-d",
-        "buzz",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-tAc",
-        sql,
-      );
+      nativeServices
+        ? nativeServices.query(sql)
+        : compose(
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            "buzz",
+            "-d",
+            "buzz",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-tAc",
+            sql,
+          );
     // Deployment bootstrap is the only tenant seeded. Signup and signed business
     // provisioning create their own records through the actual application.
     await query(
@@ -214,6 +236,9 @@ export async function startOnboardingFixtureRelay({
     });
     return {
       project,
+      backingServices: nativeServices?.evidence ?? {
+        transport: "Docker Compose",
+      },
       upstreamHttpUrl,
       query,
       close,

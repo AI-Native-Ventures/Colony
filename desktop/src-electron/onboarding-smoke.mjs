@@ -24,6 +24,9 @@ import { createOnboardingFixtureProvider } from "./onboarding-fixture/provider.m
 import { createOnboardingFixtureProxy } from "./onboarding-fixture/proxy.mjs";
 import { startOnboardingFixtureRelay } from "./onboarding-fixture/relay.mjs";
 import { completeFixtureWork } from "./onboarding-fixture/work.mjs";
+import { readIngestFailures } from "./onboarding-fixture/failure-diagnostics.mjs";
+import { readApprovalAttempt } from "./onboarding-fixture/approval-diagnostics.mjs";
+import { readNativePublishObservations } from "./onboarding-fixture/native-publish-diagnostics.mjs";
 
 assert.ok(
   process.argv.includes("--account-only") !==
@@ -127,10 +130,16 @@ const proof = {
       "onboarding-fixture/account-diagnostics.mjs",
       "onboarding-fixture/work.mjs",
       "onboarding-fixture/instruction.mjs",
-      "onboarding-fixture/approved-team.mjs",
+      "onboarding-fixture/native-team.mjs",
+      "onboarding-fixture/native-services.mjs",
+      "onboarding-fixture/service-sources.json",
       "onboarding-fixture/diagnostics.mjs",
+      "onboarding-fixture/failure-diagnostics.mjs",
+      "onboarding-fixture/native-publish-diagnostics.mjs",
+      "onboarding-fixture/team-recovery.mjs",
+      "onboarding-fixture/credits-proof.mjs",
+      "onboarding-fixture/approval-diagnostics.mjs",
       "onboarding-fixture/tool-result.mjs",
-      "onboarding-fixture/unstaffed.mjs",
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",
       "onboarding-fixture/relay.mjs",
@@ -268,6 +277,13 @@ async function launch() {
       .map((name) => `colony://app/assets/${name}`);
   });
   await page.waitForFunction(() => !!window.colonyDesktop);
+  // The migration page also has the preload. Do not reload or seed app state
+  // until the normal transfer has completed and React has mounted.
+  await page.waitForFunction(
+    () => !!document.querySelector("#root")?.children.length,
+    {},
+    { timeout: 30_000 },
+  );
   if (failure) throw failure;
   return page;
 }
@@ -296,6 +312,7 @@ try {
     adminBinary,
     providerHttpUrl: provider.httpUrl,
   });
+  proof.backingServices = relay.backingServices;
   proxy = await createOnboardingFixtureProxy({
     domain,
     upstreamHttpUrl: relay.upstreamHttpUrl,
@@ -393,7 +410,7 @@ try {
     .filter({ visible: true })
     .first();
   await card
-    .getByRole("button", { name: "Start this job", exact: true })
+    .getByRole("button", { name: "Approve team and start", exact: true })
     .click();
   await expect(card.getByTestId("first-job-status")).toHaveText(
     "Add credits before starting this job. Your brief stays here.",
@@ -405,7 +422,7 @@ try {
     tasks: "0",
   });
   provider.assertHealthy();
-  assert.equal(provider.requests.length, 0);
+  assert.equal(provider.receivedCallCount, 0);
   await waitForAnimations(page);
   await page.screenshot({
     path: path.join(proofDirectory, "joined-zero-credit-block.png"),
@@ -452,10 +469,17 @@ try {
   if (Array.isArray(error?.startupDiagnostics))
     proof.relayStartupDiagnostics = error.startupDiagnostics;
   if (page && !page.isClosed()) {
+    proof.nativePublishResponses = await readNativePublishObservations(page);
+    if (proof.suggestion?.requestId && proof.rootEventId)
+      proof.retainedApproval = await readApprovalAttempt(page, proof).catch(
+        () => ({ unavailable: true }),
+      );
     proof.failureState = await page
       .evaluate(async (owner) => {
         const state = {
           url: location.href,
+          rootMounted: !!document.querySelector("#root")?.children.length,
+          migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
           alerts: Array.from(document.querySelectorAll('[role="alert"]')).map(
             (node) => node.textContent,
           ),
@@ -518,6 +542,10 @@ try {
       .catch(() => {});
   }
   if (relay) {
+    proof.relayIngestFailures = await readIngestFailures(
+      relay.logPath,
+      owner,
+    ).catch(() => ({ unavailable: true }));
     proof.failureCounts = await Promise.all([
       relay.query("SELECT count(*) FROM email_accounts;"),
       relay.query("SELECT count(*) FROM communities;"),
@@ -565,6 +593,7 @@ try {
       cleanup.push("Owned fixture service cleanup failed");
     }
   }
+  proof.modelReceivedCalls = provider?.receivedCallCount ?? 0;
   proof.requests = proxy?.requests || [];
   proof.blockedRendererRequests = blocked;
   try {

@@ -36,6 +36,8 @@ use crate::{
 mod attach_scope;
 #[path = "initiative_dispatch_binding.rs"]
 mod dispatch_binding;
+#[path = "initiative_team_readiness.rs"]
+mod team_readiness;
 
 /// What the caller has to publish next, and what it will do.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -502,7 +504,8 @@ fn thread_attach_mode(mode: &str) -> Result<ThreadAttachMode, String> {
 /// Optional `dispatch_binding` commits the complete dispatch in its request ID
 /// while preserving the shared claim key and the ordinary visible Task title.
 /// Optional expected owner and relay fields fence first-job calls to existing
-/// staffing only, without the legacy local persona repair or team seeding.
+/// staffing, without local persona repair or store writes. The scoped path
+/// publishes and verifies its canonical Team before signing the Task request.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn attach_thread_task(
@@ -608,6 +611,23 @@ pub async fn attach_thread_task(
     if scope.is_none() {
         company_team_refs(&app, &state, &relay_url)?;
     }
+    let ready_team = if let Some(scope) = &scope {
+        Some(
+            team_readiness::ensure(
+                &app,
+                &state,
+                scope,
+                &keys,
+                &relay_pubkey,
+                normalized
+                    .as_deref()
+                    .ok_or_else(|| "This job needs its approved Chief of Staff.".to_string())?,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
 
     // Derived from the send rather than read from the clock, so a retry
     // produces the same bytes and the relay recognises the replay.
@@ -629,7 +649,10 @@ pub async fn attach_thread_task(
     })?;
     let action = dispatch_binding::bind(action, dispatch_binding.as_deref())?;
 
-    let signed_action = sign_action(&action, &keys)?;
+    let signed_action = match (&scope, &ready_team) {
+        (Some(scope), Some(ready)) => ready.sign(&app, &state, scope, &send_id, &action, &keys)?,
+        _ => sign_action(&action, &keys)?,
+    };
     if let Some(scope) = &scope {
         scope.check(&state)?;
     }

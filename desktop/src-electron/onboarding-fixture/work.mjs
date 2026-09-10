@@ -3,16 +3,31 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import { waitForAnimations } from "../../tests/helpers/animations.ts";
-import { approveFixtureTeam } from "./approved-team.mjs";
-import { readPendingAttempt, readRenderedCompany } from "./diagnostics.mjs";
+import { nativeProofReader, verifySigned } from "./native-team.mjs";
+import {
+  readPendingAttempt,
+  readRenderedCompany,
+  waitForTeamPreview,
+} from "./diagnostics.mjs";
 import {
   FIRST_JOB_BRIEF,
   INSTAGRAM_DRAFTS,
   WORKER_OUTPUT,
   SCOUT_REVIEW,
 } from "./provider.mjs";
-import { checkFixtureUnstaffed } from "./unstaffed.mjs";
+
 import { readFixtureInstruction } from "./instruction.mjs";
+import { readApprovalAttempt } from "./approval-diagnostics.mjs";
+import { assertCreditsProof, creditsProofQuery } from "./credits-proof.mjs";
+import {
+  loseSyncedFixtureTeam,
+  proveFixtureTeamRecovery,
+  readFixtureTeamReadiness,
+} from "./team-recovery.mjs";
+import {
+  installNativePublishObserver,
+  readNativePublishObservations,
+} from "./native-publish-diagnostics.mjs";
 
 /** Caller owns the real package and services; only model responses and ledger funds are fixtures. */
 export async function completeFixtureWork({
@@ -79,74 +94,223 @@ export async function completeFixtureWork({
     edited: false,
   };
   onEvidence({ defaultBrief });
-  let unstaffed;
-  const approved = await approveFixtureTeam({
-    page,
+  const relayPubkey = await invoke("get_relay_self");
+  const originalAgents = await invoke("list_managed_agents");
+  assert.equal(
+    originalAgents.length,
+    1,
+    "Actual onboarding supplies Scout only",
+  );
+  assert.equal(originalAgents[0].persona_id, "builtin:fizz");
+  assert.equal(originalAgents[0].pid, null);
+  assert.equal(originalAgents[0].relay_url, account.relayUrl);
+  assert.equal(originalAgents[0].owner_identified, true);
+  const starterPersona = (await invoke("list_personas")).find(
+    (persona) => persona.id === "builtin:fizz",
+  );
+  assert.ok(starterPersona);
+  assert.equal(starterPersona.is_builtin, true);
+  assert.equal(starterPersona.role_id, "chief-of-staff");
+  assert.equal(starterPersona.role_title, "Chief of Staff");
+  assert.equal(starterPersona.is_active, true);
+  assert.ok(starterPersona.system_prompt.length > 0);
+  const starterScout = {
+    pubkey: originalAgents[0].pubkey,
+    persona: starterPersona,
+  };
+  const reader = nativeProofReader({
+    relay,
     account,
-    proxy,
-    directory,
-    buzzBinary: path.join(bundle, "Contents/Resources/native/buzz"),
-    onProgress,
-    onTaskCandidates: (taskHeadCandidates) =>
-      onEvidence({ taskHeadCandidates }),
-    beforeTeamApproval: async () => {
-      unstaffed = await checkFixtureUnstaffed({
-        page,
-        account,
-        relay,
-        provider,
-        invoke,
-        reloadWelcome,
-        brief,
-        proofDirectory,
-        onProgress,
-      });
-      onEvidence({ unstaffed });
-      onProgress("funded-no-worker-blocked");
-    },
+    invoke,
+    relayPubkey,
+    starterScout,
   });
-  onProgress("business-and-team-approved");
+  const profileHead = await reader.business();
   assert.equal(
-    (await invoke("get_colony_credits_account")).available_balance_nanousd,
-    "5000000000",
-  );
-  assert.equal(
-    provider.requests.length,
+    (await reader.events(30175)).filter(
+      (event) => event.pubkey === account.ownerPubkey,
+    ).length,
     0,
-    "Approving setup does not start a model",
+    "The packaged builtin is local; no custom worker definition exists before approval",
   );
-  provider.configure({
-    scoutMarker: approved.scoutMarker,
-    workerMarker: approved.workerMarker,
-    scoutPubkey: approved.scout.pubkey,
-    workerPubkey: approved.worker.pubkey,
-    channelId: account.channelId,
-    rootId: account.rootEventId,
-    brief,
-    readTask: approved.readTask,
+  assert.equal((await reader.events(30181)).length, 0);
+  assert.equal(provider.receivedCallCount, 0);
+  const teamPreviews = {};
+  const waitForProposal = async (phase, startedAt = Date.now()) => {
+    await waitForTeamPreview({
+      startedAt,
+      readState: () =>
+        cards.first().evaluate((card) => {
+          const panel = card.querySelector(
+            '[data-testid="first-job-team-proposal"]',
+          );
+          const pending =
+            panel?.querySelector('[role="status"]')?.textContent ===
+            "Checking your team…";
+          const retryAvailable = Array.from(
+            panel?.querySelectorAll("button") ?? [],
+          ).some((button) => button.textContent === "Check team");
+          return {
+            pending,
+            ready: !!panel && !panel.querySelector('[role="status"]'),
+            retryAvailable,
+            error: card.querySelector('[role="alert"]')?.textContent ?? null,
+          };
+        }),
+      onObservation: (observation) => {
+        teamPreviews[phase] = observation;
+        onEvidence({ teamPreviews: { ...teamPreviews } });
+      },
+    });
+    await expect(
+      cards.first().getByTestId("first-job-team-proposal"),
+    ).toContainText("Sarah");
+    await expect(
+      cards.first().getByTestId("first-job-team-proposal"),
+    ).toContainText("Content & Campaign Specialist");
+  };
+  await waitForProposal("beforeFunding");
+  // Only this isolated ledger is seeded, through the existing real operator CLI.
+  await relay.seedCredits(account.ownerPubkey);
+  const initialCredits = await invoke("get_colony_credits_account");
+  assert.equal(initialCredits.available_balance_nanousd, "5000000000");
+  assert.equal(initialCredits.total_balance_nanousd, "5000000000");
+  const config = await invoke("get_global_agent_config");
+  assert.equal(config.credential_mode, "colony_credits");
+  assert.equal(config.preferred_runtime, "buzz-agent");
+  const runtimeBaseUrl = `https://${proxy.businessHost}/gateway/openai/v1`;
+  // Explicit fixture-only global base; newly prepared workers must still inherit it.
+  const saved = await invoke("set_global_agent_config", {
+    config: {
+      ...config,
+      env_vars: { ...config.env_vars, OPENAI_COMPAT_BASE_URL: runtimeBaseUrl },
+    },
+    expectedOwnerPubkey: account.ownerPubkey,
+    expectedRelayUrl: account.relayUrl,
   });
-  // Reload also proves that the original owner-authored root survives setup/funding.
+  assert.equal(saved.failed_restart_count, 0);
+  assert.equal(saved.restarted_count, 0);
+  const proposalReloadStartedAt = Date.now();
   await reloadWelcome();
-  onEvidence({ ...(await approved.readApprovalEvidence()), unstaffed });
-  await expect(cards.first()).toBeVisible();
+  assert.equal(provider.receivedCallCount, 0);
+  assert.equal((await readPendingAttempt(page, account)).exists, false);
   await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
-  await expect(cards.last().getByRole("textbox")).toHaveValue(brief);
-  assert.equal((await readPendingAttempt(page, account)).exists, false);
-  // Fixture approval and readback are much faster than human setup. Let the
-  // real 300/minute owner HTTP admission window expire before creating work.
-  onProgress("waiting-for-admission-window-before-start");
-  await new Promise((resolve) => setTimeout(resolve, 60_000));
-  assert.equal(provider.requests.length, 0);
-  assert.equal((await readPendingAttempt(page, account)).exists, false);
-  const retry = cards
+  await waitForProposal("afterReload", proposalReloadStartedAt);
+  const unstaffed = {
+    modelCalls: 0,
+    tasks: 0,
+    workers: 0,
+    result:
+      "Concrete new worker shown; approval creates it through native preparation",
+  };
+  onEvidence({
+    unstaffed,
+    profile: { eventId: profileHead.id, signatureVerified: true },
+  });
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: path.join(proofDirectory, "joined-team-before-approval.png"),
+  });
+  let prepared;
+  let preparationRead;
+  const readTeam = () =>
+    (preparationRead ??= (async () => {
+      const deadline = Date.now() + 30_000;
+      let lastError;
+      do {
+        try {
+          prepared = await reader.readTeam();
+          return prepared;
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+      } while (Date.now() < deadline);
+      throw lastError;
+    })());
+  provider.configure({
+    rootId: account.rootEventId,
+    channelId: account.channelId,
+    brief,
+    readTeam,
+    readTask: reader.readTask,
+  });
+  // Normal explicit product action. No direct create/persona/rank/membership calls.
+  const start = cards
     .first()
-    .getByRole("button", { name: "Try again", exact: true });
-  if (await retry.isVisible()) await retry.click();
-  else
-    await cards
-      .first()
-      .getByRole("button", { name: "Start this job", exact: true })
-      .click();
+    .getByRole("button", { name: "Approve team and start", exact: true });
+  await expect(start).toBeEnabled();
+  const teamLoss = await loseSyncedFixtureTeam({
+    directory,
+    account,
+    reader,
+    relay,
+  });
+  onEvidence({ teamLoss });
+  assert.equal(provider.receivedCallCount, 0);
+  assert.equal((await reader.events(30181)).length, 0);
+  onProgress("genuine-synced-team-projection-loss-injected");
+  await page.evaluate(installNativePublishObserver, {
+    ownerPubkey: account.ownerPubkey,
+    relayUrl: account.relayUrl,
+    channelId: account.channelId,
+    rootEventId: account.rootEventId,
+    requestId: account.suggestion.requestId,
+  });
+  await start.click();
+  await readTeam().catch(async (error) => {
+    onEvidence({
+      retainedApproval: await readApprovalAttempt(page, account).catch(() => ({
+        unavailable: true,
+      })),
+      nativePublishResponses: await readNativePublishObservations(page),
+      relayApprovalEvents: await reader
+        .events(9)
+        .then((events) =>
+          events
+            .filter(
+              (event) =>
+                event.pubkey === account.ownerPubkey &&
+                event.tags.some(
+                  (tag) =>
+                    tag[0] === "client" &&
+                    tag[1] === "colony:first-job-team-approval:v1" &&
+                    tag[2] === account.suggestion.requestId,
+                ),
+            )
+            .map((event) => event.id),
+        )
+        .catch(() => ({ unavailable: true })),
+    });
+    throw error;
+  });
+  const publicTeam = () =>
+    Object.fromEntries(
+      ["scout", "worker"].map((actor) => {
+        const { prompt: _prompt, ...ref } = prepared[actor];
+        return [actor, ref];
+      }),
+    );
+  const approved = {
+    ...prepared,
+    profileHead,
+    runtimeBaseUrl,
+    readTask: reader.readTask,
+    fixtureHttpRequests: {
+      observer: "read-only SQL; native frontend retains real relay reads",
+    },
+    readApprovalEvidence: async () => {
+      const fresh = await reader.readTeam();
+      assert.equal(fresh.worker.pubkey, prepared.worker.pubkey);
+      return {
+        ...publicTeam(),
+        approvalId: fresh.approvalId,
+        receiptId: fresh.receiptId,
+        membershipId: fresh.membershipId,
+      };
+    },
+  };
+  onEvidence(await approved.readApprovalEvidence());
   onProgress("explicit-start");
   const quotaRetries = [];
   await expect
@@ -174,7 +338,7 @@ export async function completeFixtureWork({
             "Do not retry after an instruction reached the relay",
           );
           assert.equal(
-            provider.requests.length,
+            provider.receivedCallCount,
             0,
             "Do not retry after model work began",
           );
@@ -227,6 +391,16 @@ export async function completeFixtureWork({
     .toBe("completed")
     .catch(async (error) => {
       onEvidence({
+        nativePublishResponses: await readNativePublishObservations(page),
+        teamReadiness: await readFixtureTeamReadiness(directory, account).catch(
+          () => ({ unavailable: true }),
+        ),
+      });
+      const taskFailure = await reader
+        .failureEvidence()
+        .catch(() => ({ unavailable: true }));
+      onEvidence({
+        taskFailure,
         ...(await approved.readApprovalEvidence()),
         failedStartCompanyRead: await readRenderedCompany(
           page,
@@ -238,8 +412,24 @@ export async function completeFixtureWork({
       });
       throw error;
     });
+  onEvidence({
+    nativePublishResponses: await readNativePublishObservations(page),
+  });
   const task = await approved.readTask();
   assert.equal(task.status, "completed");
+  onEvidence({
+    teamReadiness: await readFixtureTeamReadiness(directory, account).catch(
+      () => ({ unavailable: true }),
+    ),
+  });
+  const teamRecovery = await proveFixtureTeamRecovery({
+    directory,
+    account,
+    reader,
+    loss: teamLoss,
+    task,
+  });
+  onEvidence({ teamRecovery });
   const actualAgents = await invoke("list_managed_agents");
   const isolatedRuntimes = [approved.scout, approved.worker].map((ref) => {
     const agent = actualAgents.find(
@@ -281,6 +471,40 @@ export async function completeFixtureWork({
       { timeout: 30_000 },
     ),
   ]);
+  const signedReplies = [];
+  for (const [actor, marker] of [
+    ["worker", WORKER_OUTPUT],
+    ["scout", SCOUT_REVIEW],
+  ]) {
+    const replies = (await reader.events(9)).filter((event) =>
+      event.content.startsWith(marker),
+    );
+    assert.ok(
+      replies.length > 0,
+      `Actual signed ${actor} output reached the relay`,
+    );
+    for (const event of replies) {
+      verifySigned(event, 9, approved[actor].pubkey);
+      for (const [name, value] of [
+        ["h", account.channelId],
+        ["e", account.rootEventId],
+        ["task", task.id],
+        ["team", task.owningTeamId],
+      ]) {
+        assert.ok(
+          event.tags.some((tag) => tag[0] === name && tag[1] === value),
+          `Signed ${actor} reply keeps ${name} scope`,
+        );
+      }
+      signedReplies.push({
+        actor,
+        eventId: event.id,
+        pubkey: event.pubkey,
+        signatureVerified: true,
+      });
+    }
+  }
+  onEvidence({ signedReplies });
   const instruction = await readFixtureInstruction({
     relay,
     invoke,
@@ -379,7 +603,7 @@ export async function completeFixtureWork({
   const outputScreenshot = await page.screenshot({
     path: path.join(proofDirectory, "joined-worker-reviewed.png"),
   });
-  const callsBeforeReload = provider.requests.length;
+  const callsBeforeReload = provider.receivedCallCount;
   const reloadStartedAt = performance.now();
   const reloadCompletion = { progression: [] };
   await reloadWelcome();
@@ -419,7 +643,7 @@ export async function completeFixtureWork({
     "Returned work and canonical status are distinct screenshot states",
   );
   assert.equal(
-    provider.requests.length,
+    provider.receivedCallCount,
     callsBeforeReload,
     "Reload does not create another paid turn",
   );
@@ -456,9 +680,93 @@ export async function completeFixtureWork({
   );
   assert.equal(
     gatewayCalls.length,
-    provider.requests.length,
-    "Every fixture model response comes through the real gateway",
+    provider.receivedCallCount,
+    "Every received fixture model call comes through the real gateway",
   );
+  provider.assertHealthy();
+  assert.equal(provider.requests.length, provider.receivedCallCount);
+  const chargedResponses = provider.requests.map((request) => ({
+    responseId: request.responseId,
+    model: request.model,
+    usage: { ...request.usage },
+  }));
+  const callsBeforeStop = provider.receivedCallCount;
+  const stoppedRuntimes = [];
+  for (const agent of [approved.scout, approved.worker]) {
+    assert.equal((await invoke("get_identity")).pubkey, account.ownerPubkey);
+    assert.equal(await invoke("get_relay_ws_url"), account.relayUrl);
+    const stopped = await invoke("stop_managed_agent", {
+      pubkey: agent.pubkey,
+    });
+    assert.ok(
+      stopped.pid == null,
+      "The actual model producer has stopped before final accounting",
+    );
+    stoppedRuntimes.push({ pubkey: agent.pubkey, pid: stopped.pid ?? null });
+  }
+  assert.equal(
+    provider.receivedCallCount,
+    callsBeforeStop,
+    "No late model call escapes final reconciliation",
+  );
+  let accounting;
+  let debits;
+  await expect
+    .poll(
+      async () => {
+        accounting = JSON.parse(
+          await relay.query(creditsProofQuery(account.ownerPubkey)),
+        );
+        onEvidence({
+          finalAccounting: {
+            chargedResponses,
+            stoppedRuntimes,
+            snapshot: accounting,
+          },
+        });
+        try {
+          debits = assertCreditsProof(
+            accounting,
+            chargedResponses,
+            initialCredits.total_balance_nanousd,
+          );
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      {
+        timeout: 30_000,
+        intervals: [1000],
+        message:
+          "Every exact provider response has one terminal intent and distinct debit",
+      },
+    )
+    .toBe(true);
+  // Retain the precise assertion even if a future poll implementation changes.
+  debits = assertCreditsProof(
+    accounting,
+    chargedResponses,
+    initialCredits.total_balance_nanousd,
+  );
+  const finalCredits = await invoke("get_colony_credits_account");
+  assert.equal(finalCredits.total_balance_nanousd, accounting.balance);
+  assert.equal(finalCredits.available_balance_nanousd, accounting.balance);
+  assert.equal(finalCredits.gateway_reserved_nanousd, "0");
+  assert.equal(finalCredits.discovery_reserved_nanousd, "0");
+  assert.equal(provider.receivedCallCount, callsBeforeStop);
+  provider.assertHealthy();
+  const creditsSettlement = {
+    initial: initialCredits,
+    final: finalCredits,
+    debits,
+    chargedResponses,
+    stoppedRuntimes,
+    intents: accounting.intents,
+    ledgerRows: accounting.debits,
+    funding: "Synthetic isolated admin seed; no checkout or vendor payment",
+  };
+  onEvidence({ creditsSettlement });
   onProgress("worker-output-reviewed-canonical-task-completed");
   return {
     unstaffed,
@@ -467,6 +775,7 @@ export async function completeFixtureWork({
     deliveredDrafts,
     taskId: task.id,
     status: task.status,
+    teamRecovery,
     instructionCount,
     taskCount,
     modelResponses: "deterministic local fixture",
@@ -481,13 +790,20 @@ export async function completeFixtureWork({
       "not tested; explicit fixture gateway base approved",
     gatewayModelCalls: gatewayCalls.length,
     mintedRuntimeTokens: mintedTokens.length,
+    creditsSettlement,
     isolatedRuntimes,
+    signedReplies,
+    approval: await approved.readApprovalEvidence(),
+    actorAuthority:
+      "Exact own System persona against unchanged native builtin Scout and owner-signed30175 worker; signed30177 tier and manager; signed reply pubkeys",
+    rankContextLimitation:
+      "ACP rank lines read employee30190, so managed-agent30177 ranks may be absent from model work context",
     toolResults: provider.toolResults,
     quotaRetries,
     fixtureHttpRequests: { ...approved.fixtureHttpRequests },
     observer:
       "read-only SQL status every 2s; signed relay head checked for commands and final state",
-    preStartAdmissionPauseSeconds: 60,
+    preStartAdmissionPauseSeconds: 0,
     presentation,
     reloadCompletion,
   };

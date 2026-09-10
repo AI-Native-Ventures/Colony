@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFixtureShellResult } from "./tool-result.mjs";
+import { nativeRequestActor } from "./native-team.mjs";
 
 // An independent acceptance literal: the fixture must use the actual default,
 // not replace a different suggestion and claim to have tested the first job.
@@ -76,13 +77,14 @@ export async function createOnboardingFixtureProvider() {
   const toolResults = [];
   const server = createServer(async (request, response) => {
     try {
+      const requestNumber = ++calls;
+      assert.ok(requestNumber <= 40, "Fixture model call budget exceeded");
       assert.equal(request.method, "POST");
       assert.equal(request.url, "/v1/chat/completions");
       assert.equal(
         request.headers.authorization,
         "Bearer synthetic-onboarding-provider",
       );
-      assert.ok(++calls <= 40, "Fixture model call budget exceeded");
       let raw = "";
       for await (const chunk of request) {
         raw += chunk;
@@ -94,12 +96,11 @@ export async function createOnboardingFixtureProvider() {
         "No model calls are allowed before explicit staffing and Start",
       );
       const all = JSON.stringify(body.messages);
-      const actor = all.includes(context.workerMarker)
-        ? "worker"
-        : all.includes(context.scoutMarker)
-          ? "scout"
-          : null;
-      assert.ok(actor, "The real runtime carries the fixture persona marker");
+      const team = await context.readTeam();
+      const currentTask = await context.readTask();
+      const actor = nativeRequestActor(body.messages, team, currentTask);
+      assert.equal(currentTask.threadRoot, context.rootId);
+      assert.equal(currentTask.sourceChannelId, context.channelId);
       const last = body.messages.at(-1)?.content;
       const completion =
         typeof last === "string" && last.startsWith("You have stopped.");
@@ -161,10 +162,10 @@ export async function createOnboardingFixtureProvider() {
         assert.equal(task.sourceChannelId, context.channelId);
         const thread = `--channel ${context.channelId} --reply-to ${context.rootId} --task ${quote(task.id)} --team ${quote(task.owningTeamId)}`;
         if (stage === "delegate") {
-          return `buzz messages send ${thread} --mention ${context.workerPubkey} --content ${quote(`${context.brief}\n\nPrepare one distinct caption and matching visual brief for each weekday. Return all five pairs in this thread and mention the Chief of Staff for review.`)}`;
+          return `buzz messages send ${thread} --mention ${team.worker.pubkey} --content ${quote(`${context.brief}\n\nPrepare one distinct caption and matching visual brief for each weekday. Return all five pairs in this thread and mention the Chief of Staff for review.`)}`;
         }
         if (stage === "worker") {
-          return `buzz messages send ${thread} --mention ${context.scoutPubkey} --content ${quote(WORKER_DRAFT)}`;
+          return `buzz messages send ${thread} --mention ${team.scout.pubkey} --content ${quote(WORKER_DRAFT)}`;
         }
         if (index === 0)
           return `buzz messages send ${thread} --content ${quote(SCOUT_REVIEW)}`;
@@ -179,7 +180,7 @@ export async function createOnboardingFixtureProvider() {
         )?.function.name;
         assert.ok(name, "The actual managed agent exposes the shell tool");
         const shell = await command();
-        const toolCallId = `onboarding-call-${calls}`;
+        const toolCallId = `onboarding-call-${requestNumber}`;
         tools.push({ actor, stage, command: shell, toolCallId });
         steps.set(stage, index + 1);
         message = {
@@ -210,14 +211,27 @@ export async function createOnboardingFixtureProvider() {
                 : SCOUT_REVIEW,
         };
       }
-      requests.push({ actor, stage, completion, model: body.model });
+      const responseId = `onboarding-${requestNumber}`;
+      const usage = {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+      };
+      requests.push({
+        actor,
+        stage,
+        completion,
+        model: body.model,
+        responseId,
+        usage,
+      });
       response.setHeader("Content-Type", "application/json");
       response.end(
         JSON.stringify({
-          id: `onboarding-${calls}`,
+          id: responseId,
           object: "chat.completion",
           model: body.model,
-          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          usage,
           choices: [
             {
               index: 0,
@@ -243,6 +257,9 @@ export async function createOnboardingFixtureProvider() {
   return {
     httpUrl: `http://127.0.0.1:${server.address().port}`,
     requests,
+    get receivedCallCount() {
+      return calls;
+    },
     tools,
     toolResults,
     assertHealthy() {
@@ -254,10 +271,11 @@ export async function createOnboardingFixtureProvider() {
         undefined,
         "One approved team per fixture provider",
       );
-      for (const key of ["rootId", "workerPubkey", "scoutPubkey"])
-        assert.match(value[key], /^[a-f0-9]{64}$/);
+      for (const key of ["rootId"]) assert.match(value[key], /^[a-f0-9]{64}$/);
       assert.match(value.channelId, /^[a-f0-9-]{36}$/);
       assert.equal(value.brief, FIRST_JOB_BRIEF);
+      assert.equal(typeof value.readTeam, "function");
+      assert.equal(typeof value.readTask, "function");
       context = Object.freeze({ ...value });
     },
     async close() {

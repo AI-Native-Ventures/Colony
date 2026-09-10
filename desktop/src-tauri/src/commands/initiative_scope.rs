@@ -1,4 +1,4 @@
-//! Read-only owner/community fencing for the first-job attach path.
+//! Owner/community fencing for first-job attach; local staffing remains read-only.
 
 use std::{path::Path, sync::atomic::Ordering};
 
@@ -19,6 +19,14 @@ pub(super) struct AttachScope {
 }
 
 impl AttachScope {
+    pub(super) fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub(super) fn relay(&self) -> &str {
+        &self.relay
+    }
+
     /// Both optional fields are required together; omitted fields preserve legacy attach behavior.
     pub(super) fn capture(
         expected_owner: Option<String>,
