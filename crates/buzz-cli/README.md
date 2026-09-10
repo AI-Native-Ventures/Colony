@@ -32,6 +32,9 @@ export BUZZ_RELAY_URL="https://relay.example.com"
 buzz messages send --channel <uuid> --content "Hello"
 buzz messages send --channel <uuid> --content "Reply" --reply-to <event-id> --broadcast
 buzz messages send --channel <uuid> --content - < message.md   # read body from stdin
+# Attach Discovery entity references; the desktop renders each as a rich tile.
+# Stable ids come from `buzz discovery search`; the tag label is presentation only.
+buzz messages send --channel <uuid> --content "Here they are." --discovery campaign_leads:<campaign-id>
 buzz messages get --channel <uuid> --limit 20
 buzz messages thread --channel <uuid> --event <event-id>
 buzz messages search --query "architecture"

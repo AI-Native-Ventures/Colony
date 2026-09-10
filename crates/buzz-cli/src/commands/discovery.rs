@@ -7,9 +7,9 @@ use buzz_core::{
     },
     discovery_workspace::{
         campaign_budget_fingerprint, DiscoveryCampaignBudgetApproval, DiscoveryCampaignCreateInput,
-        DiscoveryCampaignInputV2, DiscoveryCampaignListRequest, DiscoveryLeadListRequest,
-        DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
-        DiscoveryWorkspaceResult,
+        DiscoveryCampaignInputV2, DiscoveryCampaignListRequest, DiscoveryEntityRef,
+        DiscoveryLeadListRequest, DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload,
+        DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
     },
     kind::{KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKSPACE_RECEIPT},
 };
@@ -25,6 +25,7 @@ use nostr::{Event, JsonUtil, PublicKey};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::commands::discovery_refs::resolved_entity_label;
 use crate::{client::BuzzClient, error::CliError, DiscoveryCmd};
 
 /// Route `buzz discovery ...`.
@@ -420,6 +421,46 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
             .await
         }
     }
+}
+
+/// Resolve Discovery references with the sender's own key and return one
+/// display label per reference, in request order.
+///
+/// This is the same permission-checked read the ACP harness performs when it
+/// hydrates a message's `discovery` tags, so a reference the sender cannot
+/// resolve here is one no reader could resolve either. Any such reference is a
+/// fatal error rather than a tag published on hope.
+pub async fn resolve_entity_labels(
+    client: &BuzzClient,
+    refs: &[DiscoveryEntityRef],
+) -> Result<Vec<String>, CliError> {
+    if refs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let receipt = request_workspace_payload(
+        client,
+        DiscoveryWorkspaceActionPayload::ResolveEntities {
+            refs: refs.to_vec(),
+        },
+        None,
+    )
+    .await?;
+    let DiscoveryWorkspaceResult::ResolvedEntities { entities } = receipt.receipt.result else {
+        return Err(CliError::Other(
+            "Discovery reference resolution returned another result".to_owned(),
+        ));
+    };
+    if entities.len() != refs.len() {
+        return Err(CliError::Other(format!(
+            "Discovery reference resolution returned {} results for {} references",
+            entities.len(),
+            refs.len()
+        )));
+    }
+    refs.iter()
+        .zip(entities.iter())
+        .map(|(reference, resolved)| resolved_entity_label(reference, resolved))
+        .collect()
 }
 
 async fn relay_self(client: &BuzzClient) -> Result<PublicKey, CliError> {

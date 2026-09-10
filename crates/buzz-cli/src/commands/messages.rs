@@ -3,6 +3,8 @@ use nostr::PublicKey;
 use uuid::Uuid;
 
 use crate::client::{normalize_events, normalize_write_response, BuzzClient};
+use crate::commands::discovery::resolve_entity_labels;
+use crate::commands::discovery_refs::{discovery_tags, parse_discovery_refs};
 use crate::error::CliError;
 use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
@@ -587,6 +589,8 @@ pub struct SendMessageParams {
     pub broadcast: bool,
     pub files: Vec<String>,
     pub mentions: Vec<String>,
+    /// Raw `--discovery <kind>:<id>` values to attach as structured references.
+    pub discovery: Vec<String>,
     /// Company Task this message's work is charged to.
     pub task: Option<String>,
     /// Initiative containing that Task, when it has one.
@@ -680,6 +684,9 @@ pub async fn cmd_send_message(
     let channel_uuid = parse_uuid(&p.channel_id)?;
 
     let explicit_mentions = normalize_explicit_mentions(&p.mentions)?;
+    // Parsed before any network call so a malformed value is a plain usage
+    // error, and resolved below before anything is uploaded or published.
+    let discovery_refs = parse_discovery_refs(&p.discovery)?;
     let stripped = strip_code_regions(&p.content);
     let uri_pubkeys = extract_nostr_uris(&stripped);
     // Supplying any identity explicitly authorizes unresolved or ambiguous @Name text
@@ -702,6 +709,13 @@ pub async fn cmd_send_message(
             .to_string(),
         ));
     }
+
+    // Resolve every Discovery reference before anything is uploaded: a tile the
+    // reader cannot open is worse than not sending, the same rule the mention
+    // preflight applies to visible @Name text.
+    let discovery_labels = resolve_entity_labels(client, &discovery_refs).await?;
+    let labelled_discovery: Vec<(buzz_core::discovery_workspace::DiscoveryEntityRef, String)> =
+        discovery_refs.into_iter().zip(discovery_labels).collect();
 
     // Upload files and build imeta tags
     let mut media_tags: Vec<Vec<String>> = Vec::new();
@@ -765,7 +779,9 @@ pub async fn cmd_send_message(
         }
     };
 
-    let builder = builder.tags(work_context_tags(&p)?);
+    let builder = builder
+        .tags(work_context_tags(&p)?)
+        .tags(discovery_tags(&labelled_discovery)?);
     let event = client.sign_event(builder)?;
     let emitted_mentions = event_mention_pubkeys(&event);
     let resp = client.submit_event(event).await?;
@@ -969,6 +985,7 @@ pub async fn dispatch(
             broadcast,
             files,
             mentions,
+            discovery,
             task,
             initiative,
             team,
@@ -983,6 +1000,7 @@ pub async fn dispatch(
                     broadcast,
                     files,
                     mentions,
+                    discovery,
                     task,
                     initiative,
                     team,
@@ -1526,6 +1544,7 @@ mod work_context_flag_tests {
             broadcast: false,
             files: Vec::new(),
             mentions: Vec::new(),
+            discovery: Vec::new(),
             task: task.map(str::to_owned),
             initiative: initiative.map(str::to_owned),
             team: team.map(str::to_owned),
