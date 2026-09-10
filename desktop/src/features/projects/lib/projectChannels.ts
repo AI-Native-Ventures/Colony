@@ -83,10 +83,30 @@ export function primaryRepository<T extends RepositoryMeta>(
   return primary ?? repositories[0] ?? null;
 }
 
+/** The `/git/<owner-pubkey>/<repo>` path a Buzz relay serves its own repos on. */
+const RELAY_HOSTED_PATH = /^\/?git\/[0-9a-f]{64}\/[^/]+$/i;
+
+/** The path part of a clone URL: `owner/repo`, `git/<pubkey>/repo`, … */
+function cloneUrlPath(cloneUrl: string): string {
+  const trimmed = cloneUrl
+    .trim()
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+  try {
+    return new URL(trimmed).pathname;
+  } catch {
+    // scp-style remotes (`git@github.com:block/buzz`) are not URLs.
+    const colon = trimmed.lastIndexOf(":");
+    return colon >= 0 ? trimmed.slice(colon + 1) : trimmed;
+  }
+}
+
 /**
- * "owner/repo" for a repository — the last two path segments of its clone URL
- * (which is how a GitHub-hosted repo carries its account), falling back to the
- * repository's own name.
+ * "owner/repo" for a repository — the last two path segments of its clone URL,
+ * which is how a GitHub-hosted repo carries its account.
+ *
+ * A relay-hosted repo falls back to its own name: its path carries the owner's
+ * 64-hex pubkey, and a pubkey in a header reads as noise, not as an account.
  */
 export function repositorySlug(
   repository: RepositoryMeta | null | undefined,
@@ -97,15 +117,12 @@ export function repositorySlug(
     (value) => typeof value === "string" && value.trim().length > 0,
   );
   if (cloneUrl) {
-    const path = cloneUrl
-      .trim()
-      .replace(/\.git$/i, "")
-      .replace(/\/+$/, "");
-    const segments = path
-      .split(/[/:]/)
-      .filter((segment) => segment.length > 0 && !segment.includes("."));
-    if (segments.length >= 2) {
-      return segments.slice(-2).join("/");
+    const path = cloneUrlPath(cloneUrl);
+    if (!RELAY_HOSTED_PATH.test(path)) {
+      const segments = path.split("/").filter((segment) => segment.length > 0);
+      if (segments.length >= 2) {
+        return segments.slice(-2).join("/");
+      }
     }
   }
 

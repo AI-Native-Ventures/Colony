@@ -143,6 +143,18 @@ describe("repositorySlug", () => {
     );
   });
 
+  it("falls back to the repository name for a relay-hosted repo", () => {
+    assert.equal(
+      repositorySlug(
+        repository({
+          name: "colony",
+          cloneUrls: [`http://localhost:3000/git/${"a".repeat(64)}/colony`],
+        }),
+      ),
+      "colony",
+    );
+  });
+
   it("falls back to the repository name without a clone url", () => {
     assert.equal(repositorySlug(repository({ name: "colony" })), "colony");
   });

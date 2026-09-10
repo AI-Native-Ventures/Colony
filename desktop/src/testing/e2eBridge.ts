@@ -6689,6 +6689,23 @@ function buildMockProjectEvents(): RelayEvent[] {
       "project-buzz".padEnd(64, "0"),
     ),
   );
+  // A second project the mock identity owns, deliberately with no
+  // `buzz-channel` tag: it is what the channel-settings "Project" row and the
+  // create-channel dialog offer as a linkable project.
+  events.push(
+    createMockEvent(
+      KIND_PROJECT_ANNOUNCEMENT,
+      "",
+      [
+        ["d", "side-quests"],
+        ["name", "side-quests"],
+        ["description", "Unlinked project used to prove channel linking."],
+      ],
+      projectOwner,
+      now,
+      "project-side-quests".padEnd(64, "0"),
+    ),
+  );
 
   return events;
 }
@@ -6712,7 +6729,11 @@ function isMockProjectScopedEvent(event: RelayEvent): boolean {
     (tag) => tag[0] === "a" && (tag[1] ?? "").startsWith("30617:"),
   );
   return (
-    (event.kind === KIND_REPO_ANNOUNCEMENT || hasRepoAddressTag) &&
+    (event.kind === KIND_REPO_ANNOUNCEMENT ||
+      // A project head carries no channel tag and need not carry a repository
+      // either (an empty project is valid), so kind alone identifies it.
+      event.kind === KIND_PROJECT_ANNOUNCEMENT ||
+      hasRepoAddressTag) &&
     (event.kind === 1 || MOCK_PROJECT_KINDS.has(event.kind))
   );
 }
