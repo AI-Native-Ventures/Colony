@@ -418,16 +418,12 @@ impl WebsiteReview {
     }
 
     /// Validate one stored decision against the record and its own payload.
+    ///
+    /// Scope is checked before the derived-id recomputation so the most
+    /// specific cause is reported first: tampering with `jobId`, `taskId`, or
+    /// `channel` changes the derived id too, but it is a scope failure, and a
+    /// tampered id with intact scope still fails as `decision_id_mismatch`.
     fn validate_decision(&self, decision: &WebsiteDecision) -> Result<(), WebsiteError> {
-        let derived = decision.derived_id();
-        if derived != decision.decision_id {
-            return Err(WebsiteError::DecisionIdMismatch(
-                derived,
-                decision.decision_id,
-            ));
-        }
-        validate_identity("decision.actor", &decision.actor)?;
-        validate_sha256(&decision.manifest_sha256)?;
         if decision.job_id != self.job_id {
             return Err(WebsiteError::ScopeMismatch("jobId"));
         }
@@ -437,6 +433,15 @@ impl WebsiteReview {
         if decision.channel != self.channel {
             return Err(WebsiteError::ScopeMismatch("channel"));
         }
+        let derived = decision.derived_id();
+        if derived != decision.decision_id {
+            return Err(WebsiteError::DecisionIdMismatch(
+                derived,
+                decision.decision_id,
+            ));
+        }
+        validate_identity("decision.actor", &decision.actor)?;
+        validate_sha256(&decision.manifest_sha256)?;
         if let Some(note) = &decision.note {
             let length = note.chars().count();
             if length > MAX_NOTE_LEN {

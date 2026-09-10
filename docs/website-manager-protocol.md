@@ -265,8 +265,14 @@ not deserialize reports `manifest_json` or `review_json`. Structural codes:
 `revision_after_approval`, `revision_after_handover`, `invalid_transition`,
 `qa_missing`, `qa_already_recorded`, `qa_not_independent`, `qa_not_passed`,
 `qa_mismatch`, `not_pinned_owner`, `not_authorized`, `not_ready_for_review`,
-`scope_mismatch`, `stale_revision`, `manifest_hash_mismatch`,
-`conflicting_decision`, `handover_mismatch`, `invalid_handover`, `note_too_long`.
+`scope_mismatch`, `decision_id_mismatch`, `stale_revision`,
+`manifest_hash_mismatch`, `conflicting_decision`, `handover_mismatch`,
+`invalid_handover`, `note_too_long`.
+
+Stored-record validation reports the most specific cause first: a decision
+whose `jobId`, `taskId`, or `channel` differs from the record fails
+`scope_mismatch` before the derived-id comparison, while a tampered
+`decisionId` with intact scope fails `decision_id_mismatch`.
 
 ## 7. Evidence and authority
 
