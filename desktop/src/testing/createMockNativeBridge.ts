@@ -1,4 +1,7 @@
-import type { NativeBridge } from "@/shared/api/nativeBridge";
+import {
+  createNativeFactoryApi,
+  type NativeBridge,
+} from "@/shared/api/nativeBridge";
 
 /**
  * Builds a full NativeBridge implementation backed by a single invoke
@@ -9,11 +12,15 @@ import type { NativeBridge } from "@/shared/api/nativeBridge";
 export function createMockNativeBridge(
   invokeHandler: (command: string, args: unknown) => Promise<unknown> | unknown,
 ): NativeBridge {
+  const invoke = async <T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> => (await invokeHandler(command, args ?? null)) as T;
   return {
-    invoke: async <T>(
-      command: string,
-      args?: Record<string, unknown>,
-    ): Promise<T> => (await invokeHandler(command, args ?? null)) as T,
+    invoke,
+    // Built from the same handler, so a test asserting on the command log sees
+    // `factory_worktree_create` exactly as the real shells send it.
+    factory: createNativeFactoryApi(invoke),
     invokeRawBinary: async <T = unknown>(
       command: string,
       payload: Uint8Array,

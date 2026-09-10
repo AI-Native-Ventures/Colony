@@ -102,11 +102,14 @@ export function buildTerminalStartRequest({
   project,
   projectsSettled,
   reposDir,
+  cwd = null,
 }: {
   channelId: string;
   project: Project | null | undefined;
   projectsSettled: boolean;
   reposDir: string | null;
+  /** Explicit working directory (an agent's worktree), when one applies. */
+  cwd?: string | null;
 }): TerminalStartRequest | null {
   if (!projectsSettled) return null;
   const primaryRepository =
@@ -115,6 +118,7 @@ export function buildTerminalStartRequest({
     ) ?? project?.repositories[0];
   return {
     channelId,
+    cwd,
     projectDtag: project?.dtag ?? null,
     cloneUrl: primaryRepository?.cloneUrls[0] ?? null,
     reposDir,

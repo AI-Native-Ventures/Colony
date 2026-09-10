@@ -12,6 +12,10 @@ use super::project_repo_paths::find_local_repo_dir;
 #[serde(rename_all = "camelCase")]
 pub struct TerminalStartRequest {
     pub channel_id: String,
+    /// Explicit working directory, used verbatim when it names a real
+    /// directory. The factory sets it to an agent's worktree; without it the
+    /// terminal falls back to the project checkout.
+    pub cwd: Option<String>,
     pub project_dtag: Option<String>,
     pub clone_url: Option<String>,
     pub repos_dir: Option<String>,
@@ -39,6 +43,12 @@ pub struct TerminalResizeRequest {
     pub rows: u16,
     pub pixel_width: Option<u16>,
     pub pixel_height: Option<u16>,
+}
+
+/// An explicit working directory, when the caller supplied one that exists.
+pub(crate) fn explicit_terminal_cwd(cwd: Option<&str>) -> Option<PathBuf> {
+    let path = PathBuf::from(cwd.map(str::trim).filter(|value| !value.is_empty())?);
+    path.is_dir().then_some(path)
 }
 
 /// Resolve a project checkout under the active community's repositories root.
@@ -86,11 +96,14 @@ pub fn workspace_terminal_start(
     if request.channel_id.trim().is_empty() {
         return Err("terminal channel id must not be empty".to_string());
     }
-    let cwd = resolve_terminal_cwd(
-        request.repos_dir.as_deref(),
-        request.project_dtag.as_deref(),
-        request.clone_url.as_deref(),
-    )?;
+    let cwd = match explicit_terminal_cwd(request.cwd.as_deref()) {
+        Some(cwd) => cwd,
+        None => resolve_terminal_cwd(
+            request.repos_dir.as_deref(),
+            request.project_dtag.as_deref(),
+            request.clone_url.as_deref(),
+        )?,
+    };
     state.start(
         Some(app),
         cwd,
@@ -195,6 +208,23 @@ mod tests {
         )
         .expect("home fallback");
         assert_eq!(resolved, dirs::home_dir().expect("home"));
+    }
+
+    #[test]
+    fn explicit_cwd_wins_over_the_project_checkout() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let worktree = root.path().join("worktree");
+        fs::create_dir_all(&worktree).expect("worktree");
+        assert_eq!(
+            explicit_terminal_cwd(Some(worktree.to_string_lossy().as_ref())),
+            Some(worktree)
+        );
+        assert_eq!(explicit_terminal_cwd(Some("  ")), None);
+        assert_eq!(
+            explicit_terminal_cwd(Some("/definitely/not/a/worktree")),
+            None
+        );
+        assert_eq!(explicit_terminal_cwd(None), None);
     }
 
     #[test]

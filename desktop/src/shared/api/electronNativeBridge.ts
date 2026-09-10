@@ -1,8 +1,10 @@
 import {
+  createNativeFactoryApi,
   NativeChannel,
   setNativeBridge,
   type NativeBridge,
   type NativeEvent,
+  type NativeFactoryApi,
   type NativeNotificationAction,
   type NativeTerminalApi,
 } from "./nativeBridge";
@@ -68,6 +70,11 @@ class ElectronNativeBridge implements NativeBridge {
 
   /** Delegated straight to preload: PTY bytes never pass through `invoke`. */
   readonly terminal?: NativeTerminalApi;
+
+  /** Worktrees are Rust's; the shell forwards like every other `invoke`. */
+  readonly factory: NativeFactoryApi = createNativeFactoryApi((command, args) =>
+    this.invoke(command, args),
+  );
 
   constructor(api: ElectronDesktop) {
     this.api = api;

@@ -757,6 +757,11 @@ pub async fn update_managed_agent(
             crate::managed_agents::validate_user_env_keys(&env_vars)?;
             record.env_vars = env_vars;
         }
+        // After the env replacement above, so the COLONY_WORKTREE mirror
+        // survives an edit that rewrites the whole map.
+        if let Some(working_dir) = input.working_dir {
+            record.set_working_dir(working_dir);
+        }
 
         // Native provider/model fields are authoritative. Keep the typed marker
         // derived for new records while retaining legacy typed records for

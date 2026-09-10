@@ -32,10 +32,12 @@ import {
 } from "@tauri-apps/plugin-notification";
 
 import {
+  createNativeFactoryApi,
   setNativeBridge,
   NativeChannel,
   type NativeBridge,
   type NativeEvent,
+  type NativeFactoryApi,
   type NativeNotificationAction,
   type NativeUnlisten,
   type NativeUpdate,
@@ -76,6 +78,10 @@ function convertValue(value: unknown): unknown {
 }
 
 class TauriNativeBridge implements NativeBridge {
+  readonly factory: NativeFactoryApi = createNativeFactoryApi((command, args) =>
+    this.invoke(command, args),
+  );
+
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     return tauriInvoke<T>(command, toTauriArgs(args));
   }

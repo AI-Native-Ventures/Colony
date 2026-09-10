@@ -597,6 +597,7 @@ pub async fn confirm_agent_snapshot_import(
         // Build the managed agent record — no machine-local commands, no
         // secrets, no lineage from the snapshot.
         let record = ManagedAgentRecord {
+            working_dir: None,
             tier: None,
             manager: None,
             pubkey: pubkey.clone(),
