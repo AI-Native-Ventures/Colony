@@ -112,13 +112,14 @@ type AppSidebarProps = {
   communities: Community[];
   onAddCommunity: (community: Community) => void;
   onAddCommunityOpenChange?: (open: boolean) => void;
+  /** Resolves with the created channel's id so the form can link a project. */
   onCreateChannel: (input: {
     name: string;
     description?: string;
     visibility: ChannelVisibility;
     ttlSeconds?: number;
     templateId?: string;
-  }) => Promise<void>;
+  }) => Promise<string | undefined>;
   onCreateForum: (input: {
     name: string;
     description?: string;
@@ -504,8 +505,9 @@ export function AppSidebar({
       templateId?: string;
     }) => {
       if (createDialogKind === "stream") {
-        await onCreateChannel(input);
-      } else if (createDialogKind === "forum") {
+        return await onCreateChannel(input);
+      }
+      if (createDialogKind === "forum") {
         await onCreateForum(input);
       }
     },

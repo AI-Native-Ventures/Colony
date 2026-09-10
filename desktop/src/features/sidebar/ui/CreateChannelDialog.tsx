@@ -19,13 +19,14 @@ type CreateChannelDialogProps = {
   channelKind: ChannelKind | null;
   isCreating: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Resolves with the created channel's id so an optional project can link. */
   onCreate: (input: {
     name: string;
     description?: string;
     visibility: ChannelVisibility;
     ttlSeconds?: number;
     templateId?: string;
-  }) => Promise<void>;
+  }) => Promise<string | undefined>;
 };
 
 export function CreateChannelDialog({
@@ -40,7 +41,9 @@ export function CreateChannelDialog({
     channelKind: channelKind ?? "stream",
     active: open,
     isCreating,
-    onCreate: onCreate as (input: CreateChannelInput) => Promise<void>,
+    onCreate: onCreate as (
+      input: CreateChannelInput,
+    ) => Promise<string | undefined>,
     onCreated: () => onOpenChange(false),
   });
 
