@@ -1,7 +1,7 @@
 /**
  * Splitter drag math for Factory canvas.
  */
-export const MIN_SPLIT_SIZE = 0.2;
+import { MIN_SPLIT_SIZE } from "./tileTree";
 
 export function resizePair(
   startSizes: ReadonlyArray<number>,

@@ -1,9 +1,10 @@
 import * as React from "react";
 import { cn } from "@/shared/lib/cn";
-import { resizePair, MIN_SPLIT_SIZE } from "@/features/factory/lib/splitterMath";
+import { resizePair } from "@/features/factory/lib/splitterMath";
 import {
   sizesForGroup,
   setGroupSizes,
+  MIN_SPLIT_SIZE,
 } from "@/features/factory/lib/tileTree";
 import { FactoryPane } from "./FactoryPane";
 import type { TileLayoutNode, TileGroup, TileTreeState } from "@/features/factory/lib/tileTree";
