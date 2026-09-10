@@ -12,6 +12,7 @@ import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
 import {
   AGENT_PUBKEY,
+  canonicalJson,
   emitMessage,
   emitSignedEvent,
   fixtureUuid,
@@ -63,6 +64,14 @@ const WEBSITE_JOB_MANIFEST = JSON.parse(
     "utf8",
   ),
 ) as ManifestFixture;
+
+// Canonical digest of the exact relay-bundled bytes, computed the same way
+// blockRepository hashes a manifest before checking the core digest table.
+export const WEBSITE_JOB_DIGEST = createHash("sha256")
+  .update(canonicalJson(WEBSITE_JOB_MANIFEST))
+  .digest("hex");
+export const EXPECTED_WEBSITE_JOB_DIGEST =
+  "df62e00412b314d4b036d07bcf547e0f7a9dbc562e013a6d3832f0c51bb7ad6f";
 
 type JobState = "brief" | "working" | "review" | "revision" | "handover";
 
@@ -562,6 +571,26 @@ async function openThreadForRoot(page: Page, rootId: string) {
   await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 }
 
+/**
+ * The trusted composite renders the thread body inside the right panel while
+ * the plain event-id attachment stays hidden (no duplicated controls).
+ */
+function threadComposite(page: Page): Locator {
+  return page
+    .getByTestId("message-thread-panel")
+    .getByTestId("website-job-composite");
+}
+
+async function expectCompositeThread(page: Page): Promise<Locator> {
+  const composite = threadComposite(page);
+  await expect(composite).toBeVisible();
+  await expect(
+    composite.getByTestId("website-job-composite-body"),
+  ).toBeVisible();
+  await expect(page.getByTestId("website-thread-attachment")).toHaveCount(0);
+  return composite;
+}
+
 function screenshotPath(name: string) {
   return path.join(SCREENSHOT_DIR, `${name}.png`);
 }
@@ -619,6 +648,10 @@ test.afterAll(() => {
   ]);
 });
 
+test("mocked website-job fixture carries the bundled core digest", () => {
+  expect(WEBSITE_JOB_DIGEST).toBe(EXPECTED_WEBSITE_JOB_DIGEST);
+});
+
 test("mocked Brief state renders the brief and start action", async ({
   page,
 }) => {
@@ -656,7 +689,7 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   await expect(stageRow("Understand the existing site")).toContainText("Done");
   await expect(stageRow("Design and build")).toContainText("Working");
   await openThreadForRoot(page, job.root.id);
-  const threadAttachment = page.getByTestId("website-thread-attachment");
+  const threadAttachment = await expectCompositeThread(page);
   const versionHistory = threadAttachment.getByRole("region", {
     name: "Version history",
   });
@@ -684,9 +717,6 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   const { job } = await seedJob(page, "review");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(page.getByText("Ready for your review").first()).toBeVisible();
-  await expect(
-    page.getByText("Desktop and mobile layouts reviewed"),
-  ).toBeVisible();
   const mobileButton = page.getByRole("button", { name: "Mobile preview" });
   await mobileButton.click();
   await expect(mobileButton).toHaveAttribute("aria-pressed", "true");
@@ -704,7 +734,10 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await openThreadForRoot(page, job.root.id);
-  const threadAttachment = page.getByTestId("website-thread-attachment");
+  const threadAttachment = await expectCompositeThread(page);
+  await expect(
+    threadAttachment.getByText("Desktop and mobile layouts reviewed"),
+  ).toBeVisible();
   await threadAttachment
     .getByRole("region", { name: "Version history" })
     .getByRole("listitem")
@@ -713,11 +746,11 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
     .click();
   await expect(page.getByText(/Read-only view of Version 1/)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Approve design" }),
+    threadAttachment.getByRole("button", { name: "Approve design" }),
   ).toBeDisabled();
   await page.getByRole("button", { name: "Close preview" }).click();
   await expect(
-    page.getByRole("button", { name: "Approve design" }),
+    threadAttachment.getByRole("button", { name: "Approve design" }),
   ).toBeEnabled();
   await captureBothWidths(page, "review", rootAttachment);
 });
@@ -730,8 +763,8 @@ test("mocked Revision state shows the exact change request", async ({
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "revision");
-  const threadAttachment = page.getByTestId("website-thread-attachment");
   await openThreadForRoot(page, job.root.id);
+  const threadAttachment = await expectCompositeThread(page);
   await expect(page.getByText("Changes requested").first()).toBeVisible();
   await expect(page.getByText(REQUEST_NOTE)).toBeVisible();
   await captureBothWidths(page, "revision", threadAttachment);
@@ -745,8 +778,8 @@ test("mocked Handover state shows confirmed resources and the draft request", as
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "handover");
-  const threadAttachment = page.getByTestId("website-thread-attachment");
   await openThreadForRoot(page, job.root.id);
+  const threadAttachment = await expectCompositeThread(page);
   await expect(page.getByText("Handover prepared").first()).toBeVisible();
   await expect(
     page.getByText(/Please share who manages the horizon-labs.example domain/),
@@ -769,7 +802,7 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   await openChannel(page, CHANNEL);
   const { job, manifestEvent } = await seedJob(page, "review");
   await openThreadForRoot(page, job.root.id);
-  const threadAttachment = page.getByTestId("website-thread-attachment");
+  const threadAttachment = await expectCompositeThread(page);
 
   await threadAttachment
     .getByPlaceholder(
@@ -836,7 +869,7 @@ test("mocked community switch clears pending website state", async ({
   await expect(page.getByTestId("chat-title")).toHaveText(CHANNEL);
   const { job } = await seedJob(page, "review");
   await openThreadForRoot(page, job.root.id);
-  const threadAttachment = page.getByTestId("website-thread-attachment");
+  const threadAttachment = await expectCompositeThread(page);
   await threadAttachment
     .getByPlaceholder(
       "Describe what should change, or leave a note with an approval.",
@@ -863,8 +896,10 @@ test("mocked browser build reports the native preview as unavailable", async ({
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "review");
   await openThreadForRoot(page, job.root.id);
+  await expectCompositeThread(page);
+  const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(
-    page
+    rootAttachment
       .getByText(
         "Interactive preview is not available. Showing the saved image of this version.",
       )

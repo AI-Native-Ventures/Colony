@@ -96,6 +96,9 @@ export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
   "542e2eefd8e515e35fb1d72063271b90d7975bedfc59afb98594a5216dd43198",
   // deliverable
   "341c6999607295c49c161785eaed12ac8480e8594dfb9a4d7e2a0b356298057e",
+  // website-job 1.0.0; the approved job card delegated to the website
+  // presentation from websiteIntegration.
+  "df62e00412b314d4b036d07bcf547e0f7a9dbc562e013a6d3832f0c51bb7ad6f",
 ]);
 
 type CachedManifest = {

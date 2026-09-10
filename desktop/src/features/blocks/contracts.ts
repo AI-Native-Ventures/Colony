@@ -30,6 +30,7 @@ export const BLOCK_STARTER_COMPOSITE_HANDLES = [
   "artifact",
   "receipt",
   "brainstorm",
+  "website-job",
 ] as const;
 
 export type BlockOrigin = "core" | "installed" | "workspace-custom";

@@ -4,6 +4,7 @@
  * carries verified heads, receipt waiters, or cached instance refs across.
  */
 
+import { resetWebsiteCompositeRegistry } from "./websiteCompositeRegistry";
 import { resetWebsiteHeadsLiveSubscriptions } from "./useWebsiteHeads";
 import { resetWebsiteHeadsState } from "./websiteHeads";
 import { resetWebsiteInstanceRefCache } from "./websiteTransport";
@@ -12,4 +13,5 @@ export function resetWebsiteIntegrationState(): void {
   resetWebsiteHeadsLiveSubscriptions();
   resetWebsiteHeadsState();
   resetWebsiteInstanceRefCache();
+  resetWebsiteCompositeRegistry();
 }

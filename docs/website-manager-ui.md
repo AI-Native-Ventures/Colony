@@ -174,8 +174,12 @@ placement is by event id, not by composite rendering.
 | `nativePreviewAdapter.ts` | Feature host adapter over `createWebsitePreviewAdapter`, artifact loader over `createWebsiteArtifactLoader`, handover download over `downloadWebsiteHandover`, error-code mapping. |
 | `clipBounds.ts` | `useAttachmentClipBounds`: walks to the nearest scrolling ancestor (or the document scrolling element), intersects its client rect with the viewport, and returns window CSS-pixel clip bounds. Channel and thread panes each resolve their own scroller. |
 | `websiteProgress.ts` | `deriveWebsiteProgress` / `deriveWebsiteStageAgents` from the relay-signed record: task report/outcome completes a stage, work event/checkpoint means in progress, revision/QA/approval/handover completion follow the record, and stage agents come only from canonical identity fields. |
-| `websiteAttachments.tsx` | `WebsiteMessageAttachment`: channel root (id === head `thread`) renders the brief/working/review projection; thread card (id === head `instance`) renders QA, version history, decisions, and handover. Builds the agent directory from profiles plus the identity colour hash. |
-| `resetWebsiteIntegrationState.ts` | One `resetCommunityState()` entry clearing heads, receipt waiters, and cached instance refs. |
+| `WebsiteThreadBody.tsx` | The shared job body (preview, QA, version history, handover, decisions) used by both the plain event-id attachment and the delegated Block composite. |
+| `WebsiteJobComposite.tsx` | Delegated presentation for a trusted core `website-job` Block instance: in the right thread it renders `WebsiteThreadBody`; in the channel timeline and whenever no verified head exists it keeps the manifest's primitive tree (with an honest preparing note when the head is absent). |
+| `websiteCompositeRegistry.ts` | Marks instance event ids presented by the composite so the plain thread attachment stays hidden (no duplicated controls). |
+| `websiteAgentDirectory.ts` | Profile-backed agent directory plus the stable identity colour hash. |
+| `websiteAttachments.tsx` | `WebsiteMessageAttachment`: channel root (id === head `thread`) renders the brief/working/review projection; the thread card renders through the composite or the plain attachment, whichever owns it. |
+| `resetWebsiteIntegrationState.ts` | One `resetCommunityState()` entry clearing heads, receipt waiters, cached instance refs, and the composite registry. |
 
 Seams used:
 
@@ -185,9 +189,14 @@ Seams used:
   `submitBlockAction` publisher for decisions, so Blocks validation and the
   receipt pipeline stay the single decision path.
 - `parseBlockInstance` (read-only reuse) to derive the pinned instance id and
-  trust the card's data; the Blocks module is not edited.
+  trust the card's data.
 - `useRelaySelfQuery` and `useCommunities` for the trust anchor and community
   boundary; `MessageRow.tsx` gains one import and one JSX line.
+- Blocks core trust: `website-job` is in `BLOCK_STARTER_COMPOSITE_HANDLES`
+  (contracts.ts) and its reviewed digest is in
+  `BUNDLED_CORE_MANIFEST_DIGESTS` (blockRepository.ts), so only a relay-signed,
+  digest-matching manifest reaches the delegated path. `BlockMessage.tsx`
+  lazily imports `WebsiteJobComposite` for that handle only.
 - The attachment element itself for clip bounds: the nearest computed
   `overflow-y: auto/scroll/overlay` ancestor (otherwise the document scrolling
   element) is intersected with the viewport, so no app-shell provider is
@@ -200,22 +209,19 @@ disables both controls until the current version is selected again.
 
 ## Remaining gaps
 
-1. **Shared Blocks composite.** The `website-job` core manifest renders through
-   the existing Block pipeline once PR #682 lands; the integration does not
-   depend on it. The inline card may show the composite fallback until then.
-2. **Native Electron proof.** The browser E2E proves the DOM integration with a
+1. **Native Electron proof.** The browser E2E proves the DOM integration with a
    mock-only artifact loader. Real clipping, zoom, and view adoption remain the
    native worker's proof (`.github/workflows/website-preview-native-proof.yml`)
    and are not claimed here.
-3. **Live agent work.** Heads, instance data, receipts, and handover access
+2. **Live agent work.** Heads, instance data, receipts, and handover access
    requests are consumed from the relay. Real crawl, build, QA, and revision
    execution belong to the backend and managed-agent workers.
-4. **Progress evidence coverage.** Brief and research completion and build-stage
+3. **Progress evidence coverage.** Brief and research completion and build-stage
    activity derive from relay-validated `stageEvidence`; approval, QA, revision,
    and handover derive from the record. Any additional granularity (for example
    a research agent identity that evidence does not name) still needs canonical
    data rather than inference.
-5. **Agent roles.** Role titles come from the profile directory (`role`);
+4. **Agent roles.** Role titles come from the profile directory (`role`);
    communities that do not publish kind-0 roles show "Role not recorded" rather
    than an invented title.
 
@@ -247,8 +253,11 @@ Nothing was executed in this session.
 - `websiteProgress.test.mjs` fresh draft, checkpoint-only in-progress,
   revision/QA completion, change-request reset, pinned approval, handover,
   and canonical-only stage agents.
-- `desktop/tests/e2e/website-manager.spec.ts` (mocked proof): five states x
-  1280x720 and 1440x900 screenshots asserted byte-distinct, desktop/mobile and
+- `desktop/tests/e2e/website-manager.spec.ts` (mocked proof): the fixture
+  digest is asserted against the bundled core digest, five states x 1280x720
+  and 1440x900 screenshots are asserted byte-distinct, and each thread state
+  asserts the trusted `website-job-composite` path rendered its body while the
+  plain `website-thread-attachment` did not. Also covers desktop/mobile and
   Before/Redesign switching, expand and close with a dialog-count zero check,
   earlier-version inspection, stale-selection approval disabled, request
   changes failing then retrying to a canonical head confirmation, reload
