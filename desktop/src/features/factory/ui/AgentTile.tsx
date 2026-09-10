@@ -11,9 +11,11 @@ import {
 } from "@/features/factory/lib/agentTabPayload";
 import { deriveDelegationCards } from "@/features/factory/lib/delegation";
 import { deriveAgentTileStatus } from "@/features/factory/lib/agentTileStatus";
+import { AgentTileAsks } from "@/features/factory/ui/AgentTileAsks";
 import { AgentTileComposer } from "@/features/factory/ui/AgentTileComposer";
 import { AgentTileDelegationCards } from "@/features/factory/ui/AgentTileDelegationCards";
 import { AgentTileHeader } from "@/features/factory/ui/AgentTileHeader";
+import { useAgentOpenAsks } from "@/features/factory/ui/useAgentTileAsks";
 import { AgentTileMenu } from "@/features/factory/ui/AgentTileMenu";
 import {
   DelegateAgentDialog,
@@ -46,6 +48,7 @@ export function AgentTile({ channelId, tab }: TabBodyProps): React.JSX.Element {
     );
   }, [agentPubkey, agentsQuery.data]);
   const activeTurns = useActiveAgentTurns(agentPubkey || null);
+  const openAsks = useAgentOpenAsks(agentPubkey);
   const tileActions = useFactoryTileActions();
   const { setOpenThreadHeadId } = useChannelPanelHistoryState();
   const [delegateTarget, setDelegateTarget] =
@@ -136,7 +139,11 @@ export function AgentTile({ channelId, tab }: TabBodyProps): React.JSX.Element {
     );
   }
 
-  const status = deriveAgentTileStatus(agent, activeTurns.length > 0);
+  const status = deriveAgentTileStatus(
+    agent,
+    activeTurns.length > 0,
+    openAsks.length > 0,
+  );
 
   return (
     <div
@@ -166,6 +173,9 @@ export function AgentTile({ channelId, tab }: TabBodyProps): React.JSX.Element {
         }
         status={status}
       />
+      {/* An open ask is the one thing that stops this agent dead, so it sits
+          above the delegation cards, closest to the header. */}
+      <AgentTileAsks agentName={agent.name} asks={openAsks} />
       <AgentTileDelegationCards
         cards={cards}
         onOpenThread={threadRootId ? openThread : null}
