@@ -76,6 +76,7 @@ export default defineConfig({
         "**/workspace-message-link.spec.ts",
         "**/workspace-terminal.spec.ts",
         "**/workspace-factory.spec.ts",
+        "**/sidebar-project-channels.spec.ts",
         "**/workspace-factory-agent.spec.ts",
         "**/workspace-factory-graph.spec.ts",
         "**/workspace-web.spec.ts",

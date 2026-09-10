@@ -27,6 +27,7 @@ import type { CreateChannelFormState } from "@/features/sidebar/lib/useCreateCha
 const CREATE_LABEL_OPTIONAL_CLASS =
   "ml-1 text-xs font-normal text-muted-foreground/50";
 const NO_TEMPLATE_VALUE = "__no-template__";
+const NO_PROJECT_VALUE = "__no-project__";
 
 export const CREATE_CHANNEL_FORM_ID = "create-channel-form";
 
@@ -43,6 +44,9 @@ export function CreateChannelFormFields({
 }) {
   const { channelKind, kindLabel, isCreating } = form;
   const [isCreateTemplateOpen, setIsCreateTemplateOpen] = React.useState(false);
+  const selectedProject = form.project.options.find(
+    (project) => project.id === form.project.projectId,
+  );
   const selectedTemplate = form.templates.find(
     (template) => template.id === form.selectedTemplateId,
   );
@@ -144,6 +148,62 @@ export function CreateChannelFormFields({
         testIdPrefix="create-channel"
         visibility={form.visibility}
       />
+
+      {form.project.enabled && form.project.options.length > 0 ? (
+        <div
+          className={cn(
+            "flex min-h-12 items-center justify-between gap-4 rounded-xl border border-input bg-background px-3 py-3",
+            isCreating && "opacity-50",
+          )}
+          data-testid="create-channel-project-container"
+        >
+          <span className="text-sm font-medium text-foreground">
+            Project
+            <span className={CREATE_LABEL_OPTIONAL_CLASS}>Optional</span>
+          </span>
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label={`Project: ${selectedProject?.name ?? "None"}`}
+                className="-mr-2.5 ml-auto h-9 min-w-0 max-w-[60%] justify-end px-2.5 text-right text-sm font-medium text-foreground hover:bg-muted/50"
+                data-testid="create-channel-project"
+                disabled={isCreating}
+                id="create-channel-project"
+                type="button"
+                variant="ghost"
+              >
+                <span className="truncate text-right">
+                  {selectedProject?.name ?? "None"}
+                </span>
+                <ChevronDown className="size-4 shrink-0 text-muted-foreground/70" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={(event) => event.preventDefault()}
+              style={{ minWidth: "var(--radix-dropdown-menu-trigger-width)" }}
+            >
+              <DropdownMenuRadioGroup
+                onValueChange={(projectId) =>
+                  form.project.setProjectId(
+                    projectId === NO_PROJECT_VALUE ? null : projectId,
+                  )
+                }
+                value={form.project.projectId ?? NO_PROJECT_VALUE}
+              >
+                <DropdownMenuRadioItem value={NO_PROJECT_VALUE}>
+                  None
+                </DropdownMenuRadioItem>
+                {form.project.options.map((project) => (
+                  <DropdownMenuRadioItem key={project.id} value={project.id}>
+                    {project.name}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : null}
 
       <div
         className={cn(

@@ -88,7 +88,10 @@ test("loads the app shell with mocked channels", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  await expect(page.getByTestId("stream-list")).toContainText("general");
+  // `general` is the mock's project channel and renders under Projects.
+  await expect(page.getByTestId("project-channel-list")).toContainText(
+    "general",
+  );
   await expect(page.getByTestId("forum-list")).toContainText("watercooler");
   await expect(page.getByTestId("dm-list")).toContainText("alice-tyler");
 });

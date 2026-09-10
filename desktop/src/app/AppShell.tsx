@@ -544,6 +544,8 @@ export function AppShell() {
       await goChannel(createdChannel.id);
       onCreated?.(createdChannel.id);
       void applyAgents(templateId, createdChannel.id);
+      // The create-channel form links an optional project to this id.
+      return createdChannel.id;
     },
     [applyAgents, applyCanvas, createChannelMutation, goChannel],
   );
@@ -589,9 +591,9 @@ export function AppShell() {
     }) => {
       if (browseDialogType === "forum") {
         await handleCreateForum(input);
-      } else {
-        await handleCreateChannel(input, getCreateSuccess() ?? undefined);
+        return;
       }
+      return await handleCreateChannel(input, getCreateSuccess() ?? undefined);
     },
     [
       browseDialogType,
