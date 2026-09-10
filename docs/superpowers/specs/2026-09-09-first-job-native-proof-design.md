@@ -32,3 +32,36 @@ signed message pubkeys. No marker or nonexistent built-in head is inserted.
 ACP currently hydrates rank context from employee30190 only; managed-agent30177
 ranks therefore need not appear in the model work context. The proof records
 this limitation and never fabricates employee heads to make the assertion pass.
+
+
+## Confirmed Task readiness defect and recovery gate
+
+Hosted run 34445569128 at PR head 31a82b570f exercised the actual owner
+approval and created the worker, but the relay refused the signed Task action:
+`conflict: this company has no coordination team to own ambiguous work`.
+The native WebSocket refusal event ID matches the verified owner action and
+relay conflict receipt. The owner Team inventory was empty, the company had
+its internal budget, and no Task or model request existed. Cleanup completed.
+
+The scoped native attach path must publish and verify a usable canonical Team
+before it signs the Task action. It must preserve authoritative manual Teams,
+owner/relay scope, concurrent edits and intentional deletion history. This
+barrier does not hire or start a runtime. Existing unscoped behavior remains
+compatible; background retention alone is not an acknowledgment barrier.
+
+The hosted recovery case waits at most 75 seconds for genuine background Team
+publication and a matching native retention row with `pending_sync=0`. It then
+removes only that exact live Team row from the isolated relay database. It
+neither signs a deletion nor changes local data or fabricates a replacement.
+The next and only owner approval must recover the Team through normal native
+attach. A compact compile-gated native trace must show that the Team was absent
+when attach checked it, identify the submitted and verified Team event, and be
+written before Task signing. Signed relay readback must match that trace and
+the actual Task's owning Team; owner content must remain intact. Missing,
+mismatched or background-masked observations fail the gate. This physical-loss
+case is distinct from the initial-publication failure recorded above.
+
+The complete output, Scout review, reload, single Task/instruction, isolation
+and settled Credits-debit requirements remain unchanged. All model responses
+and the five-dollar isolated ledger seed remain synthetic. No local test or
+build execution is part of this work.

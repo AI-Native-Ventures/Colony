@@ -18,6 +18,11 @@ import {
 
 import { readFixtureInstruction } from "./instruction.mjs";
 import {
+  loseSyncedFixtureTeam,
+  proveFixtureTeamRecovery,
+  readFixtureTeamReadiness,
+} from "./team-recovery.mjs";
+import {
   installNativePublishObserver,
   readNativePublishObservations,
 } from "./native-publish-diagnostics.mjs";
@@ -233,6 +238,16 @@ export async function completeFixtureWork({
     .first()
     .getByRole("button", { name: "Approve team and start", exact: true });
   await expect(start).toBeEnabled();
+  const teamLoss = await loseSyncedFixtureTeam({
+    directory,
+    account,
+    reader,
+    relay,
+  });
+  onEvidence({ teamLoss });
+  assert.equal(provider.receivedCallCount, 0);
+  assert.equal((await reader.events(30181)).length, 0);
+  onProgress("genuine-synced-team-projection-loss-injected");
   await page.evaluate(installNativePublishObserver, {
     ownerPubkey: account.ownerPubkey,
     relayUrl: account.relayUrl,
@@ -350,6 +365,9 @@ export async function completeFixtureWork({
     .catch(async (error) => {
       onEvidence({
         nativePublishResponses: await readNativePublishObservations(page),
+        teamReadiness: await readFixtureTeamReadiness(directory, account).catch(
+          () => ({ unavailable: true }),
+        ),
       });
       const taskFailure = await reader
         .failureEvidence()
@@ -372,6 +390,19 @@ export async function completeFixtureWork({
   });
   const task = await approved.readTask();
   assert.equal(task.status, "completed");
+  onEvidence({
+    teamReadiness: await readFixtureTeamReadiness(directory, account).catch(
+      () => ({ unavailable: true }),
+    ),
+  });
+  const teamRecovery = await proveFixtureTeamRecovery({
+    directory,
+    account,
+    reader,
+    loss: teamLoss,
+    task,
+  });
+  onEvidence({ teamRecovery });
   const actualAgents = await invoke("list_managed_agents");
   const isolatedRuntimes = [approved.scout, approved.worker].map((ref) => {
     const agent = actualAgents.find(
@@ -677,6 +708,7 @@ export async function completeFixtureWork({
     deliveredDrafts,
     taskId: task.id,
     status: task.status,
+    teamRecovery,
     instructionCount,
     taskCount,
     modelResponses: "deterministic local fixture",

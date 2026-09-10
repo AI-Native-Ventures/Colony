@@ -135,6 +135,7 @@ const proof = {
       "onboarding-fixture/diagnostics.mjs",
       "onboarding-fixture/failure-diagnostics.mjs",
       "onboarding-fixture/native-publish-diagnostics.mjs",
+      "onboarding-fixture/team-recovery.mjs",
       "onboarding-fixture/tool-result.mjs",
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",

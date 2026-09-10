@@ -49,7 +49,7 @@ jobs:
       - name: Validate joined fixture entry syntax
         run: node --check desktop/src-electron/onboarding-fixture/work.mjs
       - name: Validate proof authority and service contract
-        run: node --test desktop/src-electron/onboarding-fixture/native-team.test.mjs desktop/src-electron/onboarding-fixture/instruction.test.mjs desktop/src-electron/onboarding-fixture/task-head.test.mjs desktop/src-electron/onboarding-fixture/tool-result.test.mjs
+        run: node --test desktop/src-electron/onboarding-fixture/native-team.test.mjs desktop/src-electron/onboarding-fixture/team-recovery.test.mjs desktop/src-electron/onboarding-fixture/instruction.test.mjs desktop/src-electron/onboarding-fixture/task-head.test.mjs desktop/src-electron/onboarding-fixture/tool-result.test.mjs
       - name: Install PostgreSQL build prerequisite
         run: brew install openssl@3
       - name: Restore pinned native service tools
@@ -89,7 +89,7 @@ jobs:
           export COLONY_SMOKE_ADMIN_BINARY="$GITHUB_WORKSPACE/target/release/buzz-admin"
           export COLONY_SMOKE_PROOF_DIR="$RUNNER_TEMP/colony-first-job-proof"
           node desktop/src-electron/onboarding-smoke.mjs --with-work
-          jq -e '.completed == true and .accountCompleted == true and .workerCompletion.status == "completed" and .cleanup == "complete" and .backingServices.cleanup.complete == true' "$COLONY_SMOKE_PROOF_DIR/account-proof.json"
+          jq -e '.completed == true and .accountCompleted == true and .workerCompletion.status == "completed" and .workerCompletion.teamRecovery.status == "recovered-before-task" and .cleanup == "complete" and .backingServices.cleanup.complete == true' "$COLONY_SMOKE_PROOF_DIR/account-proof.json"
       - name: Preserve synthetic provider real native proof
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
