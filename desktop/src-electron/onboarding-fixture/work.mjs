@@ -17,6 +17,7 @@ import {
 } from "./provider.mjs";
 
 import { readFixtureInstruction } from "./instruction.mjs";
+import { readApprovalAttempt } from "./approval-diagnostics.mjs";
 import { assertCreditsProof, creditsProofQuery } from "./credits-proof.mjs";
 import {
   loseSyncedFixtureTeam,
@@ -257,7 +258,32 @@ export async function completeFixtureWork({
     requestId: account.suggestion.requestId,
   });
   await start.click();
-  await readTeam();
+  await readTeam().catch(async (error) => {
+    onEvidence({
+      retainedApproval: await readApprovalAttempt(page, account).catch(() => ({
+        unavailable: true,
+      })),
+      nativePublishResponses: await readNativePublishObservations(page),
+      relayApprovalEvents: await reader
+        .events(9)
+        .then((events) =>
+          events
+            .filter(
+              (event) =>
+                event.pubkey === account.ownerPubkey &&
+                event.tags.some(
+                  (tag) =>
+                    tag[0] === "client" &&
+                    tag[1] === "colony:first-job-team-approval:v1" &&
+                    tag[2] === account.suggestion.requestId,
+                ),
+            )
+            .map((event) => event.id),
+        )
+        .catch(() => ({ unavailable: true })),
+    });
+    throw error;
+  });
   const publicTeam = () =>
     Object.fromEntries(
       ["scout", "worker"].map((actor) => {

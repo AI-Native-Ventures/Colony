@@ -25,6 +25,7 @@ import { createOnboardingFixtureProxy } from "./onboarding-fixture/proxy.mjs";
 import { startOnboardingFixtureRelay } from "./onboarding-fixture/relay.mjs";
 import { completeFixtureWork } from "./onboarding-fixture/work.mjs";
 import { readIngestFailures } from "./onboarding-fixture/failure-diagnostics.mjs";
+import { readApprovalAttempt } from "./onboarding-fixture/approval-diagnostics.mjs";
 import { readNativePublishObservations } from "./onboarding-fixture/native-publish-diagnostics.mjs";
 
 assert.ok(
@@ -137,6 +138,7 @@ const proof = {
       "onboarding-fixture/native-publish-diagnostics.mjs",
       "onboarding-fixture/team-recovery.mjs",
       "onboarding-fixture/credits-proof.mjs",
+      "onboarding-fixture/approval-diagnostics.mjs",
       "onboarding-fixture/tool-result.mjs",
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",
@@ -468,6 +470,10 @@ try {
     proof.relayStartupDiagnostics = error.startupDiagnostics;
   if (page && !page.isClosed()) {
     proof.nativePublishResponses = await readNativePublishObservations(page);
+    if (proof.suggestion?.requestId && proof.rootEventId)
+      proof.retainedApproval = await readApprovalAttempt(page, proof).catch(
+        () => ({ unavailable: true }),
+      );
     proof.failureState = await page
       .evaluate(async (owner) => {
         const state = {

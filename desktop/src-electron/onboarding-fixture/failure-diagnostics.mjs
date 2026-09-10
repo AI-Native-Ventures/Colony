@@ -1,6 +1,7 @@
 // Failure evidence only. Never repairs state, retries work, or changes transport.
 import assert from "node:assert/strict";
 import { open } from "node:fs/promises";
+import { verifyEvent } from "nostr-tools/pure";
 
 /** Bound and redact diagnostic text before it enters a public proof artifact. */
 export const redactReason = (reason) =>
@@ -12,14 +13,14 @@ export const redactReason = (reason) =>
     .replace(/\b(?:nsec1|npub1)[a-z0-9]+\b/gi, "[redacted-key]")
     .replace(/\b[a-f0-9]{64,}\b/gi, "[redacted-key]")
     .replace(
-      /\b(?:Bearer\s+|(?:password|token|secret|api[_-]?key)\s*[:=]\s*)\S+/gi,
+      /["']?\b(?:password|(?:access[_-]|refresh[_-])?token|(?:client[_-])?secret|api[_-]?key)["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi,
       "[redacted-credential]",
     )
+    .replace(/\b(?:Bearer|Basic)\s+\S+/gi, "[redacted-credential]")
     .replace(/\s+/g, " ")
     .slice(0, 500);
 
-/** Observe a bounded copy while the unmodified response keeps streaming to the app. */
-export function observeEventResponse(response, record) {
+function observeBoundedBody(stream, prefix, project, record) {
   let chunks = [];
   let size = 0;
   let finished = false;
@@ -27,43 +28,95 @@ export function observeEventResponse(response, record) {
     if (finished) return;
     finished = true;
     chunks = [];
-    record(value);
+    // Failure evidence must never interrupt the original transport listener.
+    try {
+      record(value);
+    } catch {
+      // The owning evidence entry remains pending if its recorder is unavailable.
+    }
   };
-  response.on("data", (chunk) => {
+  stream.on("data", (chunk) => {
     if (finished) return;
     size += chunk.length;
-    if (size > 32 * 1024) finish({ unavailable: "response-limit" });
+    if (size > 32 * 1024) finish({ unavailable: `${prefix}-limit` });
     else chunks.push(chunk);
   });
-  response.once("error", () => finish({ unavailable: "response-read" }));
-  response.once("aborted", () => finish({ unavailable: "response-aborted" }));
-  response.once("close", () =>
-    finish({ unavailable: "response-closed-before-end" }),
+  stream.once("error", () => finish({ unavailable: `${prefix}-read` }));
+  stream.once("aborted", () => finish({ unavailable: `${prefix}-aborted` }));
+  stream.once("close", () =>
+    finish({ unavailable: `${prefix}-closed-before-end` }),
   );
-  response.once("end", () => {
+  stream.once("end", () => {
     if (finished) return;
-    let body = null;
     try {
-      body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      finish(project(Buffer.concat(chunks).toString("utf8")));
     } catch {
-      finish({ unavailable: "response-parse" });
-      return;
+      finish({ unavailable: `${prefix}-parse` });
     }
-    if (body?.accepted === true) finish({ accepted: true });
-    else if (
-      body?.accepted === false &&
-      typeof body.event_id === "string" &&
-      body.event_id.length === 64 &&
-      /^[a-f0-9]{64}$/.test(body.event_id) &&
-      typeof body.message === "string"
-    ) {
-      finish({
-        accepted: false,
-        eventId: body.event_id,
-        message: redactReason(body.message),
-      });
-    } else finish({ unavailable: "response-shape" });
   });
+}
+
+/** Observe public, signature-verified identity only; never retain request content or auth. */
+export function observeEventRequest(request, record) {
+  observeBoundedBody(
+    request,
+    "request",
+    (raw) => {
+      const body = JSON.parse(raw);
+      if (!body || typeof body !== "object" || !verifyEvent(body))
+        return { unavailable: "request-signature" };
+      return { eventId: body.id, pubkey: body.pubkey, kind: body.kind };
+    },
+    record,
+  );
+}
+
+/** Observe a bounded copy while the unmodified response keeps streaming to the app. */
+export function observeEventResponse(response, record) {
+  const httpStatus = response.statusCode ?? 200;
+  observeBoundedBody(
+    response,
+    "response",
+    (raw) => {
+      let body = null;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        if (httpStatus === 200) return { unavailable: "response-parse" };
+        return {
+          httpStatus,
+          messageFormat: "text-error",
+          message: redactReason(raw),
+        };
+      }
+      if (body?.accepted === true && httpStatus === 200)
+        return { accepted: true };
+      if (
+        body?.accepted === false &&
+        typeof body.event_id === "string" &&
+        body.event_id.length === 64 &&
+        /^[a-f0-9]{64}$/.test(body.event_id) &&
+        typeof body.message === "string"
+      ) {
+        return {
+          ...(httpStatus === 200 ? {} : { httpStatus }),
+          accepted: false,
+          eventId: body.event_id,
+          message: redactReason(body.message),
+        };
+      }
+      // The real bridge uses {error: string} before/around ingest. Only this
+      // diagnostic string is retained, never arbitrary JSON or reflected fields.
+      if (httpStatus !== 200 && typeof body?.error === "string")
+        return {
+          httpStatus,
+          messageFormat: "json-error",
+          message: redactReason(body.error),
+        };
+      return { unavailable: "response-shape" };
+    },
+    record,
+  );
 }
 
 /** Project only bounded public ingest diagnostics, never arbitrary log fields. */
