@@ -77,6 +77,14 @@ pub(super) fn local_team(
     if let Some(team) = select(&teams) {
         return Ok(team);
     }
+    // An owner can clear a blueprint/custom team's lead under a different ID
+    // from our default. Missing relay state is not permission to replace that
+    // applicable coordination choice with a new competing built-in.
+    if teams.iter().any(|team| {
+        team_publishes_to_relay(team, relay) && team.id.ends_with("company-coordination")
+    }) {
+        return Err(CONFLICT.into());
+    }
     // Same canonical in-memory projection used by event_sync. This does not
     // write teams.json, hire anyone, or repair an owner-invalidated record.
     ensure_coordination_team_for_relay(&mut teams, relay, &crate::util::now_iso());

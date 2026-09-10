@@ -71,6 +71,48 @@ fn manual_blueprint_and_named_team_are_preserved_instead_of_shadowed_by_default(
 }
 
 #[test]
+fn absent_relay_head_does_not_replace_invalid_manual_coordination_choice() {
+    let absent = policy::verified_heads(vec![], &[]).unwrap();
+    assert!(policy::ready_head(&absent, SCOUT).unwrap().is_none());
+    for id in [
+        "company-team:blueprint:company-coordination",
+        "custom:company-coordination",
+        "my-company-coordination",
+    ] {
+        for pin in [Some(RELAY.to_owned()), None] {
+            let mut manual = coordination_team();
+            manual.id = id.into();
+            manual.is_builtin = false;
+            manual.relay_url = pin;
+            manual.lead_persona_id = None;
+            assert_eq!(
+                policy::local_team(vec![manual], RELAY, SCOUT)
+                    .err()
+                    .as_deref(),
+                Some(policy::CONFLICT),
+                "Missing remote state must preserve the owner-invalidated {id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unrelated_invalid_teams_do_not_prevent_this_relay_default() {
+    let mut other_community = coordination_team();
+    other_community.id = "company-team:elsewhere:company-coordination".into();
+    other_community.is_builtin = false;
+    other_community.relay_url = Some("wss://another.example".into());
+    other_community.lead_persona_id = None;
+    let mut unrelated_team = other_community.clone();
+    unrelated_team.id = "my-unfinished-editorial-team".into();
+    unrelated_team.relay_url = Some(RELAY.into());
+    let selected = policy::local_team(vec![other_community, unrelated_team], RELAY, SCOUT).unwrap();
+    assert_eq!(selected.id, coordination_team().id);
+    assert_eq!(selected.relay_url.as_deref(), Some(RELAY));
+    assert_eq!(selected.lead_persona_id.as_deref(), Some(SCOUT));
+}
+
+#[test]
 fn remote_manual_team_wins_without_republishing_stale_local_content() {
     let owner = Keys::generate();
     let local = coordination_team();
