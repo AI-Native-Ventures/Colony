@@ -7,6 +7,25 @@ fn web_url_normalization_keeps_about_blank_and_rejects_empty() {
 }
 
 #[test]
+fn profile_key_keeps_relay_hosts_and_refuses_to_escape_the_profile_root() {
+    assert_eq!(
+        sanitize_profile_key("relay.colony.example"),
+        "relay.colony.example"
+    );
+    assert_eq!(
+        sanitize_profile_key("relay-1_a.example"),
+        "relay-1_a.example"
+    );
+    // A traversal attempt loses its separators rather than climbing out.
+    assert_eq!(sanitize_profile_key("../../etc"), "....etc");
+    assert_eq!(sanitize_profile_key("a/b"), "ab");
+    // Nothing usable left over falls back instead of yielding "" or "..".
+    assert_eq!(sanitize_profile_key(".."), DEFAULT_PROFILE_KEY);
+    assert_eq!(sanitize_profile_key(""), DEFAULT_PROFILE_KEY);
+    assert_eq!(sanitize_profile_key("///"), DEFAULT_PROFILE_KEY);
+}
+
+#[test]
 fn input_validation_accepts_supported_events_and_rejects_bad_coordinates() {
     assert!(validate_mouse(&WebMouseInput {
         event_type: "mousePressed".into(),
@@ -114,6 +133,7 @@ fn test_session() -> Arc<WebSession> {
         done: Mutex::new(Some(done_receiver)),
         task: Mutex::new(None),
         shared_host: None,
+        shared_host_released: AtomicBool::new(false),
         shared: shared_endpoint::SharedTabInfo {
             endpoint: "ws://127.0.0.1:9222".into(),
             target_id: "target-1".into(),

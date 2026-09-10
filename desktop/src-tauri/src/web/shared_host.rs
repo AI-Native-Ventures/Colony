@@ -71,6 +71,31 @@ pub(super) fn release(slot: &SharedHostSlot) {
     }
 }
 
+/// Release one session's claim, shutting the shared browser down cleanly when
+/// this was the last one.
+///
+/// Chromium only writes a persistent profile's cookies to disk on a normal
+/// shutdown, so the mailbox's Gmail login only survives a restart if the last
+/// release asks the browser to close rather than letting `Drop` fall back to a
+/// signal. Callers on a synchronous path (app shutdown) still use [`release`].
+pub(super) async fn release_gracefully(slot: &SharedHostSlot) {
+    let last = {
+        let mut guard = lock(slot);
+        let Some(shared) = guard.as_mut() else {
+            return;
+        };
+        shared.refcount = shared.refcount.saturating_sub(1);
+        if shared.refcount == 0 {
+            guard.take()
+        } else {
+            None
+        }
+    };
+    if let Some(shared) = last {
+        shared.host.close_gracefully().await;
+    }
+}
+
 /// Holds a claim on the shared host until [`SharedHostReservation::keep`] is
 /// called. Dropping it unclaimed (a failed attach/connect after acquiring)
 /// releases the claim instead of leaking the refcount.

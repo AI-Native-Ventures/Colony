@@ -107,44 +107,87 @@ impl OwnedBrowserCleanup {
         }
     }
 
-    /// Kill and reap the owned child. When `persist_profile` is `false`, also
-    /// remove the profile directory; when `true`, leave it intact (mailbox use).
+    /// Terminate and reap the owned child. When `persist_profile` is `false`,
+    /// also remove the profile directory; when `true`, leave it intact so a
+    /// mailbox login survives the restart.
+    ///
+    /// This is the crash fallback, and it runs from `Drop` on whatever thread
+    /// released the host, so it is deliberately bounded: it never waits more
+    /// than [`TERMINATE_GRACE`] before escalating to a kill. Callers that want
+    /// Chromium to flush a persistent profile cleanly should await
+    /// [`BrowserHost::close_gracefully`] first.
     pub fn cleanup(&self) {
         let child = match self.state.child.lock() {
             Ok(mut child) => child.take(),
             Err(error) => error.into_inner().take(),
         };
         if let Some(mut child) = child {
-            // For persistent profiles, try graceful termination first so
-            // Chrome can flush its cookie database before we restart.
-            if self.state.persist_profile {
-                let pid = child.id() as i32;
-                let _ = std::process::Command::new("/bin/kill")
-                    .args(["-TERM", &pid.to_string()])
-                    .status();
-                let deadline = std::time::Instant::now() + Duration::from_secs(15);
-                loop {
-                    match child.try_wait() {
-                        Ok(Some(_)) => break,
-                        Ok(None) if std::time::Instant::now() > deadline => {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            break;
-                        }
-                        _ => {
-                            std::thread::sleep(Duration::from_millis(100));
-                        }
-                    }
-                }
-            } else {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+            terminate_child(&mut child);
         }
         if !self.state.persist_profile {
             let _ = std::fs::remove_dir_all(&self.state.profile_dir);
         }
     }
+
+    /// Poll for the owned child's exit for at most `timeout`, reaping it when
+    /// it goes. Returns `true` once no live child remains.
+    async fn wait_for_exit(&self, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            {
+                let mut slot = match self.state.child.lock() {
+                    Ok(slot) => slot,
+                    Err(error) => error.into_inner(),
+                };
+                match slot.as_mut() {
+                    None => return true,
+                    Some(child) => {
+                        if matches!(child.try_wait(), Ok(Some(_))) {
+                            *slot = None;
+                            return true;
+                        }
+                    }
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+}
+
+/// How long a synchronous teardown waits for `SIGTERM` before killing.
+const TERMINATE_GRACE: Duration = Duration::from_secs(2);
+
+/// How long [`BrowserHost::close_gracefully`] waits for a browser that has
+/// accepted `Browser.close` to actually exit.
+const GRACEFUL_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Stop a browser child without blocking for long.
+///
+/// This can run inside `Drop` on a tokio worker thread, so it must not stall
+/// that thread: the unix path asks with `SIGTERM` (which lets Chromium flush a
+/// persistent profile) and escalates to a kill after [`TERMINATE_GRACE`].
+fn terminate_child(child: &mut Child) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        // Safe: the child has not been reaped yet, so its pid is still ours
+        // and cannot have been recycled onto an unrelated process.
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        let deadline = std::time::Instant::now() + TERMINATE_GRACE;
+        while std::time::Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 impl OwnedBrowserGuard {
@@ -399,6 +442,53 @@ impl BrowserHost {
     /// Clone synchronous cleanup authority for an owned browser process.
     pub fn cleanup_handle(&self) -> Option<OwnedBrowserCleanup> {
         self.owned_process.clone()
+    }
+
+    /// Shut an owned browser down the way quitting it from its own UI would.
+    ///
+    /// Chromium only flushes its cookie database on a normal shutdown, so a
+    /// persistent profile loses its logins when the process is merely killed.
+    /// This sends the CDP `Browser.close` command on the browser-level
+    /// websocket (the same thing Puppeteer's `browser.close()` does), waits up
+    /// to ten seconds for the process to exit, and falls back to the bounded
+    /// synchronous teardown if it does not. The profile directory is left
+    /// alone whenever `persist_profile` is `true`.
+    ///
+    /// Attached hosts are a no-op: their process belongs to the shell that
+    /// started it, and Colony must never shut that down.
+    pub async fn close_gracefully(&self) {
+        let Some(cleanup) = self.owned_process.as_ref() else {
+            return;
+        };
+        if let Err(error) = self.request_browser_close().await {
+            tracing::debug!("browser graceful close request failed: {error}");
+        }
+        if !cleanup.wait_for_exit(GRACEFUL_CLOSE_TIMEOUT).await {
+            tracing::debug!("browser did not exit after Browser.close; falling back to signal");
+        }
+        cleanup.cleanup();
+    }
+
+    /// Send CDP `Browser.close` on this host's browser-level websocket.
+    async fn request_browser_close(&self) -> Result<(), BrowserError> {
+        let version = reqwest::get(format!("{}/json/version", self.base_url))
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        let ws_url = version["webSocketDebuggerUrl"].as_str().ok_or_else(|| {
+            BrowserError::Host(format!(
+                "no browser websocket advertised at {}",
+                self.base_url
+            ))
+        })?;
+        let mut client = crate::cdp::CdpClient::connect(ws_url).await?;
+        // Chromium often tears the websocket down before answering, which the
+        // client surfaces as a transport error even though the shutdown it was
+        // asked for is already under way. `wait_for_exit` is the real check.
+        let _ = client
+            .send_command("Browser.close", serde_json::json!({}))
+            .await;
+        Ok(())
     }
 
     /// Open a new blank page target ("tab") on this host via the DevTools
@@ -916,6 +1006,14 @@ mod tests {
             .await
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // A cookie with no `expires` is a session cookie, which is in-memory by
+        // definition and never written to the profile. A Gmail login cookie is
+        // a persistent one, so give this an expiry too.
+        let expires = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 86_400;
         let set_cookie_result = client_first
             .send_command(
                 "Network.setCookie",
@@ -923,7 +1021,8 @@ mod tests {
                     "name": "mailbox_cookie",
                     "value": "mailbox_value",
                     "domain": "example.com",
-                    "url": "https://example.com/"
+                    "url": "https://example.com/",
+                    "expires": expires,
                 }),
             )
             .await
@@ -935,12 +1034,10 @@ mod tests {
                 .unwrap_or(false),
             "Network.setCookie must report success"
         );
-        // Give Chrome a brief window to flush its cookie database.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
+        // A normal shutdown is what makes Chromium flush its cookie database.
+        host_first.close_gracefully().await;
         drop(host_first);
-        // Give Chrome time to flush its cookie database to disk.
-        tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
 
         // Profile must survive the first host drop.
         assert!(
@@ -966,9 +1063,7 @@ mod tests {
             .send_command("Page.navigate", json!({ "url": "https://example.com/" }))
             .await
             .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        // Give the restarted browser time to load its cookie database.
-        tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         let cookies_result = client_second
             .send_command(
@@ -978,10 +1073,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Note: the cookie exists in memory before drop (verified above); after
-        // a SIGTERM restart Chrome may not load it immediately through CDP in
-        // headless mode, but the profile directory survives intact, which is the
-        // real persistence contract the mailbox feature depends on.
         let cookies = cookies_result["cookies"].as_array().unwrap();
         eprintln!(
             "Cookie after restart (array length={}): mailbox_cookie found={}",
@@ -996,16 +1087,14 @@ mod tests {
             "persistent profile directory must survive restart: {}",
             tmp_dir.display()
         );
-        // The cookie exists in memory before drop (verified above); after a
-        // SIGTERM restart Chrome may not reload it immediately through CDP in
-        // headless mode, so the durable persistence contract (directory survives,
-        // singleton files cleaned, new host launches with the same profile) is
-        // the engine-level proof the mailbox feature depends on.
         assert!(
-            tmp_dir.exists(),
-            "persistent profile directory must survive second host drop"
+            cookies
+                .iter()
+                .any(|c| c["name"].as_str() == Some("mailbox_cookie")),
+            "mailbox_cookie must survive a graceful restart of the persistent profile, got: {cookies:?}"
         );
 
+        host_second.close_gracefully().await;
         drop(host_second);
         let _ = std::fs::remove_dir_all(&tmp_dir);
     }
