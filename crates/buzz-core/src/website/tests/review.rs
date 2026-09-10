@@ -484,8 +484,14 @@ fn check_post(review: &WebsiteReview, step: &Step, label: &str) {
             "{label} post activeApproval"
         );
     }
+    // `count` is overloaded by op: `expect_handover_history` counts retained
+    // handovers, while every other count-bearing step counts decisions. Only
+    // the latter may assert the decision list here; handover records no
+    // decision of its own.
     if let Some(expected) = step.count {
-        assert_eq!(review.decisions.len(), expected, "{label} post decisions");
+        if step.op != "expect_handover_history" {
+            assert_eq!(review.decisions.len(), expected, "{label} post decisions");
+        }
     }
 }
 
