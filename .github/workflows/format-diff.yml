@@ -1,0 +1,52 @@
+name: Format diff
+# On-demand formatter run for a branch whose author cannot run the repo's
+# formatters locally (for example an agent-written branch on a machine that
+# must not run local tooling). It applies the same fix recipes the pre-commit
+# hook runs (`just fmt`, `just desktop-tauri-fmt`, `just desktop-fix`,
+# `just web-fix`) on a GitHub runner and uploads the resulting `git diff` as
+# an artifact. It never pushes: a human or orchestrator applies the patch and
+# commits it with their own sign-off, so DCO and authorship stay intact.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: format-diff-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Run formatters and upload the diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - name: Install JS dependencies
+        run: just desktop-install-ci
+      - name: Rust formatting
+        run: |
+          just fmt
+          just desktop-tauri-fmt
+      - name: Desktop and web biome fixes
+        run: |
+          (cd desktop && pnpm exec biome check --write . || true)
+          (cd web && pnpm exec biome check --write . || true)
+      - name: Collect the diff
+        run: |
+          git --no-pager diff --stat
+          git diff > format.patch
+          wc -c format.patch
+      - name: Upload the patch
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: format-patch
+          path: format.patch
+          if-no-files-found: error
