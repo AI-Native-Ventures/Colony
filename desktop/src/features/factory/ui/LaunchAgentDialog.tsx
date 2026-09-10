@@ -16,11 +16,19 @@ import {
   resolveStartRuntimeForDefinition,
 } from "@/features/agents/lib/instanceInputForDefinition";
 import { getProviderEffortConfig } from "@/features/agents/ui/buzzAgentConfig";
+import { useCommunities } from "@/features/communities/useCommunities";
+import { findProjectForChannel } from "@/features/factory/lib/projectChannel";
 import {
   launchSelectionId,
   planAgentLaunch,
   type LaunchAgentFormState,
 } from "@/features/factory/lib/launchPlan";
+import {
+  buildWorktreeRequest,
+  worktreeBranchFor,
+} from "@/features/factory/lib/worktreePlan";
+import { useProjectsQuery } from "@/features/projects/hooks";
+import { nativeFactory } from "@/shared/api/nativeBridge";
 import {
   LaunchAgentFields,
   type LaunchAgentOption,
@@ -43,6 +51,8 @@ const EMPTY_FORM: LaunchAgentFormState = {
   runtimeId: "",
   model: "",
   effort: "",
+  worktreeMode: "new",
+  worktreeBranch: "",
   brief: "",
 };
 
@@ -62,11 +72,14 @@ export type LaunchedAgent = {
  * the error.
  */
 export function LaunchAgentDialog({
+  briefPrefill = "",
   channelId,
   onLaunched,
   onOpenChange,
   open,
 }: {
+  /** Seeds the brief — a tile's "New agent…" starts it "Delegated by X: ". */
+  briefPrefill?: string;
   channelId: string;
   onLaunched: (launched: LaunchedAgent) => void;
   onOpenChange: (open: boolean) => void;
@@ -81,15 +94,23 @@ export function LaunchAgentDialog({
   const updateAgent = useUpdateManagedAgentMutation();
   const attachToChannel = useAttachManagedAgentToChannelMutation(channelId);
 
+  const projectsQuery = useProjectsQuery();
+  const project = findProjectForChannel(projectsQuery.data, channelId);
+  const { activeCommunity } = useCommunities();
+
   const [form, setForm] = React.useState<LaunchAgentFormState>(EMPTY_FORM);
+  // Until the user types in the branch field, it tracks the brief; after that
+  // it is theirs and a later brief edit must not overwrite what they wrote.
+  const [branchEdited, setBranchEdited] = React.useState(false);
   const [launching, setLaunching] = React.useState(false);
   const [problem, setProblem] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, brief: briefPrefill });
+    setBranchEdited(false);
     setProblem(null);
-  }, [open]);
+  }, [briefPrefill, open]);
 
   const personas = React.useMemo(
     () => (personasQuery.data ?? []).filter((persona) => persona.isActive),
@@ -114,6 +135,29 @@ export function LaunchAgentDialog({
   );
 
   const selected = resolveSelected(form.selectionId, personas, agents);
+  const selectedName =
+    selected?.type === "persona"
+      ? selected.persona.displayName
+      : (selected?.agent.name ?? "agent");
+  const defaultBranch =
+    project?.repositories.find(
+      (candidate) => candidate.repoAddress === project.primaryRepositoryAddress,
+    )?.defaultBranch ??
+    project?.repositories[0]?.defaultBranch ??
+    "main";
+
+  // The branch name follows the brief until the user takes it over. Derived in
+  // an effect rather than at render so the field stays a controlled input the
+  // user can actually type into.
+  const derivedBranch = worktreeBranchFor(form.brief, selectedName);
+  React.useEffect(() => {
+    if (!open || branchEdited) return;
+    setForm((current) =>
+      current.worktreeBranch === derivedBranch
+        ? current
+        : { ...current, worktreeBranch: derivedBranch },
+    );
+  }, [branchEdited, derivedBranch, open]);
   const teams: LaunchAgentOption[] = React.useMemo(() => {
     const personaId =
       selected?.type === "persona"
@@ -148,8 +192,9 @@ export function LaunchAgentDialog({
   );
 
   const handleChange = React.useCallback(
-    (patch: Partial<LaunchAgentFormState>) => {
+    (patch: Partial<LaunchAgentFormState> & { branchEdited?: boolean }) => {
       setProblem(null);
+      if (patch.branchEdited) setBranchEdited(true);
       setForm((current) => {
         const next = { ...current, ...patch };
         // A different employee carries a different harness, model and team, so
@@ -173,6 +218,21 @@ export function LaunchAgentDialog({
     setLaunching(true);
     setProblem(null);
     try {
+      // The worktree comes first: a git failure or a project with no local
+      // checkout must abort the launch before an agent has been minted.
+      let workingDir: string | null = null;
+      if (plan.worktree) {
+        const request = buildWorktreeRequest({
+          project,
+          reposDir: activeCommunity?.reposDir ?? null,
+          branch: plan.worktree.branch,
+        });
+        if (!request) {
+          throw new Error("This project has no repository to branch from.");
+        }
+        workingDir = (await nativeFactory().createWorktree(request)).path;
+      }
+
       let agent: ManagedAgent;
       if (plan.create) {
         const persona = personas.find(
@@ -192,6 +252,7 @@ export function LaunchAgentDialog({
           ...input,
           ...(plan.create.model ? { model: plan.create.model } : {}),
           ...(plan.create.teamId ? { teamId: plan.create.teamId } : {}),
+          ...(workingDir ? { workingDir } : {}),
           envVars: plan.create.envVars,
         });
         agent = created.agent;
@@ -202,9 +263,16 @@ export function LaunchAgentDialog({
             candidate.pubkey === plan.selection.pubkey,
         );
         if (!existing) throw new Error("That agent is no longer available.");
-        agent = plan.update
-          ? (await updateAgent.mutateAsync(plan.update)).agent
-          : existing;
+        // A worktree is a record change too, so it forces the update even when
+        // the form left model and effort exactly as they were.
+        const patch =
+          plan.update || workingDir
+            ? {
+                ...(plan.update ?? { pubkey: existing.pubkey }),
+                ...(workingDir ? { workingDir } : {}),
+              }
+            : null;
+        agent = patch ? (await updateAgent.mutateAsync(patch)).agent : existing;
       }
 
       // Membership and the start ride the same call: a running agent only
@@ -251,6 +319,7 @@ export function LaunchAgentDialog({
         </DialogHeader>
 
         <LaunchAgentFields
+          defaultBranch={defaultBranch}
           disabled={launching}
           effortDefault={effortConfig.defaultValue}
           effortValid={effortConfig.validValues}

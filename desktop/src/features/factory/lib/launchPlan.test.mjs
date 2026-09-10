@@ -27,6 +27,8 @@ function form(overrides = {}) {
     runtimeId: "",
     model: "",
     effort: "",
+    worktreeMode: "shared",
+    worktreeBranch: "",
     brief: "Add CSV export.",
     ...overrides,
   };
@@ -184,4 +186,52 @@ test("a blank brief, a blank pick and a stale pick each refuse", async () => {
     m.planAgentLaunch(form({ selectionId: "agent:ff99" }), context),
     { ok: false, problem: "That agent is no longer on this device." },
   );
+});
+
+test("the shared checkout plans no worktree", async () => {
+  const m = await load();
+  const result = m.planAgentLaunch(form(), {
+    personas: PERSONAS,
+    agents: AGENTS,
+  });
+  assert.ok(result.ok);
+  assert.strictEqual(result.plan.worktree, null);
+});
+
+test("a new worktree carries its branch through the plan", async () => {
+  const m = await load();
+  const result = m.planAgentLaunch(
+    form({ worktreeMode: "new", worktreeBranch: "  feat/csv-export  " }),
+    { personas: PERSONAS, agents: AGENTS },
+  );
+  assert.ok(result.ok);
+  assert.deepStrictEqual(result.plan.worktree, { branch: "feat/csv-export" });
+});
+
+test("a new worktree without a branch is refused", async () => {
+  const m = await load();
+  const result = m.planAgentLaunch(
+    form({ worktreeMode: "new", worktreeBranch: "   " }),
+    { personas: PERSONAS, agents: AGENTS },
+  );
+  assert.strictEqual(result.ok, false);
+  assert.match(result.problem, /branch/i);
+});
+
+test("an existing agent can be re-launched into a new worktree alone", async () => {
+  const m = await load();
+  const result = m.planAgentLaunch(
+    form({
+      selectionId: "agent:aa11",
+      model: "gpt-5.6-sol",
+      effort: "medium",
+      worktreeMode: "new",
+      worktreeBranch: "feat/second-run",
+    }),
+    { personas: PERSONAS, agents: AGENTS },
+  );
+  assert.ok(result.ok);
+  // Nothing about the record changed, so no update — only the worktree.
+  assert.strictEqual(result.plan.update, null);
+  assert.deepStrictEqual(result.plan.worktree, { branch: "feat/second-run" });
 });

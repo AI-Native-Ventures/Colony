@@ -50,9 +50,12 @@ const CHIP_CLASS =
 /** The tile's identity row: who this is, what it is set to, and stop/restart. */
 export function AgentTileHeader({
   agent,
+  menu,
   status,
 }: {
   agent: ManagedAgent;
+  /** Overflow menu, supplied by the tile so the header stays presentational. */
+  menu?: React.ReactNode;
   status: AgentTileStatus;
 }): React.JSX.Element {
   const runtimesQuery = useAcpRuntimesQuery();
@@ -63,7 +66,7 @@ export function AgentTileHeader({
           candidate.id.trim().toLowerCase() === harness.id?.toLowerCase(),
       )
     : undefined;
-  const worktree = resolveAgentWorktreeLabel(agent.envVars);
+  const worktree = resolveAgentWorktreeLabel(agent);
   const actions = useManagedAgentActions();
   const isActive = isManagedAgentActive(agent);
   const isRestarting = actions.restartingAgentPubkey === agent.pubkey;
@@ -162,6 +165,7 @@ export function AgentTileHeader({
             className={cn("h-3.5 w-3.5", isRestarting && "animate-spin")}
           />
         </button>
+        {menu}
       </div>
     </div>
   );

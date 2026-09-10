@@ -502,3 +502,33 @@ test("insertPaneAtEdge allows null tabId to create empty pane", async () => {
   assert.deepEqual(newPane?.tabIds, []);
   assert.equal(newPane?.activeTabId, null);
 });
+
+test("paneRightOf finds the next pane in a horizontal group", async () => {
+  const m = await load();
+  const root = makeGroup("g", "horizontal", [
+    makePane("left", ["a"]),
+    makePane("right", ["b"]),
+  ]);
+  assert.equal(m.paneRightOf(root, "left")?.id, "right");
+  assert.equal(m.paneRightOf(root, "right"), null);
+});
+
+test("paneRightOf ignores vertical groups and a lone root pane", async () => {
+  const m = await load();
+  const column = makeGroup("g", "vertical", [
+    makePane("top", ["a"]),
+    makePane("bottom", ["b"]),
+  ]);
+  assert.equal(m.paneRightOf(column, "top"), null);
+  assert.equal(m.paneRightOf(makePane("only", []), "only"), null);
+  assert.equal(m.paneRightOf(column, "missing"), null);
+});
+
+test("paneRightOf refuses a nested group as a target", async () => {
+  const m = await load();
+  const root = makeGroup("g", "horizontal", [
+    makePane("left", ["a"]),
+    makeGroup("nested", "vertical", [makePane("x", []), makePane("y", [])]),
+  ]);
+  assert.equal(m.paneRightOf(root, "left"), null);
+});

@@ -1059,6 +1059,7 @@ type RawManagedAgent = {
   model: string | null;
   provider?: string | null;
   env_vars?: Record<string, string>;
+  working_dir?: string | null;
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
   created_at: string;
@@ -9494,6 +9495,7 @@ async function handleCreateManagedAgent(
       model?: string;
       provider?: string;
       envVars?: Record<string, string>;
+      workingDir?: string;
       spawnAfterCreate?: boolean;
       startOnAppLaunch?: boolean;
       backend?:
@@ -9569,7 +9571,15 @@ async function handleCreateManagedAgent(
     avatar_url: avatarUrl,
     model: args.input.model?.trim() || linkedPersona?.model || null,
     provider: args.input.provider?.trim() || linkedPersona?.provider || null,
-    env_vars: { ...(args.input.envVars ?? {}) },
+    // The native create mirrors the worktree into COLONY_WORKTREE so the tile
+    // chip and the spawned child name the same directory; mirror it here too.
+    env_vars: {
+      ...(args.input.envVars ?? {}),
+      ...(args.input.workingDir
+        ? { COLONY_WORKTREE: args.input.workingDir }
+        : {}),
+    },
+    working_dir: args.input.workingDir ?? null,
     status: args.input.spawnAfterCreate ? "running" : "stopped",
     pid: args.input.spawnAfterCreate ? 42000 + mockManagedAgents.length : null,
     created_at: now,
@@ -9830,6 +9840,7 @@ async function handleUpdateManagedAgent(args: {
     model?: string | null;
     systemPrompt?: string | null;
     envVars?: Record<string, string>;
+    workingDir?: string | null;
     respondTo?: "owner-only" | "allowlist" | "anyone";
     respondToAllowlist?: string[];
   };
@@ -9846,6 +9857,18 @@ async function handleUpdateManagedAgent(args: {
   }
   if (args.input.envVars !== undefined) {
     agent.env_vars = { ...args.input.envVars };
+  }
+  // Applied after the env replacement, exactly like the native command: an
+  // env edit must not wipe the COLONY_WORKTREE mirror.
+  if (args.input.workingDir !== undefined) {
+    const workingDir = args.input.workingDir?.trim() || null;
+    agent.working_dir = workingDir;
+    if (workingDir) {
+      agent.env_vars = { ...agent.env_vars, COLONY_WORKTREE: workingDir };
+    } else {
+      const { COLONY_WORKTREE: _dropped, ...rest } = agent.env_vars ?? {};
+      agent.env_vars = rest;
+    }
   }
   if (args.input.respondTo !== undefined) {
     agent.respond_to = args.input.respondTo;
@@ -14418,6 +14441,25 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleGetChannelWindow>[0],
           activeConfig,
         );
+      case "factory_worktree_create": {
+        // The real command shells out to `git worktree add`; the mock answers
+        // with the path it would have produced so the launcher's worktree lane
+        // is exercised end to end without a checkout on disk.
+        const args = payload as {
+          request: {
+            reposDir: string | null;
+            projectDtag: string;
+            branch: string;
+          };
+        };
+        const slug = args.request.branch.replace(/[^A-Za-z0-9_.-]+/g, "-");
+        const root = args.request.reposDir ?? "/workspace/repos";
+        return {
+          path: `${root}/.colony-worktrees/${args.request.projectDtag}/${slug}`,
+          branch: args.request.branch,
+          created: true,
+        };
+      }
       case "send_channel_message":
         return handleSendChannelMessage(
           payload as Parameters<typeof handleSendChannelMessage>[0],
