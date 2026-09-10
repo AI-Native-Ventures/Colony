@@ -236,7 +236,8 @@ test("failure log projection excludes unrelated records and strips sensitive tex
   )[0].reason;
   assert.equal(control, "reason end");
   assert.equal(
-    projectIngestFailures(Array(30).fill(lines[1]), ownerPubkey).length,
+    projectIngestFailures(Array(30).fill(JSON.stringify(fields)), ownerPubkey)
+      .length,
     20,
   );
   assert.equal(
