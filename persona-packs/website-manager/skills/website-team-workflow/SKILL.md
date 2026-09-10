@@ -21,6 +21,9 @@ review, and handover without a second tracker.
   teammate.
 - A stage is complete only when its output ref is in the thread and the
   evidence gate passed.
+- Post a status line only on a meaningful factual change: a stage transition, a
+  new output ref, or a new blocker. Do not post after every teammate reply, and
+  never re-post a review card for the same version.
 - Never call owner-side job lease commands from an agent identity.
 - Never publish or promise publication.
 
@@ -38,14 +41,31 @@ review, and handover without a second tracker.
 5. **Owner review.** Run the owner-review skill. One request per version.
 6. **Handover.** Run the handover skill. Publication stays separate.
 
-After each reply, post a one-line status: stage, refs, next step. Never post a
-step that has not happened.
+After a meaningful stage change, post one status line: stage, refs, next step.
+Never post a step that has not happened, and do not narrate routine replies.
+
+## Deduplication and restart limits
+
+The mention handoff is best-effort. Searching the thread cannot guarantee
+exactly-once intent under concurrent workers or a restart: two actors can each
+miss the other's handoff and duplicate work. Never describe the fallback as
+providing restart-safe exactly-once.
+
+When the canonical Website Manager record and its durable platform command are
+wired (see `docs/website-manager-protocol.md`), recover from that record first
+and dispatch against its derived decision identity; that identity is the
+once-only key. Until then, re-read the thread immediately before re-issuing a
+handoff, treat an existing handoff as final, and say the check is best-effort
+when it matters.
 
 ## Restart recovery
 
-On restart, read the project thread newest-first and list the project's tasks
-(`buzz tasks list --company <id>`). Reconstruct the stage from refs. Resume at
-the first stage without a recorded output. Never repeat a recorded stage.
+On restart, recover before acting. When a canonical record exists for the job,
+read it first: it owns the revision, QA, decision, and handover state. Then read
+the project thread newest-first and list the project's tasks
+(`buzz tasks list --company <id>`). Reconstruct the stage from the record and
+the refs. Resume at the first stage without a recorded output. Never repeat a
+recorded stage.
 
 ## Gaps
 
@@ -55,7 +75,10 @@ affected stage, and continue with what is possible. Escalate with
 
 ## Output contract
 
-One JSON status object per update, posted in the thread or attached as a file:
+One bounded status object per meaningful update, posted in the thread. This is a
+thread status, not a second tracker: the canonical job state is the Website
+Manager review record (`colony.website-review/v1` in
+`docs/website-manager-protocol.md`) once the platform integration is wired.
 
 ```json
 {

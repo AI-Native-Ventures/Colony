@@ -8,9 +8,9 @@ Method; it contains no Horizon-specific content and no sample outputs.
 
 | Teammate | Role | Owns |
 |---|---|---|
-| **Avery** | Website Manager | Scoping, delegation, evidence gates, owner review, handover |
+| **Avery** | Website Manager | Scoping, delegation, evidence gates, owner review, handover verification and presentation |
 | **Ren** | Researcher | Cited dossier, site inventory, before captures, gaps |
-| **Jules** | Designer-builder | One direction, immutable version, source, assets |
+| **Jules** | Designer-builder | One direction, immutable version, source, assets, handover bundle and access-request draft |
 | **Vera** | Independent reviewer | Rendered and functional QA, findings, verdict |
 
 The default names are shipped defaults and may be renamed per community. Roles,
@@ -22,8 +22,10 @@ evidence gates, and prohibitions are not optional.
 2. Direction: Jules picks one direction grounded in the dossier.
 3. Build: Jules implements an immutable version.
 4. Independent review: Vera reviews that exact version on desktop and mobile.
-5. Owner review: Avery presents one review packet per version.
-6. Handover: Avery assembles the bundle and drafts access requests.
+5. Owner review: Avery presents one review packet per version; feedback maps to
+   the protocol's `requestChanges` decision.
+6. Handover: Jules assembles the bundle and drafts access requests; Avery
+   verifies the required refs and presents them.
 
 Publication is a separate, owner-authorized step. Feedback on a reviewed version
 produces a new version; the reviewed one is never mutated.
@@ -40,6 +42,12 @@ moves by mention handoff:
    mentions the delegator back. That mention is the completion signal.
 3. Task-bound work is also reported with
    `buzz tasks report-complete --task <task-id> --note "<text>"`.
+
+This fallback is best-effort and does not provide atomic deduplication: two
+concurrent workers or a restart can duplicate a handoff. Once the canonical
+Website Manager record and its durable platform command are wired
+(`docs/website-manager-protocol.md`), recovery and dispatch use that record's
+derived decision identity, which is the once-only key.
 
 Factual site evidence uses the supported scanner:
 `buzz company scan --url <url> [--max-pages <n>]`. It is bounded, SSRF-safe,
@@ -66,7 +74,7 @@ discipline, the no-owner-keys rule, and the no-publication rule. The manager
 coordinates, gates, and presents; the builder produces the source, assets, and
 handover artifact.
 
-## Runtime integration requirements (not yet wired)
+## Runtime integration requirements
 
 Pack files alone do not implement any of the following. Each is a runtime or
 owner-side responsibility:
@@ -78,13 +86,16 @@ owner-side responsibility:
    Until then, the mention handoff above is the supported path.
 2. **Website Manager API.** Project registry, preview hosting, render and
    screenshot service, and durable artifact store. The version preview contract
-   will be specified in `docs/website-manager-protocol.md` when that work lands.
-3. **Pack installation.** Installing a pack must be idempotent: re-running an
-   install or upgrading the pack must not duplicate agents, must scope agents
-   and channels to the installing community, and must preserve owner
-   customizations (renames, edited prompts, edited skills) rather than
-   overwriting them with pack defaults. Import currently means recreating
-   agents from `buzz pack inspect` output, so preservation is manual today.
+   is specified in `docs/website-manager-protocol.md`; the relay/native
+   integration is landing separately.
+3. **Pack installation (implemented).** The desktop installer creates the
+   personas, team, and one managed agent per persona for the community you are
+   in, publishes the real team/persona/agent heads to that relay, and writes the
+   skills into the agent workspace. It is idempotent by deterministic
+   owner+community+team+role identity with a durable journal: a repeat click,
+   retry after a partial install, restart, or community switch reconciles
+   existing records instead of duplicating them, and it preserves owner edits to
+   names, prompts, skills, roles, and org placement.
 4. **Capture and artifact tooling.** Browser, file, and media tooling may cover
    full-page desktop/mobile captures and artifact refs in the interim. Where it
    does not, personas record a concrete gap and stop that step.
@@ -99,3 +110,6 @@ owner-side responsibility:
 - `persona-packs/website-manager/personas/*.persona.md`: the four teammates.
 - `persona-packs/website-manager/skills/*/SKILL.md`: per-role runbooks.
 - `persona-packs/website-manager/README.md`: install and customization notes.
+- `desktop/src-tauri/src/managed_agents/website_team/`: the native installer and
+  bundled recipe.
+- `desktop/src/features/websiteTeam/`: the Agents entry and install dialog.

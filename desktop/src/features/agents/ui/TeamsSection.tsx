@@ -37,6 +37,7 @@ type TeamsSectionProps = {
   onAddToChannel: (team: AgentTeam) => void;
   onShare: (team: AgentTeam) => void;
   onImport: () => void;
+  onInstallWebsiteManager: () => void;
 };
 
 export function TeamsSection({
@@ -52,6 +53,7 @@ export function TeamsSection({
   onAddToChannel,
   onShare,
   onImport,
+  onInstallWebsiteManager,
 }: TeamsSectionProps) {
   return (
     <section className="relative space-y-4" data-testid="agents-library-teams">
@@ -88,6 +90,7 @@ export function TeamsSection({
             isPending={isPending}
             onCreate={onCreate}
             onImport={onImport}
+            onInstallWebsiteManager={onInstallWebsiteManager}
           />
           {teams.map((team) => {
             const resolution = resolveTeamPersonas(team, personas);
@@ -192,10 +195,12 @@ function NewTeamCard({
   isPending,
   onCreate,
   onImport,
+  onInstallWebsiteManager,
 }: {
   isPending: boolean;
   onCreate: () => void;
   onImport: () => void;
+  onInstallWebsiteManager: () => void;
 }) {
   return (
     <DropdownMenu modal={false}>
@@ -211,6 +216,13 @@ function NewTeamCard({
         </DropdownMenuItem>
         <DropdownMenuItem disabled={isPending} onClick={onImport}>
           Import
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          disabled={isPending}
+          onClick={onInstallWebsiteManager}
+        >
+          Website Manager
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

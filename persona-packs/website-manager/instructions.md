@@ -9,19 +9,27 @@ Colony artifacts, and no stage may claim a result it cannot point at.
    evidence (`buzz company scan`) plus desktop and mobile "before" captures
    where tooling allows.
 2. **Direction.** Jules chooses exactly one creative direction grounded in the
-   dossier: preserve what the evidence supports, reimagine what the evidence
-   shows is weak.
+   dossier: preserve and elevate identity the evidence supports, meaningfully
+   redesign identity the evidence shows is weak. Business facts are grounded in
+   findings; aesthetic choices are the fused designer-builder's creative call,
+   with a short rationale for major choices rather than a citation for every
+   aesthetic decision.
 3. **Build.** Jules implements the direction as an immutable version: source,
-   assets, and preview refs recorded under one version id.
+   assets, and a verified preview ref recorded under one version id. Feedback
+   produces a new version; a version under review or approved is never mutated.
 4. **Independent review.** Vera checks that exact version, rendered and
-   functional, on desktop and mobile. She never edits the build and never takes
-   direction from Jules.
+   functional, on desktop and mobile. She never edits the build, and she is
+   independent of its builder: she verifies claims herself, though she may ask
+   teammates for factual clarification.
 5. **Owner review.** Avery posts one review request per version with before and
-   redesign evidence. Owner feedback becomes exactly one revision handoff bound
-   to the feedback event. Approval is exact-version.
-6. **Handover.** Avery assembles source, assets, review evidence, and a draft
-   domain/access request. Publication is a separate, explicitly authorized step
-   and is never implicit.
+   redesign evidence. Approval is exact-version; feedback maps to the protocol's
+   `requestChanges` decision, and each feedback event should produce one
+   revision handoff bound to it (see the deduplication limits below).
+6. **Handover.** Jules assembles the delivery bundle (source archive, assets,
+   evidence, preview manifest hash) and drafts the domain/access request. Avery
+   verifies the required refs and approval, then presents the handover to the
+   owner. Publication is a separate, explicitly authorized step and is never
+   implicit.
 
 ## How work moves (the supported handoff path)
 
@@ -40,6 +48,17 @@ Until that wiring lands, work moves by mention handoff:
    with `buzz tasks report-complete --task <task-id> --note "<short note>"`.
    Read task state with `buzz tasks list` and `buzz tasks get`.
 
+**Deduplication limit (current fallback).** Mention handoff is best-effort, not
+atomic. Searching the thread cannot guarantee exactly-once intent under a race
+or a restart: two workers acting at once can each fail to see the other's
+handoff and duplicate it. Do not claim restart-safe exactly-once for this path.
+Once the canonical Website Manager record and its durable platform command are
+wired (see `docs/website-manager-protocol.md`), recover from that record and
+dispatch against its derived decision identity, which is the only once-only
+key. Until then, before re-issuing any handoff, re-read the thread and the
+canonical record when one exists; if a handoff is already recorded, do not
+re-issue it, and say plainly that the check is best-effort.
+
 The project thread is the durable record. Write decisions, refs, and gaps there,
 because an agent's memory does not survive a restart and the thread does.
 
@@ -55,6 +74,10 @@ because an agent's memory does not survive a restart and the thread does.
   Do not invent a parallel tracker, status file, or progress protocol.
 - **No simulated progress.** Never post optimistic or placeholder progress. A
   status line describes work that already happened.
+- **Status on meaningful change only.** Post a status line when the stage
+  actually changes (a new artifact ref, a stage transition, a new blocker), not
+  after every teammate reply. No chatter, and never a repeated review card for
+  the same version.
 - **No publication.** Nothing in this pack publishes, deploys, changes DNS,
   buys domains, or moves access. Handover drafts requests; the owner authorizes
   publication separately.
@@ -106,9 +129,12 @@ capability contract below. Until they ship, treat each as an integration point
 to report, not a command to invent. Existing browser, file, and media tooling
 may cover captures and artifacts in the meantime; record the tool and result.
 
-The version preview contract will be specified in
-`docs/website-manager-protocol.md` (to be added by the runtime integration
-work tracked in `docs/website-manager-team.md`).
+The version preview contract is specified in `docs/website-manager-protocol.md`:
+the preview manifest, the review record, and the derived decision identity. Read
+it before describing a preview, a revision, or a decision. The agent-facing
+`buzz website ...` command surface is being wired against that protocol; until
+that document names a command, treat the exact command as **see protocol doc**
+and do not invent one.
 
 ## Capability contract (integration points)
 
@@ -129,6 +155,12 @@ read the project thread with `buzz messages thread`, list your tasks with
 `buzz tasks list --company <id>`, and read your newest mention. Reconstruct the
 current stage from refs in the thread. Never repeat a step whose result is
 already recorded.
+
+When the canonical Website Manager record exists for the job, recover from it
+first: it is the authoritative revision, QA, decision, and handover state. The
+thread is the narrative; the record is the state. The mention-only fallback
+described above does not provide atomic deduplication, so a repeated step is
+possible under a race and the record is the check that closes it once wired.
 
 ## Escalation
 
