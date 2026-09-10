@@ -48,10 +48,26 @@ export function reconcileTree(
   }
 
   // Add workspace tabs missing from the tree into the focused pane.
+  // First collect all tab ids that already exist anywhere in the tree.
+  const allPaneIds: string[] = [];
+  function collectAllPaneIds(node: TileLayoutNode): void {
+    if (node.kind === "pane") {
+      allPaneIds.push(node.id);
+    } else {
+      for (const child of node.children) collectAllPaneIds(child);
+    }
+  }
+  collectAllPaneIds(result.root);
+  const allTreeTabIds: string[] = [];
+  for (const paneId of allPaneIds) {
+    const pane = findPaneById(result.root, paneId);
+    if (pane) allTreeTabIds.push(...pane.tabIds);
+  }
+  const existingIds = new Set(allTreeTabIds);
+
   const focusedPaneId = result.focusedPaneId;
   const focusedPane = findPaneById(result.root, focusedPaneId);
   if (focusedPane) {
-    const existingIds = new Set([...focusedPane.tabIds]);
     const missingIds = workspaceTabIds.filter(
       (id) => id !== factoryId && !existingIds.has(id),
     );

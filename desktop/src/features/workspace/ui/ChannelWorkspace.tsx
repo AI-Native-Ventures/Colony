@@ -4,12 +4,12 @@ import { setChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMo
 import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import {
   clearActiveTab,
-  closeTab,
   getWorkspace,
   openTab,
   setActiveTab,
   useWorkspace,
 } from "@/features/workspace/lib/workspaceTabs";
+import { closeWorkspaceTab } from "@/features/workspace/lib/closeWorkspaceTab";
 import { getTabBody } from "@/features/workspace/kinds";
 import { NewTabPage } from "@/features/workspace/ui/NewTabPage";
 import { WorkspaceTabStrip } from "@/features/workspace/ui/WorkspaceTabStrip";
@@ -53,20 +53,13 @@ export function ChannelWorkspace({
   }, [channelId]);
 
   const handleClose = React.useCallback(
-    (tabId: string) => {
+    async (tabId: string) => {
       const tab = tabs.find((candidate) => candidate.id === tabId);
       if (!tab) return;
-      const definition = getTabKind(tab.kind);
-      void Promise.resolve(definition?.dispose?.(tab))
-        .catch((error: unknown) => {
-          console.error("Failed to dispose workspace tab:", error);
-        })
-        .finally(() => {
-          closeTab(channelId, tabId);
-          if (getWorkspace(channelId).tabs.length === 0) {
-            setChannelSurfaceMode(channelId, "timeline");
-          }
-        });
+      await closeWorkspaceTab(channelId, tabId);
+      if (getWorkspace(channelId).tabs.length === 0) {
+        setChannelSurfaceMode(channelId, "timeline");
+      }
     },
     [channelId, tabs],
   );

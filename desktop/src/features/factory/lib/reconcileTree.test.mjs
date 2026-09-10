@@ -33,6 +33,28 @@ test("reconcileTree drops missing tabs", async () => {
   assert.deepEqual(reconciled.root.tabIds, ["t-1", "t-2"]);
 });
 
+test("reconcileTree does not duplicate tabs already in another pane", async () => {
+  const m = await load();
+  const { createInitialTree, addTabToPane, insertPaneAtEdge } = await import("./tileTree.ts?test=" + Math.random());
+  let state = createInitialTree("main");
+  state = addTabToPane(state, "main", "t-1");
+  const splitResult = insertPaneAtEdge(state, "main", "right", "pane-b", "t-2");
+  if (!splitResult) throw new Error("split failed");
+  const reconciled = m.reconcileTree(splitResult, ["t-1", "t-2"], "factory");
+  // Both tabs should exist exactly once across the tree.
+  const allIds = [];
+  function collect(node) {
+    if (node.kind === "pane") {
+      allIds.push(...node.tabIds);
+    } else {
+      for (const child of node.children) collect(child);
+    }
+  }
+  collect(reconciled.root);
+  assert.equal(allIds.filter((id) => id === "t-1").length, 1);
+  assert.equal(allIds.filter((id) => id === "t-2").length, 1);
+});
+
 test("reconcileTree excludes factory tab id", async () => {
   const m = await load();
   const { createInitialTree, addTabToPane } = await import(

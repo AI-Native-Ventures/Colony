@@ -21,7 +21,8 @@ import { FactoryCanvas } from "@/features/factory/ui/FactoryCanvas";
 import { FactoryToolbar } from "@/features/factory/ui/FactoryToolbar";
 import { isProjectChannel } from "@/features/factory/lib/projectChannel";
 import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
-import { useWorkspace, closeTab } from "@/features/workspace/lib/workspaceTabs";
+import { useWorkspace } from "@/features/workspace/lib/workspaceTabs";
+import { closeWorkspaceTab } from "@/features/workspace/lib/closeWorkspaceTab";
 
 export const factoryKindDefinition: TabKindDefinition = {
   kind: "factory",
@@ -57,6 +58,9 @@ export function FactoryBody({
 }: TabBodyProps): React.JSX.Element {
   const { state, commit } = useFactoryTree(channelId, tab);
   const workspace = useWorkspace(channelId);
+  const [preset, setPreset] = React.useState<
+    "single" | "columns" | "grid" | "focus" | null
+  >(null);
 
   // Handle pane focus.
   const handlePaneFocus = React.useCallback(
@@ -70,6 +74,7 @@ export function FactoryBody({
   // Handle split actions.
   const handlePaneSplitRight = React.useCallback(
     (paneId: string) => {
+      setPreset(null);
       const newPaneId = `pane-${Math.random().toString(36).slice(2)}`;
       const result = insertPaneAtEdge(state, paneId, "right", newPaneId, null);
       if (result) {
@@ -85,6 +90,7 @@ export function FactoryBody({
 
   const handlePaneSplitDown = React.useCallback(
     (paneId: string) => {
+      setPreset(null);
       const newPaneId = `pane-${Math.random().toString(36).slice(2)}`;
       const result = insertPaneAtEdge(state, paneId, "bottom", newPaneId, null);
       if (result) {
@@ -101,6 +107,7 @@ export function FactoryBody({
   // Handle pane close: move tabs to nearest sibling, then remove pane.
   const handlePaneClose = React.useCallback(
     (paneId: string) => {
+      setPreset(null);
       const panePath = findPanePath(state.root, paneId);
       if (!panePath) return;
 
@@ -136,7 +143,7 @@ export function FactoryBody({
               () => {},
             );
           }
-          closeTab(channelId, tabId);
+          void closeWorkspaceTab(channelId, tabId);
         }
         return;
       }
@@ -165,6 +172,7 @@ export function FactoryBody({
   // Handle active tab change within a pane.
   const handlePaneActiveTabChange = React.useCallback(
     (paneId: string, tabId: string | null) => {
+      setPreset(null);
       const newRoot = replacePane(state.root, paneId, (pane) => ({
         ...pane,
         activeTabId: tabId ?? pane.tabIds[0] ?? null,
@@ -177,6 +185,7 @@ export function FactoryBody({
   // Handle tab close from pane: close through workspace mechanism so dispose runs.
   const handlePaneCloseTab = React.useCallback(
     (_paneId: string, tabId: string) => {
+      setPreset(null);
       const workspaceTab = workspace.tabs.find((t) => t.id === tabId);
       if (workspaceTab) {
         const definition = getTabKind(workspaceTab.kind);
@@ -184,7 +193,7 @@ export function FactoryBody({
           () => {},
         );
       }
-      closeTab(channelId, tabId);
+      void closeWorkspaceTab(channelId, tabId);
     },
     [workspace.tabs, channelId],
   );
@@ -192,6 +201,7 @@ export function FactoryBody({
   // Handle group resize from splitters.
   const handleGroupResize = React.useCallback(
     (groupId: string, sizes: ReadonlyArray<number>) => {
+      setPreset(null);
       // Basic resize: apply normalized sizes from splitter drag.
       // The Splitter passes delta fractions; we translate to absolute sizes
       // based on current group sizes.
@@ -200,7 +210,7 @@ export function FactoryBody({
       if (sizes.length >= 2) {
         // If the passed array has the right length for the group, use it.
         const group = (function findGroup(
-          root: import("@/features/factory/lib/tileTree").TileLayoutNode,
+          root: TileLayoutNode,
           gid: string,
         ): import("@/features/factory/lib/tileTree").TileGroup | null {
           if (root.kind === "group" && root.id === gid) return root;
@@ -244,7 +254,7 @@ export function FactoryBody({
       className="flex h-full flex-col overflow-hidden"
       data-testid="workspace-factory-body"
     >
-      <FactoryToolbar channelId={channelId} state={state} commit={commit} />
+      <FactoryToolbar channelId={channelId} state={state} commit={commit} preset={preset} onPresetChange={setPreset} />
       <FactoryCanvas
         state={state}
         workspaceTabs={workspace.tabs}

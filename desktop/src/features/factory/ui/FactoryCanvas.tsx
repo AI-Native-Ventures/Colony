@@ -1,64 +1,107 @@
 import * as React from "react";
 import { cn } from "@/shared/lib/cn";
-import type {
-  TileLayoutNode,
-  TileGroup,
-  TileTreeState,
-} from "@/features/factory/lib/tileTree";
+import { resizePair, MIN_SPLIT_SIZE } from "@/features/factory/lib/splitterMath";
 import {
   sizesForGroup,
   setGroupSizes,
-  MIN_SPLIT_SIZE,
 } from "@/features/factory/lib/tileTree";
 import { FactoryPane } from "./FactoryPane";
+import type { TileLayoutNode, TileGroup, TileTreeState } from "@/features/factory/lib/tileTree";
 import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
 
 function Splitter({
   direction,
   groupId,
   index,
-  onResize,
+  state,
+  commit,
 }: {
   direction: "horizontal" | "vertical";
   groupId: string;
   index: number;
-  onResize: (groupId: string, sizes: number[]) => void;
+  state: TileTreeState;
+  commit: (next: TileTreeState) => void;
 }) {
   const isRow = direction === "horizontal";
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const target = e.currentTarget;
-    target.setPointerCapture(e.pointerId);
-    target.classList.add("dragging");
+  const [dragging, setDragging] = React.useState(false);
+  const startSizesRef = React.useRef<ReadonlyArray<number>>([]);
+  const startPosRef = React.useRef(0);
+  const groupSizeRef = React.useRef(0);
 
-    const rect = target.parentElement?.getBoundingClientRect();
-    const startPos = isRow
-      ? e.clientX - (rect?.left ?? 0)
-      : e.clientY - (rect?.top ?? 0);
+  const findGroup = React.useCallback(
+    (
+      root: import("@/features/factory/lib/tileTree").TileLayoutNode,
+      gid: string,
+    ): import("@/features/factory/lib/tileTree").TileGroup | null => {
+      if (root.kind === "group" && root.id === gid) return root;
+      if (root.kind === "group") {
+        for (const child of root.children) {
+          const found = findGroup(child, gid);
+          if (found) return found;
+        }
+      }
+      return null;
+    },
+    [],
+  );
 
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      if (!rect) return;
-      const currentPos = isRow
-        ? moveEvent.clientX - rect.left
-        : moveEvent.clientY - rect.top;
-      const delta =
-        (currentPos - startPos) / (isRow ? rect.width : rect.height);
-      // We don't have easy access to current group sizes here without passing state.
-      // For this step, we'll implement basic resize logic through a callback that
-      // updates the full tree state externally.
-      onResize(groupId, [delta]);
-    };
+  const handlePointerDown = React.useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const target = e.currentTarget;
+      target.setPointerCapture(e.pointerId);
+      target.classList.add("dragging");
+      setDragging(true);
+      const parent = target.parentElement;
+      const rect = parent?.getBoundingClientRect();
+      const groupPixelSize = isRow ? rect?.width ?? 0 : rect?.height ?? 0;
+      groupSizeRef.current = groupPixelSize;
+      const groupNode = findGroup(state.root, groupId);
+      startSizesRef.current = groupNode ? sizesForGroup(state.sizesByGroupId, groupNode) : [];
+      const startPos = isRow
+        ? e.clientX - (rect?.left ?? 0)
+        : e.clientY - (rect?.top ?? 0);
+      startPosRef.current = startPos;
+    },
+    [isRow, groupId, state, findGroup],
+  );
 
-    const handlePointerUp = () => {
+  const handlePointerMove = React.useCallback(
+    (e: PointerEvent) => {
+      if (!dragging || groupSizeRef.current <= 0) return;
+      const parent = (e.target as HTMLElement)?.parentElement;
+      const rect = parent?.getBoundingClientRect();
+      const currentPos = isRow ? e.clientX - (rect?.left ?? 0) : e.clientY - (rect?.top ?? 0);
+      const delta = (currentPos - startPosRef.current) / groupSizeRef.current;
+      const newSizes = resizePair(startSizesRef.current, index, delta);
+      const updated = setGroupSizes(state, groupId, newSizes);
+      commit(updated);
+    },
+    [dragging, isRow, index, groupId, state, commit],
+  );
+
+  const handlePointerUp = React.useCallback(
+    (e: PointerEvent) => {
+      const target = e.currentTarget as HTMLDivElement;
       target.releasePointerCapture(e.pointerId);
       target.classList.remove("dragging");
+      setDragging(false);
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerup", handlePointerUp);
-    };
+    },
+    [handlePointerMove],
+  );
 
-    document.addEventListener("pointermove", handlePointerMove);
-    document.addEventListener("pointerup", handlePointerUp);
-  };
+  React.useEffect(() => {
+    if (dragging) {
+      document.addEventListener("pointermove", handlePointerMove);
+      document.addEventListener("pointerup", handlePointerUp);
+      return () => {
+        document.removeEventListener("pointermove", handlePointerMove);
+        document.removeEventListener("pointerup", handlePointerUp);
+      };
+    }
+  }, [dragging, handlePointerMove, handlePointerUp]);
 
   return (
     <div
@@ -67,6 +110,7 @@ function Splitter({
         isRow
           ? "w-[6px] cursor-col-resize -mx-[3px] my-auto"
           : "h-[6px] cursor-row-resize -my-[3px] mx-auto",
+        dragging ? "bg-primary" : "",
       )}
       data-testid={`factory-splitter-${groupId}-${index}`}
       onPointerDown={handlePointerDown}
@@ -139,7 +183,8 @@ function renderNode(
               direction={group.direction}
               groupId={group.id}
               index={index}
-              onResize={props.onGroupResize}
+              state={props.state}
+              commit={props.commit}
             />
           )}
           <div
@@ -178,6 +223,7 @@ export function FactoryCanvas({
 }: FactoryCanvasProps): React.JSX.Element {
   const handleResize = React.useCallback(
     (groupId: string, deltaSizes: ReadonlyArray<number>) => {
+      onGroupResize(groupId, deltaSizes);
       const currentSizes: ReadonlyArray<number> =
         state.sizesByGroupId[groupId] ?? [];
       const newSizes = [...currentSizes].map((s: number, i: number) =>
@@ -185,7 +231,6 @@ export function FactoryCanvas({
       );
       const updated = setGroupSizes(state, groupId, newSizes);
       commit(updated);
-      onGroupResize(groupId, newSizes);
     },
     [state, commit, onGroupResize],
   );

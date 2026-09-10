@@ -15,12 +15,16 @@ export type FactoryToolbarProps = {
   channelId: string;
   state: TileTreeState;
   commit: (next: TileTreeState) => void;
+  preset: "single" | "columns" | "grid" | "focus" | null;
+  onPresetChange: (preset: "single" | "columns" | "grid" | "focus" | null) => void;
 };
 
 export function FactoryToolbar({
   channelId,
   state,
   commit,
+  preset,
+  onPresetChange,
 }: FactoryToolbarProps): React.JSX.Element {
   const projects = useProjectsQuery();
   const project = findProjectForChannel(projects.data, channelId);
@@ -59,56 +63,40 @@ export function FactoryToolbar({
       </span>
       <div className="flex-1" />
       <div className="flex items-center gap-2">
-        <Tabs defaultValue="single" className="w-auto">
+        <Tabs value={preset ?? "single"} onValueChange={(v) => { onPresetChange(v as "single" | "columns" | "grid" | "focus"); const tabIds = tabIdsInTree; const updated = applyPreset(state, v as "single" | "columns" | "grid" | "focus", tabIds); commit(updated); }} className="w-auto">
           <TabsList className="h-7 bg-muted p-0.5">
             <TabsTrigger
               value="single"
-              className="h-5 px-2 py-0.5 text-[10px]"
-              onClick={() => {
-                const tabIds = tabIdsInTree;
-                const updated = applyPreset(state, "single", tabIds);
-                commit(updated);
-              }}
+              className="h-5 px-2 py-0.5 text-badge"
               title="Single"
+              data-testid="factory-preset-single"
             >
               <LayoutGrid className="mr-1 h-3 w-3" />
               Single
             </TabsTrigger>
             <TabsTrigger
               value="columns"
-              className="h-5 px-2 py-0.5 text-[10px]"
-              onClick={() => {
-                const tabIds = tabIdsInTree;
-                const updated = applyPreset(state, "columns", tabIds);
-                commit(updated);
-              }}
+              className="h-5 px-2 py-0.5 text-badge"
               title="Columns"
+              data-testid="factory-preset-columns"
             >
               <Columns2 className="mr-1 h-3 w-3" />
               Columns
             </TabsTrigger>
             <TabsTrigger
               value="grid"
-              className="h-5 px-2 py-0.5 text-[10px]"
-              onClick={() => {
-                const tabIds = tabIdsInTree;
-                const updated = applyPreset(state, "grid", tabIds);
-                commit(updated);
-              }}
+              className="h-5 px-2 py-0.5 text-badge"
               title="Grid"
+              data-testid="factory-preset-grid"
             >
               <Rows2 className="mr-1 h-3 w-3" />
               Grid
             </TabsTrigger>
             <TabsTrigger
               value="focus"
-              className="h-5 px-2 py-0.5 text-[10px]"
-              onClick={() => {
-                const tabIds = tabIdsInTree;
-                const updated = applyPreset(state, "focus", tabIds);
-                commit(updated);
-              }}
+              className="h-5 px-2 py-0.5 text-badge"
               title="Focus"
+              data-testid="factory-preset-focus"
             >
               <Focus className="mr-1 h-3 w-3" />
               Focus

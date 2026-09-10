@@ -53,28 +53,33 @@ export function FactoryPane({
             const tab = workspaceTabs.find((t) => t.id === tabId);
             const isActive = tabId === activeTabId;
             return (
-              <button
+              <div
                 key={tabId}
                 className={cn(
-                  "group relative flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors",
+                  "group relative flex shrink-0 items-center rounded-md px-2 py-1 text-xs transition-colors",
                   isActive
                     ? "bg-background border border-border text-foreground shadow-sm"
                     : "text-muted-foreground hover:bg-background/60",
                 )}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSetActiveTab(tabId);
-                }}
-                title={tab?.title ?? tabId}
-                type="button"
                 data-testid={`factory-tab-${tabId}`}
               >
-                <span className="max-w-[8rem] truncate">
-                  {tab?.title ?? tabId}
-                </span>
-                <span
+                <button
                   className={cn(
-                    "inline-flex h-3.5 w-3.5 items-center justify-center rounded-sm text-[9px] font-medium opacity-0 transition-opacity hover:opacity-100",
+                    "max-w-[8rem] truncate text-left outline-none",
+                    isActive ? "text-foreground" : "text-muted-foreground",
+                  )}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSetActiveTab(tabId);
+                  }}
+                  title={tab?.title ?? tabId}
+                  type="button"
+                >
+                  {tab?.title ?? tabId}
+                </button>
+                <button
+                  className={cn(
+                    "inline-flex h-3.5 w-3.5 items-center justify-center rounded-sm text-3xs font-medium opacity-0 transition-opacity hover:opacity-100 focus-visible:opacity-100",
                     isActive ? "opacity-100" : "",
                   )}
                   onClick={(e) => {
@@ -83,10 +88,11 @@ export function FactoryPane({
                   }}
                   aria-label={`Close ${tab?.title ?? tabId}`}
                   title="Close tab"
+                  type="button"
                 >
                   <X className="h-2.5 w-2.5" />
-                </span>
-              </button>
+                </button>
+              </div>
             );
           })}
           {pane.tabIds.length === 0 && (
