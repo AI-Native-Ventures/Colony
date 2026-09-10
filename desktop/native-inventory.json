@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 515,
-    "rust_lines": 187807,
+    "rust_lines": 187838,
     "tauri_coupled": 207,
     "portable": 308,
-    "portable_lines": 105570,
+    "portable_lines": 105578,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -831,7 +831,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:288",
+        "src/features/communities/useCommunityInit.ts:290",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -2508,7 +2508,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:274",
+        "src/features/communities/useCommunityInit.ts:276",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:88"
       ]
@@ -2557,7 +2557,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriWebsiteTeam.ts:139"
+        "src/shared/api/tauriWebsiteTeam.ts:145"
       ]
     },
     "interrupt_huddle_speech": {
@@ -4284,7 +4284,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriWebsiteTeam.ts:126"
+        "src/shared/api/tauriWebsiteTeam.ts:132"
       ]
     },
     "website_team_recipe": {
@@ -4293,7 +4293,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriWebsiteTeam.ts:117"
+        "src/shared/api/tauriWebsiteTeam.ts:123"
       ]
     },
     "workspace_terminal_close": {

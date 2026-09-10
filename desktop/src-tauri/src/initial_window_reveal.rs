@@ -30,9 +30,11 @@ pub(crate) fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             {
                 set_initial_window_backing(&window);
                 let (initial_render_tx, initial_render_rx) = tokio::sync::oneshot::channel();
-                window.app_handle().once(INITIAL_RENDER_READY_EVENT, move |_| {
-                    let _ = initial_render_tx.send(());
-                });
+                window
+                    .app_handle()
+                    .once(INITIAL_RENDER_READY_EVENT, move |_| {
+                        let _ = initial_render_tx.send(());
+                    });
 
                 tauri::async_runtime::spawn(async move {
                     wait_for_stable_initial_window_geometry(&window).await;
