@@ -102,11 +102,24 @@ impl Drop for SharedHostReservation {
 /// comparable across both paths.
 pub(super) async fn acquire_host(
     slot: &SharedHostSlot,
+    profile_dir: &std::path::Path,
 ) -> Result<(BrowserHost, SharedHostReservation), BrowserError> {
+    std::fs::create_dir_all(profile_dir).map_err(|error| {
+        BrowserError::Host(format!(
+            "failed to create browser profile directory {}: {error}",
+            profile_dir.display()
+        ))
+    })?;
     let endpoint = match reuse_existing(slot) {
         Some(endpoint) => endpoint,
         None => {
-            let launched = host::launch(&host::HostConfig::default()).await?;
+            let launched = host::launch(&host::HostConfig {
+                binary: None,
+                profile_dir: profile_dir.to_path_buf(),
+                headless: true,
+                persist_profile: true,
+            })
+            .await?;
             install_or_join(slot, launched)
         }
     };

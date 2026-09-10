@@ -36,6 +36,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::{mpsc, oneshot};
+use url::Url;
 
 /// Event emitted for each acknowledged CDP screencast frame.
 pub const WEB_FRAME_EVENT: &str = "workspace-web-frame";
@@ -45,6 +46,47 @@ pub const WEB_ERROR_EVENT: &str = "workspace-web-error";
 pub const WEB_CLOSED_EVENT: &str = "workspace-web-closed";
 
 const SESSION_POLL: Duration = Duration::from_millis(100);
+
+/// Sanitize a relay host to a safe profile-directory segment.
+fn sanitize_profile_key(host: &str) -> String {
+    host.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
+        .collect()
+}
+
+/// Compute the persistent mailbox profile path for the active community.
+fn mailbox_profile_dir<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
+    let data_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(_) => return std::env::temp_dir().join("default").join("mailbox"),
+    };
+    let key = if let Some(state) = app.try_state::<crate::app_state::AppState>() {
+        let url_str = state
+            .relay_url_override
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                let s: String = guard.clone();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            })
+            .unwrap_or_default();
+        if url_str.is_empty() {
+            "default".to_string()
+        } else {
+            Url::parse(&url_str)
+                .ok()
+                .and_then(|url| url.host_str().map(|h| sanitize_profile_key(h)))
+                .unwrap_or_else(|| "default".to_string())
+        }
+    } else {
+        "default".to_string()
+    };
+    data_dir.join("browser-profiles").join(&key).join("mailbox")
+}
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const START_WAIT_TIMEOUT: Duration = Duration::from_secs(25);
 const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -195,11 +237,20 @@ impl WebManager {
                 .map_err(|error| error.to_string())?;
             (host, None)
         } else {
-            let (host, reservation) =
-                tokio::time::timeout(START_TIMEOUT, shared_host::acquire_host(&self.shared_host))
-                    .await
-                    .map_err(|_| "browser connection timed out".to_string())?
-                    .map_err(|error| error.to_string())?;
+            let profile_dir = mailbox_profile_dir(&app);
+            std::fs::create_dir_all(&profile_dir).map_err(|error| {
+                format!(
+                    "failed to create mailbox browser profile directory {}: {error}",
+                    profile_dir.display()
+                )
+            })?;
+            let (host, reservation) = tokio::time::timeout(
+                START_TIMEOUT,
+                shared_host::acquire_host(&self.shared_host, &profile_dir),
+            )
+            .await
+            .map_err(|_| "browser connection timed out".to_string())?
+            .map_err(|error| error.to_string())?;
             (host, Some(reservation))
         };
         let host_ready = Instant::now();
