@@ -31,10 +31,14 @@ import type {
   VerticalDetail,
 } from "../types";
 import { PIPELINE_COLUMN_STATUSES } from "../types";
-import type {
-  DiscoveryDataSource,
-  DiscoveryEntitySummary,
+import {
+  DISCOVERY_RESOLVE_MAX_REFS,
+  type DiscoveryDataSource,
+  type DiscoveryEntityRef,
+  type DiscoveryEntitySummary,
+  type ResolvedDiscoveryEntity,
 } from "./DiscoveryDataSource";
+import { resolveFixtureDiscoveryEntity } from "./fixtureResolvedEntities";
 import { BUSINESS_TAXONOMY } from "./businessTaxonomy/index";
 import {
   CAMPAIGN_FIXTURE,
@@ -303,6 +307,20 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       if (matches.length >= limit * 4) break;
     }
     return matches.slice(0, limit);
+  }
+
+  /**
+   * Deterministic tile context for fixture builds. Every well-formed
+   * reference resolves; a malformed one answers `unavailable`, which is the
+   * quiet tile the live path also produces for a record this reader cannot
+   * see.
+   */
+  async resolveEntities(
+    refs: readonly DiscoveryEntityRef[],
+  ): Promise<ResolvedDiscoveryEntity[]> {
+    return refs
+      .slice(0, DISCOVERY_RESOLVE_MAX_REFS)
+      .map((ref) => resolveFixtureDiscoveryEntity(ref));
   }
 
   async getEntitlement(): Promise<DiscoveryEntitlement> {
