@@ -36,6 +36,10 @@ import {
   BoardBody,
   boardKindDefinition,
 } from "@/features/workspace/kinds/boardKind";
+import {
+  CommGraphBody,
+  commGraphKindDefinition,
+} from "@/features/workspace/kinds/commGraphKind";
 import { getFeature } from "@/shared/features/manifest";
 import { resolveEnabled } from "@/shared/features/resolveEnabled";
 import { getOverrides } from "@/shared/features/store";
@@ -115,6 +119,9 @@ export function registerAllTabKinds(): void {
     // channel rule as the canvas it is opened from.
     registerTabKind(boardKindDefinition);
     bodies.set(boardKindDefinition.kind, BoardBody);
+    // The graph is part of the same surface, on the same flag.
+    registerTabKind(commGraphKindDefinition);
+    bodies.set(commGraphKindDefinition.kind, CommGraphBody);
   }
   if (!webKindRegistered && workspaceWebTabEnabled()) {
     webKindRegistered = true;
