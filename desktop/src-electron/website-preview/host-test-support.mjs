@@ -17,6 +17,7 @@ class FakeWebContents {
     this.loaded = [];
     this.url = "";
     this.zoomFactor = 1;
+    this.zoomFactorCalls = [];
     this.windowOpenHandler = null;
     this.destroyed = false;
     this.closed = false;
@@ -43,6 +44,7 @@ class FakeWebContents {
   }
   setZoomFactor(value) {
     this.zoomFactor = value;
+    this.zoomFactorCalls.push(value);
   }
   setWindowOpenHandler(handler) {
     this.windowOpenHandler = handler;

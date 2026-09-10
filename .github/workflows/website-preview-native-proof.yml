@@ -44,13 +44,17 @@ jobs:
         env:
           COLONY_PREVIEW_PROOF_DIR: ${{ runner.temp }}/colony-website-preview-proof
         run: pnpm --dir desktop exec electron src-electron/website-preview/proof.mjs
-      - name: Report proof and reject a failed clip result
+      - name: Report proof and reject any incomplete or failed check
         if: always()
         env:
           PROOF: ${{ runner.temp }}/colony-website-preview-proof/proof.json
         run: |
           test -f "$PROOF"
           jq '{complete, clip: .clip.status, geometry, failures: [.checks[] | select(.ok != true) | .name]}' "$PROOF"
+          jq -e '.complete == true' "$PROOF" > /dev/null
+          jq -e '[.checks[] | select(.ok != true)] | length == 0' "$PROOF" > /dev/null
+          # `unavailable` clip capture is recorded as unproven, not a pass;
+          # only an actual failed pixel proof rejects the run.
           jq -e '.clip.status != "failed"' "$PROOF" > /dev/null
       - name: Preserve preview host proof
         if: always()

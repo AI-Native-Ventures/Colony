@@ -221,6 +221,10 @@ export async function mountEntry(host, entry) {
   entry.previewSession = previewSession;
   configurePreviewSession(entry, previewSession);
 
+  // Compute the fitted factor before construction so the first paint is
+  // already scaled; applyLayout re-applies it after every load.
+  const initialLayout = host.layoutFor(entry);
+
   const container = new host.View();
   const view = new host.WebContentsView({
     webPreferences: {
@@ -236,6 +240,7 @@ export async function mountEntry(host, entry) {
       devTools: false,
       disableDialogs: true,
       spellcheck: false,
+      zoomFactor: initialLayout.visible === true ? initialLayout.zoomFactor : 1,
     },
   });
   if (

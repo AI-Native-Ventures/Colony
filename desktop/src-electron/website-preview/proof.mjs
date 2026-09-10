@@ -47,6 +47,9 @@ const PROOF_DIR =
   process.env.COLONY_PREVIEW_PROOF_DIR ??
   path.join(process.cwd(), "test-results/website-preview-proof");
 const REQUIRED_TIMEOUT_MS = 180_000;
+// Integer fitting can move the CSS height by a fraction of a pixel; width
+// must be exact. A larger gap means the fitted zoom factor is not in effect.
+const MAX_ROUNDING_TOLERANCE_CSS_PX = 2;
 
 const FIXTURE_HTML =
   '<!doctype html><html><head><meta charset="utf-8">' +
@@ -175,16 +178,29 @@ async function proveGeometry(host, window, fixture) {
     wc,
     "({ width: innerWidth, height: innerHeight, narrow: matchMedia('(max-width: 1439px)').matches, ready: window.__ready === true })",
   );
-  const desktopTolerance = Math.max(
-    Math.abs(metrics.width - 1440),
-    Math.abs(metrics.height - 900),
+  const desktopView = host.byHandle.get(desktop.handle).view.getBounds();
+  const desktopExpectedCssHeight =
+    desktopView.height / (desktopView.width / 1440);
+  const desktopMeasuredDelta = Math.abs(
+    metrics.height - desktopExpectedCssHeight,
   );
-  results.geometry.desktop = { ...metrics, tolerance: desktopTolerance };
+  const desktopTolerance = Math.abs(desktopExpectedCssHeight - 900);
+  results.geometry.desktop = {
+    ...metrics,
+    fitted: { width: desktopView.width, height: desktopView.height },
+    expectedCssHeight: desktopExpectedCssHeight,
+    tolerance: desktopTolerance,
+  };
   check(
     "geometry.desktopCssViewport",
-    metrics.width === 1440 && desktopTolerance <= 1,
-    `innerWidth=${metrics.width} innerHeight=${metrics.height}`,
-    { toleranceCssPx: desktopTolerance },
+    metrics.width === 1440 &&
+      desktopMeasuredDelta <= 1 &&
+      desktopTolerance <= MAX_ROUNDING_TOLERANCE_CSS_PX,
+    `innerWidth=${metrics.width} innerHeight=${metrics.height} expectedHeight=${desktopExpectedCssHeight}`,
+    {
+      toleranceCssPx: desktopTolerance,
+      measuredDeltaCssPx: desktopMeasuredDelta,
+    },
   );
   check(
     "geometry.desktopMediaQuery",
@@ -249,16 +265,28 @@ async function proveGeometry(host, window, fixture) {
     mobileWc,
     "({ width: innerWidth, height: innerHeight, narrow: matchMedia('(max-width: 500px)').matches })",
   );
-  const mobileTolerance = Math.abs(mobileMetrics.height - 844);
+  const mobileView = host.byHandle.get(mobile.handle).view.getBounds();
+  const mobileExpectedCssHeight = mobileView.height / (mobileView.width / 390);
+  const mobileMeasuredDelta = Math.abs(
+    mobileMetrics.height - mobileExpectedCssHeight,
+  );
+  const mobileTolerance = Math.abs(mobileExpectedCssHeight - 844);
   results.geometry.mobile = {
     ...mobileMetrics,
+    fitted: { width: mobileView.width, height: mobileView.height },
+    expectedCssHeight: mobileExpectedCssHeight,
     tolerance: mobileTolerance,
   };
   check(
     "geometry.mobileCssViewport",
-    mobileMetrics.width === 390 && mobileTolerance <= 1,
-    `innerWidth=${mobileMetrics.width} innerHeight=${mobileMetrics.height}`,
-    { toleranceCssPx: mobileTolerance },
+    mobileMetrics.width === 390 &&
+      mobileMeasuredDelta <= 1 &&
+      mobileTolerance <= MAX_ROUNDING_TOLERANCE_CSS_PX,
+    `innerWidth=${mobileMetrics.width} innerHeight=${mobileMetrics.height} expectedHeight=${mobileExpectedCssHeight}`,
+    {
+      toleranceCssPx: mobileTolerance,
+      measuredDeltaCssPx: mobileMeasuredDelta,
+    },
   );
   check(
     "geometry.mobileMediaQuery",

@@ -367,6 +367,23 @@ test("the origin root and explicit entrypoint share one authorization", async ()
   await host.close({ window, handle: state.handle });
 });
 
+test("open seeds the fitted zoom and navigation re-applies it", async () => {
+  const { host, world } = createHost();
+  const window = createWindow();
+  const state = await host.open(
+    requestFor(window, {
+      bounds: { x: 0, y: 0, width: 360, height: 300 },
+    }),
+  );
+  const view = world.views[0];
+  assert.equal(view.options.webPreferences.zoomFactor, 0.25);
+  const before = view.webContents.zoomFactorCalls.length;
+  view.webContents.emit("did-navigate");
+  assert.ok(view.webContents.zoomFactorCalls.length > before);
+  assert.equal(view.webContents.zoomFactorCalls.at(-1), 0.25);
+  await host.close({ window, handle: state.handle });
+});
+
 test("navigation, popups, permissions, and downloads are denied", async () => {
   const { host, world } = createHost();
   const window = createWindow();

@@ -215,10 +215,19 @@ switch or reload cannot be raced by a late load.
 The page keeps its real CSS viewport. The host sizes the native view in
 content pixels and derives `webContents.setZoomFactor(fittedWidthDip /
 pixelWidth)` from the actual fitted width, so the CSS viewport stays at the
-canonical size while the native view fits the pane without cropping. Integer
-rounding means the CSS height can differ by less than one CSS pixel; the real
-proof measures and reports that tolerance instead of asserting an exact
-height.
+canonical size while the native view fits the pane without cropping.
+
+Electron stores page zoom per origin and a factor set before the first commit,
+or reset by a navigation, is discarded. The host therefore seeds the first
+paint through `webPreferences.zoomFactor` (computed with the pure layout
+before the view is constructed) and re-applies `setZoomFactor` on every
+`applyLayout`, which runs after `did-finish-load` and every `did-navigate`.
+Without the re-application the page measures its DIP size as the CSS size
+(for example `innerWidth=900` for a 900 DIP pane instead of the canonical
+1440). Width becomes exact; integer rounding can move the CSS height by up to
+a couple of CSS pixels, which the proof computes from the actual fitted
+dimensions and caps at 2 px rather than measuring against the canonical size
+alone.
 
 `bounds` is the full, unclipped element rect and `clip` is the visible app
 region, both in app CSS pixels. The host intersects them, sizes the container
@@ -405,8 +414,10 @@ proof registers the same `PREVIEW_SCHEME_DESCRIPTOR` before `app.whenReady()`
 as production, mounts an in-process fixture artifact (no network) through real
 `View`, `WebContentsView`, and `session` objects, and checks:
 
-- desktop and mobile `innerWidth`, `innerHeight`, and `matchMedia` with the
-  measured rounding tolerance;
+- desktop and mobile CSS geometry: `innerWidth` exactly 1440/390,
+  `innerHeight` within 1 px of the height implied by the actual fitted view
+  dimensions, and that implied height within 2 px of the canonical 900/844,
+  plus the `matchMedia` result for each viewport;
 - inline script and inline handler execution on the entrypoint **and on a
   second verified HTML page**, each under its own hash-authorized CSP;
 - denial of external navigation, popups, permissions, and network fetches;
@@ -416,6 +427,11 @@ as production, mounts an in-process fixture artifact (no network) through real
   `desktopCapturer`, reported `proven`, `failed`, or `unavailable` when the OS
   withholds screen capture. The workflow rejects `failed` and does not treat
   `unavailable` as proof.
+
+The workflow now fails the job whenever `proof.json` reports
+`complete: false` or any check with `ok: true` missing, in addition to
+rejecting a `failed` clip result; an `unavailable` clip result is reported but
+is not treated as proof.
 
 This is host-fixture proof. It does not prove packaged Colony adoption, the
 production artifact loader against a real CDN, relay review integration, or
@@ -441,18 +457,22 @@ Exact limits of the current evidence:
 
 1. The native clipping pixel proof has not run; `"hide"` remains the
    production default and `"clip"` is not adopted. `desktopCapturer` may be
-   unavailable on a CI runner; that is recorded as `unavailable`, not proof,
-   and the workflow deliberately fails only on `failed`.
+   unavailable on a CI runner; that is recorded as `unavailable`, not proof.
+   The workflow rejects `complete: false`, any failed check, and a `failed`
+   clip result, while an `unavailable` clip result does not fail the job.
 2. Second-page CSP behavior is proven by source tests and by the fixture proof
    only. Real generated sites with unusual inline constructs (template-literal
    scripts containing `</script>` text, attribute values we decode
    differently, or more than 128 inline scripts) may degrade to the visible
    `inlineScriptsTruncated` state; none of that is proven against real
    generator output yet.
-3. The zoom rule (webview zoom pinned to 1, text scaled by root font-size) is
-   a source-reading conclusion in `useWebviewZoomShortcuts.ts`. The fixture
-   proof drives the host directly and does not execute the renderer adapter,
-   so the rect-to-host path with Cmd +/- text scaling is not measured.
+3. The fitted zoom is now seeded through `webPreferences.zoomFactor` and
+   re-applied after every load/navigation, with host and viewport source tests
+   for both. The previous real-Electron run measured `innerWidth` equal to the
+   fitted DIP width (900 desktop, 323 mobile), so the canonical CSS viewport
+   is still unproven until the next run shows exact 1440/390 widths and the
+   capped height tolerance. The renderer-adapter rect path with Cmd +/-
+   font-size scaling is also still not measured.
 4. The typed error prefix (`"<code>: <message>"`) and the structured-clone
    bytes path are source-proven; neither has been exercised across a live
    `colony:request` IPC boundary with a real renderer.

@@ -105,6 +105,32 @@ test("clip opt-in preserves the CSS viewport without rescaling", async () => {
   assert.ok(Math.abs(cssHeight - 844) <= 1, `css height ${cssHeight}`);
 });
 
+test("zoom is seeded at construction and re-applied after navigation", async () => {
+  const { host, world } = createHost();
+  const window = createWindow();
+  const state = await host.open(
+    requestFor(window, {
+      bounds: { x: 0, y: 0, width: 720, height: 450 },
+    }),
+  );
+  const view = world.views[0];
+  // First paint is already scaled through webPreferences.zoomFactor.
+  assert.equal(view.options.webPreferences.zoomFactor, 0.5);
+  assert.equal(view.webContents.zoomFactor, 0.5);
+  const applications = view.webContents.zoomFactorCalls.length;
+  assert.ok(applications >= 1);
+
+  // Electron's zoom map is per origin and is reset by navigation, so the
+  // host must apply the fitted factor again on every commit.
+  view.webContents.emit("did-navigate");
+  assert.ok(view.webContents.zoomFactorCalls.length > applications);
+  assert.equal(view.webContents.zoomFactorCalls.at(-1), 0.5);
+
+  view.webContents.emit("did-finish-load");
+  assert.equal(view.webContents.zoomFactorCalls.at(-1), 0.5);
+  await host.close({ window, handle: state.handle });
+});
+
 test("the default hide strategy hides a partially occluded pane", async () => {
   const { host, world } = createHost();
   const window = createWindow();

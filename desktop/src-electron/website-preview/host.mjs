@@ -411,33 +411,37 @@ export class WebsitePreviewHost {
     }
   }
 
+  /** Pure fitted layout for one entry, usable before the view exists. */
+  layoutFor(entry) {
+    if (entry.bounds === null) return Object.freeze({ visible: false });
+    return computePreviewLayout({
+      bounds: entry.bounds,
+      clip: entry.clip,
+      zoom: entry.zoom,
+      pixelWidth: entry.pixelWidth,
+      pixelHeight: entry.pixelHeight,
+      clipStrategy: this.clipStrategy,
+    });
+  }
+
   applyLayout(entry) {
     if (entry.disposed || entry.container === null || entry.view === null)
       return;
-    const layout =
-      entry.bounds === null
-        ? { visible: false }
-        : computePreviewLayout({
-            bounds: entry.bounds,
-            clip: entry.clip,
-            zoom: entry.zoom,
-            pixelWidth: entry.pixelWidth,
-            pixelHeight: entry.pixelHeight,
-            clipStrategy: this.clipStrategy,
-          });
+    const layout = this.layoutFor(entry);
     entry.layout = layout;
     const visible =
       entry.requestedVisible && layout.visible === true && !entry.failed;
     if (layout.visible === true) {
       entry.container.setBounds(layout.container);
       entry.view.setBounds(layout.child);
-      if (entry.zoomFactor !== layout.zoomFactor) {
-        entry.zoomFactor = layout.zoomFactor;
-        try {
-          entry.webContents.setZoomFactor(layout.zoomFactor);
-        } catch {
-          // The view may be mid-teardown; zoom will be re-applied if it loads.
-        }
+      // Always re-apply the factor. Electron's zoom map is per origin and a
+      // factor set before the first commit (or reset by navigation) is
+      // discarded, so this must run again after every load/navigation.
+      entry.zoomFactor = layout.zoomFactor;
+      try {
+        entry.webContents.setZoomFactor(layout.zoomFactor);
+      } catch {
+        // The view may be mid-teardown; zoom will be re-applied if it loads.
       }
     }
     try {
