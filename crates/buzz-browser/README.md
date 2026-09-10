@@ -110,3 +110,50 @@ the two fixture servers running.
 
 `estimate_tokens` is a deterministic heuristic (`max(1, ceil(chars/4))`);
 real provider token accounting lands via the Colony ledger later.
+
+## `mail_send` journey
+
+The `mail_send` MCP tool drives Gmail's compose form deterministically.
+It navigates to the compose URL (default `https://mail.google.com/mail/u/0/#inbox?compose=new`),
+finds the four controls by accessible-name prefix (`To`, `Subject`, `Message Body`, `Send`),
+fills them, clicks Send, waits (bounded, 30 s) for the `"Message sent"` toast,
+and returns structured JSON.
+
+### Inputs
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `to` | string | required |
+| `subject` | string | required |
+| `body` | string | required |
+| `compose_url` | string | `https://mail.google.com/mail/u/0/#inbox?compose=new` |
+
+Requires a prior `browser_connect`. The journey uses only AX-tree accessible-name
+prefixes (no CSS selectors), so it survives Gmail's dynamic markup changes.
+
+### Outputs
+
+```json
+{
+  "status": "sent" | "failed",
+  "failure_reason": "missing send control (expected name starting with 'Send', found: ...)" | null,
+  "sent_at": 1723456789,
+  "to": "lead@example.com",
+  "subject": "Winter boiler special",
+  "screenshot_png_base64": "iVBORw0KGgo..." | null
+}
+```
+
+`status: "failed"` names the exact missing control (recipient, subject, body, or send)
+or reports a timeout when the `"Message sent"` text does not appear within 30 s.
+The `screenshot_png_base64` is always captured (even on failure) as evidence.
+
+### Fixture
+
+- `test-fixtures/gmail-compose.html` - mirrors Gmail's compose accessibility tree with a `Send (⌘Enter)` button (bidi characters preserved) and a toast showing `"Message sent"` plus an `Undo` link. A `<pre id="sent">` records the sent fields as JSON.
+- `test-fixtures/gmail-compose-no-send.html` - same form without the Send button, used to prove the failure path.
+
+### Tests
+
+Unit (no browser): accessible-name prefix matching and bidi-character survival.
+Real browser (`BUZZ_BROWSER_REAL=1`): launches Chrome, opens the fixture, asserts `status == "sent"` and verifies the fixture's JSON equals the inputs. The second test uses the no-send fixture and asserts `status == "failed"` with a reason naming the missing send control.
