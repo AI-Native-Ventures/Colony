@@ -1,4 +1,4 @@
-import { LayoutGrid, LogIn, SquareTerminal } from "lucide-react";
+import { FolderGit2, LayoutGrid, LogIn, SquareTerminal } from "lucide-react";
 import type * as React from "react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
@@ -8,6 +8,14 @@ import { getChannelDescription } from "@/features/channels/lib/channelDescriptio
 import { getDmParticipantPreview } from "@/features/channels/lib/dmParticipantDisplay";
 import { ChannelHeaderStatusBadge } from "@/features/channels/ui/ChannelHeaderStatusBadge";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
+import { useChannelMembersQuery } from "@/features/channels/hooks";
+import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import { useProjectChannels } from "@/features/projects/useProjectChannels";
+import {
+  countChannelEmployees,
+  projectHeaderMeta,
+} from "@/features/projects/lib/projectChannels";
+import { Badge } from "@/shared/ui/badge";
 import { useAgentRank } from "@/features/agents/employeeHeads";
 import { useAgentReportingLine } from "@/features/agents/reportingLine";
 import { AgentRankBadge } from "@/features/agents/ui/AgentRankBadge";
@@ -81,6 +89,23 @@ export function ChannelScreenHeader({
   onToggleMembers,
 }: ChannelScreenHeaderProps) {
   const surfaceMode = useChannelSurfaceMode(channelId);
+  // A channel a project owns reads as a repository: repo icon, "project"
+  // badge, and "owner/repo · branch · N employees" in place of the topic.
+  const { projectByChannelId } = useProjectChannels();
+  const project = activeChannel
+    ? (projectByChannelId.get(activeChannel.id) ?? null)
+    : null;
+  const knownAgentPubkeys = useKnownAgentPubkeys();
+  const projectMembers = useChannelMembersQuery(
+    project && activeChannel ? activeChannel.id : null,
+  ).data;
+  const projectMeta = project
+    ? projectHeaderMeta(
+        project,
+        project.repositories,
+        countChannelEmployees(projectMembers, knownAgentPubkeys),
+      )
+    : null;
   const isGroupDm =
     activeChannel?.channelType === "dm" &&
     activeDmHeaderParticipants.length > 1;
@@ -187,9 +212,16 @@ export function ChannelScreenHeader({
       chromeWrapperRef={chromeWrapperRef}
       actions={actions}
       channelType={activeChannel?.channelType}
-      description={getChannelDescription(activeChannel)}
+      description={projectMeta ?? getChannelDescription(activeChannel)}
+      showDescription={Boolean(projectMeta)}
       leadingContent={
-        activeChannel?.channelType === "dm" ? (
+        projectMeta ? (
+          <FolderGit2
+            aria-hidden
+            className="mr-0.5 h-4 w-4 text-muted-foreground"
+            data-testid="chat-header-project-icon"
+          />
+        ) : activeChannel?.channelType === "dm" ? (
           isGroupDm ? (
             <DmHeaderParticipantStack
               participants={activeDmHeaderParticipants}
@@ -245,6 +277,11 @@ export function ChannelScreenHeader({
                 testId="chat-header-dm-reporting-line"
               />
             </>
+          ) : null}
+          {project ? (
+            <Badge data-testid="chat-header-project-badge" variant="outline">
+              project
+            </Badge>
           ) : null}
           <ChannelHeaderStatusBadge
             ephemeralDisplay={activeChannelEphemeralDisplay}

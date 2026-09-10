@@ -39,6 +39,13 @@
       "platforms": ["desktop"]
     },
     {
+      "id": "workspaceFactoryTab",
+      "name": "Factory tab",
+      "description": "Multi-pane software factory view over a project channel's workspace tabs",
+      "defaultEnabled": true,
+      "platforms": ["desktop"]
+    },
+    {
       "id": "workspaceWebTab",
       "name": "Workspace web tab",
       "description": "Attach a workspace tab to a local Chromium DevTools page",

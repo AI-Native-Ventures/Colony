@@ -4,6 +4,7 @@ import {
   ChevronDown,
   CircleDot,
   FileText,
+  FolderGit2,
   Hash,
   Lock,
   X,
@@ -222,11 +223,13 @@ function SidebarChannelIcon({
   channel,
   className,
   dmParticipants,
+  isProjectChannel,
   presenceStatus,
 }: {
   channel: Channel;
   className?: string;
   dmParticipants?: SidebarDmParticipant[];
+  isProjectChannel?: boolean;
   presenceStatus?: PresenceStatus;
 }) {
   if (channel.channelType === "dm") {
@@ -243,6 +246,12 @@ function SidebarChannelIcon({
         }
       />
     );
+  }
+
+  // A channel a project owns reads as a repository first: the padlock and the
+  // hash both say "channel", and neither distinguishes it from the rest.
+  if (isProjectChannel) {
+    return <FolderGit2 className={cn("h-4 w-4", className)} />;
   }
 
   if (channel.visibility === "private") {
@@ -263,8 +272,10 @@ export function ChannelMenuButton({
   hasUnread,
   activeWorking,
   isMuted,
+  isProjectChannel,
   dmParticipants,
   presenceStatus,
+  trailingMeta,
   onSelectChannel,
 }: {
   channel: Channel;
@@ -274,8 +285,11 @@ export function ChannelMenuButton({
   unreadCount?: number;
   activeWorking?: ActiveChannelTurnSummary;
   isMuted?: boolean;
+  isProjectChannel?: boolean;
   dmParticipants?: SidebarDmParticipant[];
   presenceStatus?: PresenceStatus;
+  /** Muted meta shown at the end of the row (e.g. a project's default branch). */
+  trailingMeta?: string;
   onSelectChannel: (channelId: string) => void;
 }) {
   const resolvedLabel = label ?? channel.name;
@@ -335,6 +349,7 @@ export function ChannelMenuButton({
           channel.channelType === "dm" ? undefined : inactiveContentOpacity
         }
         dmParticipants={dmParticipants}
+        isProjectChannel={isProjectChannel}
         presenceStatus={presenceStatus}
       />
       <span
@@ -351,6 +366,20 @@ export function ChannelMenuButton({
           </span>
         ) : null}
       </span>
+      {trailingMeta ? (
+        <span
+          className={cn(
+            "ml-auto max-w-24 shrink truncate text-2xs font-normal leading-none",
+            isActive
+              ? "text-sidebar-active-foreground/70"
+              : "text-sidebar-foreground/50",
+            inactiveContentOpacity,
+          )}
+          data-testid={`channel-meta-${channel.name}`}
+        >
+          {trailingMeta}
+        </span>
+      ) : null}
       {ephemeralDisplay ? (
         <EphemeralChannelBadge
           display={ephemeralDisplay}
@@ -399,9 +428,11 @@ export function SidebarSection({
   emptyState,
   items,
   channelLabels,
+  channelMetaById,
   isCollapsed,
   isActiveChannel,
   presenceByChannelId,
+  projectChannelIds,
   selectedChannelId,
   title,
   testId,
@@ -423,9 +454,13 @@ export function SidebarSection({
   emptyState?: React.ReactNode;
   items: Channel[];
   channelLabels?: Record<string, string>;
+  /** Muted trailing meta per channel row (e.g. a project's default branch). */
+  channelMetaById?: Record<string, string>;
   isCollapsed?: boolean;
   isActiveChannel: boolean;
   presenceByChannelId?: Record<string, PresenceStatus>;
+  /** Channels owned by a project — these render a repository icon. */
+  projectChannelIds?: ReadonlySet<string>;
   selectedChannelId: string | null;
   title: string;
   testId: string;
@@ -500,11 +535,13 @@ export function SidebarSection({
                       hasUnread={unreadChannelIds.has(channel.id)}
                       unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                       isMuted={mutedChannelIds?.has(channel.id)}
+                      isProjectChannel={projectChannelIds?.has(channel.id)}
                       isActive={
                         isActiveChannel && selectedChannelId === channel.id
                       }
                       label={channelLabels?.[channel.id] ?? channel.name}
                       presenceStatus={presenceByChannelId?.[channel.id]}
+                      trailingMeta={channelMetaById?.[channel.id]}
                       onSelectChannel={onSelectChannel}
                     />
                     {channel.channelType === "dm" &&
