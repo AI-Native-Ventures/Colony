@@ -204,6 +204,62 @@ test("a stale remembered session falls back to a fresh start", async () => {
   assert.equal(storage.get(KEY("tab-stale")), "session-1");
 });
 
+test("resize requested before start is applied once the session is running", async () => {
+  const startGate = deferred();
+  const backend = createFakeBackend({ start: () => startGate.promise });
+  await withBackend(backend, storage);
+
+  const start = sessions.ensureTerminalSession("tab-late-resize", request);
+  await new Promise((resolve) => setImmediate(resolve));
+  await sessions.resizeTerminal("tab-late-resize", 200, 50);
+  startGate.resolve({
+    sessionId: "late-resize-session",
+    cwd: "/checkout",
+    pid: 9140,
+  });
+  await start;
+
+  assert.deepEqual(
+    backend.calls.filter(([name]) => name === "resize"),
+    [["resize", "late-resize-session", 200, 50]],
+  );
+});
+
+test("a size recorded before start is carried by the start request", async () => {
+  const backend = createFakeBackend();
+  await withBackend(backend, storage);
+
+  await sessions.resizeTerminal("tab-seeded-size", 200, 50);
+  await sessions.ensureTerminalSession("tab-seeded-size", request);
+
+  assert.deepEqual(backend.calls, [
+    ["start", { ...request, cols: 200, rows: 50 }],
+  ]);
+});
+
+test("resize during reattach is applied after attach", async () => {
+  const attachGate = deferred();
+  const backend = createFakeBackend({
+    list: () => [
+      { sessionId: "kept-resize", pid: 99, cwd: "/checkout", alive: true },
+    ],
+    attach: () => attachGate.promise,
+  });
+  await withBackend(backend, storage);
+  storage.set(KEY("tab-reattach-resize"), "kept-resize");
+
+  const start = sessions.ensureTerminalSession("tab-reattach-resize", request);
+  await new Promise((resolve) => setImmediate(resolve));
+  await sessions.resizeTerminal("tab-reattach-resize", 180, 44);
+  attachGate.resolve({ replay: new Uint8Array() });
+  await start;
+
+  assert.deepEqual(
+    backend.calls.filter(([name]) => name === "resize"),
+    [["resize", "kept-resize", 180, 44]],
+  );
+});
+
 test("closing a tab closes the PTY and forgets its session", async () => {
   const backend = createFakeBackend();
   await withBackend(backend, storage);
