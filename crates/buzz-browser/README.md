@@ -45,6 +45,17 @@ calls `browser_connect` before any other tool. Tool set:
 
 `endpoint` accepts a bare port, a `host:port`, or a full URL:
 
+Persistent profile: when `HostConfig::persist_profile` is `true`, the profile
+survives host teardown (`browser-profiles/<host>/mailbox` for mailbox use).
+`launch` deletes stale `SingletonLock`, `SingletonSocket`, `SingletonCookie`
+files before spawning so Chromium does not refuse the profile.
+
+Chromium only writes a profile's cookies to disk on a normal shutdown, so a
+persistent profile must be torn down with `BrowserHost::close_gracefully`
+(CDP `Browser.close`, then a bounded wait for the process). Dropping the host
+is the crash fallback only: it sends `SIGTERM` and escalates to a kill after
+two seconds, because `Drop` can run on a tokio worker thread.
+
 ```json
 { "endpoint": "9222" }
 { "endpoint": "127.0.0.1:9222", "target_id": "A1B2C3" }
