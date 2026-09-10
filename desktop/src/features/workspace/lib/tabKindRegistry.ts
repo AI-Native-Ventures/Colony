@@ -32,6 +32,8 @@ export type TabKindDefinition = {
   canCreateFromNewTabPage: boolean;
   /** Optional kind-owned cleanup before the shell removes a tab. */
   dispose?: (tab: WorkspaceTab) => void | Promise<void>;
+  /** Optional: the tab ids this kind owns (e.g. factory tiles). */
+  ownedTabIds?: (tab: WorkspaceTab) => string[];
 };
 
 const registry = new Map<string, TabKindDefinition>();

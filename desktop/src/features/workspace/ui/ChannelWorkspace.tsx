@@ -74,6 +74,17 @@ export function ChannelWorkspace({
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const Body = activeTab ? getTabBody(activeTab.kind) : undefined;
 
+  // Hide factory-owned workspace tabs from the strip when the factory
+  // tab is active. They remain in the store and reappear when the factory
+  // tab is closed.
+  const activeFactoryDef = activeTab ? getTabKind(activeTab.kind) : undefined;
+  const factoryOwnedTabIds = activeFactoryDef?.ownedTabIds
+    ? activeFactoryDef.ownedTabIds(activeTab)
+    : [];
+  const visibleTabs = factoryOwnedTabIds.length > 0
+    ? tabs.filter((t) => !factoryOwnedTabIds.includes(t.id))
+    : tabs;
+
   return (
     <div
       className={cn(
@@ -90,7 +101,7 @@ export function ChannelWorkspace({
         onClose={handleClose}
         onNewTab={handleNewTab}
         onSelect={(tabId) => setActiveTab(channelId, tabId)}
-        tabs={tabs}
+        tabs={visibleTabs}
       />
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">
         {activeTab && Body ? (

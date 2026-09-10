@@ -448,7 +448,7 @@ export interface InsertPaneAtEdgeArgs {
   readonly targetPaneId: string;
   readonly newPaneId: string;
   readonly edge: EdgeDropPosition;
-  readonly tabId: string;
+  readonly tabId: string | null;
 }
 
 export interface InsertPaneAtEdgeResult {
@@ -461,7 +461,7 @@ export function insertPaneAtEdge(
   targetPaneId: string,
   edge: EdgeDropPosition,
   newPaneId: string,
-  tabId: string,
+  tabId: string | null,
 ): InsertPaneAtEdgeResult | null {
   const direction: SplitDirection =
     edge === "left" || edge === "right" ? "horizontal" : "vertical";
@@ -478,8 +478,8 @@ export function insertPaneAtEdge(
   const newPane: TilePane = {
     kind: "pane",
     id: newPaneId,
-    tabIds: [tabId],
-    activeTabId: tabId,
+    tabIds: tabId !== null ? [tabId] : [],
+    activeTabId: tabId !== null ? tabId : null,
   };
 
   // Same-direction merge into parent group.
