@@ -697,7 +697,7 @@ async fn begin_work_requires_the_current_generation() {
 
     let stale = send_action(&mut client, &owner, &build_action(99)).await;
     assert!(!stale.accepted, "a stale generation must be refused");
-    assert!(job_row_generation(&fixture.task_id).await == Some(1));
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(1));
 
     let fresh = send_action(&mut client, &owner, &build_action(1)).await;
     assert!(

@@ -439,10 +439,8 @@ impl WebsiteAction {
                 "accessRequest": access_request,
             }),
         };
-        if let Value::Object(object) = &mut value {
-            if let Some(generation) = self.generation {
-                object.insert("generation".to_owned(), json!(generation));
-            }
+        if let (Value::Object(object), Some(generation)) = (&mut value, self.generation) {
+            object.insert("generation".to_owned(), json!(generation));
         }
         value
     }

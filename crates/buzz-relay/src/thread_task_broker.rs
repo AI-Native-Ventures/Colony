@@ -774,9 +774,10 @@ pub(crate) async fn reconcile_website_task(
         .collect();
     for persona in participants
         .iter()
-        .chain(std::iter::once(&qa_persona.to_owned()))
+        .map(String::as_str)
+        .chain(std::iter::once(qa_persona))
     {
-        if !installed.contains(persona.as_str()) {
+        if !installed.contains(persona) {
             return Err(format!(
                 "persona {persona} is not part of the owner's installed team"
             ));

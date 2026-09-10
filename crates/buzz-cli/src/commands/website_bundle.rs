@@ -366,7 +366,7 @@ fn write_tar_entry(archive: &mut Vec<u8>, path: &str, bytes: &[u8]) -> Result<()
     archive.extend_from_slice(&header);
     archive.extend_from_slice(bytes);
     let padding = (512 - bytes.len() % 512) % 512;
-    archive.extend(std::iter::repeat(0_u8).take(padding));
+    archive.extend(std::iter::repeat_n(0_u8, padding));
     Ok(())
 }
 
@@ -612,7 +612,7 @@ mod tests {
             sha256: "0".repeat(64),
             ..descriptor.clone()
         };
-        assert!(sha256_hex(bytes) == descriptor.sha256);
-        assert!(wrong.sha256 != sha256_hex(bytes));
+        assert_eq!(sha256_hex(bytes), descriptor.sha256);
+        assert_ne!(wrong.sha256, sha256_hex(bytes));
     }
 }
