@@ -107,15 +107,12 @@
     }
   },
   "tree": {
-    "type": "stack",
-    "gap": "medium",
+    "type": "card",
+    "presentation": "surface",
+    "eyebrow": "Company brief",
+    "title": "{{trading_name}}",
+    "description": "{{summary}}",
     "children": [
-      {
-        "type": "section",
-        "title": "{{trading_name}}",
-        "text": "{{summary}}",
-        "presentation": "lead"
-      },
       {
         "type": "card-list",
         "items_path": "/findings",

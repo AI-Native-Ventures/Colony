@@ -208,15 +208,12 @@
     }
   },
   "tree": {
-    "type": "stack",
-    "gap": "medium",
+    "type": "card",
+    "presentation": "surface",
+    "eyebrow": "Company plan · for your review",
+    "title": "{{trading_name}}",
+    "description": "{{summary}}",
     "children": [
-      {
-        "type": "section",
-        "title": "{{trading_name}}",
-        "text": "{{summary}}",
-        "presentation": "lead"
-      },
       {
         "type": "section",
         "title": "The people",
@@ -226,15 +223,14 @@
       {
         "type": "card-list",
         "items_path": "/roster",
-        "mode": "grid",
+        "mode": "list",
         "presentation": "separated",
         "card": {
           "type": "card",
           "presentation": "row",
           "title": "{{personal_name}}",
           "description": "{{why}}",
-          "subtitle": "{{role_title}}",
-          "eyebrow": "{{team}}",
+          "subtitle": "{{role_title}} · {{team}}",
           "children": [
             {
               "type": "details",
@@ -257,28 +253,15 @@
       {
         "type": "card-list",
         "items_path": "/teams",
-        "mode": "grid",
+        "mode": "list",
         "presentation": "separated",
         "card": {
           "type": "card",
           "presentation": "row",
           "title": "{{name}}",
           "description": "{{accountable_for}}",
-          "children": [
-            {
-              "type": "details",
-              "items": [
-                {
-                  "label": "Lead",
-                  "value": "{{lead}}"
-                },
-                {
-                  "label": "Members",
-                  "value": "{{members}}"
-                }
-              ]
-            }
-          ]
+          "subtitle": "Led by {{lead}} · {{members}}",
+          "children": []
         }
       },
       {
@@ -289,15 +272,22 @@
       {
         "type": "card-list",
         "items_path": "/cost_centres",
-        "mode": "grid",
+        "mode": "list",
         "presentation": "separated",
         "card": {
           "type": "card",
           "presentation": "row",
-          "title": "{{name}}",
-          "description": "{{covers}}",
-          "eyebrow": "{{kind}}",
-          "children": []
+          "children": [
+            {
+              "type": "details",
+              "items": [
+                {
+                  "label": "{{name}}",
+                  "value": "{{covers}}"
+                }
+              ]
+            }
+          ]
         }
       },
       {

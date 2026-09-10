@@ -14,6 +14,7 @@ import {
   signBlockInstance,
   signCatalog,
   signManifest,
+  waitForLiveChannel,
 } from "./blocks-test-helpers";
 import {
   approvedCoreManifests,
@@ -43,7 +44,7 @@ test("an attached Mermaid file renders in the channel and thread and keeps its o
       headers: { "access-control-allow-origin": "*" },
     }),
   );
-  await installMockBridge(page);
+  await installMockBridge(page, { activeIdentityInDefaultChannels: true });
   await openChannel(page, "general");
   const event = await emitMessage(page, {
     channelName: "general",
@@ -204,7 +205,7 @@ async function openApprovedExamples(
   tab: "Collections" | "Diagrams",
 ) {
   await seedApprovedAppearance(page, theme);
-  await installMockBridge(page);
+  await installMockBridge(page, { activeIdentityInDefaultChannels: true });
   await page.goto("/");
   await page.getByTestId("open-settings").click();
   await page.getByTestId("profile-popover-settings").click();
@@ -578,7 +579,11 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
         chunks.push(Buffer.from(chunk));
       expect(Buffer.concat(chunks).toString()).toBe(example.source);
       // The same complex source must also pass the ordinary message renderer.
-      await openChannel(page, "general");
+      await page.getByTestId("settings-back-to-app").click();
+      await expect(page.getByTestId("settings-view")).toHaveCount(0);
+      await page.getByTestId("channel-general").click();
+      await expect(page.getByTestId("chat-title")).toHaveText("general");
+      await waitForLiveChannel(page, "general");
       const event = await emitMessage(page, {
         channelName: "general",
         content: `${example.title}\n\n\`\`\`mermaid\n${example.source}\n\`\`\``,
@@ -652,6 +657,7 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
       }),
     );
     await installMockBridge(page, {
+      activeIdentityInDefaultChannels: true,
       blockEvents: [signed],
       relaySelf: OWNER_PUBKEY,
     });

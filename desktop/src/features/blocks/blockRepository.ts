@@ -47,9 +47,9 @@ export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
   // brainstorm 1.1.0; retain historical digests below.
   "8ded39001dff7ea2f9c6ccccf728078bddcec091d7a37351df55f2c03d774000",
   // company-blueprint 1.1.0; retain historical digests below.
-  "b336adcbdc36865c35a35908aa112289e17e2e4b1fbd405f1e555acbc25a4d03",
+  "5a636e42d728e3d0fa35f9b0594cb2e79762698469603179fd91fec9e2124bed",
   // company-brief 1.1.0; retain historical digests below.
-  "084182e25b491f98573ca2b7da7ff96d98bdae0ba5d04b06a83d55e7276f1d1c",
+  "87d4dd63346e6aa8b93454ad03057b0dd06f21ce037e028b667aeff667886417",
   // deliverable 1.1.0; retain historical digests below.
   "57dd5cdcc3d71c8adbb12146cd822895af48f7323321b277c268ebd05476e7f0",
   // handover 1.1.0; retain historical digests below.

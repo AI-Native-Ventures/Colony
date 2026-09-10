@@ -2,9 +2,16 @@
 
 ## Unreleased
 
-- feat(desktop): browse a searchable Blocks catalogue with one full preview, clearer cards and tables, and theme-aware company plans, findings and review details.
-- feat(desktop): switch between documents and media in an ordered collection while retaining reading position, and view expandable Mermaid flow, sequence and relationship diagrams inline.
-- feat(agents): describe a Block's active schema and examples in one command, supply custom Question choices and Details, and receive valid Interview responses.
+## v0.16.13
+
+- feat(desktop): browse a searchable Blocks catalogue with one full preview, clearer cards and tables, and company plans, findings and review details that follow the light/dark theme and accent.
+- feat(desktop): switch between documents and media in an ordered collection while retaining reading position, and view expandable Mermaid flow, sequence and relationship diagrams inline in channels and threads. Download the originals for editing.
+- feat(agents): describe a Block's active schema and examples in one command, supply custom Question choices and Details, and distinguish a one-off choice from an Interview answered in the thread.
+
+## relay-v0.11.10
+
+- feat(relay): publish the approved Core Block catalogue versions, including Question 2.0 and populated Details, while preserving pinned historical definitions and later owner-selected catalogue heads.
+- fix(relay): validate Question choices and selection limits against the posted Block instance, reject ambiguous Question composition, and derive Interview response fields from the trusted instance.
 
 ## v0.16.12
 

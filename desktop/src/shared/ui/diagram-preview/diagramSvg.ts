@@ -146,6 +146,52 @@ function containsExternalResource(value: string): boolean {
   );
 }
 
+function matchesAttributes(node: Element, expected: Record<string, string>) {
+  return (
+    node.attributes.length === Object.keys(expected).length &&
+    Object.entries(expected).every(
+      ([name, value]) => node.getAttribute(name) === value,
+    )
+  );
+}
+
+function removeUnusedLibraryShadows(root: Element, markup: string) {
+  // Mermaid 11.17 emits these two definitions even for diagrams with no shadows.
+  // Keep every other filter unsupported, including references to these filters.
+  const rootId = root.getAttribute("id");
+  if (!rootId) return;
+  for (const filter of root.querySelectorAll("defs > filter")) {
+    const id = filter.getAttribute("id");
+    const small = id === `${rootId}-drop-shadow-small`;
+    if ((!small && id !== `${rootId}-drop-shadow`) || markup.includes(`#${id}`))
+      continue;
+    const shadow = filter.firstElementChild;
+    if (
+      filter.namespaceURI === NS &&
+      filter.children.length === 1 &&
+      !filter.textContent?.trim() &&
+      matchesAttributes(filter, {
+        id: id || "",
+        height: small ? "150%" : "130%",
+        width: small ? "150%" : "130%",
+      }) &&
+      shadow?.namespaceURI === NS &&
+      shadow.localName === "feDropShadow" &&
+      shadow.childNodes.length === 0 &&
+      ["#000000", "#FFFFFF"].some((color) =>
+        matchesAttributes(shadow, {
+          dx: small ? "2" : "4",
+          dy: small ? "2" : "4",
+          stdDeviation: "0",
+          "flood-opacity": "0.06",
+          "flood-color": color,
+        }),
+      )
+    )
+      filter.remove();
+  }
+}
+
 /** Flatten library styling into the existing declarative SVG artwork vocabulary. */
 export function flattenDiagramSvg(markup: string, host: HTMLElement): string {
   if (new TextEncoder().encode(markup).length > MAX_DIAGRAM_SVG_BYTES)
@@ -156,6 +202,7 @@ export function flattenDiagramSvg(markup: string, host: HTMLElement): string {
     throw new Error("Diagram output is invalid.");
   if (root.querySelectorAll("*").length >= 5_000)
     throw new Error("Diagram output is too complex.");
+  removeUnusedLibraryShadows(root, markup);
   // Mermaid adds unused computer/database/clock symbols to every sequence.
   // Drop those inert definitions; referenced icons and use/href remain unsupported.
   for (const symbol of root.querySelectorAll("defs > symbol")) {

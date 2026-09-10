@@ -714,6 +714,45 @@ export async function settleTimelineAtLatest(page: Page) {
   );
 }
 
+/** Reveal a real history row without assuming offscreen virtual rows stay mounted. */
+export async function revealBlockRow(page: Page, messageId: string) {
+  const timeline = page.getByTestId("message-timeline");
+  const row = timeline.locator(`[data-message-id="${messageId}"]`);
+  if ((await row.count()) === 0) {
+    await timeline.evaluate(
+      (element) =>
+        new Promise<void>((resolve) => {
+          element.scrollTo({ top: 0, behavior: "instant" });
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+    await expect
+      .poll(
+        async () => {
+          if ((await row.count()) > 0) return true;
+          await timeline.evaluate(
+            (element) =>
+              new Promise<void>((resolve) => {
+                element.scrollBy({
+                  top: Math.max(1, Math.floor(element.clientHeight / 2)),
+                  behavior: "instant",
+                });
+                requestAnimationFrame(() =>
+                  requestAnimationFrame(() => resolve()),
+                );
+              }),
+          );
+          return (await row.count()) > 0;
+        },
+        { timeout: 20_000, intervals: [100, 150, 250] },
+      )
+      .toBe(true);
+  }
+  await row.scrollIntoViewIfNeeded();
+  await expect(row).toBeVisible();
+  return row;
+}
+
 export function capture(
   page: Page,
   locator: Locator,

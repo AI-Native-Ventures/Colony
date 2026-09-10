@@ -20,6 +20,7 @@ import {
   OWNER_PUBKEY,
   pushFeedItem,
   readCoreManifest,
+  revealBlockRow,
   replaceBlockEvents,
   setTextScale,
   settleTimelineAtLatest,
@@ -36,7 +37,10 @@ import {
 const COMPOSITE_SCREENSHOTS = CORE_HANDLES.map(
   (handle) => `composite-${handle}.png`,
 );
-const PRIMITIVE_SCREENSHOTS = ["primitive-card-list.png"] as const;
+const PRIMITIVE_SCREENSHOTS = [
+  "primitive-card-list.png",
+  "primitive-table-filtered.png",
+] as const;
 const LAYOUT_SCREENSHOTS = [
   "layout-1024-100.png",
   "layout-1024-125.png",
@@ -169,27 +173,16 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
     manifestId: cardListManifestEvent.id,
   });
 
-  // Release the tail before asserting on the rows. The timeline freezes its
-  // logical tail whenever the scroller is reported off the bottom, and live
-  // arrivals then queue behind the "N new messages" pill instead of entering
-  // the DOM at all. A burst of appends can trip that on its own, and this test
-  // emits ten in a row without ever establishing that the timeline is pinned.
-  // CI run 32666875841, Desktop Smoke E2E shard 1, caught it exactly there:
-  // `[data-block-handle="report"]` (index 3) reported "element(s) not found"
-  // for the full 15s, and the failure screenshot shows a "7 new messages" pill
-  // with only lead-card, approval and agent-proposal rendered. 3 + 7 = the ten
-  // that were emitted. `settleTimelineAtLatest` scrolls to the floor and
-  // clicks that pill, which is what puts the withheld rows into the DOM.
+  // Admit queued arrivals, then reveal each history row. Settling at the tail
+  // deliberately evicts older virtual rows, so their absence there is not a
+  // failure to render their signed Blocks.
   await settleTimelineAtLatest(page);
 
   for (let index = 0; index < CORE_HANDLES.length; index += 1) {
     const handle = CORE_HANDLES[index];
-    const row = page.locator(`[data-message-id="${events[index].id}"]`);
+    const row = await revealBlockRow(page, events[index].id);
     const block = row.locator(`[data-block-handle="${handle}"]`);
     await expect(block).toHaveAttribute("data-block-trust", "core");
-    if (handle === "brainstorm") {
-      await settleTimelineAtLatest(page);
-    }
     await capture(page, block, COMPOSITE_SCREENSHOTS[index]);
   }
   await emitSignedEvent(page, "general", cardListInstance);
@@ -226,21 +219,41 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
     "actions",
     "question",
   ]) {
+    const ownerIndex = CORE_HANDLES.findIndex((handle) =>
+      Object.hasOwn(readCoreManifest(handle).primitive_versions, primitive),
+    );
+    const owner = await revealBlockRow(
+      page,
+      primitive === "card-list" ? cardListInstance.id : events[ownerIndex].id,
+    );
     await expect(
-      page.locator(`[data-block-primitive="${primitive}"]`).first(),
+      owner.locator(`[data-block-primitive="${primitive}"]`).first(),
     ).toBeVisible();
   }
+  const reportRow = await revealBlockRow(
+    page,
+    events[CORE_HANDLES.indexOf("report")].id,
+  );
   await expect(
-    page.getByRole("img", { name: "Chart, line chart" }),
+    reportRow.getByRole("img", { name: "Chart, line chart" }),
   ).toBeVisible();
-  await expect(page.getByPlaceholder("Filter rows").first()).toBeVisible();
+  const smallTable = reportRow.locator(
+    '[data-block-handle="report"] [data-block-primitive="table"]',
+  );
+  await expect(smallTable.locator("tbody tr")).toHaveCount(3);
+  await expect(smallTable.getByRole("searchbox")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "Approve", exact: true }),
+    smallTable.getByRole("columnheader").getByRole("button"),
+  ).toHaveCount(0);
+  await expect(smallTable).toContainText("Read-only");
+  const approvalRow = await revealBlockRow(page, events[1].id);
+  await expect(
+    approvalRow.getByRole("button", { name: "Approve", exact: true }),
   ).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Deny" })).toBeEnabled();
-  await expect(page.getByText("jordan@tennant-group.com")).toBeVisible();
+  await expect(approvalRow.getByRole("button", { name: "Deny" })).toBeEnabled();
+  await expect(approvalRow.getByText("jordan@tennant-group.com")).toBeVisible();
   await expect(
-    page.getByText(
+    approvalRow.getByText(
       "Hi Jordan,\n\nWe rebuilt your homepage to show what Tennant Group can really do.",
       { exact: true },
     ),
@@ -251,47 +264,74 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
   // moment company-blueprint grew its own change-request question the shared
   // "Something else" custom input matched twice and this failed on strict
   // mode, naming the fill rather than the second card that caused it.
-  const question = page.locator(
+  const questionRow = await revealBlockRow(
+    page,
+    events[CORE_HANDLES.indexOf("brainstorm")].id,
+  );
+  const question = questionRow.locator(
     '[data-block-handle="brainstorm"] [data-block-primitive="question"]',
   );
-  const premium = question.getByRole("button", {
-    name: "Premium editorial",
+  const premium = question.getByRole("checkbox", {
+    name: /^Premium editorial\b/,
   });
   await premium.focus();
   await page.keyboard.press("Space");
-  await expect(premium).toHaveAttribute("aria-pressed", "true");
-  const motion = question.getByRole("button", { name: "Cinematic motion" });
+  await expect(premium).toBeChecked();
+  const motion = question.getByRole("checkbox", {
+    name: /^Cinematic motion\b/,
+  });
   await motion.focus();
-  await page.keyboard.press("Enter");
-  await expect(motion).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Space");
+  await expect(motion).toBeChecked();
   await question
     .getByLabel("Something else")
     .fill("Combine cinematic pacing with restrained editorial typography.");
   const submitAnswer = question.getByRole("button", { name: "Submit" });
   await expect(submitAnswer).toBeEnabled();
   await submitAnswer.click();
+  const publishedQuestionAction = () =>
+    page.evaluate(
+      () =>
+        (window as BlocksE2eWindow).__BUZZ_E2E_PUBLISHED_EVENTS__?.find(
+          (event) =>
+            event.kind === 40010 &&
+            event.tags.some(
+              (tag) =>
+                tag[0] === "block-action" && tag[2] === "brainstorm.submit",
+            ),
+        ) ?? null,
+    );
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as BlocksE2eWindow).__BUZZ_E2E_PUBLISHED_EVENTS__?.find(
-            (event) =>
-              event.kind === 40010 &&
-              event.tags.some(
-                (tag) =>
-                  tag[0] === "block-action" && tag[2] === "brainstorm.submit",
-              ),
-          )?.content ?? null,
-      ),
-    )
+    .poll(async () => (await publishedQuestionAction())?.content ?? null)
     .toBe(
       '{"custom_input":"Combine cinematic pacing with restrained editorial typography.","selected":["premium","motion"]}',
     );
   await expect(
+    question.getByRole("button", { name: "Submitted", exact: true }),
+  ).toBeDisabled();
+  await expect(question.getByRole("button", { name: "Answered" })).toHaveCount(
+    0,
+  );
+  const questionAction = await publishedQuestionAction();
+  if (!questionAction) throw new Error("Question action was not published.");
+  expect(verifyEvent(questionAction)).toBe(true);
+  const questionIndex = CORE_HANDLES.indexOf("brainstorm");
+  await emitSignedEvent(
+    page,
+    "general",
+    signBlockReceipt({
+      action: questionAction,
+      channelId: GENERAL_CHANNEL_ID,
+      instanceEventId: events[questionIndex].id,
+      instanceId: fixtureUuid(questionIndex + 1),
+      status: "succeeded",
+    }),
+  );
+  await expect(
     question.getByRole("button", { name: "Answered" }),
   ).toBeDisabled();
 
-  const approvalRow = page.locator(`[data-message-id="${events[1].id}"]`);
+  await revealBlockRow(page, events[1].id);
   await approvalRow.getByRole("button", { name: "Approve" }).click();
   await expect
     .poll(() =>
@@ -330,9 +370,11 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
   // describe a converged timeline rather than whichever frame they landed on.
   await settleTimelineAtLatest(page);
   await expect(page.locator('[data-render-pending="true"]')).toHaveCount(0);
+  await revealBlockRow(page, events[questionIndex].id);
   await expect(
     question.getByRole("button", { name: "Answered" }),
   ).toBeDisabled();
+  await revealBlockRow(page, events[1].id);
   await expect(approvalRow.getByText(/Action submitted/)).toBeVisible();
   await capture(
     page,
@@ -340,6 +382,51 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
     "approval-pending.png",
   );
   expect(errors).toEqual([]);
+});
+
+test("large native tables filter real rows and restore the complete result", async ({
+  page,
+}) => {
+  const manifest = readCoreManifest("report");
+  const signed = signManifest(manifest);
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    label: index === 7 ? "Priority client" : `Client ${index + 1}`,
+    value: index + 1,
+  }));
+  await installMockBridge(page, {
+    blockEvents: [signed],
+    relaySelf: OWNER_PUBKEY,
+  });
+  await openChannel(page, "general");
+  const event = signBlockInstance({
+    channelId: GENERAL_CHANNEL_ID,
+    content: "The complete report remains readable if its table cannot render.",
+    data: { ...(compositeData("report") as Record<string, unknown>), rows },
+    handle: "report",
+    instanceId: fixtureUuid(150),
+    manifestId: signed.id,
+    processorPubkey: OWNER_PUBKEY,
+  });
+  await emitSignedEvent(page, "general", event);
+  await settleTimelineAtLatest(page);
+  const row = page.locator(`[data-message-id="${event.id}"]`);
+  const block = row.locator('[data-block-handle="report"]');
+  await expect(block).toHaveAttribute("data-block-trust", "core");
+  await expect(row.locator("[data-block-fallback]")).toHaveCount(0);
+  const table = block.locator('[data-block-primitive="table"]');
+  await expect(table.locator("tbody tr")).toHaveCount(20);
+  const filter = table.getByRole("searchbox", { name: "Filter table" });
+  await filter.fill("Priority client");
+  await expect(table.locator("tbody tr")).toHaveCount(1);
+  await expect(table.getByRole("cell")).toHaveText(["Priority client", "8"]);
+  await expect(table).toContainText("1 of 20 rows");
+  await capture(page, table, "primitive-table-filtered.png");
+  await filter.clear();
+  await expect(table.locator("tbody tr")).toHaveCount(20);
+  await expect(table).toContainText("20 rows");
+  await expect(
+    table.getByRole("cell", { name: "Client 20", exact: true }),
+  ).toBeVisible();
 });
 
 test("the visible Blocks catalog hands a typed Block reference into chat", async ({
