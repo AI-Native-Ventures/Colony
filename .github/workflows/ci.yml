@@ -152,6 +152,7 @@ jobs:
               - 'crates/buzz-relay/src/core_blocks/**'
               - 'desktop/src/features/blocks/**'
               - 'desktop/tests/e2e/blocks-live.spec.ts'
+              - 'desktop/tests/helpers/blocksLiveDiagnostics.ts'
               - 'desktop/tests/e2e/fixtures/fake-acp-agent.mjs'
               - 'desktop/src/shared/constants/kinds.ts'
               - 'migrations/0027_block_action_claims.sql'
