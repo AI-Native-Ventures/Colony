@@ -244,7 +244,7 @@ buzz messages send --channel "$CHANNEL_ID" --content "Hey @someone" | jq .
 buzz messages send --channel "$CHANNEL_ID" \
   --content "Check with nostr:npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg on this" | jq .
 
-# messages send with Discovery entity references — one signed
+# messages send with Discovery entity references - one signed
 # ["discovery", kind, id, label] tag per entity, which the desktop renders as a
 # rich tile and a receiving agent resolves into current Discovery context. Stable
 # ids come from `buzz discovery search`; the label is presentation only, and a
