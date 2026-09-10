@@ -48,46 +48,6 @@ pub(crate) async fn load_task(
         .map_err(|error| format!("the canonical company task is unreadable: {error}"))
 }
 
-/// Resolve one pubkey's persona and require it to be an assignee of the task.
-pub(crate) async fn require_persona_assigned(
-    tenant: &TenantContext,
-    state: &Arc<AppState>,
-    pubkey: &PublicKey,
-    task: &CompanyTask,
-    label: &'static str,
-) -> Result<String, String> {
-    let persona = resolve_agent_persona(tenant, state, pubkey)
-        .await?
-        .ok_or_else(|| format!("{label} must be a managed agent with an assigned persona"))?;
-    if !task
-        .assignee_persona_ids
-        .iter()
-        .any(|candidate| candidate == &persona)
-    {
-        return Err(format!("{label} is not assigned to the canonical task"));
-    }
-    Ok(persona)
-}
-
-/// Require every named persona to be an assignee of the canonical task.
-pub(crate) fn require_personas_assigned(
-    task: &CompanyTask,
-    personas: &[String],
-    field: &'static str,
-) -> Result<(), String> {
-    if personas.is_empty() {
-        return Err(format!("{field} must name at least one assigned persona"));
-    }
-    for persona in personas {
-        if !task.assignee_persona_ids.iter().any(|id| id == persona) {
-            return Err(format!(
-                "{field} names a persona that is not assigned to the canonical task"
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// Require every persona to be a member of a team the owner published.
 ///
 /// This is the verified installed team: persona ids come from the owner's own
@@ -146,22 +106,6 @@ async fn installed_personas(
         .iter()
         .flat_map(|team| team.persona_ids.iter().cloned())
         .collect())
-}
-
-/// Require the review list to include the task's QA persona when it names one.pub(crate) fn require_review_persona_covers_qa(
-    task: &CompanyTask,
-    review_personas: &[String],
-) -> Result<(), String> {
-    if task.qa_persona_id.is_empty() {
-        return Ok(());
-    }
-    if !review_personas
-        .iter()
-        .any(|persona| persona == &task.qa_persona_id)
-    {
-        return Err("reviewPersonas must include the task's QA persona".to_owned());
-    }
-    Ok(())
 }
 
 /// Require an agent to be a managed agent owned by the pinned job owner.

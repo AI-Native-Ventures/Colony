@@ -19,10 +19,10 @@ mod types;
 mod validate;
 
 pub use types::{
-    DecisionKind, DecisionOutcome, DecisionSubmission, HandoverAsset, QaEvidence,
-    RevisionSubmission, Stage, StageEvidence, StageEvidenceKind, WebsiteCaptures,
+    DecisionKind, DecisionOutcome, DecisionSubmission, HandoverAccessRequest, HandoverAsset,
+    QaEvidence, RevisionSubmission, Stage, StageEvidence, StageEvidenceKind, WebsiteCaptures,
     WebsiteDecision, WebsiteHandover, WebsiteReview, WebsiteReviewInit, WebsiteRevision,
-    WebsiteStatus, MAX_DECISIONS, MAX_HANDOVER_ASSETS, MAX_REVIEW_BYTES, MAX_REVISIONS,
-    MAX_SCOPE_LEN, MAX_STAGE_EVIDENCE, REVIEW_SCHEMA, WEBSITE_DECISION_NAMESPACE,
+    WebsiteStatus, MAX_ACCESS_REQUEST_CHARS, MAX_DECISIONS, MAX_HANDOVER_ASSETS, MAX_REVIEW_BYTES,
+    MAX_REVISIONS, MAX_SCOPE_LEN, MAX_STAGE_EVIDENCE, REVIEW_SCHEMA, WEBSITE_DECISION_NAMESPACE,
 };
 pub use validate::validate_handover_assets;

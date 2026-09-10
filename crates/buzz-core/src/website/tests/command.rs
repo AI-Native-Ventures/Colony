@@ -407,6 +407,43 @@ fn content_round_trips_through_parse() {
 }
 
 #[test]
+fn handover_access_request_is_bounded_and_attributed() {
+    let keys = Keys::generate();
+    let handover = json!({
+        "op": "handover",
+        "schema": WEBSITE_ACTION_SCHEMA,
+        "approvedRevision": 1,
+        "approvedManifestSha256": HASH,
+        "sourceUrl": "https://source.colony.test/sites/acme",
+        "sourceArchive": artifact("https://cdn.colony.test/archives/r1.tar.gz", HASH),
+        "assets": [{"path": "index.html", "artifact": artifact("https://cdn.colony.test/site/index.html", HASH)}],
+        "accessRequest": {
+            "text": "Point the apex at our host.\nDNS: A record -> 203.0.113.7",
+            "authoredBy": COORDINATOR,
+        },
+    });
+    assert!(parse_website_action(&signed(&keys, &handover, Some(3))).is_ok());
+
+    let mut bad_text = handover.clone();
+    bad_text["accessRequest"]["text"] = json!("bad\u{7}control");
+    assert_eq!(
+        parse_website_action(&signed(&keys, &bad_text, Some(3)))
+            .unwrap_err()
+            .code(),
+        "invalid_content"
+    );
+
+    let mut bad_author = handover;
+    bad_author["accessRequest"]["authoredBy"] = json!("not-a-pubkey");
+    assert_eq!(
+        parse_website_action(&signed(&keys, &bad_author, Some(3)))
+            .unwrap_err()
+            .code(),
+        "invalid_identity"
+    );
+}
+
+#[test]
 fn public_url_guard_rejects_loopback_and_credentials() {
     assert!(validate_public_url("https://cdn.colony.test/site/index.html").is_ok());
     assert!(validate_public_url("https://localhost/site").is_err());

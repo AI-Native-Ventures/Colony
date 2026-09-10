@@ -2742,53 +2742,6 @@ async fn ingest_event_inner(
         }
     }
 
-    // Reserved website decisions are channel-scoped Block actions that must
-    // reach the website broker before generic Block validation: the shared
-    // website-job Block composite does not exist yet, so the broker verifies
-    // the pinned review instance and decision maker itself and commits the
-    // canonical state plus its own relay receipt.
-    if crate::website_broker::is_reserved_website_candidate(&event) {
-        let Some(channel_id) = channel_id else {
-            return Err(IngestError::Rejected(
-                "invalid: channel-scoped events must include an h tag".into(),
-            ));
-        };
-        let outcome = crate::website_broker::handle_website_block_action(state, tenant, &event)
-            .await
-            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
-        return match outcome {
-            crate::website_broker::WebsiteBrokerOutcome::Applied { head, receipt, .. } => {
-                let receipt_event_id = receipt.event.id.to_hex();
-                let head_event_id = head.as_ref().map(|head| head.event.id.to_hex());
-                emit(
-                    tracer,
-                    TraceAction::WriteInsert {
-                        msg_id: msg_id_label(event.id.as_bytes()),
-                        channel: channel_label(channel_id),
-                        claimed_community: claimed_community_from_event(&event),
-                    },
-                    state_for_request(tenant, auth.pubkey()),
-                );
-                Ok(IngestResult::stored_with_message(
-                    event_id_hex,
-                    serde_json::json!({
-                        "receipt_event_id": receipt_event_id,
-                        "head_event_id": head_event_id,
-                    })
-                    .to_string(),
-                ))
-            }
-            crate::website_broker::WebsiteBrokerOutcome::Duplicate {
-                original_action_event_id,
-                ..
-            } => Ok(broker_duplicate_result(
-                event_id_hex,
-                hex::encode(original_action_event_id),
-                "action",
-            )),
-        };
-    }
-
     let validated_block_event = crate::blocks::validate_public_envelope(tenant, state, &event)
         .await
         .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
@@ -3595,6 +3548,54 @@ async fn ingest_event_inner(
 
     if let Some(crate::blocks::ValidatedBlockEvent::Action(action)) = validated_block_event.as_ref()
     {
+        // Reserved website decisions passed the full generic Block validation
+        // above (manifest declaration, trusted active manifest, processor and
+        // attention decision-maker authority). They are routed to the website
+        // broker instead of `insert_block_action_once`: `website_actions` is
+        // the once-only boundary for them, keyed by actor + request UUID and
+        // uniquely by action event id, and it additionally binds a canonical
+        // payload digest so a conflicting replay is refused rather than
+        // aliased. The broker persists the action, head, and receipt in its
+        // own transaction and dispatches them.
+        if buzz_core::website::is_reserved_website_action_id(&action.action_id) {
+            let outcome = crate::website_broker::handle_validated_website_block_action(
+                state, tenant, &event, action,
+            )
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
+            return match outcome {
+                crate::website_broker::WebsiteBrokerOutcome::Applied { head, receipt, .. } => {
+                    let receipt_event_id = receipt.event.id.to_hex();
+                    let head_event_id = head.as_ref().map(|head| head.event.id.to_hex());
+                    emit(
+                        tracer,
+                        TraceAction::WriteInsert {
+                            msg_id: msg_id_label(event.id.as_bytes()),
+                            channel: channel_label(action.channel_id),
+                            claimed_community: claimed_community_from_event(&event),
+                        },
+                        state_for_request(tenant, auth.pubkey()),
+                    );
+                    Ok(IngestResult::stored_with_message(
+                        event_id_hex,
+                        serde_json::json!({
+                            "receipt_event_id": receipt_event_id,
+                            "head_event_id": head_event_id,
+                        })
+                        .to_string(),
+                    ))
+                }
+                crate::website_broker::WebsiteBrokerOutcome::Duplicate {
+                    original_action_event_id,
+                    ..
+                } => Ok(broker_duplicate_result(
+                    event_id_hex,
+                    hex::encode(original_action_event_id),
+                    "action",
+                )),
+            };
+        }
+
         let stored_event = match state
             .db
             .insert_block_action_once(
@@ -4471,6 +4472,7 @@ mod tests {
             KIND_DISCOVERY_WORKSPACE_ACTION,
             buzz_core::kind::KIND_LEDGER_ACTION,
             KIND_WORKSPACE_TAB_ACTION,
+            KIND_WEBSITE_ACTION,
             KIND_DM_OPEN,
             KIND_DM_ADD_MEMBER,
         ];

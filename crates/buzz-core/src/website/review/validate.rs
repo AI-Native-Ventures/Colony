@@ -14,8 +14,9 @@ use super::super::preview::{
 };
 use super::types::{
     DecisionKind, HandoverAsset, QaEvidence, StageEvidence, WebsiteCaptures, WebsiteDecision,
-    WebsiteHandover, WebsiteReview, WebsiteRevision, WebsiteStatus, MAX_DECISIONS,
-    MAX_HANDOVER_ASSETS, MAX_REVISIONS, MAX_SCOPE_LEN, MAX_STAGE_EVIDENCE, REVIEW_SCHEMA,
+    WebsiteHandover, WebsiteReview, WebsiteRevision, WebsiteStatus, MAX_ACCESS_REQUEST_CHARS,
+    MAX_DECISIONS, MAX_HANDOVER_ASSETS, MAX_REVISIONS, MAX_SCOPE_LEN, MAX_STAGE_EVIDENCE,
+    REVIEW_SCHEMA,
 };
 
 impl WebsiteCaptures {
@@ -155,6 +156,22 @@ impl WebsiteHandover {
             .any(|evidence| evidence.revision == Some(revision.revision));
         if !builder_evidence {
             return Err(WebsiteError::InvalidHandover("builderEvidence"));
+        }
+        if let Some(access) = &self.access_request {
+            validate_identity("handover.accessRequest.authoredBy", &access.authored_by)?;
+            let length = access.text.chars().count();
+            if access.text.trim().is_empty() || length > MAX_ACCESS_REQUEST_CHARS {
+                return Err(WebsiteError::InvalidHandover("accessRequest"));
+            }
+            if access
+                .text
+                .chars()
+                .any(|character| {
+                    character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+                })
+            {
+                return Err(WebsiteError::InvalidHandover("accessRequest"));
+            }
         }
         Ok(())
     }

@@ -275,23 +275,68 @@ identities, revision references, and hashes. Core does not verify signatures,
 assignees, or that an event exists; those checks belong to the relay
 verification pipeline.
 
-## 8. Phase 2 obligations (not implemented here)
+## 8. Relay implementation (implemented)
 
-- Resolve every hostname and every redirect hop and reject blocked addresses
-  after resolution.
-- Download each file URL and verify byte-for-byte SHA-256 and size before a
-  revision may become ready for review.
-- Persist review records and once-only decision application atomically.
-- Connect records to real managed execution. Managed agents currently execute
-  through ACP thread mentions and callback mentions. `buzz jobs work` is a
-  separate direct-LLM worker loop, its claims are owner-only
-  (`job_broker.rs::handle_claim`), and managed agents cannot claim, heartbeat,
-  or finish as the owner. That authority must not be altered by this contract.
-  Decisions and evidence must point at real executions (`KIND_TASK_REPORT`
-  task reports, job outcomes, job checkpoints, signed work events), not at
-  file queue rows.
-- Verify evidence signatures, assignee identity, and owner authority before a
-  decision is accepted by the relay.
+The relay backend is implemented; this section is the operational contract.
+
+### Kinds and events
+
+| kind | author | shape |
+| --- | --- | --- |
+| 30203 `KIND_WEBSITE_HEAD` | relay | NIP-33 head, `d` = job UUID. Content is the exact `colony.website-review/v1` record. Tags: `h` channel, `task`, `thread`, `instance` (review-card Block instance event id), `manifest` (active website-job Block manifest event id), `generation`, and `p` tags for owner then coordinator. |
+| 40027 `KIND_WEBSITE_ACTION` | client | Channel-scoped command. Tags: `h`, `task`, `thread`, `request` (per-actor UUID), optional `generation`, optional `instance`/`manifest` (required on `create`). Content is a strict `colony.website-action/v1` object. |
+| 40028 `KIND_WEBSITE_RECEIPT` | relay | Channel-scoped receipt; content is `colony.website-receipt/v1` (`op`, `outcome`, `jobId`, `generation`, `revision`, `headEventId`, optional `decisionId`). |
+| 40026 `KIND_TASK_REPORT` | agent | QA binding tag `["website-qa", revision, manifestSha256, reportUrl, reportSha256]` for `recordQa`, plus `task`. |
+
+Actions: `create`, `beginWork`, `addRevision`, `recordQa`, `stageEvidence`, `ready`, `requestChanges`, `handover`. Owner approve/request-changes decisions arrive as reserved Block actions `website.approve` / `website.request-changes` through the generic Block pipeline; they are then brokered here.
+
+### Creation sequence (real flow)
+
+1. The owner writes an ordinary message in a channel; it becomes the thread root (and the relay opens the canonical thread task from it).
+2. The coordinator agent posts a `website-job` Block instance (kind 9 with `block`/`block-processor`/attention tags) inside that thread, referencing the active `website-job` manifest. The instance inline data carries `taskId` and `threadRoot`.
+3. Owner or coordinator submits `create`. The action names the review `--instance` and `--manifest`. The broker verifies owner authorship of the thread root, managed-agent ownership, installed-team membership for every persona, the active relay-authored manifest for the instance handle, and the instance's channel/thread/processor/attention pins.
+4. The broker reconciles the canonical task assignment in the same phase: assignees widen to the research/build/review personas plus the coordinator, and `qaPersonaId` is set to the first review persona. Only personas from the owner's published teams are added.
+
+### Retry and concurrency
+
+Every action carries a per-actor `request` UUID and a canonical payload digest. `website_actions` is keyed `(community, actor, request)` and uniquely by action event id; an exact retry returns the recorded head and receipt (including after the old head was superseded), a replay with a different digest is refused, and a retry never re-fetches artifacts. Mutations compare-and-set the row `generation`; a stale generation is refused.
+
+### Reopen after handover
+
+`requestChanges` (owner through Blocks or the coordinator through the action path) reopens work. If the canonical task is `completed`, the broker bounces it with the validated `completed -> ready` transition (reason attached, `bounceCount` + 1), clears completion reports, widens assignment from the owner's installed teams, and re-claims the thread slot so dispatch can find the open work. A `cancelled` task is refused with a clear reopen instruction. Vera's QA task report alone cannot close a four-assignee task: `report_closes_task` requires every assignee to report.
+
+### Access request
+
+`handover` may carry `accessRequest: {text, authoredBy}`. `text` is 1..=4000 code points with ordinary newlines; `authoredBy` must be a managed agent owned by the job owner holding an assigned build persona. The owner presents it; the agent authors it.
+
+### Artifact verification
+
+Manifest and QA report bytes are fetched through one bounded, DNS-pinned public transport (single wall-clock deadline over DNS, redirects, headers, and body; every hop re-validated against core's public-URL policy; byte cap). `addRevision` verifies the fetched manifest hashes to the declared ref; `handover` verifies the approved revision's manifest and asset membership; `recordQa` verifies the report hash, reviewer, revision, manifest, and that the checklist agrees with `passed`.
+
+### CLI
+
+```
+buzz website get --channel <uuid> [--task <id>] [--job <uuid>]
+buzz website list --channel <uuid> [--limit N]
+buzz website create --channel <uuid> --task <id> --thread <hex> \
+    --instance <event-id> --manifest <event-id> --coordinator <pubkey> \
+    --source-url <url> [--research <persona>]... [--build <persona>]... [--review <persona>]...
+buzz website begin-work --channel <uuid> --task <id> --thread <hex> [--generation N]
+buzz website revision --channel <uuid> --task <id> --thread <hex> [--generation N] --file <json>
+buzz website qa --channel <uuid> --task <id> --thread <hex> [--generation N] \
+    --revision N (--passed | ) --report-url <url> --report-file <path> [--report-event <hex>]
+buzz website evidence --channel <uuid> --task <id> --thread <hex> [--generation N] \
+    --stage <stage> [--revision N] --kind <kind> --event <hex>
+buzz website ready --channel <uuid> --task <id> --thread <hex> [--generation N]
+buzz website request-changes --channel <uuid> --task <id> --thread <hex> [--generation N] \
+    --revision N --hash <sha256> --note <text>
+buzz website handover --channel <uuid> --task <id> --thread <hex> [--generation N] --file <json>
+```
+
+`--generation` is read from the current head when omitted. `revision` and `handover` files match the wire structs; `handover` may include `accessRequest`. `qa` publishes the signed task report carrying the `website-qa` binding tag first, then the `recordQa` action referencing it.
+
+The artifact bundler is not part of this phase: `buzz website bundle` will need to hash and upload the built static site through existing Blossom, preserve relative paths, reject symlinks/traversal/unsupported files, and emit the preview manifest, source archive, and before/desktop/mobile capture refs that `revision` consumes. No live deployment is created by any command here.
+
 
 ## 9. Shared vectors
 

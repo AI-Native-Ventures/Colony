@@ -187,6 +187,7 @@ fn handover_for(review: &WebsiteReview) -> WebsiteHandover {
                 &"0".repeat(64),
             ),
         }],
+        access_request: None,
         accepted_by: OWNER.to_string(),
     }
 }

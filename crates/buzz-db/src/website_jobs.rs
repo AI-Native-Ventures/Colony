@@ -439,3 +439,236 @@ pub async fn insert_website_action_claim_tx(
     .await?;
     Ok(result.rows_affected() == 1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz"; // sadscan:disable np.postgres.1
+
+    fn test_database_url() -> String {
+        std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| TEST_DB_URL.to_owned())
+    }
+
+    async fn setup() -> (PgPool, CommunityId, Uuid) {
+        let pool = PgPool::connect(&test_database_url())
+            .await
+            .expect("connect to test DB");
+        crate::migration::run_migrations_unless_provisioned(&pool)
+            .await
+            .expect("apply migrations");
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(id)
+            .bind(format!("website-jobs-test-{}.example", id.simple()))
+            .execute(&pool)
+            .await
+            .expect("insert test community");
+        let community = CommunityId::from_uuid(id);
+        let channel = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO channels \
+                (id, community_id, name, channel_type, visibility, created_by) \
+             VALUES ($1, $2, $3, 'stream'::channel_type, 'open'::channel_visibility, $4)",
+        )
+        .bind(channel)
+        .bind(community.as_uuid())
+        .bind(format!("website-{}", channel.simple()))
+        .bind([0x11_u8; 32].as_slice())
+        .execute(&pool)
+        .await
+        .expect("insert test channel");
+        (pool, community, channel)
+    }
+
+    fn review_bytes(job_id: Uuid) -> Vec<u8> {
+        let review = buzz_core::website::WebsiteReview::new(buzz_core::website::WebsiteReviewInit {
+            job_id,
+            task_id: "task-website".to_owned(),
+            channel: "website-ops".to_owned(),
+            thread_root: "e".repeat(64),
+            owner: "a".repeat(64),
+            coordinator: Some("b".repeat(64)),
+            source_url: "https://source.colony.test/sites/acme".to_owned(),
+        })
+        .expect("valid review");
+        serde_json::to_vec(&review).expect("review serializes")
+    }
+
+    async fn insert_job(
+        pool: &PgPool,
+        community: CommunityId,
+        channel: Uuid,
+        job_id: Uuid,
+        task_id: &str,
+    ) -> Option<WebsiteJobRow> {
+        let review = review_bytes(job_id);
+        let mut tx = pool.begin().await.expect("begin job insert");
+        let inserted = insert_website_job_tx(
+            &mut tx,
+            community,
+            NewWebsiteJob {
+                job_id,
+                task_id,
+                channel_id: channel,
+                thread_root: &"e".repeat(64),
+                instance_event_id: &[0x21_u8; 32],
+                manifest_event_id: &[0x22_u8; 32],
+                owner: &[0xaa_u8; 32],
+                coordinator: &[0xbb_u8; 32],
+                source_url: "https://source.colony.test/sites/acme",
+                review: &review,
+                research_personas: &["persona-research".to_owned()],
+                build_personas: &["persona-build".to_owned()],
+                review_personas: &["persona-review".to_owned()],
+                head_event_id: &[0x31_u8; 32],
+                head_at: 1,
+                now: 1,
+            },
+        )
+        .await
+        .expect("job insert");
+        tx.commit().await.expect("commit job insert");
+        inserted
+    }
+
+    #[tokio::test]
+    async fn one_task_owns_one_job() {
+        let (pool, community, channel) = setup().await;
+        let first = insert_job(&pool, community, channel, Uuid::new_v4(), "task-a")
+            .await
+            .expect("first job");
+        assert_eq!(first.task_id, "task-a");
+        assert_eq!(first.generation, 1);
+
+        let second = insert_job(&pool, community, channel, Uuid::new_v4(), "task-a").await;
+        assert!(
+            second.is_none(),
+            "a second create for the same canonical task must lose"
+        );
+    }
+
+    #[tokio::test]
+    async fn generation_cas_refuses_a_stale_writer() {
+        let (pool, community, channel) = setup().await;
+        let job_id = Uuid::new_v4();
+        let job = insert_job(&pool, community, channel, job_id, "task-b")
+            .await
+            .expect("job");
+        let review = review_bytes(job_id);
+        let mut tx = pool.begin().await.expect("begin cas");
+        let updated = update_website_job_cas(
+            &mut tx,
+            community,
+            job_id,
+            job.generation,
+            WebsiteJobUpdate {
+                status: "working",
+                current_revision: 1,
+                review: &review,
+                head_event_id: &[0x41_u8; 32],
+                head_at: 2,
+                now: 2,
+            },
+        )
+        .await
+        .expect("cas update");
+        tx.commit().await.expect("commit cas");
+        let updated = updated.expect("first CAS wins");
+        assert_eq!(updated.generation, job.generation + 1);
+
+        let mut tx = pool.begin().await.expect("begin stale cas");
+        let stale = update_website_job_cas(
+            &mut tx,
+            community,
+            job_id,
+            job.generation,
+            WebsiteJobUpdate {
+                status: "working",
+                current_revision: 1,
+                review: &review,
+                head_event_id: &[0x42_u8; 32],
+                head_at: 3,
+                now: 3,
+            },
+        )
+        .await
+        .expect("stale cas query");
+        tx.rollback().await.expect("rollback stale");
+        assert!(stale.is_none(), "a stale generation must match no row");
+    }
+
+    #[tokio::test]
+    async fn action_claim_is_once_only_and_records_the_digest() {
+        let (pool, community, channel) = setup().await;
+        let job_id = Uuid::new_v4();
+        insert_job(&pool, community, channel, job_id, "task-c")
+            .await
+            .expect("job");
+        let request_id = Uuid::new_v4();
+        let actor = [0xaa_u8; 32];
+        let digest = [0x33_u8; 32];
+        let action_event = [0x51_u8; 32];
+        let head_event = [0x52_u8; 32];
+        let receipt_event = [0x53_u8; 32];
+
+        let mut tx = pool.begin().await.expect("begin claim");
+        let won = insert_website_action_claim_tx(
+            &mut tx,
+            community,
+            NewWebsiteActionClaim {
+                actor: &actor,
+                request_id,
+                job_id,
+                action_event_id: &action_event,
+                op: "create",
+                payload_digest: &digest,
+                head_event_id: &head_event,
+                receipt_event_id: &receipt_event,
+                generation: 1,
+            },
+        )
+        .await
+        .expect("first claim");
+        assert!(won, "the first claim must win");
+        tx.commit().await.expect("commit claim");
+
+        let mut tx = pool.begin().await.expect("begin retry");
+        let retry = insert_website_action_claim_tx(
+            &mut tx,
+            community,
+            NewWebsiteActionClaim {
+                actor: &actor,
+                request_id,
+                job_id,
+                action_event_id: &[0x54_u8; 32],
+                op: "create",
+                payload_digest: &digest,
+                head_event_id: &head_event,
+                receipt_event_id: &receipt_event,
+                generation: 1,
+            },
+        )
+        .await
+        .expect("retry claim");
+        tx.rollback().await.expect("rollback retry");
+        assert!(!retry, "a reused request UUID must not claim twice");
+
+        let recorded = find_website_action_claim(&pool, community, &actor, request_id)
+            .await
+            .expect("read claim")
+            .expect("claim exists");
+        assert_eq!(recorded.payload_digest, digest);
+        assert_eq!(recorded.head_event_id, head_event);
+        let by_event = find_website_action_claim_by_event(&pool, community, &action_event)
+            .await
+            .expect("read by event")
+            .expect("event claim exists");
+        assert_eq!(by_event.job_id, job_id);
+        assert_eq!(by_event.receipt_event_id, receipt_event);
+    }
+}
+

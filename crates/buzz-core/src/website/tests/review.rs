@@ -372,6 +372,7 @@ fn record_handover(harness: &mut Harness, step: &Step) -> Result<(), WebsiteErro
         source_url,
         source_archive: archive,
         assets,
+        access_request: None,
         accepted_by: identity(step.accepted_by.as_deref().unwrap_or("owner")),
     })
 }

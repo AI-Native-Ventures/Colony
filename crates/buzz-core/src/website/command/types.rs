@@ -14,7 +14,8 @@ use nostr::{PublicKey, Tag};
 
 use super::super::preview::PreviewArtifactRef;
 use super::super::review::{
-    DecisionKind, HandoverAsset, Stage, StageEvidenceKind, WebsiteCaptures, MAX_SCOPE_LEN,
+    DecisionKind, HandoverAccessRequest, HandoverAsset, Stage, StageEvidenceKind, WebsiteCaptures,
+    MAX_SCOPE_LEN,
 };
 
 /// Exact `schema` value for website action content.
@@ -180,6 +181,8 @@ pub enum WebsiteActionOp {
         source_archive: PreviewArtifactRef,
         /// Approved assets, at least one, unique literal paths.
         assets: Vec<HandoverAsset>,
+        /// Optional team-prepared domain/access request.
+        access_request: Option<HandoverAccessRequest>,
     },
 }
 
@@ -318,6 +321,7 @@ impl WebsiteAction {
                 source_url,
                 source_archive,
                 assets,
+                access_request,
             } => {
                 push_component(&mut buffer, approved_revision.to_string().as_bytes());
                 push_component(&mut buffer, approved_manifest_sha256.as_bytes());
@@ -326,6 +330,10 @@ impl WebsiteAction {
                 for asset in assets {
                     push_component(&mut buffer, asset.path.as_bytes());
                     push_artifact(&mut buffer, &asset.artifact);
+                }
+                if let Some(access) = access_request {
+                    push_component(&mut buffer, access.text.as_bytes());
+                    push_component(&mut buffer, access.authored_by.as_bytes());
                 }
             }
         }
@@ -414,6 +422,7 @@ impl WebsiteAction {
                 source_url,
                 source_archive,
                 assets,
+                access_request,
             } => json!({
                 "op": "handover",
                 "schema": WEBSITE_ACTION_SCHEMA,
@@ -422,6 +431,7 @@ impl WebsiteAction {
                 "sourceUrl": source_url,
                 "sourceArchive": source_archive,
                 "assets": assets,
+                "accessRequest": access_request,
             }),
         };
         if let Value::Object(object) = &mut value {

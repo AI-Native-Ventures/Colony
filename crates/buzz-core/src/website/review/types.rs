@@ -35,6 +35,9 @@ pub const MAX_STAGE_EVIDENCE: usize = 256;
 /// Maximum number of assets in one handover.
 pub const MAX_HANDOVER_ASSETS: usize = 512;
 
+/// Maximum characters in a handover access-request text.
+pub const MAX_ACCESS_REQUEST_CHARS: usize = 4_000;
+
 /// Maximum byte length of a `taskId` or `channel` scope string.
 pub const MAX_SCOPE_LEN: usize = 256;
 
@@ -253,6 +256,19 @@ pub struct HandoverAsset {
     pub artifact: PreviewArtifactRef,
 }
 
+/// A team-prepared domain/access request included in a handover.
+///
+/// Authored canonically by the assigned builder agent so the owner-reviewable
+/// text is part of the durable record rather than fabricated by a renderer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HandoverAccessRequest {
+    /// Owner-reviewable request text, 1..=4000 Unicode code points.
+    pub text: String,
+    /// Pubkey (64 lowercase hex) of the agent that authored the request.
+    pub authored_by: String,
+}
+
 /// The transfer of approved source and assets.
 ///
 /// There is deliberately no publish, deploy, or cutover field: a handover
@@ -276,6 +292,9 @@ pub struct WebsiteHandover {
     pub source_archive: PreviewArtifactRef,
     /// Approved assets, at least one, with unique literal paths.
     pub assets: Vec<HandoverAsset>,
+    /// Team-prepared domain/access request, when one was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_request: Option<HandoverAccessRequest>,
     /// Pubkey (64 lowercase hex) of the handover acceptor; must be the pinned
     /// owner or the coordinator.
     pub accepted_by: String,

@@ -16,7 +16,8 @@ use super::super::preview::{
     MAX_NOTE_LEN,
 };
 use super::super::review::{
-    DecisionKind, HandoverAsset, Stage, StageEvidenceKind, WebsiteCaptures, MAX_HANDOVER_ASSETS,
+    DecisionKind, HandoverAccessRequest, HandoverAsset, Stage, StageEvidenceKind, WebsiteCaptures,
+    MAX_ACCESS_REQUEST_CHARS, MAX_HANDOVER_ASSETS,
 };
 use super::error::WebsiteCommandError;
 use super::types::{
@@ -222,12 +223,16 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
             validate_url("sourceUrl", &wire.source_url)?;
             validate_artifact("sourceArchive", &wire.source_archive)?;
             validate_handover_assets(&wire.assets)?;
+            if let Some(access) = &wire.access_request {
+                validate_access_request(access)?;
+            }
             WebsiteActionOp::Handover {
                 approved_revision: wire.approved_revision,
                 approved_manifest_sha256: wire.approved_manifest_sha256,
                 source_url: wire.source_url,
                 source_archive: wire.source_archive,
                 assets: wire.assets,
+                access_request: wire.access_request,
             }
         }
         "approve" | "decision" => return Err(WebsiteCommandError::DecisionViaWebsiteAction),
@@ -377,6 +382,8 @@ struct WireHandover {
     source_url: String,
     source_archive: PreviewArtifactRef,
     assets: Vec<HandoverAsset>,
+    #[serde(default)]
+    access_request: Option<HandoverAccessRequest>,
 }
 
 #[derive(Deserialize)]
@@ -476,6 +483,20 @@ fn validate_handover_assets(assets: &[HandoverAsset]) -> Result<(), WebsiteComma
         validate_artifact("assets.artifact", &asset.artifact)?;
     }
     Ok(())
+}
+
+fn validate_access_request(access: &HandoverAccessRequest) -> Result<(), WebsiteCommandError> {
+    if access.text.trim().is_empty() || access.text.chars().count() > MAX_ACCESS_REQUEST_CHARS {
+        return Err(WebsiteCommandError::InvalidContent);
+    }
+    if access
+        .text
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(WebsiteCommandError::InvalidContent);
+    }
+    validate_identity("accessRequest.authoredBy", &access.authored_by)
 }
 
 fn validate_persona_list(

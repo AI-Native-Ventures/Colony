@@ -42,10 +42,12 @@ use nostr::{Event, PublicKey};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::blocks::{ActionEnvelope, ValidatedBlockEvent};
+use crate::blocks::ActionEnvelope;
 use crate::handlers::event::dispatch_persistent_event;
 use crate::state::AppState;
-use crate::website_authority::{authorize_create, authorize_update, require_decision_instance};
+use crate::website_authority::{
+    authorize_create, authorize_update, require_actor_persona, require_decision_instance,
+};
 use crate::website_evidence::{
     load_task, require_stage_evidence, require_task_report, QaReportBinding,
 };
@@ -262,16 +264,21 @@ pub async fn apply_website_action(
     }
 }
 
-/// Parse and apply one reserved website decision Block action.
-pub async fn handle_website_block_action(
+/// Apply one reserved website decision Block action that already passed
+/// generic Block validation.
+///
+/// Ingest calls this only after `blocks::validate_public_envelope` accepted
+/// the event, so manifest declaration, trusted-active manifest, processor pin,
+/// and the attention decision-maker signature have all been enforced by the
+/// generic pipeline. This adapter adds the canonical job binding (instance
+/// identity, task/thread data, generation CAS) and persists the transition
+/// under the website claim boundary.
+pub(crate) async fn handle_validated_website_block_action(
     state: &Arc<AppState>,
     tenant: &TenantContext,
     event: &Event,
+    action: &ActionEnvelope,
 ) -> Result<WebsiteBrokerOutcome, String> {
-    let action = match crate::blocks::parse_public_envelope(event) {
-        Ok(Some(ValidatedBlockEvent::Action(action))) => action,
-        _ => return Err("reserved website decision is not a valid Block action".to_owned()),
-    };
     if !is_reserved_website_action_id(&action.action_id) {
         return Err("event does not name a reserved website decision".to_owned());
     }
@@ -290,12 +297,12 @@ pub async fn handle_website_block_action(
     {
         return duplicate_outcome(state, tenant, claim).await;
     }
-    preflight_decision(state, tenant, event, &action, &decision).await?;
-    apply_website_decision(state, tenant, event, &action, &decision).await
+    preflight_decision(state, tenant, event, action, &decision).await?;
+    apply_website_decision(state, tenant, event, action, &decision).await
 }
 
 /// Apply a parsed owner decision carried by a validated Block action.
-pub async fn apply_website_decision(
+pub(crate) async fn apply_website_decision(
     state: &Arc<AppState>,
     tenant: &TenantContext,
     action_event: &Event,
@@ -506,14 +513,10 @@ async fn preflight_decision(
         return Err(WEBSITE_JOB_UNAVAILABLE.to_owned());
     }
     let actor = action_event.pubkey.to_bytes();
-    let authorized = match decision.kind {
-        DecisionKind::Approve => actor.as_slice() == job.owner.as_slice(),
-        DecisionKind::RequestChanges => {
-            actor.as_slice() == job.owner.as_slice()
-                || actor.as_slice() == job.coordinator.as_slice()
-        }
-    };
-    if !authorized {
+    // The review card pins attention to the owner, so every Block decision
+    // (approve or request-changes) is owner-signed. The coordinator's
+    // request-changes is the ordinary `requestChanges` website action.
+    if actor.as_slice() != job.owner.as_slice() {
         return Err(WEBSITE_JOB_UNAVAILABLE.to_owned());
     }
     if decision.generation != u64::try_from(job.generation).unwrap_or(u64::MAX) {
@@ -1003,10 +1006,25 @@ async fn apply_update(
             source_url,
             source_archive,
             assets,
+            access_request,
         } => {
             let bytes = manifest.ok_or_else(|| WEBSITE_ARTIFACT_REQUIRED.to_owned())?;
             if sha256_hex(bytes) != *approved_manifest_sha256 {
                 return Err(WEBSITE_ARTIFACT_MISMATCH.to_owned());
+            }
+            if let Some(access) = access_request {
+                let author = PublicKey::parse(&access.authored_by)
+                    .map_err(|_| "the access request author is not a valid pubkey".to_owned())?;
+                require_actor_persona(
+                    tenant,
+                    state,
+                    &job,
+                    &task,
+                    &author,
+                    &job.build_personas,
+                    "accessRequest",
+                )
+                .await?;
             }
             let handover = WebsiteHandover {
                 job_id,
@@ -1016,6 +1034,7 @@ async fn apply_update(
                 source_url: source_url.clone(),
                 source_archive: source_archive.clone(),
                 assets: assets.clone(),
+                access_request: access_request.clone(),
                 accepted_by: action.actor.to_hex(),
             };
             validate_handover_assets(&handover, bytes).map_err(map_website_error)?;
@@ -1097,6 +1116,9 @@ async fn apply_decision_inner(
 
     match applied {
         DecisionOutcome::Applied(_) => {
+            if decision.kind == DecisionKind::RequestChanges {
+                reopen_task_for_revision(tenant, state, &job).await?;
+            }
             let new_revision = i32::try_from(review.current_revision)
                 .map_err(|_| "website revision out of range".to_owned())?;
             let context = UpdateContext {
@@ -1123,58 +1145,32 @@ async fn apply_decision_inner(
             .await
         }
         DecisionOutcome::Duplicate(_) => {
-            let head_event_id = job.head_event_id.clone();
-            let receipt = build_decision_receipt(
+            let receipt = build_duplicate_receipt(
                 &state.relay_keypair,
                 action_event,
                 job.job_id,
                 job.channel_id,
                 &job.task_id,
                 &job.thread_root,
-                decision,
+                decision.op_name(),
+                "block-action",
                 job.generation,
                 review.current_revision,
-                &hex::encode(&head_event_id),
+                &hex::encode(&job.head_event_id),
                 Some(decision_id.to_string()),
             )?;
-            if !claim_action(
+            commit_duplicate_receipt(
+                tenant,
                 &mut *tx,
-                tenant.community(),
+                action_event,
+                &job,
                 actor_bytes,
                 block_action.idempotency_key,
-                job.job_id,
-                action_event,
                 decision.op_name(),
                 digest,
-                &head_event_id,
-                receipt.id.as_bytes(),
-                job.generation,
+                &receipt,
             )
-            .await?
-            {
-                let claim = winner_claim(
-                    &mut *tx,
-                    tenant.community(),
-                    actor_bytes,
-                    block_action.idempotency_key,
-                    action_event.id.as_bytes(),
-                    digest,
-                )
-                .await?;
-                return Ok(ApplyResult::Duplicate(claim));
-            }
-            let stored_action =
-                insert_event_tx(&mut *tx, tenant.community(), action_event, Some(job.channel_id))
-                    .await?;
-            let stored_receipt =
-                insert_event_tx(&mut *tx, tenant.community(), &receipt, Some(job.channel_id))
-                    .await?;
-            Ok(ApplyResult::Committed(Committed {
-                job,
-                head: None,
-                receipt: stored_receipt,
-                action: Some(stored_action),
-            }))
+            .await
         }
     }
 }

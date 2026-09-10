@@ -106,8 +106,12 @@ pub mod workflow_sink;
 pub mod workspace_tab_broker;
 /// Relay-owned Website Manager job broker (actions, heads, receipts, decisions).
 pub mod website_broker;
+/// Authority checks for Website Manager actions against canonical state.
+mod website_authority;
 /// Assigned-agent evidence and authority checks for Website Manager actions.
 mod website_evidence;
+/// Event construction and persistence primitives for the website broker.
+mod website_events;
 /// Bounded, DNS-pinned artifact fetch for Website Manager actions.
 pub(crate) mod website_fetch;
 

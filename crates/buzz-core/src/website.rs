@@ -46,9 +46,10 @@ pub use preview::{
     MAX_PATH_LEN, MAX_PREVIEW_FILES, MAX_TOTAL_BYTES, MAX_URL_LEN, PREVIEW_SCHEMA,
 };
 pub use review::{
-    validate_handover_assets, DecisionKind, DecisionOutcome, DecisionSubmission, HandoverAsset,
-    QaEvidence, RevisionSubmission, Stage, StageEvidence, StageEvidenceKind, WebsiteCaptures,
-    WebsiteDecision, WebsiteHandover, WebsiteReview, WebsiteReviewInit, WebsiteRevision,
-    WebsiteStatus, MAX_DECISIONS, MAX_HANDOVER_ASSETS, MAX_REVIEW_BYTES, MAX_REVISIONS,
-    MAX_SCOPE_LEN, MAX_STAGE_EVIDENCE, REVIEW_SCHEMA, WEBSITE_DECISION_NAMESPACE,
+    validate_handover_assets, DecisionKind, DecisionOutcome, DecisionSubmission,
+    HandoverAccessRequest, HandoverAsset, QaEvidence, RevisionSubmission, Stage, StageEvidence,
+    StageEvidenceKind, WebsiteCaptures, WebsiteDecision, WebsiteHandover, WebsiteReview,
+    WebsiteReviewInit, WebsiteRevision, WebsiteStatus, MAX_ACCESS_REQUEST_CHARS, MAX_DECISIONS,
+    MAX_HANDOVER_ASSETS, MAX_REVIEW_BYTES, MAX_REVISIONS, MAX_SCOPE_LEN, MAX_STAGE_EVIDENCE,
+    REVIEW_SCHEMA, WEBSITE_DECISION_NAMESPACE,
 };
