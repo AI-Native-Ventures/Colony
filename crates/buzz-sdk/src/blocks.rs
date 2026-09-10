@@ -512,6 +512,8 @@ mod tests {
             tree: BlockNode::Stack {
                 gap: BlockGap::Medium,
                 children: vec![BlockNode::Section(SectionNode {
+                    presentation: None,
+                    omit_empty_text: None,
                     title: Some("{{title}}".to_owned()),
                     text: None,
                 })],
@@ -687,6 +689,7 @@ mod tests {
             }
         });
         manifest.tree = BlockNode::Question(QuestionNode {
+            mode_path: None,
             prompt: "Choose directions".to_owned(),
             mode: QuestionMode::MultiSelect,
             options: vec![],

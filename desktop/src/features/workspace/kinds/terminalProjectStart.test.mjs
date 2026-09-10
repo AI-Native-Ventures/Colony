@@ -66,6 +66,7 @@ test("delayed project data does not start home, then starts the linked checkout"
   });
   assert.deepEqual(settled, {
     channelId,
+    cwd: null,
     projectDtag: "colony",
     cloneUrl: "https://example.test/colony.git",
     reposDir: "/workspace/repos",
@@ -85,4 +86,40 @@ test("delayed project data does not start home, then starts the linked checkout"
     args: { request: settled },
   });
   await sessions.disposeTerminalSession("tab-project");
+});
+
+test("an explicit cwd rides the start request through to the host", async () => {
+  const calls = [];
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      if (command === "workspace_terminal_start") {
+        return {
+          sessionId: "worktree-session",
+          cwd: "/workspace/repos/.colony-worktrees/colony/feat-x",
+          pid: 4242,
+        };
+      }
+      return null;
+    }),
+  );
+
+  const [{ buildTerminalStartRequest }, sessions] = await Promise.all([
+    import("./terminalKind.tsx"),
+    import("../lib/terminalSessions.ts"),
+  ]);
+  const request = buildTerminalStartRequest({
+    channelId: "channel-worktree",
+    project: null,
+    projectsSettled: true,
+    reposDir: "/workspace/repos",
+    cwd: "/workspace/repos/.colony-worktrees/colony/feat-x",
+  });
+  assert.equal(request.cwd, "/workspace/repos/.colony-worktrees/colony/feat-x");
+  await sessions.ensureTerminalSession("tab-worktree", request);
+  assert.deepEqual(calls.at(-1), {
+    command: "workspace_terminal_start",
+    args: { request },
+  });
+  await sessions.disposeTerminalSession("tab-worktree");
 });

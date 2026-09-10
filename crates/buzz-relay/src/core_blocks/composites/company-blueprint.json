@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "company-blueprint",
-  "version": "1.0.0",
-  "created_at": 1787875200,
+  "version": "1.1.0",
+  "created_at": 1787875201,
   "name": "Company Blueprint",
   "description": "The proposed company: who it hires, what teams they sit in, where costs land, and the first three pieces of work. Nothing is created until it is approved.",
   "origin": "core",
@@ -208,134 +208,126 @@
     }
   },
   "tree": {
-    "type": "stack",
-    "gap": "medium",
+    "type": "card",
+    "presentation": "surface",
+    "eyebrow": "Company plan · for your review",
+    "title": "{{trading_name}}",
+    "description": "{{summary}}",
     "children": [
       {
         "type": "section",
-        "title": "{{trading_name}}",
-        "text": "{{summary}}"
-      },
-      {
-        "type": "section",
         "title": "The people",
-        "text": "Uncheck anyone you don't want. Nothing is created until you approve."
+        "text": "This is the proposed team. Ask for changes below; nothing is created until you approve.",
+        "presentation": "body"
       },
       {
-        "type": "table",
-        "columns": [
-          {
-            "key": "personal_name",
-            "label": "Name"
-          },
-          {
-            "key": "role_title",
-            "label": "Role"
-          },
-          {
-            "key": "team",
-            "label": "Team"
-          },
-          {
-            "key": "why",
-            "label": "Why"
-          },
-          {
-            "key": "enabled",
-            "label": "Create"
-          }
-        ],
-        "rows_path": "/roster"
-      },
-      {
-        "type": "section",
-        "title": "The teams"
-      },
-      {
-        "type": "table",
-        "columns": [
-          {
-            "key": "name",
-            "label": "Team"
-          },
-          {
-            "key": "lead",
-            "label": "Lead"
-          },
-          {
-            "key": "members",
-            "label": "Members"
-          },
-          {
-            "key": "accountable_for",
-            "label": "Accountable for"
-          }
-        ],
-        "rows_path": "/teams"
+        "type": "card-list",
+        "items_path": "/roster",
+        "mode": "list",
+        "presentation": "separated",
+        "card": {
+          "type": "card",
+          "presentation": "row",
+          "title": "{{personal_name}}",
+          "description": "{{why}}",
+          "subtitle": "{{role_title}} · {{team}}",
+          "children": [
+            {
+              "type": "details",
+              "items": [
+                {
+                  "label": "Included",
+                  "value": "{{enabled}}",
+                  "format": "boolean"
+                }
+              ]
+            }
+          ]
+        }
       },
       {
         "type": "section",
-        "title": "Where costs land"
+        "title": "The teams",
+        "presentation": "body"
       },
       {
-        "type": "table",
-        "columns": [
-          {
-            "key": "name",
-            "label": "Cost centre"
-          },
-          {
-            "key": "kind",
-            "label": "Kind"
-          },
-          {
-            "key": "covers",
-            "label": "Covers"
-          }
-        ],
-        "rows_path": "/cost_centres"
+        "type": "card-list",
+        "items_path": "/teams",
+        "mode": "list",
+        "presentation": "separated",
+        "card": {
+          "type": "card",
+          "presentation": "row",
+          "title": "{{name}}",
+          "description": "{{accountable_for}}",
+          "subtitle": "Led by {{lead}} · {{members}}",
+          "children": []
+        }
+      },
+      {
+        "type": "section",
+        "title": "Where costs land",
+        "presentation": "body"
+      },
+      {
+        "type": "card-list",
+        "items_path": "/cost_centres",
+        "mode": "list",
+        "presentation": "separated",
+        "card": {
+          "type": "card",
+          "presentation": "row",
+          "children": [
+            {
+              "type": "details",
+              "items": [
+                {
+                  "label": "{{name}}",
+                  "value": "{{covers}}"
+                }
+              ]
+            }
+          ]
+        }
       },
       {
         "type": "section",
         "title": "First three pieces of work",
-        "text": "Proposed only. None of these start until you say so."
+        "text": "Proposed only. None of these start until you say so.",
+        "presentation": "body"
       },
       {
-        "type": "table",
-        "columns": [
-          {
-            "key": "title",
-            "label": "Initiative"
-          },
-          {
-            "key": "owner",
-            "label": "Owner"
-          },
-          {
-            "key": "why_first",
-            "label": "Why first"
-          }
-        ],
-        "rows_path": "/initiatives"
+        "type": "card-list",
+        "items_path": "/initiatives",
+        "mode": "list",
+        "presentation": "numbered",
+        "card": {
+          "type": "card",
+          "presentation": "row",
+          "title": "{{title}}",
+          "description": "{{why_first}}",
+          "subtitle": "{{owner}}",
+          "children": []
+        }
       },
       {
         "type": "section",
         "title": "Still unknown",
-        "text": "These were not answered. The company can start without them, at the cost shown."
+        "text": "These were not answered. The company can start without them, at the cost shown.",
+        "presentation": "body"
       },
       {
-        "type": "table",
-        "columns": [
-          {
-            "key": "label",
-            "label": "Gap"
-          },
-          {
-            "key": "cost_of_leaving_open",
-            "label": "What it costs to leave open"
-          }
-        ],
-        "rows_path": "/gaps"
+        "type": "card-list",
+        "items_path": "/gaps",
+        "mode": "list",
+        "presentation": "separated",
+        "card": {
+          "type": "card",
+          "presentation": "row",
+          "title": "{{label}}",
+          "description": "{{cost_of_leaving_open}}",
+          "children": []
+        }
       },
       {
         "type": "actions",
@@ -353,7 +345,8 @@
       {
         "type": "section",
         "title": "Not right yet?",
-        "text": "Say what to change instead of approving. Whoever drafted this gets your words exactly as you write them, and nothing is created until you approve."
+        "text": "Say what to change instead of approving. Whoever drafted this gets your words exactly as you write them, and nothing is created until you approve.",
+        "presentation": "body"
       },
       {
         "type": "question",
@@ -489,7 +482,9 @@
   ],
   "primitive_versions": {
     "section": 1,
-    "table": 1,
+    "card": 1,
+    "card-list": 1,
+    "details": 1,
     "actions": 1,
     "question": 1
   },

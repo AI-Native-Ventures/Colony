@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "artifact",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Artifact",
   "description": "A delivered website, image, video, document, or file.",
   "origin": "core",
@@ -50,7 +50,8 @@
           }
         ]
       }
-    ]
+    ],
+    "eyebrow": "Your files"
   },
   "actions": [
     {

@@ -480,10 +480,13 @@ test("carousel images without imeta retain their intrinsic geometry without crop
     .filter({ hasText: "no dim gallery" })
     .last();
   await expect(row).toBeVisible();
-  await expect(row.locator(`img[src="${NO_DIM_WIDE_URL}"]`)).toBeVisible();
-  await expect(row.locator(`img[src="${NO_DIM_PORTRAIT_URL}"]`)).toHaveCount(0);
+  const stage = row.getByTestId("message-image-lightbox-trigger");
+  await expect(stage.locator(`img[src="${NO_DIM_WIDE_URL}"]`)).toBeVisible();
+  await expect(stage.locator(`img[src="${NO_DIM_PORTRAIT_URL}"]`)).toHaveCount(
+    0,
+  );
 
-  await row.locator(`img[src="${NO_DIM_WIDE_URL}"]`).click();
+  await stage.click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(`img[src="${NO_DIM_WIDE_URL}"]`)).toBeVisible();
@@ -648,9 +651,15 @@ test("multi-image carousels fill the message width with stable contained stages"
     await expect(carousel.getByTestId("media-preview-count")).toHaveText(
       `1 / ${count}`,
     );
-    await expect(carousel.locator("img")).toHaveCount(1);
-    await expect(carousel.locator("img")).toHaveCSS("object-fit", "contain");
-    await expect(carousel.locator("img")).toHaveJSProperty("naturalWidth", 320);
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveCount(1);
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveCSS("object-fit", "contain");
+    await expect(
+      carousel.getByTestId("message-image-lightbox-trigger").locator("img"),
+    ).toHaveJSProperty("naturalWidth", 320);
     // Wait for an actual layout, then compare equal stages across item counts.
     let box: Awaited<ReturnType<typeof carousel.boundingBox>> = null;
     await expect
@@ -707,7 +716,7 @@ test("image carousel screenshot", async ({ page }) => {
     .filter({ hasText: "Weekend photo dump" })
     .last();
   await expect(
-    row.getByTestId("media-image-preview").locator("img"),
+    row.getByTestId("message-image-lightbox-trigger").locator("img"),
   ).toHaveCount(1);
   await expect(row.getByTestId("media-preview-count")).toHaveText("1 / 3");
   await waitForAnimations(page);

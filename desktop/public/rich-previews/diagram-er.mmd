@@ -1,0 +1,28 @@
+erDiagram
+    CLIENT ||--o{ PROJECT : commissions
+    PROJECT ||--o{ THREAD : discusses
+    PROJECT ||--o{ DELIVERABLE : contains
+    DELIVERABLE ||--|{ VERSION : has
+    VERSION ||--o{ ASSET : includes
+    VERSION ||--o{ DECISION : receives
+    DECISION ||--o| RECEIPT : records
+    CLIENT {
+      string name
+      string contact
+    }
+    DELIVERABLE {
+      string title
+      string status
+    }
+    VERSION {
+      int number
+      string summary
+    }
+    ASSET {
+      string filename
+      string format
+    }
+    DECISION {
+      string outcome
+      string reviewer
+    }

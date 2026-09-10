@@ -29,19 +29,49 @@ const items = [
 ];
 test("a collection loads only the active original and presents ordered navigation", () => {
   const html = render(ImagePreview, { items, initialIndex: 1 });
-  assert.equal((html.match(/<img /g) ?? []).length, 1);
-  assert.match(html, /src="\/rich-previews\/launch-02.svg"/);
-  assert.match(html, /object-contain/);
+  const stage =
+    html.match(
+      /<button[^>]+data-image-lightbox-trigger[^>]*>.*?<\/button>/s,
+    )?.[0] || "";
+  assert.equal((stage.match(/<img /g) ?? []).length, 1);
+  assert.match(stage, /src="\/rich-previews\/launch-02.svg"/);
+  assert.match(stage, /object-contain/);
+  assert.doesNotMatch(html, /src="\/rich-previews\/launch-0[13].svg"/);
   assert.match(html, /2 \/ 3/);
   assert.match(html, /aria-label="Previous image"/);
   assert.match(html, /aria-label="Next image"/);
   assert.match(html, /aria-label="Expand image"/);
-  assert.doesNotMatch(html, /object-cover/);
+  assert.doesNotMatch(stage, /object-cover/);
+  assert.match(html, /aria-label="Choose an image"/);
+  assert.match(
+    html,
+    /aria-label="Show image 2 of 3: Portrait artwork" aria-current="true"/,
+  );
 });
 test("a single portrait reserves its authored ratio without carousel chrome", () => {
   const html = render(ImagePreview, { items: [items[1]] });
   assert.match(html, /aspect-ratio:0.75/);
   assert.doesNotMatch(html, /Previous image|Next image/);
+  assert.doesNotMatch(html, /media-image-thumbnails|Show image/);
+});
+
+test("thumbnail strip uses supplied lazy thumbnails without loading inactive originals", () => {
+  const html = render(ImagePreview, {
+    items: items.map((item, position) => ({
+      ...item,
+      thumbnailSrc: `/thumb-${position}.jpg`,
+    })),
+  });
+  const strip =
+    html.match(
+      /<fieldset[^>]+data-testid="media-image-thumbnails"[^>]*>.*?<\/fieldset>/s,
+    )?.[0] || "";
+  assert.equal((strip.match(/<button /g) ?? []).length, 3);
+  assert.equal((strip.match(/loading="lazy"/g) ?? []).length, 3);
+  for (let position = 0; position < 3; position++)
+    assert.ok(strip.includes(`src="/thumb-${position}.jpg"`));
+  assert.doesNotMatch(strip, /src="\/rich-previews\//);
+  assert.match(strip, /overflow-x-auto/);
 });
 
 test("single-image source dimensions reach the image before decoding without display caps", () => {

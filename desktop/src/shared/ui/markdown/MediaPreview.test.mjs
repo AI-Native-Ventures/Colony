@@ -32,9 +32,57 @@ test("actual Markdown image children route to one carousel in supplied order", (
     (html.match(/data-testid="media-image-preview"/g) ?? []).length,
     1,
   );
-  assert.equal((html.match(/<img /g) ?? []).length, 1);
   assert.match(html, /src="\/rich-previews\/launch-01.svg"/);
+  assert.doesNotMatch(html, /<img [^>]*src="\/rich-previews\/launch-02.svg"/);
   assert.match(html, /1 \/ 2/);
+});
+
+test("adjacent metadata-backed PDF, workbook and image keep source order in one selector", () => {
+  const base = "https://relay.example/media/";
+  const files = [
+    ["report.pdf", "application/pdf"],
+    [
+      "ledger.xlsx",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ],
+    ["art.png", "image/png"],
+  ];
+  const html = renderToStaticMarkup(
+    React.createElement(
+      MarkdownRuntimeContext.Provider,
+      {
+        value: {
+          ...runtime,
+          imetaByUrl: new Map(
+            files.map(([filename, m]) => [base + filename, { filename, m }]),
+          ),
+        },
+      },
+      React.createElement(
+        ReactMarkdown,
+        { components: { p: MarkdownMediaParagraph } },
+        `Package:\n[report.pdf](${base}report.pdf)\n[ledger.xlsx](${base}ledger.xlsx)\n![Artwork](${base}art.png)`,
+      ),
+    ),
+  );
+  assert.equal((html.match(/data-testid="media-collection"/g) ?? []).length, 1);
+  assert.equal(
+    (html.match(/data-testid="inline-file-preview"/g) ?? []).length,
+    1,
+  );
+  assert.ok(
+    html.indexOf("View file 1: report.pdf") <
+      html.indexOf("View file 2: ledger.xlsx"),
+  );
+  assert.ok(
+    html.indexOf("View file 2: ledger.xlsx") <
+      html.indexOf("View file 3: art.png"),
+  );
+  assert.match(html, /Package:/);
+  assert.doesNotMatch(
+    html,
+    /<img [^>]*src="https:\/\/relay.example\/media\/art.png"/,
+  );
 });
 
 test("actual document FileCard in a Markdown paragraph receives a block parent", () => {

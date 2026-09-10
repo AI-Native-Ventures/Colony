@@ -96,7 +96,9 @@ const SHOW_TRANSCRIPT_ACP_SOURCE = shouldShowTranscriptAcpSource();
 export type AgentSessionTranscriptEmptyState = "idle" | "loading";
 
 function shouldShowTranscriptAcpSource() {
-  const envValue = import.meta.env.VITE_SHOW_TRANSCRIPT_ACP_SOURCE;
+  // Optional: the direct-loader tests import this module without Vite's env
+  // shim, where `import.meta.env` is undefined rather than an empty object.
+  const envValue = import.meta.env?.VITE_SHOW_TRANSCRIPT_ACP_SOURCE;
   if (envValue === "1" || envValue === "true") {
     return true;
   }

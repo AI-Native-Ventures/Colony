@@ -450,6 +450,7 @@ fn make_persona(id: &str, display_name: &str) -> AgentDefinition {
 
 fn make_agent(name: &str, persona_id: Option<&str>) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        working_dir: None,
         tier: None,
         manager: None,
         pubkey: String::new(),

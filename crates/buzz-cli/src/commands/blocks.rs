@@ -2,9 +2,15 @@
 
 use std::fs;
 
+#[path = "blocks_description.rs"]
+mod description;
+#[path = "blocks_fallback.rs"]
+mod fallback;
+use fallback::render_fallback;
+
 use buzz_core::{
     block::{
-        canonical_json, normalize_block_handle, parse_manifest, validate_instance,
+        canonical_json, normalize_block_handle, parse_manifest, validate_manifest_instance,
         BlockCatalogEntry, BlockCatalogStatus, BlockInteraction, BlockManifest, BlockValidation,
         BlockValidationState,
     },
@@ -52,6 +58,9 @@ pub async fn dispatch(command: BlocksCmd, client: &BuzzClient) -> Result<(), Cli
     match command {
         BlocksCmd::List => list(client).await,
         BlocksCmd::Get { handle, author } => get(client, &handle, author.as_deref()).await,
+        BlocksCmd::Describe { handle, manifest } => {
+            describe(client, &handle, manifest.as_deref()).await
+        }
         BlocksCmd::Draft { manifest } => draft(client, &manifest).await,
         BlocksCmd::Test { manifest, data } => test(&manifest, data.as_deref()),
         BlocksCmd::Activate { handle, manifest } => {
@@ -151,6 +160,31 @@ async fn get(client: &BuzzClient, handle: &str, author: Option<&str>) -> Result<
     }
 }
 
+async fn describe(
+    client: &BuzzClient,
+    raw_handle: &str,
+    raw_manifest_id: Option<&str>,
+) -> Result<(), CliError> {
+    let handle = normalize_block_handle(raw_handle).map_err(block_error)?;
+    let resolved = match raw_manifest_id {
+        Some(id) => fetch_manifest(client, parse_event_id(id)?).await?,
+        None => {
+            let (event_id, manifest) = resolve_active_manifest(client, &handle).await?;
+            ResolvedManifest { event_id, manifest }
+        }
+    };
+    if resolved.manifest.handle != handle {
+        return Err(CliError::Usage(
+            "requested handle does not match the pinned manifest".into(),
+        ));
+    }
+    println!(
+        "{}",
+        description::describe_manifest(&resolved.manifest, &resolved.event_id.to_hex())
+    );
+    Ok(())
+}
+
 async fn draft(client: &BuzzClient, path: &str) -> Result<(), CliError> {
     let manifest = read_manifest(path)?;
     let builder = build_block_manifest(&manifest).map_err(sdk_error)?;
@@ -174,12 +208,12 @@ async fn draft(client: &BuzzClient, path: &str) -> Result<(), CliError> {
 fn test(manifest_path: &str, data_path: Option<&str>) -> Result<(), CliError> {
     let manifest = read_manifest(manifest_path)?;
     for example in &manifest.examples {
-        validate_instance(&manifest.input_schema, &example.data).map_err(block_error)?;
+        validate_manifest_instance(&manifest, &example.data).map_err(block_error)?;
         render_fallback(&manifest.fallback_template, &example.data)?;
     }
     if let Some(path) = data_path {
         let data = read_json(path)?;
-        validate_instance(&manifest.input_schema, &data).map_err(block_error)?;
+        validate_manifest_instance(&manifest, &data).map_err(block_error)?;
         render_fallback(&manifest.fallback_template, &data)?;
     }
     let canonical = canonical_serialized(&manifest)?;
@@ -478,11 +512,7 @@ async fn receipt(
                 }
             )
     });
-    let resolves_attention = action_resolves
-        && matches!(
-            status,
-            BlockReceiptStatus::Succeeded | BlockReceiptStatus::Denied
-        );
+    let resolves_attention = receipt_resolves_attention(&instance, action_resolves, status);
     let builder = build_block_receipt(&BlockReceiptInput {
         channel_id,
         action_event_id,
@@ -687,25 +717,6 @@ fn read_json(path: &str) -> Result<Value, CliError> {
         .map_err(|error| CliError::Usage(format!("invalid JSON in {path}: {error}")))
 }
 
-fn render_fallback(template: &str, data: &Value) -> Result<String, CliError> {
-    let mut fallback = template.to_owned();
-    if let Some(values) = data.as_object() {
-        for (key, value) in values {
-            let rendered = value
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| value.to_string());
-            fallback = fallback.replace(&format!("{{{{{key}}}}}"), &rendered);
-        }
-    }
-    if fallback.trim().is_empty() {
-        return Err(CliError::Usage(
-            "manifest generated an empty fallback".to_owned(),
-        ));
-    }
-    Ok(fallback)
-}
-
 fn canonical_serialized<T: Serialize>(value: &T) -> Result<String, CliError> {
     let value = serde_json::to_value(value)
         .map_err(|error| CliError::Other(format!("could not serialize Block: {error}")))?;
@@ -761,6 +772,22 @@ fn normalize_action_write_response(
     )
 }
 
+fn receipt_resolves_attention(
+    instance: &Event,
+    action_resolves: bool,
+    status: BlockReceiptStatus,
+) -> bool {
+    action_resolves
+        && matches!(
+            status,
+            BlockReceiptStatus::Succeeded | BlockReceiptStatus::Denied
+        )
+        && instance
+            .tags
+            .iter()
+            .any(|tag| tag.as_slice() == buzz_core::block::BLOCK_ATTENTION_REQUIRED_TAG)
+}
+
 fn receipt_status(status: BlockReceiptStatusArg) -> BlockReceiptStatus {
     match status {
         BlockReceiptStatusArg::Succeeded => BlockReceiptStatus::Succeeded,
@@ -796,12 +823,43 @@ fn sdk_error(error: buzz_sdk::SdkError) -> CliError {
 mod tests {
     use super::{
         build_catalog_action_request, instance_coordinates, normalize_action_write_response,
-        render_fallback, require_tested_validation, resolve_instance_processor,
-        CATALOG_ACTION_SCHEMA, CATALOG_ACTION_TTL_SECONDS,
+        receipt_resolves_attention, render_fallback, require_tested_validation,
+        resolve_instance_processor, CATALOG_ACTION_SCHEMA, CATALOG_ACTION_TTL_SECONDS,
     };
     use buzz_core::block::{parse_manifest, BlockValidation, BlockValidationState};
     use nostr::{EventBuilder, EventId, Keys, Kind, Tag};
     use serde_json::json;
+
+    #[test]
+    fn non_attention_interview_receipt_does_not_resolve_an_attention_queue() {
+        use buzz_sdk::blocks::BlockReceiptStatus;
+        let keys = Keys::generate();
+        for required in [false, true] {
+            let tags = if required {
+                vec![Tag::parse(["block-attention", "1", "required"]).expect("tag")]
+            } else {
+                vec![]
+            };
+            let instance = EventBuilder::new(Kind::from(9), "Interview")
+                .tags(tags)
+                .sign_with_keys(&keys)
+                .expect("instance");
+            assert_eq!(
+                receipt_resolves_attention(&instance, true, BlockReceiptStatus::Succeeded),
+                required
+            );
+            assert!(!receipt_resolves_attention(
+                &instance,
+                false,
+                BlockReceiptStatus::Succeeded
+            ));
+            assert!(!receipt_resolves_attention(
+                &instance,
+                true,
+                BlockReceiptStatus::Failed
+            ));
+        }
+    }
 
     #[test]
     fn fallback_replaces_top_level_values_without_executing_templates() {

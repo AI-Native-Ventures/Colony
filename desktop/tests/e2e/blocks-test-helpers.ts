@@ -714,6 +714,72 @@ export async function settleTimelineAtLatest(page: Page) {
   );
 }
 
+/** Reveal a real history row without assuming offscreen virtual rows stay mounted. */
+export async function revealBlockRow(page: Page, messageId: string) {
+  const timeline = page.getByTestId("message-timeline");
+  const row = timeline.locator(`[data-message-id="${messageId}"]`);
+  const deadline = Date.now() + 20_000;
+  const attemptTimeout = () =>
+    Math.max(1, Math.min(1_000, deadline - Date.now()));
+  let restartSearch = true;
+  await expect
+    .poll(
+      async () => {
+        if (Date.now() >= deadline) return false;
+        if ((await row.count()) > 0) {
+          try {
+            // CI caught a tail jump between count() and scrolling. Reacquire
+            // the row after eviction instead of waiting out the entire test.
+            await row.scrollIntoViewIfNeeded({ timeout: attemptTimeout() });
+          } catch (error) {
+            if (!(error instanceof Error) || error.name !== "TimeoutError") {
+              throw error;
+            }
+            restartSearch = true;
+            return false;
+          }
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() =>
+                  requestAnimationFrame(() => resolve()),
+                );
+              }),
+          );
+          if (await row.isVisible()) return true;
+          restartSearch = true;
+        }
+        restartSearch = await timeline.evaluate(
+          (element, restart) =>
+            new Promise<boolean>((resolve) => {
+              if (restart) {
+                element.scrollTo({ top: 0, behavior: "instant" });
+              } else {
+                element.scrollBy({
+                  top: Math.max(1, Math.floor(element.clientHeight / 2)),
+                  behavior: "instant",
+                });
+              }
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() =>
+                  resolve(
+                    element.scrollTop + element.clientHeight >=
+                      element.scrollHeight - 1,
+                  ),
+                ),
+              );
+            }),
+          restartSearch,
+        );
+        return false;
+      },
+      { timeout: 20_000, intervals: [100, 150, 250] },
+    )
+    .toBe(true);
+  await expect(row).toBeVisible({ timeout: attemptTimeout() });
+  return row;
+}
+
 export function capture(
   page: Page,
   locator: Locator,

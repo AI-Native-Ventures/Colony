@@ -1,3 +1,4 @@
+import { resolveInterviewActionInputs } from "../interviewAction";
 import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
@@ -137,6 +138,10 @@ export function BlockRenderProvider({
         : new Map<string, Record<string, unknown>>(),
     [data, manifest.handle],
   );
+  const interviewInputs = React.useMemo(
+    () => resolveInterviewActionInputs(manifest.handle, data),
+    [manifest.handle, data],
+  );
   const directActionInputs = React.useMemo(() => {
     const inputs = new Map<string, unknown>();
     if (approvalInputs?.ok) {
@@ -147,11 +152,13 @@ export function BlockRenderProvider({
     for (const [actionId, input] of blueprintInputs) {
       inputs.set(actionId, input);
     }
+    for (const [actionId, input] of interviewInputs)
+      inputs.set(actionId, input);
     for (const [actionId, input] of initiativeInputs) {
       inputs.set(actionId, input);
     }
     return inputs;
-  }, [approvalInputs, blueprintInputs, initiativeInputs]);
+  }, [approvalInputs, blueprintInputs, initiativeInputs, interviewInputs]);
   const directActionIds = React.useMemo(() => {
     if (manifest.handle === "agent-proposal") return new Set<string>();
     const direct = new Set(

@@ -3,15 +3,29 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
+import {
+  captureBlocksManifestQueryState,
+  installBlocksLiveDiagnostics,
+  installBlocksManifestDiagnostics,
+} from "../helpers/blocksLiveDiagnostics";
 import { installBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const execFile = promisify(execFileCallback);
 const enabled = process.env.BUZZ_E2E_BLOCKS_LIVE === "1";
 
 type CommandResult = Record<string, unknown>;
+
+const manifestDiagnosticsByPage = new WeakMap<
+  Page,
+  {
+    directory: string;
+    manifestIds: string[];
+    observer: ReturnType<typeof installBlocksManifestDiagnostics>;
+  }
+>();
 
 function required(name: string, value: string | undefined): string {
   if (!value)
@@ -109,28 +123,41 @@ async function captureProposalReceiptEvidence(
   page: import("@playwright/test").Page,
   directory: string,
   harnessProject: string,
-  instanceId: string,
+  instanceIds: string[],
 ) {
-  if (!/^[0-9a-f]{64}$/.test(instanceId))
+  if (
+    instanceIds.length !== 2 ||
+    instanceIds.some((id) => !/^[0-9a-f]{64}$/.test(id))
+  )
     throw new Error("Invalid proposal evidence event ID");
-  const browser = await page.evaluate(
-    (id) => ({
-      nativeCommandCount: (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
-        (entry) => entry.command === "execute_agent_proposal",
-      ).length,
-      remainingNativeOutcomes:
-        window.__BUZZ_E2E__?.mock?.agentProposalExecutionOutcomes?.map(
-          (outcome) => outcome.status,
-        ) ?? [],
-      receiptSigningAttempts: (window.__BUZZ_E2E_SIGNED_EVENTS__ ?? []).filter(
-        (event) =>
-          event.kind === 40011 &&
-          event.tags.some((tag) => tag[0] === "e" && tag[1] === id),
-      ),
-    }),
-    instanceId,
-  );
-  const { stdout } = await execFile(
+  const browser = await page
+    .evaluate(
+      (ids) => ({
+        nativeCommandCount: (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (entry) => entry.command === "execute_agent_proposal",
+        ).length,
+        remainingNativeOutcomes:
+          window.__BUZZ_E2E__?.mock?.agentProposalExecutionOutcomes?.map(
+            (outcome) => outcome.status,
+          ) ?? [],
+        signingAttempts: ids.map((id) => ({
+          instanceEventId: id,
+          actions: (window.__BUZZ_E2E_SIGNED_EVENTS__ ?? []).filter(
+            (event) =>
+              event.kind === 40010 &&
+              event.tags.some((tag) => tag[0] === "e" && tag[1] === id),
+          ).length,
+          receipts: (window.__BUZZ_E2E_SIGNED_EVENTS__ ?? []).filter(
+            (event) =>
+              event.kind === 40011 &&
+              event.tags.some((tag) => tag[0] === "e" && tag[1] === id),
+          ).length,
+        })),
+      }),
+      instanceIds,
+    )
+    .catch(() => ({ unavailable: true }));
+  const stored = await execFile(
     "docker",
     [
       "compose",
@@ -148,18 +175,24 @@ async function captureProposalReceiptEvidence(
       "buzz",
       "-tAc",
       "SELECT COALESCE(json_agg(json_build_object(" +
-        "'id', encode(id, 'hex'), 'pubkey', encode(pubkey, 'hex'), " +
-        "'sig', encode(sig, 'hex'), 'created_at', extract(epoch FROM created_at)::bigint, " +
-        "'kind', kind, 'content', content, 'tags', tags)), '[]'::json) " +
-        `FROM events WHERE kind IN (40010, 40011) AND tags::text LIKE '%${instanceId}%'`,
+        "'id', encode(id, 'hex'), 'created_at', extract(epoch FROM created_at)::bigint, " +
+        "'kind', kind, 'instanceEventId', instance_event_id)), '[]'::json) " +
+        "FROM (SELECT id, created_at, kind, CASE " +
+        instanceIds
+          .map((id) => `WHEN tags::text LIKE '%${id}%' THEN '${id}'`)
+          .join(" ") +
+        " END AS instance_event_id FROM events WHERE kind IN (40010, 40011) AND (" +
+        instanceIds.map((id) => `tags::text LIKE '%${id}%'`).join(" OR ") +
+        ") ORDER BY created_at, id LIMIT 200) proposal_events",
     ],
-    { cwd: path.resolve("..") },
-  );
+    { cwd: path.resolve(".."), timeout: 5_000, maxBuffer: 128 * 1024 },
+  )
+    .then(({ stdout }) => JSON.parse(stdout))
+    .catch(() => ({ unavailable: true }));
   await writeEvidence(directory, "agent-proposal-receipts.json", {
     browser,
-    storedEvents: JSON.parse(stdout),
+    storedEvents: stored,
   });
-  console.log(`AGENT_PROPOSAL_RECEIPTS ${JSON.stringify(browser)}`);
 }
 
 /**
@@ -176,6 +209,25 @@ test.describe("Blocks live Gate C", () => {
     !enabled,
     "set BUZZ_E2E_BLOCKS_LIVE=1 to run the harness-owned live gate",
   );
+
+  test.afterEach(async ({ page }) => {
+    const diagnostics = manifestDiagnosticsByPage.get(page);
+    if (!diagnostics) return;
+    manifestDiagnosticsByPage.delete(page);
+    const transport = diagnostics.observer.snapshot();
+    diagnostics.observer.stop();
+    // Persist initial-load evidence even when the test never reaches actions.
+    await writeEvidence(
+      diagnostics.directory,
+      "manifest-transport.json",
+      transport,
+    );
+    await writeEvidence(
+      diagnostics.directory,
+      "manifest-query-state.json",
+      await captureBlocksManifestQueryState(page, diagnostics.manifestIds),
+    );
+  });
 
   test("persists the chat-native Blocks loop with signed relay evidence", async ({
     page,
@@ -473,8 +525,27 @@ test.describe("Blocks live Gate C", () => {
     const proposalIds = [firstProposal, secondProposal].map((proposal) =>
       String(proposal.instance_event_id ?? ""),
     );
-    if (proposalIds.some((id) => !id))
+    if (proposalIds.some((id) => !/^[0-9a-f]{64}$/.test(id)))
       throw new Error("agent draft-create did not return both instance IDs");
+    const proposalDiagnostics = installBlocksLiveDiagnostics(
+      page,
+      relayWsUrl,
+      proposalIds,
+    );
+    page.once("close", () => proposalDiagnostics.stop());
+    const manifestIds = [String(oldLead.manifest_id ?? ""), draftId];
+    const manifestDiagnostics = installBlocksManifestDiagnostics(
+      page,
+      relayWsUrl,
+      { manifestIds, relaySelfPubkey: relaySelf },
+    );
+    manifestDiagnosticsByPage.set(page, {
+      directory: evidence,
+      manifestIds,
+      observer: manifestDiagnostics,
+    });
+    manifestDiagnostics.start();
+    page.once("close", () => manifestDiagnostics.stop());
     await writeEvidence(evidence, "cli.json", {
       created,
       databaseUrl,
@@ -733,119 +804,133 @@ test.describe("Blocks live Gate C", () => {
     // Browser mode reaches the real relay but its native command boundary is
     // intentionally deterministic. Double invocation must still reserve one
     // browser command; the Rust tests run by prove-blocks cover the real store.
-    await proposalRows[0].getByRole("button", { name: "Review agent" }).click();
-    await expect(proposalDialog.getByLabel("Agent name")).toHaveValue(
-      "Gate C Researcher",
-    );
-    await proposalDialog
-      .getByLabel("Agent name")
-      .fill("Gate C Researcher approved");
-    const submit = proposalDialog.getByTestId("persona-dialog-submit");
-    await expect(submit).toBeEnabled();
-    expect(
-      await page.evaluate(() =>
-        window.__BUZZ_E2E__?.mock?.agentProposalExecutionOutcomes?.map(
-          (outcome) => outcome.status,
-        ),
-      ),
-    ).toEqual(["applied"]);
-    await submit.evaluate((element) => {
-      (element as HTMLElement).click();
-      (element as HTMLElement).click();
-    });
-    // The dialog closes only after the signed Block action is published, and
-    // the client gives that publish PUBLISH_TIMEOUT_MS (25s) before it gives
-    // up. The integration project's default expect timeout is 15s, so the
-    // assertion could fire while the publish was still inside its own budget
-    // and report a hung dialog for a round trip that was merely slow. Wait
-    // past the publish deadline, like the receipt assertions below already do.
-    await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
-              (entry) => entry.command === "execute_agent_proposal",
-            ).length,
-        ),
-      )
-      .toBe(1);
+    proposalDiagnostics.start();
     try {
+      await proposalRows[0]
+        .getByRole("button", { name: "Review agent" })
+        .click();
+      await expect(proposalDialog.getByLabel("Agent name")).toHaveValue(
+        "Gate C Researcher",
+      );
+      await proposalDialog
+        .getByLabel("Agent name")
+        .fill("Gate C Researcher approved");
+      const submit = proposalDialog.getByTestId("persona-dialog-submit");
+      await expect(submit).toBeEnabled();
+      expect(
+        await page.evaluate(() =>
+          window.__BUZZ_E2E__?.mock?.agentProposalExecutionOutcomes?.map(
+            (outcome) => outcome.status,
+          ),
+        ),
+      ).toEqual(["applied"]);
+      await submit.evaluate((element) => {
+        (element as HTMLElement).click();
+        (element as HTMLElement).click();
+      });
+      // The dialog closes only after the signed Block action is published, and
+      // the client gives that publish PUBLISH_TIMEOUT_MS (25s) before it gives
+      // up. The integration project's default expect timeout is 15s, so the
+      // assertion could fire while the publish was still inside its own budget
+      // and report a hung dialog for a round trip that was merely slow. Wait
+      // past the publish deadline, like the receipt assertions below already do.
+      await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+                (entry) => entry.command === "execute_agent_proposal",
+              ).length,
+          ),
+        )
+        .toBe(1);
       await expect(proposalRows[0].getByText("Completed.")).toBeVisible({
         timeout: 30_000,
       });
+      await proposalRows[1]
+        .getByRole("button", { name: "Review agent" })
+        .click();
+      const decline = proposalDialog.getByRole("button", { name: "Decline" });
+      await expect(decline).toBeEnabled();
+      await decline.click();
+      await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
+      // Probe, not an assertion. The decline receipt is published by the
+      // owner-side broker (useAgentProposalBroker), so "Declined." never
+      // appearing has two very different causes: the broker never published a
+      // kind:40011 receipt, or it published one the client then filtered out.
+      // The DOM cannot tell those apart and the failure below reads the same
+      // either way. Ask the relay's own store directly, and print it before the
+      // assertion so a red run carries the answer.
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const { stdout: blockEvents } = await execFile(
+          "docker",
+          [
+            "compose",
+            "-p",
+            harnessProject,
+            "-f",
+            "docker-compose.harness.yml",
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            "buzz",
+            "-d",
+            "buzz",
+            "-tAc",
+            "SELECT kind, encode(id, 'hex') FROM events " +
+              "WHERE kind IN (40010, 40011) " +
+              `AND tags::text LIKE '%${proposalIds[1]}%' ORDER BY created_at, id`,
+          ],
+          { cwd: path.resolve("..") },
+        );
+        const receipts = blockEvents
+          .split("\n")
+          .filter((line) => line.startsWith("40011"));
+        console.log(
+          `BLOCKEVENTS attempt=${attempt} receipts=${receipts.length}\n${blockEvents.trim()}`,
+        );
+        if (receipts.length > 0) {
+          break;
+        }
+        await page.waitForTimeout(2_500);
+      }
+      await expect(proposalRows[1].getByText("Declined.")).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+                (entry) => entry.command === "execute_agent_proposal",
+              ).length,
+          ),
+        )
+        .toBe(1);
     } finally {
-      // Capture accepted signed receipts and final command count even when
-      // the DOM assertion fails. An early count of one cannot distinguish a
-      // later receipt retry from a missing or rejected receipt.
+      // Persist transport metadata before querying storage. A publish timeout
+      // must preserve both proposals' evidence, even if the dialog never closes
+      // or a later diagnostic read fails. Never replace the original failure.
+      proposalDiagnostics.stop();
+      await writeEvidence(
+        evidence,
+        "agent-proposal-transport.json",
+        proposalDiagnostics.snapshot(),
+      ).catch(() =>
+        console.warn("Gate C transport evidence could not be written."),
+      );
       await captureProposalReceiptEvidence(
         page,
         evidence,
         harnessProject,
-        proposalIds[0] ?? "",
+        proposalIds,
+      ).catch(() =>
+        console.warn("Gate C receipt evidence could not be written."),
       );
     }
-    await proposalRows[1].getByRole("button", { name: "Review agent" }).click();
-    const decline = proposalDialog.getByRole("button", { name: "Decline" });
-    await expect(decline).toBeEnabled();
-    await decline.click();
-    await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
-    // Probe, not an assertion. The decline receipt is published by the
-    // owner-side broker (useAgentProposalBroker), so "Declined." never
-    // appearing has two very different causes: the broker never published a
-    // kind:40011 receipt, or it published one the client then filtered out.
-    // The DOM cannot tell those apart and the failure below reads the same
-    // either way. Ask the relay's own store directly, and print it before the
-    // assertion so a red run carries the answer.
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const { stdout: blockEvents } = await execFile(
-        "docker",
-        [
-          "compose",
-          "-p",
-          harnessProject,
-          "-f",
-          "docker-compose.harness.yml",
-          "exec",
-          "-T",
-          "postgres",
-          "psql",
-          "-U",
-          "buzz",
-          "-d",
-          "buzz",
-          "-tAc",
-          "SELECT kind, encode(id, 'hex'), tags::text FROM events " +
-            "WHERE kind IN (40010, 40011) ORDER BY created_at, id",
-        ],
-        { cwd: path.resolve("..") },
-      );
-      const receipts = blockEvents
-        .split("\n")
-        .filter((line) => line.startsWith("40011"));
-      console.log(
-        `BLOCKEVENTS attempt=${attempt} receipts=${receipts.length}\n${blockEvents.trim()}`,
-      );
-      if (
-        receipts.some((line) => line.includes(proposalIds[1] ?? "no-proposal"))
-      ) {
-        break;
-      }
-      await page.waitForTimeout(2_500);
-    }
-    await expect(proposalRows[1].getByText("Declined.")).toBeVisible({
-      timeout: 30_000,
-    });
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
-              (entry) => entry.command === "execute_agent_proposal",
-            ).length,
-        ),
-      )
-      .toBe(1);
     await page.getByRole("button", { name: "Inbox" }).click();
     await page.getByTestId("inbox-filter-trigger").click();
     await page.getByRole("menuitemradio", { name: "Needs action" }).click();

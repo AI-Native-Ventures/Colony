@@ -28,6 +28,14 @@ import {
   FactoryBody,
   factoryKindDefinition,
 } from "@/features/workspace/kinds/factoryKind";
+import {
+  AgentBody,
+  agentKindDefinition,
+} from "@/features/workspace/kinds/agentKind";
+import {
+  CommGraphBody,
+  commGraphKindDefinition,
+} from "@/features/workspace/kinds/commGraphKind";
 import { getFeature } from "@/shared/features/manifest";
 import { resolveEnabled } from "@/shared/features/resolveEnabled";
 import { getOverrides } from "@/shared/features/store";
@@ -99,6 +107,13 @@ export function registerAllTabKinds(): void {
     factoryKindRegistered = true;
     registerTabKind(factoryKindDefinition);
     bodies.set(factoryKindDefinition.kind, FactoryBody);
+    // The agent tile is a Factory surface: it rides the same flag, so a build
+    // without the Factory tab cannot restore an agent tab it cannot render.
+    registerTabKind(agentKindDefinition);
+    bodies.set(agentKindDefinition.kind, AgentBody);
+    // The graph is part of the same surface, on the same flag.
+    registerTabKind(commGraphKindDefinition);
+    bodies.set(commGraphKindDefinition.kind, CommGraphBody);
   }
   if (!webKindRegistered && workspaceWebTabEnabled()) {
     webKindRegistered = true;

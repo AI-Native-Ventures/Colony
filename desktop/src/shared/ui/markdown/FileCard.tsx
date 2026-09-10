@@ -6,6 +6,8 @@ import { useWorkspaceAttachmentOpener } from "@/features/workspace/ui/WorkspaceL
 import { invokeTauri } from "@/shared/api/tauri";
 import { cn } from "@/shared/lib/cn";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
+import { DiagramFilePreview } from "@/shared/ui/diagram-preview/DiagramFilePreview";
+import { supportsDiagramFile } from "@/shared/ui/diagram-preview/diagramModel";
 import {
   InlineFilePreview,
   supportsInlineFilePreview,
@@ -148,6 +150,25 @@ export function FileCard(props: {
   const openInWorkspace = useWorkspaceAttachmentOpener();
   const frame = React.useRef<HTMLDivElement>(null);
   useSmoothCorners(frame);
+  if (supportsDiagramFile(props.filename, props.mime)) {
+    return (
+      <div ref={frame} className="my-2 w-full" data-testid="file-card">
+        <DiagramFilePreview
+          {...props}
+          onOpenInWorkspace={
+            openInWorkspace
+              ? () =>
+                  openInWorkspace({
+                    url: props.href,
+                    filename: props.filename,
+                    mime: props.mime,
+                  })
+              : undefined
+          }
+        />
+      </div>
+    );
+  }
   if (supportsInlineFilePreview(props.filename, props.mime)) {
     return (
       <div

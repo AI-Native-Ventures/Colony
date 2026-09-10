@@ -33,7 +33,10 @@ import {
 } from "@/shared/api/relayClosedRecovery";
 import { replayLiveSubscriptions } from "@/shared/api/relayReconnectReplay";
 import { handleRelayWsMessage } from "@/shared/api/relayClientInbound";
-import { publishRelayEvent } from "@/shared/api/relayEventPublisher";
+import {
+  handleRelayEventOk,
+  publishRelayEvent,
+} from "@/shared/api/relayEventPublisher";
 import {
   fetchChunkedHistory,
   requestFirstEventGated,
@@ -714,8 +717,6 @@ export class RelayClient {
       {
         currentCommunityGeneration: () => this.communityGeneration,
         ensureConnected: () => this.ensureConnected(),
-        normalizeError: (error, fallbackMessage) =>
-          this.normalizeRelayError(error, fallbackMessage),
         pendingEvents: this.pendingEvents,
         recoverFromSocketFailure: (error, fallbackMessage) =>
           this.recoverFromSocketFailure(error, fallbackMessage),
@@ -831,19 +832,7 @@ export class RelayClient {
       return;
     }
 
-    const pendingEvent = this.pendingEvents.get(eventId);
-    if (!pendingEvent) {
-      return;
-    }
-
-    window.clearTimeout(pendingEvent.timeout);
-    this.pendingEvents.delete(eventId);
-
-    if (success) {
-      pendingEvent.resolve(pendingEvent.event);
-    } else {
-      pendingEvent.reject(new Error(message || "Relay rejected the event."));
-    }
+    handleRelayEventOk(this.pendingEvents, eventId, success, message);
   }
 
   private hasLiveSubscriptions() {
