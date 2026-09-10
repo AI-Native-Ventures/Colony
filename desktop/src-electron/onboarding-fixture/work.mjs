@@ -119,7 +119,7 @@ export async function completeFixtureWork({
     "The packaged builtin is local; no custom worker definition exists before approval",
   );
   assert.equal((await reader.events(30181)).length, 0);
-  assert.equal(provider.requests.length, 0);
+  assert.equal(provider.receivedCallCount, 0);
   await expect(
     cards.first().getByTestId("first-job-team-proposal"),
   ).toContainText("Sarah");
@@ -147,7 +147,7 @@ export async function completeFixtureWork({
   assert.equal(saved.failed_restart_count, 0);
   assert.equal(saved.restarted_count, 0);
   await reloadWelcome();
-  assert.equal(provider.requests.length, 0);
+  assert.equal(provider.receivedCallCount, 0);
   assert.equal((await readPendingAttempt(page, account)).exists, false);
   await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
   await expect(
@@ -253,7 +253,7 @@ export async function completeFixtureWork({
             "Do not retry after an instruction reached the relay",
           );
           assert.equal(
-            provider.requests.length,
+            provider.receivedCallCount,
             0,
             "Do not retry after model work began",
           );
@@ -492,7 +492,7 @@ export async function completeFixtureWork({
   const outputScreenshot = await page.screenshot({
     path: path.join(proofDirectory, "joined-worker-reviewed.png"),
   });
-  const callsBeforeReload = provider.requests.length;
+  const callsBeforeReload = provider.receivedCallCount;
   const reloadStartedAt = performance.now();
   const reloadCompletion = { progression: [] };
   await reloadWelcome();
@@ -532,7 +532,7 @@ export async function completeFixtureWork({
     "Returned work and canonical status are distinct screenshot states",
   );
   assert.equal(
-    provider.requests.length,
+    provider.receivedCallCount,
     callsBeforeReload,
     "Reload does not create another paid turn",
   );
@@ -569,8 +569,8 @@ export async function completeFixtureWork({
   );
   assert.equal(
     gatewayCalls.length,
-    provider.requests.length,
-    "Every fixture model response comes through the real gateway",
+    provider.receivedCallCount,
+    "Every received fixture model call comes through the real gateway",
   );
   let finalCredits;
   await expect

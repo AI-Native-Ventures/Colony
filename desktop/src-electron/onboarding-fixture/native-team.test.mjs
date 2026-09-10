@@ -4,9 +4,11 @@ import { finalizeEvent } from "nostr-tools/pure";
 import {
   nativeRequestActor,
   personaAuthority,
+  scopedFirstJobDefinitionId,
   verifySigned,
 } from "./native-team.mjs";
 import { bucketRequest } from "./native-services.mjs";
+import { createOnboardingFixtureProvider } from "./provider.mjs";
 
 const team = {
   scout: { pubkey: "a".repeat(64), prompt: "Coordinate the company." },
@@ -161,8 +163,17 @@ test("built-in Scout authority stays local while a new worker requires its signe
       starterScout: { ...common.starterScout, pubkey: "b".repeat(64) },
     }),
   );
+  const action = {
+    requestId: "2e81fba5-6f00-4786-a991-c1a12198fdbe",
+    preparation: {
+      ownerPubkey: common.ownerPubkey,
+      communityRelayUrl:
+        "wss://horizon-labs.onboarding-01e484b5c1c936a5.invalid",
+    },
+    definition: { systemPrompt: "Write." },
+  };
   const worker = {
-    id: "approved-worker",
+    id: "cae2d97d-957b-5269-b9fb-63018ad0902d",
     is_builtin: false,
     system_prompt: "Write.",
   };
@@ -175,10 +186,7 @@ test("built-in Scout authority stays local while a new worker requires its signe
     persona: worker,
     record: sign(30177, "b".repeat(64), { persona_id: worker.id }),
     definition,
-    action: {
-      requestId: worker.id,
-      definition: { systemPrompt: worker.system_prompt },
-    },
+    action,
   };
   assert.equal(personaAuthority(workerArgs).eventId, definition.id);
   assert.throws(() => personaAuthority({ ...workerArgs, definition: null }));
@@ -208,4 +216,102 @@ test("built-in Scout authority stays local while a new worker requires its signe
       },
     }),
   );
+});
+
+test("worker definition coordinate matches the observed real native owner/community-scoped UUID", () => {
+  // Observed native result in GitHub proof34418895093, not a locally generated expected value.
+  const action = {
+    requestId: "2e81fba5-6f00-4786-a991-c1a12198fdbe",
+    preparation: {
+      ownerPubkey:
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      communityRelayUrl:
+        "wss://horizon-labs.onboarding-01e484b5c1c936a5.invalid",
+    },
+  };
+  assert.equal(
+    scopedFirstJobDefinitionId(action),
+    "cae2d97d-957b-5269-b9fb-63018ad0902d",
+  );
+  for (const preparation of [
+    { ...action.preparation, ownerPubkey: "b".repeat(64) },
+    {
+      ...action.preparation,
+      communityRelayUrl:
+        "wss://horizon-labs.onboarding-1111111111111111.invalid",
+    },
+  ])
+    assert.notEqual(
+      scopedFirstJobDefinitionId({ ...action, preparation }),
+      scopedFirstJobDefinitionId(action),
+    );
+  assert.throws(() =>
+    scopedFirstJobDefinitionId({
+      ...action,
+      preparation: {
+        ...action.preparation,
+        communityRelayUrl: "wss://example.com",
+      },
+    }),
+  );
+});
+
+test("worker coordinate refuses noncanonical whitespace and root slash", () => {
+  const action = {
+    requestId: "2e81fba5-6f00-4786-a991-c1a12198fdbe",
+    preparation: {
+      ownerPubkey: "a".repeat(64),
+      communityRelayUrl:
+        "wss://horizon-labs.onboarding-01e484b5c1c936a5.invalid",
+    },
+  };
+  for (const suffix of ["\n", "/"])
+    assert.throws(() =>
+      scopedFirstJobDefinitionId({
+        ...action,
+        preparation: {
+          ...action.preparation,
+          communityRelayUrl: action.preparation.communityRelayUrl + suffix,
+        },
+      }),
+    );
+  assert.throws(() =>
+    scopedFirstJobDefinitionId({
+      ...action,
+      requestId: action.requestId + "\n",
+    }),
+  );
+  assert.throws(() =>
+    scopedFirstJobDefinitionId({
+      ...action,
+      preparation: {
+        ...action.preparation,
+        ownerPubkey: action.preparation.ownerPubkey + "\n",
+      },
+    }),
+  );
+});
+
+test("an early rejected provider request still counts as a received call", async () => {
+  const provider = await createOnboardingFixtureProvider();
+  try {
+    const response = await fetch(`${provider.httpUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer synthetic-onboarding-provider",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ messages: [] }),
+    });
+    assert.equal(response.status, 500);
+    await response.json();
+    assert.equal(provider.receivedCallCount, 1);
+    assert.equal(provider.requests.length, 0);
+    assert.throws(
+      () => provider.assertHealthy(),
+      /No model calls are allowed before explicit staffing/,
+    );
+  } finally {
+    await provider.close();
+  }
 });

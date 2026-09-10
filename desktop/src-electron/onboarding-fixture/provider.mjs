@@ -77,13 +77,13 @@ export async function createOnboardingFixtureProvider() {
   const toolResults = [];
   const server = createServer(async (request, response) => {
     try {
+      assert.ok(++calls <= 40, "Fixture model call budget exceeded");
       assert.equal(request.method, "POST");
       assert.equal(request.url, "/v1/chat/completions");
       assert.equal(
         request.headers.authorization,
         "Bearer synthetic-onboarding-provider",
       );
-      assert.ok(++calls <= 40, "Fixture model call budget exceeded");
       let raw = "";
       for await (const chunk of request) {
         raw += chunk;
@@ -243,6 +243,9 @@ export async function createOnboardingFixtureProvider() {
   return {
     httpUrl: `http://127.0.0.1:${server.address().port}`,
     requests,
+    get receivedCallCount() {
+      return calls;
+    },
     tools,
     toolResults,
     assertHealthy() {

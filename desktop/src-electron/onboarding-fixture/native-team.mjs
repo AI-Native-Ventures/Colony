@@ -21,6 +21,46 @@ const tag = (event, name) => {
   return values[0];
 };
 
+/** Match the native owner/community-scoped UUIDv5 for this canonical fixture relay. */
+export function scopedFirstJobDefinitionId(action) {
+  const { ownerPubkey, communityRelayUrl } = action.preparation;
+  for (const value of [ownerPubkey, communityRelayUrl, action.requestId])
+    assert.equal(
+      value,
+      value.trim(),
+      "Canonical coordinate has no surrounding whitespace",
+    );
+  assert.match(ownerPubkey, /^[a-f0-9]{64}$/);
+  // This gate only creates this canonical private host; never approximate the
+  // production normalizer for an arbitrary relay URL.
+  assert.match(
+    communityRelayUrl,
+    /^wss:\/\/horizon-labs\.onboarding-[a-f0-9]{16}\.invalid$/,
+  );
+  assert.match(
+    action.requestId,
+    /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/,
+  );
+  const coordinate = [ownerPubkey, communityRelayUrl, action.requestId].join(
+    "\n",
+  );
+  const bytes = createHash("sha1")
+    .update(Buffer.from("e812dfbd1ec943baa59d721ff70f3e49", "hex"))
+    .update(coordinate)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+}
+
 /** Bind Scout to the unchanged packaged builtin and workers to owner-signed definitions. */
 export function personaAuthority({
   name,
@@ -66,7 +106,8 @@ export function personaAuthority({
   }
   assert.equal(name, "worker");
   assert.equal(persona.is_builtin, false);
-  assert.equal(persona.id, action.requestId);
+  assert.equal(action.preparation.ownerPubkey, ownerPubkey);
+  assert.equal(persona.id, scopedFirstJobDefinitionId(action));
   assert.ok(
     definition,
     "New worker needs a real owner-published persona definition",

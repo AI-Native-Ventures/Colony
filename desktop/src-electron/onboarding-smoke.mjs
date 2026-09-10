@@ -414,7 +414,7 @@ try {
     tasks: "0",
   });
   provider.assertHealthy();
-  assert.equal(provider.requests.length, 0);
+  assert.equal(provider.receivedCallCount, 0);
   await waitForAnimations(page);
   await page.screenshot({
     path: path.join(proofDirectory, "joined-zero-credit-block.png"),
@@ -576,6 +576,7 @@ try {
       cleanup.push("Owned fixture service cleanup failed");
     }
   }
+  proof.modelReceivedCalls = provider?.receivedCallCount ?? 0;
   proof.requests = proxy?.requests || [];
   proof.blockedRendererRequests = blocked;
   try {
