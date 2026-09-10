@@ -1,17 +1,15 @@
 // Hosted fixture lifecycle only. Never included in the packaged app.
 import assert from "node:assert/strict";
-import { isDeepStrictEqual } from "node:util";
 import { setTimeout } from "node:timers/promises";
 
 const ordered = (entries) =>
   [...entries].sort(([a], [b]) => a.localeCompare(b));
 
-/** Keep the fixture writer alive until another process observes its writes. */
+/** Model a legacy app exiting before the first independent upgrade reader. */
 export async function persistLegacyFixture({
   writer,
   read,
-  pause = () => setTimeout(500),
-  attempts = 10,
+  settle = () => setTimeout(2_000),
 }) {
   let source;
   try {
@@ -20,25 +18,16 @@ export async function persistLegacyFixture({
       source.length > 0,
       "Legacy fixture must seed nonempty source data",
     );
-    let observed = false;
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      const entries = ordered(await read());
-      if (isDeepStrictEqual(entries, source)) {
-        observed = true;
-        break;
-      }
-      // Only an as-yet-empty store is a flush race. Different data is a failure.
-      assert.equal(entries.length, 0, "Legacy source changed before migration");
-      if (attempt + 1 < attempts) await pause();
-    }
-    assert.ok(
-      observed,
-      "Legacy WebKit writes were not visible to an independent reader",
-    );
+    // WebKit batches SQLite writes. Keep the live writer alone through the
+    // commit delay, then close it normally before opening any independent reader.
+    // This fixture preparation wait is not persistence proof; the one post-exit
+    // read below must still contain the exact source data.
+    // https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/storage/SQLiteStorageArea.cpp
+    await settle();
   } finally {
     await writer.close();
   }
-  // All writer and observer processes have exited. This fresh process proves
+  // The writer has exited normally. This single fresh process proves
   // persistence before Electron is allowed to start; it never seeds or retries.
   assert.deepEqual(
     ordered(await read()),

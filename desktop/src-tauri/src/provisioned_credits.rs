@@ -500,6 +500,30 @@ pub fn ensure_lease_blocking(
     )
 }
 
+/// Read an already-issued, unexpired lease for native read-only catalog discovery.
+/// This never mints, refreshes, revokes, or exposes a token to the renderer.
+pub(crate) fn cached_catalog_lease(
+    app: &AppHandle,
+    relay_url: &str,
+) -> Result<GatewayLease, String> {
+    let (owner, _) = capture_owner_signer(app, None)?;
+    let key = GatewayLeaseKey::new(relay_url, &owner)?;
+    let state = app.state::<AppState>();
+    let manager = state
+        .provisioned_credits
+        .lock()
+        .map_err(|error| error.to_string())?;
+    if manager.is_closed() || manager.is_identity_transitioning() {
+        return Err("Colony Credits connection is changing. Try again after reconnect.".into());
+    }
+    manager
+        .leases
+        .get(&key)
+        .filter(|entry| entry.lease.expires_at > Utc::now())
+        .map(|entry| entry.lease.clone())
+        .ok_or_else(|| "Connect Colony Credits before choosing reply settings.".into())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RotationReason {
     Ensure,

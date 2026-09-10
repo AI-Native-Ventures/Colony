@@ -1,3 +1,18 @@
+import {
+  brokerMockCommunityProfileAction,
+  canonicalCompanyMockJson,
+  mockCompanyRecord,
+  seedMockCommunityProfileHead,
+  signMockCommunityProfileUpdate,
+  mockCommunityProfileHeadRecord,
+  type CommunityProfileHeadSeed,
+} from "./e2eCompanyProfile";
+import { prepareFirstJobTeamFixture } from "./e2eFirstJobTeam";
+import {
+  mockEventMatchesFilter,
+  selectMockChannelHistory,
+  type MockFilter,
+} from "./e2eBridgeFilters";
 import { createProfileHandlers, type RawProfile } from "./e2eBridgeProfiles";
 import {
   createMockOpenRouter,
@@ -1174,21 +1189,6 @@ type MockSubscription = {
   ownerPubkeys: string[];
 };
 
-type MockFilter = {
-  "#a"?: string[];
-  "#d"?: string[];
-  "#e"?: string[];
-  "#grant"?: string[];
-  "#h"?: string[];
-  "#p"?: string[];
-  authors?: string[];
-  ids?: string[];
-  kinds?: number[];
-  limit?: number;
-  since?: number;
-  until?: number;
-};
-
 type MockSocket = {
   handler: WsHandler;
   subscriptions: Map<string, MockSubscription>;
@@ -1393,11 +1393,7 @@ declare global {
     __BUZZ_E2E_REPLACE_MOCK_BLOCK_EVENTS__?: (events: RelayEvent[]) => number;
     __BUZZ_E2E_CLEAR_MOCK_CHANNEL__?: (channelName: string) => boolean;
     __BUZZ_E2E_PUBLISHED_EVENTS__?: RelayEvent[];
-    __BUZZ_E2E_MOCK_COMPANY_BROKER__?: () => {
-      actionEventIds: string[];
-      receiptOutcomes: string[];
-      headKinds: number[];
-    };
+    __BUZZ_E2E_MOCK_COMPANY_BROKER__?: typeof readMockCompanyBrokerLog;
     __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
       content: string;
       createdAt?: number;
@@ -3412,27 +3408,6 @@ export type CompanyWorkContextConfig = {
   refuseWith?: "rejected" | "failed" | "no-receipt";
 };
 
-/**
- * Seeds just the community profile head, without the task/team routing
- * `CompanyWorkContextConfig` also wires up. Mirrors what
- * `run_profile_backfill`'s default profile looks like on a fresh relay.
- */
-export type CommunityProfileHeadSeed = {
-  tradingName?: string;
-  summary?: string;
-  businessType?: string;
-  costCentreId?: string;
-  createdAt?: number;
-  updatedAt?: number;
-  /**
-   * Hex-encoded secret to sign the head with. Defaults to the fixed mock
-   * relay key. Set this when the spec also sets `relaySelf` to a different
-   * identity: `getActiveCompanyHead` filters heads to `authors:
-   * [relaySelfPubkey]`, so a head signed by anyone else is invisible to it.
-   */
-  signerSecretHex?: string;
-};
-
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockBlockEvents: RelayEvent[] = [];
 const mockDelegationGrantEvents: RelayEvent[] = [];
@@ -3482,30 +3457,6 @@ let mockRelayMembers: RawRelayMember[] = [];
 // answers: it must author heads, answer Company Actions with receipts, and
 // serve both back. Everything below is that relay, and nothing more.
 
-/** Byte-for-byte the encoding the relay signs company content as. */
-function canonicalCompanyMockJson(value: unknown): string {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number") return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalCompanyMockJson).join(",")}]`;
-  }
-  const entries = Object.keys(value as Record<string, unknown>).sort();
-  return `{${entries
-    .map(
-      (key) =>
-        `${JSON.stringify(key)}:${canonicalCompanyMockJson(
-          (value as Record<string, unknown>)[key],
-        )}`,
-    )
-    .join(",")}}`;
-}
-
 function signAsMockRelay(
   kind: number,
   record: unknown,
@@ -3520,30 +3471,6 @@ function signAsMockRelay(
     },
     MOCK_RELAY_SECRET,
   ) as unknown as RelayEvent;
-}
-
-function mockCompanyRecord(config: CompanyWorkContextConfig) {
-  return {
-    schema: "colony.company/v1",
-    tradingName: config.tradingName ?? "Horizon Labs",
-    legalName: null,
-    website: null,
-    summary: "Software for South African businesses.",
-    businessType: "agency",
-    services: [],
-    customerSegments: [],
-    costCentres: [
-      {
-        id: config.costCentreId,
-        name: "Company coordination",
-        kind: "internal",
-        serviceId: null,
-      },
-    ],
-    sourceReportEventId: null,
-    createdAt: 1_780_000_000,
-    updatedAt: 1_780_000_000,
-  };
 }
 
 function mockInitiativeRecord(
@@ -3606,30 +3533,6 @@ function mockTaskRecord(
   };
 }
 
-function mockCommunityProfileHeadRecord(seed: CommunityProfileHeadSeed) {
-  return {
-    schema: "colony.company/v1",
-    tradingName: seed.tradingName ?? "Horizon Labs",
-    legalName: null,
-    website: null,
-    summary: seed.summary ?? "",
-    businessType: seed.businessType ?? "unspecified",
-    services: [],
-    customerSegments: [],
-    costCentres: [
-      {
-        id: seed.costCentreId ?? "general",
-        name: "General",
-        kind: "internal",
-        serviceId: null,
-      },
-    ],
-    sourceReportEventId: null,
-    createdAt: seed.createdAt ?? 1_780_000_000,
-    updatedAt: seed.updatedAt ?? 1_780_000_000,
-  };
-}
-
 /** Seed the company (and its initiative). The Task is not seeded on purpose. */
 function seedMockCompanyRecords(
   config: CompanyWorkContextConfig | undefined,
@@ -3642,8 +3545,10 @@ function seedMockCompanyRecords(
   mockRefuseInitiativeRead = config?.refuseInitiativeRead ?? false;
 
   if (config) {
-    const company = mockCompanyRecord(config);
-    mockCompanyHeads.push(signAsMockRelay(30179, company, [["d", "profile"]]));
+    if (!profileHeadSeed)
+      mockCompanyHeads.push(
+        signAsMockRelay(30179, mockCompanyRecord(config), [["d", "profile"]]),
+      );
     if (config.initiativeId) {
       const initiative = mockInitiativeRecord(config);
       mockCompanyHeads.push(
@@ -3672,32 +3577,13 @@ function seedMockCompanyRecords(
       if (task.initiativeId) tags.push(["initiative", task.initiativeId]);
       mockCompanyHeads.push(signAsMockRelay(30181, task, tags));
     }
-    return;
   }
 
-  // No `companyWorkContext`, so the task/team broker stays off, but the
-  // relay mints a profile for every community at boot regardless
-  // (`run_profile_backfill`). A spec proving Blueprint approval needs one to
-  // edit, without the task-broker semantics `companyWorkContext` also turns
-  // on.
-  if (profileHeadSeed) {
-    const secret = profileHeadSeed.signerSecretHex
-      ? hexToBytes(profileHeadSeed.signerSecretHex)
-      : MOCK_RELAY_SECRET;
+  // An explicit fresh profile also overrides the task fixture's configured default.
+  if (profileHeadSeed)
     mockCompanyHeads.push(
-      finalizeEvent(
-        {
-          kind: 30179,
-          created_at: Math.floor(Date.now() / 1000),
-          tags: [["d", "profile"]],
-          content: canonicalCompanyMockJson(
-            mockCommunityProfileHeadRecord(profileHeadSeed),
-          ),
-        },
-        secret,
-      ) as unknown as RelayEvent,
+      seedMockCommunityProfileHead(profileHeadSeed, MOCK_RELAY_SECRET),
     );
-  }
 }
 
 /** Answer one owner Company Action the way the relay broker would. */
@@ -3710,10 +3596,26 @@ function readMockCompanyBrokerLog() {
         event.tags.find((tag) => tag[0] === "company-receipt")?.[4] ?? "",
     ),
     headKinds: mockCompanyHeads.map((event) => event.kind),
+    profileHeads: structuredClone(
+      mockCompanyHeads.filter((event) => event.kind === 30179),
+    ),
+    receipts: structuredClone(mockCompanyReceipts),
   };
 }
 
 function brokerMockCompanyAction(event: RelayEvent): boolean {
+  const profile = brokerMockCommunityProfileAction(event, {
+    ownerPubkey: getMockMemberPubkey(getConfig()),
+    relaySecret: getConfig()?.mock?.communityProfileHead?.signerSecretHex
+      ? hexToBytes(
+          getConfig()?.mock?.communityProfileHead?.signerSecretHex ?? "",
+        )
+      : MOCK_RELAY_SECRET,
+    heads: mockCompanyHeads,
+    actions: mockCompanyActions,
+    receipts: mockCompanyReceipts,
+  });
+  if (profile !== null) return profile;
   const config = getConfig()?.mock?.companyWorkContext;
   if (!config) return false;
   mockCompanyActions.push(event);
@@ -3821,6 +3723,7 @@ function filterMockCompanyEvents(filter: MockFilter): RelayEvent[] {
     // serving every head to it would answer with whichever happened to be
     // first once a thread holds more than one task.
     if (filter.ids && !filter.ids.includes(event.id)) return false;
+    if (filter.authors && !filter.authors.includes(event.pubkey)) return false;
     for (const [key, values] of Object.entries(filter)) {
       if (!key.startsWith("#") || !Array.isArray(values)) continue;
       const name = key.slice(1);
@@ -3915,37 +3818,6 @@ function filterMockDecisionLogEvents(filter: MockFilter): RelayEvent[] {
     }
     return true;
   });
-}
-
-function mockEventMatchesFilter(
-  event: RelayEvent,
-  filter: MockFilter,
-): boolean {
-  const authors = filter.authors?.map((author) => author.toLowerCase());
-  if (filter.ids && !filter.ids.includes(event.id)) return false;
-  if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
-  if (authors && !authors.includes(event.pubkey.toLowerCase())) return false;
-  if (filter.since !== undefined && event.created_at < filter.since) {
-    return false;
-  }
-  if (filter.until !== undefined && event.created_at > filter.until) {
-    return false;
-  }
-  for (const [tagName, values] of [
-    ["a", filter["#a"]],
-    ["d", filter["#d"]],
-    ["e", filter["#e"]],
-    ["h", filter["#h"]],
-    ["p", filter["#p"]],
-  ] as const) {
-    if (
-      values &&
-      !event.tags.some((tag) => tag[0] === tagName && values.includes(tag[1]))
-    ) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function filterMockBlockEvents(filter: MockFilter): RelayEvent[] {
@@ -5463,35 +5335,10 @@ function emitMockHistory(
   channelId: string,
   filter: MockFilter,
 ) {
-  const events = getMockMessageStore(channelId)
-    .filter((event) => {
-      if (filter.kinds && !filter.kinds.includes(event.kind)) {
-        return false;
-      }
-      if (filter.since !== undefined && event.created_at < filter.since) {
-        return false;
-      }
-      if (filter.until !== undefined && event.created_at > filter.until) {
-        return false;
-      }
-      return true;
-    })
-    // Relay order is `created_at DESC, id ASC` — match it (both the WS history
-    // page and the `get_channel_messages_before` keyset are backed by that one
-    // order in production, so the mock must be self-consistent too, else a
-    // same-second slice returned here won't line up with the keyset's tiebreak
-    // and the dense-second escape hatch can't prove completeness). Bare `until`
-    // still can't advance past a second denser than one page; the composite
-    // keyset is the escape hatch.
-    .sort(
-      (left, right) =>
-        right.created_at - left.created_at || left.id.localeCompare(right.id),
-    )
-    .slice(0, filter.limit ?? 50)
-    .sort(
-      (left, right) =>
-        left.created_at - right.created_at || left.id.localeCompare(right.id),
-    );
+  const events = selectMockChannelHistory(
+    getMockMessageStore(channelId),
+    filter,
+  );
 
   const emit = () => {
     for (const event of events) {
@@ -10282,6 +10129,7 @@ async function handleSendChannelMessage(
     linkPreviewTags?: string[][] | null;
     mentionTags?: string[][] | null;
     workTags?: string[][] | null;
+    replyModelTags?: string[][] | null;
     sentFromThreadTag?: string[] | null;
   },
   config: E2eConfig | undefined,
@@ -10386,6 +10234,7 @@ async function handleSendChannelMessage(
     ...linkPreviewTags,
     ...mentionTags,
     ...workTags,
+    ...(args.replyModelTags ?? []),
     ...(sentFromThreadTag ? [sentFromThreadTag] : []),
   ];
   const identity = getIdentity(config);
@@ -12641,6 +12490,17 @@ export function maybeInstallE2eTauriMocks() {
           if (!mine.some((entry) => entry.slug === community.slug))
             activeConfig.mock.colonyCommunities = [...mine, community];
         }
+        if (!mockCompanyHeads.some((head) => head.kind === 30179))
+          mockCompanyHeads.push(
+            signAsMockRelay(
+              30179,
+              mockCommunityProfileHeadRecord({
+                tradingName:
+                  colonyName.charAt(0).toUpperCase() + colonyName.slice(1),
+              }),
+              [["d", "profile"]],
+            ),
+          );
         return { community };
       }
       case "colony_list_my_communities":
@@ -13597,6 +13457,70 @@ export function maybeInstallE2eTauriMocks() {
         const outcomes =
           activeConfig?.mock?.agentProposalExecutionOutcomes ?? [];
         const outcome = outcomes.shift();
+        const firstJob = payload as Parameters<
+          typeof prepareFirstJobTeamFixture
+        >[0];
+        if (
+          !outcome &&
+          firstJob.action?.preparation?.mode === "first-job-worker"
+        ) {
+          const owner = getActiveIdentity(activeConfig);
+          if (!owner)
+            throw Error("First-job staffing needs the signed-in mock owner.");
+          return prepareFirstJobTeamFixture(firstJob, {
+            owner: owner.pubkey,
+            find: (id) =>
+              mockManagedAgents.find((agent) => agent.persona_id === id),
+            async create(action) {
+              const persona = await handleCreatePersona({
+                input: {
+                  displayName: action.definition.displayName,
+                  systemPrompt: action.definition.systemPrompt,
+                  roleId: action.preparation?.roleId,
+                  roleTitle: action.preparation?.roleTitle,
+                },
+              });
+              const saved = mockPersonas.find(
+                (entry) => entry.id === persona.id,
+              );
+              if (!saved)
+                throw Error("The new fixture persona was not retained.");
+              Object.assign(saved, {
+                id: action.requestId,
+                runtime: null,
+                provider: null,
+                model: null,
+              });
+              upsertMockPersonaEvent(saved);
+              const created = await handleCreateManagedAgent(
+                {
+                  input: {
+                    name: action.definition.displayName,
+                    personaId: saved.id,
+                    relayUrl: firstJob.communityRelayUrl,
+                    spawnAfterCreate: false,
+                    startOnAppLaunch: false,
+                    respondTo: "owner-only",
+                    parallelism: 1,
+                  },
+                },
+                activeConfig,
+              );
+              return created.agent;
+            },
+            addMembers: (channelId, pubkeys) =>
+              handleAddChannelMembers({ channelId, pubkeys }, activeConfig),
+            sign: (template) => signWithIdentity(owner, template),
+            publishHead(event) {
+              const pubkey = event.tags.find((tag) => tag[0] === "d")?.[1];
+              const index = mockManagedAgentHeadEvents.findIndex((head) =>
+                head.tags.some((tag) => tag[0] === "d" && tag[1] === pubkey),
+              );
+              if (index >= 0) mockManagedAgentHeadEvents.splice(index, 1);
+              mockManagedAgentHeadEvents.push(event);
+            },
+          });
+        }
         return (
           outcome ?? {
             status: "failed",
@@ -14070,6 +13994,16 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleGetManagedAgentLog>[0],
         );
       case "get_agent_models":
+        if (activeConfig?.mock?.discoverAgentModelsError)
+          throw new Error(activeConfig.mock.discoverAgentModelsError);
+        if (activeConfig?.mock?.discoverAgentModels)
+          return {
+            agentName: "mock-agent",
+            agentVersion: "0.0.0",
+            agentDefaultModel: null,
+            selectedModel: null,
+            ...activeConfig.mock.discoverAgentModels,
+          };
         return {
           agentName: "mock-agent",
           agentVersion: "0.0.0",
@@ -14532,6 +14466,18 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleGetEvent>[0],
           activeConfig,
         );
+      case "sign_community_profile_update":
+        return signMockCommunityProfileUpdate(
+          payload as Parameters<typeof signMockCommunityProfileUpdate>[0],
+          {
+            identity,
+            relayUrl: mockAppliedRelayWsUrl ?? getRelayWsUrl(activeConfig),
+            relayPubkey:
+              activeConfig?.mock?.relaySelf ??
+              mockCompanyHeads.find((head) => head.kind === 30179)?.pubkey ??
+              MOCK_RELAY_SELF_PUBKEY,
+          },
+        );
       case "attach_thread_task": {
         // Which task a send is charged to is the relay's decision, and it is
         // proven in `thread_task_broker.rs`. What the desktop has to prove is
@@ -14915,9 +14861,8 @@ export function maybeInstallE2eTauriMocks() {
         }
         return (
           activeConfig?.mock?.relaySelf ??
-          (activeConfig?.mock?.companyWorkContext
-            ? MOCK_RELAY_SELF_PUBKEY
-            : null)
+          mockCompanyHeads.find((head) => head.kind === 30179)?.pubkey ??
+          null
         );
       case "archive_identity":
       case "unarchive_identity":

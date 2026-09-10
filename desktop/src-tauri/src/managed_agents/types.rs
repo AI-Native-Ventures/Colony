@@ -406,8 +406,8 @@ pub struct ManagedAgentRecord {
     /// The agent's interrupt-ladder rank (`worker`, `leader`, `executive`),
     /// mirrored from the owner-authored kind:30177 head.
     ///
-    /// The owner sets it in the rank dialog, which publishes the head
-    /// directly; this device never originates it. It is held here only so the
+    /// The owner sets it in the rank dialog or approves it with a first-job
+    /// worker proposal. It is held here so the
     /// device's own republish carries it back rather than dropping it: the
     /// published projection is rebuilt from this record, so a rank absent
     /// here is a rank erased from the relay on the next rename, parallelism

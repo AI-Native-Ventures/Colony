@@ -10,6 +10,8 @@ import { useChannelsQuery } from "@/features/channels/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
 
+import { RichPreviewGallery } from "./RichPreviewGallery";
+
 import { BlocksCatalogList } from "./BlocksCatalogList";
 
 /**
@@ -59,10 +61,12 @@ export function BlocksSettingsCard() {
   return (
     <section className="min-w-0" data-testid="blocks-catalog-page">
       <SettingsSectionHeader
-        description="The reusable views agents can place inside a conversation. Open one to continue working on it in chat."
+        description="Rich previews and reusable views for your channels and threads."
         title="Blocks"
       />
 
+      <RichPreviewGallery />
+      <h2 className="mb-4 text-base font-medium">Workspace Blocks</h2>
       <BlocksCatalogList
         error={catalogQuery.error instanceof Error ? catalogQuery.error : null}
         isLoading={

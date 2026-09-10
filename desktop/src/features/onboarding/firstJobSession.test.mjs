@@ -250,3 +250,53 @@ test("native string errors preserve the actionable gateway failure", async () =>
   );
   assert.notEqual(f.session.getSnapshot().phase, "sent");
 });
+
+test("a saved team approval freezes its original brief and resumes preparation", async () => {
+  const proposal = { scout: { name: "Scout" }, worker: { name: "Sarah" } };
+  let received;
+  const f = fixture({
+    preparationStore: store({ content: "Approved brief", proposal }),
+    start: async (brief, team) => {
+      received = { brief, team };
+      throw Error("team still being confirmed");
+    },
+  });
+  assert.equal(f.session.getSnapshot().phase, "error");
+  f.session.edit("New brief");
+  assert.equal(f.session.getSnapshot().brief, "Approved brief");
+  await f.session.start(proposal);
+  assert.deepEqual(received, { brief: "Approved brief", team: proposal });
+  assert.equal(f.session.getSnapshot().phase, "error");
+  assert.match(f.session.getSnapshot().error, /team still/);
+});
+
+test("business context repair is distinguished from retryable connection errors", async () => {
+  const repair = Object.assign(Error("Review the business description"), {
+    code: "first-job-business-repair",
+  });
+  const f = fixture({
+    start: async () => {
+      throw repair;
+    },
+  });
+  await f.session.start();
+  assert.equal(f.session.getSnapshot().businessRepair, true);
+  f.runtime.start = async () => {
+    throw Error("Connection unavailable");
+  };
+  await f.session.start();
+  assert.equal(f.session.getSnapshot().businessRepair, false);
+});
+
+test("dispatch storage failure during Start remains a handled error", async () => {
+  const f = fixture();
+  f.runtime.attemptStore.read = () => {
+    throw Error("saved request unavailable");
+  };
+  f.runtime.checkExistingRequest = async () => {
+    throw Error("saved request unavailable");
+  };
+  await assert.doesNotReject(f.session.start());
+  assert.equal(f.session.getSnapshot().phase, "error");
+  assert.match(f.session.getSnapshot().error, /saved request unavailable/);
+});

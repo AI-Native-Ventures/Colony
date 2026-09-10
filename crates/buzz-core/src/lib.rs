@@ -5,6 +5,8 @@
 //! Provides [`StoredEvent`], filter matching, kind constants, and event
 //! verification. All other Buzz crates depend on this one.
 
+/// One-message model selection for an existing teammate.
+pub mod agent_reply;
 /// NIP-AM: Agent Turn Metric — payload type and encrypt/decrypt helpers.
 pub mod agent_turn_metric;
 /// Safe, versioned contracts for chat-native Block manifests and catalogs.
@@ -52,6 +54,10 @@ pub mod invite;
 pub mod job;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
+/// Canonical audio container validation shared by desktop and relay.
+pub mod media_audio;
+/// Bounded declarative SVG validation shared by native and relay media paths.
+pub mod media_svg;
 /// Ranking OpenRouter models into an ordered fallback chain.
 pub mod model_ranking;
 /// Channel workspace tab action parsing and ownership protocol kinds.

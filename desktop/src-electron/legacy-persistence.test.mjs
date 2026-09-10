@@ -2,10 +2,44 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { persistLegacyFixture } from "./onboarding-fixture/legacy-persistence.mjs";
 
-const source = [["buzz-theme", "github-dark"]];
-test("legacy writer stays alive until observed, then a fresh read proves persistence", async () => {
+const source = [
+  ["buzz-theme", "github-dark"],
+  ["buzz-active-community-id", "proof-alpha"],
+];
+
+test("a delayed WebKit commit settles before writer exit and cannot meet an early observer", async () => {
+  let committed = false;
+  let closed = false;
+  let reads = 0;
+  const actual = await persistLegacyFixture({
+    writer: {
+      read: async () => source,
+      close: async () => {
+        assert.equal(committed, true, "writer must survive the delayed commit");
+        assert.equal(
+          reads,
+          0,
+          "no competing reader may observe uncommitted storage",
+        );
+        closed = true;
+      },
+    },
+    settle: async () => {
+      committed = true;
+    },
+    read: async () => {
+      reads += 1;
+      assert.equal(closed, true);
+      return committed ? source : [];
+    },
+  });
+  assert.deepEqual(actual, [...source].reverse());
+  assert.equal(reads, 1);
+});
+
+test("legacy writer settles alone and exits before exactly one independent read", async () => {
   const trace = [];
-  let observations = 0;
+  let closed = false;
   const actual = await persistLegacyFixture({
     writer: {
       read: async () => {
@@ -14,64 +48,94 @@ test("legacy writer stays alive until observed, then a fresh read proves persist
       },
       close: async () => {
         trace.push("close-writer");
+        closed = true;
       },
     },
-    read: async () => {
-      trace.push("independent-read");
-      return ++observations === 1 ? [] : source;
+    settle: async () => {
+      trace.push("settle");
+      assert.equal(closed, false);
+      assert.ok(!trace.includes("independent-read"));
     },
-    pause: async () => {
-      trace.push("wait");
+    read: async () => {
+      assert.equal(closed, true);
+      trace.push("independent-read");
+      return [...source].reverse();
     },
   });
-  assert.deepEqual(actual, source);
+  assert.deepEqual(actual, [...source].reverse());
   assert.deepEqual(trace, [
     "seed",
-    "independent-read",
-    "wait",
-    "independent-read",
+    "settle",
     "close-writer",
     "independent-read",
   ]);
 });
 
-test("empty store exhaustion and changed data fail with writer closed, never reseeded", async () => {
+test("empty or changed post-exit storage fails after one read without retry or reseeding", async () => {
   for (const result of [[], [["buzz-theme", "changed"]]]) {
-    let seeds = 0;
-    let closed = 0;
+    const calls = { seed: 0, settle: 0, close: 0, read: 0 };
     await assert.rejects(
       persistLegacyFixture({
         writer: {
           read: async () => {
-            seeds++;
+            calls.seed++;
             return source;
           },
           close: async () => {
-            closed++;
+            calls.close++;
           },
         },
-        read: async () => result,
-        pause: async () => {},
-        attempts: 2,
+        settle: async () => {
+          calls.settle++;
+        },
+        read: async () => {
+          assert.equal(calls.close, 1);
+          calls.read++;
+          return result;
+        },
       }),
+      /Legacy source did not survive writer exit/,
     );
-    assert.equal(seeds, 1);
-    assert.equal(closed, 1);
+    assert.deepEqual(calls, { seed: 1, settle: 1, close: 1, read: 1 });
   }
 });
 
-test("visibility while writer runs cannot stand in for persistence after exit", async () => {
-  let closed = false;
-  await assert.rejects(
-    persistLegacyFixture({
-      writer: {
-        read: async () => source,
-        close: async () => {
-          closed = true;
+test("invalid seed, setup, settle or close failures never open an independent reader", async () => {
+  for (const stage of ["empty", "setup", "settle", "close"]) {
+    const trace = [];
+    await assert.rejects(
+      persistLegacyFixture({
+        writer: {
+          read: async () => {
+            trace.push("seed");
+            if (stage === "setup") throw new Error("setup failed");
+            return stage === "empty" ? [] : source;
+          },
+          close: async () => {
+            trace.push("close-writer");
+            if (stage === "close") throw new Error("abnormal writer exit");
+          },
         },
-      },
-      read: async () => (closed ? [] : source),
-    }),
-    /did not survive writer exit/,
-  );
+        settle: async () => {
+          trace.push("settle");
+          if (stage === "settle") throw new Error("settle failed");
+        },
+        read: async () => {
+          trace.push("independent-read");
+          return source;
+        },
+      }),
+      stage === "empty"
+        ? /nonempty source data/
+        : stage === "close"
+          ? /abnormal writer exit/
+          : new RegExp(`${stage} failed`),
+    );
+    assert.deepEqual(
+      trace,
+      ["empty", "setup"].includes(stage)
+        ? ["seed", "close-writer"]
+        : ["seed", "settle", "close-writer"],
+    );
+  }
 });

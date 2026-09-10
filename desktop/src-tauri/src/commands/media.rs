@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::app_state::AppState;
 use crate::relay::{parse_json_response, relay_api_base_url_with_override, relay_error_message};
 
+use super::media_audio::{audio_input_format, canonical_audio_filename, prepare_audio_bytes};
 use super::media_transcode::{
     has_heic_extension, is_heic_file, is_video_file, transcode_and_extract_poster,
     transcode_and_extract_poster_with_cancellation, transcode_heic_path_to_jpeg_bytes,
@@ -115,7 +116,7 @@ fn fd_real_path(_file: &std::fs::File) -> Result<std::path::PathBuf, String> {
 
 /// MIME types blocked from upload — mirrors the server's generic-file deny-list.
 ///
-/// Active-content XSS carriers (JS, SVG) and native executables. Other types,
+/// Active-content XSS carriers and executables. Declarative SVG passes the shared validator first. Other types,
 /// including HTML, are accepted as downloads; un-sniffable files fall back to
 /// `application/octet-stream`. XHTML remains blocked in lockstep with the relay.
 const BLOCKED_MIME: &[&str] = &[
@@ -299,6 +300,13 @@ pub(crate) fn sanitize_image_for_upload(body: Vec<u8>, mime: &str) -> Result<Vec
 }
 
 pub(crate) fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
+    if buzz_core_pkg::media_svg::is_svg_candidate(body) {
+        buzz_core_pkg::media_svg::validate_svg(body).map_err(|error| error.to_string())?;
+        return Ok("image/svg+xml".to_string());
+    }
+    if buzz_core_pkg::media_audio::validate_canonical_wav(body).is_ok() {
+        return Ok("audio/wav".to_string());
+    }
     let mime = infer::get(body)
         .map(|t| t.mime_type().to_string())
         .unwrap_or_else(|| "application/octet-stream".to_string());
@@ -510,18 +518,45 @@ pub async fn upload_media(
     }
 
     use std::io::Read;
-    let mut body = Vec::new();
-    file.read_to_end(&mut body)
-        .map_err(|e| format!("failed to read file: {e}"))?;
+    let mut header = [0u8; 4096];
+    let count = file.read(&mut header).map_err(|error| error.to_string())?;
+    let audio = audio_input_format(
+        &header[..count],
+        path.file_name().and_then(|name| name.to_str()),
+    );
+    let mut body = header[..count].to_vec();
+    if audio.is_some() {
+        let cap = buzz_core_pkg::media_audio::MAX_CANONICAL_AUDIO_BYTES;
+        (&mut file)
+            .take((cap + 1 - count) as u64)
+            .read_to_end(&mut body)
+            .map_err(|_| "Could not read audio source.".to_string())?;
+    } else {
+        file.read_to_end(&mut body)
+            .map_err(|error| format!("failed to read file: {error}"))?;
+    }
     drop(file);
 
     if is_temp {
         let _ = std::fs::remove_file(&fd_path);
     }
 
+    let body = if let Some(format) = audio {
+        tokio::task::spawn_blocking(move || prepare_audio_bytes(body, format, None))
+            .await
+            .map_err(|_| "Audio conversion failed.".to_string())??
+    } else {
+        body
+    };
     let mime = detect_and_validate_mime(&body)?;
     let body = sanitize_image_for_upload(body, &mime)?;
-    do_upload(body, &mime, &state, None, None).await
+    let mut descriptor = do_upload(body, &mime, &state, None, None).await?;
+    if audio.is_some() {
+        descriptor.filename = Some(canonical_audio_filename(
+            path.file_name().and_then(|name| name.to_str()),
+        ));
+    }
+    Ok(descriptor)
 }
 
 /// Read a picked path through the TOCTOU-safe pipeline (fd pin → sniff →
@@ -546,6 +581,10 @@ async fn process_picked_path(
     // extension still tells us the webview can't render them. Computed before
     // the closure since `path` isn't moved in.
     let heic_by_ext = has_heic_extension(&path);
+    let audio_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string);
 
     // All sync I/O (sniff, transcode, read) runs off the async runtime to
     // avoid blocking Tokio worker threads during long ffmpeg transcodes.
@@ -557,7 +596,17 @@ async fn process_picked_path(
             let mut header = [0u8; 4096];
             let n = file.read(&mut header).map_err(|e| e.to_string())?;
 
-            if is_video_file(&header[..n]) {
+            if let Some(format) = audio_input_format(&header[..n], audio_name.as_deref()) {
+                if images_only {
+                    return Err("Please choose an image file.".to_string());
+                }
+                let cap = buzz_core_pkg::media_audio::MAX_CANONICAL_AUDIO_BYTES;
+                let mut bytes = header[..n].to_vec();
+                file.take((cap + 1 - n) as u64)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| "Could not read audio source.".to_string())?;
+                prepare_audio_bytes(bytes, format, None).map(|wav| (wav, None))
+            } else if is_video_file(&header[..n]) {
                 if images_only {
                     return Err("Please choose an image file.".to_string());
                 }
@@ -610,10 +659,15 @@ async fn process_picked_path(
         }
     }
 
-    descriptor.filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(sanitize_filename);
+    descriptor.filename = if mime == "audio/wav" {
+        Some(canonical_audio_filename(
+            path.file_name().and_then(|name| name.to_str()),
+        ))
+    } else {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(sanitize_filename)
+    };
 
     Ok(descriptor)
 }
@@ -725,7 +779,16 @@ pub(super) async fn upload_media_bytes_inner(
         .as_deref()
         .is_some_and(|name| has_heic_extension(std::path::Path::new(name)));
 
-    let (body, poster_bytes) = if is_video_file(&data) {
+    let audio_format = audio_input_format(&data, filename.as_deref());
+    let (body, poster_bytes) = if let Some(format) = audio_format {
+        let cancellation = cancellation.cloned();
+        let wav = tokio::task::spawn_blocking(move || {
+            prepare_audio_bytes(data, format, cancellation.as_ref())
+        })
+        .await
+        .map_err(|_| "Audio conversion failed.".to_string())??;
+        (wav, None)
+    } else if is_video_file(&data) {
         emit_media_upload_phase(&app, progress_id.as_deref(), "processing-video");
         // Video: write to temp → transcode + extract poster → read results.
         // All blocking I/O runs off the async runtime via spawn_blocking.
@@ -790,7 +853,11 @@ pub(super) async fn upload_media_bytes_inner(
         }
     }
 
-    descriptor.filename = filename.as_deref().map(sanitize_filename);
+    descriptor.filename = if audio_format.is_some() {
+        Some(canonical_audio_filename(filename.as_deref()))
+    } else {
+        filename.as_deref().map(sanitize_filename)
+    };
 
     Ok(descriptor)
 }
@@ -798,201 +865,5 @@ pub(super) async fn upload_media_bytes_inner(
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_server_authority_default_ports() {
-        assert_eq!(
-            extract_server_authority("https://relay.example.com"),
-            Some("relay.example.com".to_string())
-        );
-        assert_eq!(
-            extract_server_authority("https://relay.example.com:443"),
-            Some("relay.example.com".to_string())
-        );
-        assert_eq!(
-            extract_server_authority("http://relay.example.com:80"),
-            Some("relay.example.com".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_server_authority_non_default_ports() {
-        assert_eq!(
-            extract_server_authority("http://localhost:3000"),
-            Some("localhost:3000".to_string())
-        );
-        assert_eq!(
-            extract_server_authority("https://relay.example.com:8443"),
-            Some("relay.example.com:8443".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_server_authority_ipv6() {
-        assert_eq!(
-            extract_server_authority("http://[::1]:3000"),
-            Some("[::1]:3000".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_server_authority_invalid() {
-        assert_eq!(extract_server_authority("not-a-url"), None);
-        assert_eq!(extract_server_authority(""), None);
-    }
-
-    #[test]
-    fn test_sign_blossom_get_auth_header_shape() {
-        let keys = Keys::generate();
-        let header = sign_blossom_get_auth_header(&keys, "http://localhost:3000", 600).unwrap();
-        let b64 = header.strip_prefix("Nostr ").expect("Nostr scheme prefix");
-        let json = URL_SAFE_NO_PAD.decode(b64).unwrap();
-        let event = nostr::Event::from_json(std::str::from_utf8(&json).unwrap()).unwrap();
-
-        assert_eq!(event.kind, Kind::from(24242));
-        event.verify().expect("valid signature");
-
-        let tag = |name: &str| -> Option<String> {
-            event.tags.iter().find_map(|t| {
-                let v = t.as_slice();
-                (v.first().map(String::as_str) == Some(name)).then(|| v[1].clone())
-            })
-        };
-        assert_eq!(tag("t").as_deref(), Some("get"));
-        assert_eq!(tag("server").as_deref(), Some("localhost:3000"));
-        // Server-scoped token: no x tag (BUD-01 allows x OR server).
-        assert!(tag("x").is_none());
-        let expiration: u64 = tag("expiration").unwrap().parse().unwrap();
-        let now = Timestamp::now().as_secs();
-        assert!(expiration > now && expiration <= now + 600);
-    }
-
-    #[test]
-    fn test_sign_blossom_get_auth_header_invalid_base_url() {
-        let keys = Keys::generate();
-        assert!(sign_blossom_get_auth_header(&keys, "not-a-url", 600).is_err());
-    }
-
-    #[test]
-    fn test_detect_and_validate_mime_jpeg() {
-        // Minimal JPEG: SOI + EOI
-        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0];
-        assert_eq!(detect_and_validate_mime(&jpeg).unwrap(), "image/jpeg");
-    }
-
-    #[test]
-    fn test_detect_and_validate_mime_accepts_text_as_octet_stream() {
-        // Plain text has no magic bytes — infer returns None, so it's accepted
-        // as opaque binary (served as a download). This is the common Slack case.
-        let text = b"hello world";
-        assert_eq!(
-            detect_and_validate_mime(text).unwrap(),
-            "application/octet-stream"
-        );
-    }
-
-    #[test]
-    fn test_detect_and_validate_mime_accepts_html_as_inert_download() {
-        let html = b"<!DOCTYPE html><html><body><script>alert(1)</script></body></html>";
-        assert_eq!(detect_and_validate_mime(html).unwrap(), "text/html");
-    }
-
-    #[test]
-    fn test_detect_and_validate_mime_still_rejects_executable() {
-        let elf = [b"\x7fELF".as_slice(), &[0u8; 60]].concat();
-        assert!(detect_and_validate_mime(&elf).is_err());
-    }
-
-    #[test]
-    fn test_blocked_mime_keeps_active_content_and_executables() {
-        for kept in [
-            "image/svg+xml",
-            "application/xhtml+xml",
-            "application/javascript",
-            "text/javascript",
-            "application/x-executable",
-            "application/x-mach-binary",
-        ] {
-            assert!(BLOCKED_MIME.contains(&kept), "{kept} must stay blocked");
-        }
-    }
-
-    #[test]
-    fn test_image_sanitizer_bakes_exif_orientation() {
-        let source = image::RgbImage::from_fn(2, 3, |x, y| {
-            image::Rgb([(x * 80) as u8, (y * 60) as u8, 32])
-        });
-        let mut encoded = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 95)
-            .encode_image(&source)
-            .unwrap();
-
-        // Minimal little-endian Exif IFD with Orientation=6 (rotate 90°).
-        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0".to_vec();
-        exif.extend_from_slice(&[
-            0x12, 0x01, // Orientation tag
-            0x03, 0x00, // SHORT
-            0x01, 0x00, 0x00, 0x00, // count=1
-            0x06, 0x00, 0x00, 0x00, // value=6
-            0x00, 0x00, 0x00, 0x00, // next IFD
-        ]);
-        let segment_len = (exif.len() + 2) as u16;
-        let mut oriented = encoded[..2].to_vec();
-        oriented.extend_from_slice(&[0xff, 0xe1]);
-        oriented.extend_from_slice(&segment_len.to_be_bytes());
-        oriented.extend_from_slice(&exif);
-        oriented.extend_from_slice(&encoded[2..]);
-
-        let sanitized = sanitize_image_for_upload(oriented, "image/jpeg").unwrap();
-        let decoded =
-            image::load_from_memory_with_format(&sanitized, image::ImageFormat::Jpeg).unwrap();
-        assert_eq!((decoded.width(), decoded.height()), (3, 2));
-        assert!(!sanitized.windows(6).any(|bytes| bytes == b"Exif\0\0"));
-    }
-
-    #[test]
-    fn test_animated_png_and_webp_are_not_flattened() {
-        let mut apng = b"\x89PNG\r\n\x1a\n".to_vec();
-        apng.extend_from_slice(&8u32.to_be_bytes());
-        apng.extend_from_slice(b"acTL");
-        apng.extend_from_slice(&[0; 8]);
-        apng.extend_from_slice(&[0; 4]);
-        assert!(is_animated_image(&apng, "image/png"));
-        assert!(sanitize_image_for_upload(apng, "image/png").is_ok());
-
-        let mut webp = b"RIFF\x0c\0\0\0WEBPANIM".to_vec();
-        webp.extend_from_slice(&0u32.to_le_bytes());
-        assert!(is_animated_image(&webp, "image/webp"));
-        assert!(sanitize_image_for_upload(webp, "image/webp").is_ok());
-    }
-
-    #[test]
-    fn test_legacy_upload_retry_statuses_are_narrow() {
-        assert!(should_retry_legacy_upload(reqwest::StatusCode::NOT_FOUND));
-        assert!(should_retry_legacy_upload(
-            reqwest::StatusCode::METHOD_NOT_ALLOWED
-        ));
-        assert!(!should_retry_legacy_upload(
-            reqwest::StatusCode::UNPROCESSABLE_ENTITY
-        ));
-        assert!(!should_retry_legacy_upload(
-            reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
-        ));
-    }
-
-    #[test]
-    fn test_sanitize_filename() {
-        assert_eq!(sanitize_filename("report.pdf"), "report.pdf");
-        // Strips directory components and traversal.
-        assert_eq!(sanitize_filename("../../etc/passwd"), "passwd");
-        assert_eq!(sanitize_filename("/abs/path/notes.txt"), "notes.txt");
-        assert_eq!(sanitize_filename(r"C:\Users\me\doc.docx"), "doc.docx");
-        // Empty / separator-only falls back.
-        assert_eq!(sanitize_filename(""), "file");
-        assert_eq!(sanitize_filename("/"), "file");
-        // Control chars removed.
-        assert_eq!(sanitize_filename("a\nb\tc.txt"), "abc.txt");
-    }
-}
+#[path = "media_tests.rs"]
+mod tests;

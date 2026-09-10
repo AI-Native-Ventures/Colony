@@ -30,6 +30,10 @@ type ImageLightboxThumbnailTarget = {
 export type ImageGalleryDirection = "forward" | "backward";
 
 export type ImageGalleryItem = {
+  carousel?: { trigger: HTMLElement; index: number };
+  filename?: string;
+  downloadUrl?: string;
+  thumbnailSrc?: string;
   alt: string | undefined;
   dim?: string;
   resolvedSrc: string;
@@ -37,6 +41,20 @@ export type ImageGalleryItem = {
   thumbnailBox?: ImageLightboxBox;
   thumbnailCornerRadii?: ImageLightboxCornerRadii;
 };
+
+// Weak ownership means unmounted message/community surfaces retain no media list.
+const carouselItems = new WeakMap<HTMLElement, readonly ImageGalleryItem[]>();
+
+/** Register ordered carousel members without mounting or fetching hidden slides. */
+export function registerImageGalleryItems(
+  trigger: HTMLElement,
+  items: readonly ImageGalleryItem[],
+): () => void {
+  carouselItems.set(trigger, items);
+  return () => {
+    carouselItems.delete(trigger);
+  };
+}
 
 export const IMAGE_LIGHTBOX_ENTER_MS = 260;
 export const IMAGE_LIGHTBOX_EXIT_MS = 170;
@@ -400,11 +418,28 @@ export function visibleImageGalleryForTrigger(
       continue;
     }
 
+    const members = carouselItems.get(candidate) ?? [item];
     if (candidate === trigger) {
-      galleryIndex = galleryItems.length;
+      const registeredIndex = Number(candidate.dataset.imageLightboxIndex);
+      const memberIndex =
+        carouselItems.has(candidate) && Number.isInteger(registeredIndex)
+          ? Math.min(members.length - 1, Math.max(0, registeredIndex))
+          : members.findIndex(
+              (member) => member.resolvedSrc === fallbackItem.resolvedSrc,
+            );
+      galleryIndex = galleryItems.length + Math.max(0, memberIndex);
       foundCurrentTrigger = true;
     }
-    galleryItems.push(item);
+    galleryItems.push(
+      ...members.map((member, memberIndex) => ({
+        ...member,
+        carousel: carouselItems.has(candidate)
+          ? { trigger: candidate, index: memberIndex }
+          : undefined,
+        thumbnailBox: thumbnail.box,
+        thumbnailCornerRadii: thumbnail.cornerRadii,
+      })),
+    );
   }
 
   if (!foundCurrentTrigger) {

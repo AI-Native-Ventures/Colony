@@ -1,119 +1,34 @@
 import { ChevronRight, TriangleAlert } from "lucide-react";
 
-import type {
-  BlockNode,
-  BlockQuestionOption,
-} from "@/features/blocks/contracts";
+import type { BlockNode } from "@/features/blocks/contracts";
 import {
   type BlockCatalogItem,
   parseBlockWorkshopDestination,
 } from "@/features/blocks/blockCatalog";
-import { resolveQuestionOptions } from "@/features/blocks/questionOptions";
+import { InlineFilePreview } from "@/shared/ui/file-preview/InlineFilePreview";
+import { ImagePreview } from "@/shared/ui/media-preview";
 import { Button } from "@/shared/ui/button";
 
 import { BlockPrimitive } from "./primitives";
-import { resolveBlockTemplate, type BlockPrimitiveNode } from "./primitives";
+import type { BlockPrimitiveNode } from "./primitives";
 
-function ReadonlyActionsPreview({ labels }: { labels: readonly string[] }) {
-  if (labels.length === 0) return null;
-  return (
-    <div
-      className="flex flex-wrap gap-1.5"
-      data-block-catalog-preview="actions"
-    >
-      {labels.map((label) => (
-        <span
-          className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs text-muted-foreground"
-          key={label}
-        >
-          {label}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function ReadonlyQuestionPreview({
-  data,
-  node,
-}: {
-  data: unknown;
-  node: Extract<BlockNode, { type: "question" }>;
-}) {
-  const optionsResult = resolveQuestionOptions(node, data);
-  const options: readonly BlockQuestionOption[] = optionsResult.ok
-    ? optionsResult.options
-    : [];
-  return (
-    <section
-      className="space-y-2.5 rounded-lg border border-border/60 bg-background/45 p-3"
-      data-block-catalog-preview="question"
-    >
-      <h4 className="text-sm font-medium text-foreground">
-        {resolveBlockTemplate(node.prompt, data)}
-      </h4>
-      {options.length > 0 ? (
-        <div className="grid gap-1.5 sm:grid-cols-2">
-          {options.slice(0, 4).map((option) => (
-            <div
-              className="rounded-md border border-border/50 bg-muted/20 px-2.5 py-2"
-              key={option.id}
-            >
-              <p className="text-xs font-medium text-foreground">
-                {option.label}
-              </p>
-              {option.description ? (
-                <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                  {option.description}
-                </p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {node.allow_custom ? (
-        <p className="text-xs text-muted-foreground">
-          Custom responses are supported.
-        </p>
-      ) : null}
-    </section>
-  );
-}
+const PREVIEW_ENVIRONMENT = {
+  origin: "core" as const,
+  trusted: false,
+  declaredActionIds: new Set<string>(),
+  disabledReason: "Actions are available in the conversation.",
+};
 
 function ReadonlyBlockPreview({
   data,
   node,
-  rootData = data,
 }: {
   data: unknown;
   node: BlockNode;
-  rootData?: unknown;
 }) {
-  if (node.type === "actions") {
-    return (
-      <ReadonlyActionsPreview
-        labels={node.controls.map((control) => control.label)}
-      />
-    );
-  }
-  if (node.type === "question") {
-    return <ReadonlyQuestionPreview data={rootData} node={node} />;
-  }
-
   return (
     <BlockPrimitive
-      context={{
-        data,
-        rootData,
-        renderChild: (child, key, childData) => (
-          <ReadonlyBlockPreview
-            data={childData}
-            key={key}
-            node={child as BlockNode}
-            rootData={rootData}
-          />
-        ),
-      }}
+      context={{ data, actionEnvironment: PREVIEW_ENVIRONMENT }}
       node={node as BlockPrimitiveNode}
     />
   );
@@ -169,7 +84,7 @@ export function BlockCatalogCard({
 
   return (
     <article
-      className="grid min-w-0 gap-6 border-t border-border/50 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:items-center lg:gap-12"
+      className="@container min-w-0 space-y-5 rounded-xl border border-border bg-card p-5 text-card-foreground"
       data-block-catalog-handle={item.handle}
       data-testid={`block-catalog-card-${item.handle}`}
     >
@@ -198,11 +113,31 @@ export function BlockCatalogCard({
         />
       </div>
 
-      <figure className="min-w-0">
+      <figure className="min-w-0 rounded-lg bg-background p-3">
         <figcaption className="sr-only">
           {item.name} read-only preview
         </figcaption>
-        <ReadonlyBlockPreview data={item.preview} node={manifest.tree} />
+        {trust === "core" && item.handle === "media" ? (
+          <ImagePreview
+            items={[
+              {
+                src: "/rich-previews/launch-01.svg",
+                downloadUrl: "/rich-previews/launch-01.svg",
+                filename: "launch-01.svg",
+                alt: "Launch campaign preview",
+                width: 1080,
+                height: 1080,
+              },
+            ]}
+          />
+        ) : trust === "core" && item.handle === "artifact" ? (
+          <InlineFilePreview
+            href="/rich-previews/service-report.pdf"
+            filename="service-report.pdf"
+          />
+        ) : (
+          <ReadonlyBlockPreview data={item.preview} node={manifest.tree} />
+        )}
       </figure>
     </article>
   );

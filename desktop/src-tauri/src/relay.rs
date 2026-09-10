@@ -399,7 +399,7 @@ pub fn parse_command_response<T: DeserializeOwned>(message: &str) -> Result<T, S
 /// `buzz-sdk` uses `nostr 0.36` while the desktop crate uses `nostr 0.37`. Cross-version
 /// bridging is done via hex-encoded public keys and raw tag slices — both versions share the
 /// same wire format.
-fn build_profile_event(
+pub(crate) fn build_profile_event(
     agent_keys: &nostr::Keys,
     display_name: &str,
     avatar_url: Option<&str>,

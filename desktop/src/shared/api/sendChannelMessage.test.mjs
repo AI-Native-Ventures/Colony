@@ -91,3 +91,22 @@ test("a message with no work context sends workTags as null", async () => {
 
   assert.equal(onlyInvokeArgs().workTags, null);
 });
+
+test("one-reply model tag reaches native IPC separately and unchanged", async () => {
+  const reply = ["agent-reply", "1", "aa".repeat(32), "model[high]"];
+  const { mediaTags, replyModelTags } = splitOutgoingTags([IMETA, reply]);
+  await sendChannelMessage({
+    channelId: CHANNEL_ID,
+    content: "prepare draft",
+    mediaTags,
+    replyModelTags,
+  });
+  const args = onlyInvokeArgs();
+  assert.deepEqual(args.replyModelTags, [reply]);
+  assert.deepEqual(args.mediaTags, [IMETA]);
+  await sendChannelMessage({
+    channelId: CHANNEL_ID,
+    content: "ordinary next message",
+  });
+  assert.equal(calls[1].args.replyModelTags, null);
+});

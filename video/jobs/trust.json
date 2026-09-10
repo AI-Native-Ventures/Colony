@@ -1,0 +1,15 @@
+{
+  "hook": "I wrote 20 emails and sent zero. Here's why.",
+  "hue": "blue",
+  "lines": [
+    {"who":"owner", "text":"Draft 20 intro emails for the plumbing leads. Don't send any."},
+    {"who":"scout", "text":"Drafted 20. Every one addresses the contact by name. Waiting."}
+  ],
+  "results": [
+    {"name":"Bryanston Business Park", "detail":"Facilities manager: Thabo M."},
+    {"name":"Sandton Medical Suites", "detail":"Practice manager: Lerato K."},
+    {"name":"Grayston Office Tower", "detail":"Building manager: Pieter V."}
+  ],
+  "approval": {"question":"Send 20 intro emails from your address?", "fine":"You can read each one before it goes."},
+  "endCard": {"title":"Give your business a team.", "url":"colony.ainative.ventures"}
+}

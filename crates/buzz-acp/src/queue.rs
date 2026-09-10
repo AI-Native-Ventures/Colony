@@ -352,6 +352,7 @@ impl EventQueue {
     pub fn push(&mut self, event: QueuedEvent) -> bool {
         if matches!(self.dedup_mode, DedupMode::Drop)
             && self.in_flight_channels.contains(&event.channel_id)
+            && !buzz_core::agent_reply::has_agent_reply(&event.event)
         {
             tracing::debug!(
                 channel_id = %event.channel_id,
@@ -408,6 +409,41 @@ impl EventQueue {
             self.recover_withheld_for_expired_channel(id);
         }
 
+        // A recovered scoped request must not merge with a later message.
+        if let Some(channel_id) = self
+            .cancelled_batches
+            .iter()
+            .find(|(id, events)| {
+                !self.in_flight_channels.contains(id)
+                    && self.retry_after.get(id).is_none_or(|&t| t <= now)
+                    && events
+                        .iter()
+                        .any(|entry| buzz_core::agent_reply::has_agent_reply(&entry.event))
+            })
+            .map(|(id, _)| *id)
+        {
+            let recovered = self.cancelled_batches.get_mut(&channel_id)?;
+            let index = recovered
+                .iter()
+                .position(|entry| buzz_core::agent_reply::has_agent_reply(&entry.event))?;
+            let events = vec![recovered.remove(index)];
+            let cancel_reason = self.cancel_reasons.get(&channel_id).copied();
+            if recovered.is_empty() {
+                self.cancelled_batches.remove(&channel_id);
+                self.cancel_reasons.remove(&channel_id);
+            }
+            self.in_flight_channels.insert(channel_id);
+            self.in_flight_deadlines
+                .insert(channel_id, now + self.in_flight_deadline);
+            self.in_flight_batch_sizes.insert(channel_id, events.len());
+            return Some(FlushBatch {
+                channel_id,
+                events,
+                cancelled_events: vec![],
+                cancel_reason,
+            });
+        }
+
         // Find the channel whose head event has the oldest received_at,
         // excluding in-flight channels and throttled channels.
         let channel_id = self
@@ -456,7 +492,14 @@ impl EventQueue {
 
         // Drain up to MAX_BATCH_EVENTS; leave any remainder in the queue.
         let queue = self.queues.entry(channel_id).or_default();
-        let drain_count = MAX_BATCH_EVENTS.min(queue.len());
+        let drain_count = match queue
+            .iter()
+            .position(|entry| buzz_core::agent_reply::has_agent_reply(&entry.event))
+        {
+            Some(0) => 1,
+            Some(index) => MAX_BATCH_EVENTS.min(index),
+            None => MAX_BATCH_EVENTS.min(queue.len()),
+        };
         let mut events: Vec<BatchEvent> = queue
             .drain(..drain_count)
             .map(|qe| BatchEvent {
@@ -482,12 +525,20 @@ impl EventQueue {
         self.in_flight_batch_sizes.insert(channel_id, events.len());
 
         // Merge any cancelled events stored by requeue_as_cancelled().
-        let cancelled_events = self
-            .cancelled_batches
-            .remove(&channel_id)
-            .unwrap_or_default();
+        let is_scoped_reply = events
+            .iter()
+            .any(|entry| buzz_core::agent_reply::has_agent_reply(&entry.event));
+        let cancelled_events = if is_scoped_reply {
+            vec![]
+        } else {
+            self.cancelled_batches
+                .remove(&channel_id)
+                .unwrap_or_default()
+        };
         let cancel_reason = if cancelled_events.is_empty() {
-            self.cancel_reasons.remove(&channel_id);
+            if !is_scoped_reply {
+                self.cancel_reasons.remove(&channel_id);
+            }
             None
         } else {
             self.cancel_reasons.remove(&channel_id)
@@ -5817,6 +5868,88 @@ mod tests {
         assert!(
             !prompt.contains("Description:"),
             "unresolved metadata must not render a Description field; got: {prompt}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod reply_model_queue_tests {
+    use super::*;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    fn entry(channel_id: Uuid, content: &str, scoped: bool) -> QueuedEvent {
+        let keys = Keys::generate();
+        let mut builder = EventBuilder::new(Kind::Custom(9), content);
+        if scoped {
+            let key = keys.public_key().to_hex();
+            builder = builder.tags([
+                Tag::parse(["p", &key]).unwrap(),
+                Tag::parse(["agent-reply", "1", &key, "model[high]"]).unwrap(),
+            ]);
+        }
+        QueuedEvent {
+            channel_id,
+            event: builder.sign_with_keys(&keys).unwrap(),
+            received_at: Instant::now(),
+            prompt_tag: "mention".into(),
+        }
+    }
+
+    #[test]
+    fn normal_scoped_normal_dispatch_separately() {
+        let channel = Uuid::new_v4();
+        let mut queue = EventQueue::new(DedupMode::Queue);
+        for (message, scoped) in [("before", false), ("scoped", true), ("after", false)] {
+            assert!(queue.push(entry(channel, message, scoped)));
+        }
+        for expected in ["before", "scoped", "after"] {
+            let batch = queue.flush_next().unwrap();
+            assert_eq!(batch.events.len(), 1);
+            assert_eq!(batch.events[0].event.content, expected);
+            queue.mark_complete(channel);
+        }
+    }
+
+    #[test]
+    fn scoped_request_waits_even_in_drop_mode() {
+        let channel = Uuid::new_v4();
+        let mut queue = EventQueue::new(DedupMode::Drop);
+        queue.push(entry(channel, "running", false));
+        let _ = queue.flush_next().unwrap();
+        assert!(queue.push(entry(channel, "scoped", true)));
+        assert!(queue.flush_next().is_none());
+        queue.mark_complete(channel);
+        assert_eq!(
+            queue.flush_next().unwrap().events[0].event.content,
+            "scoped"
+        );
+    }
+
+    #[test]
+    fn recovered_scoped_request_preserves_other_cancelled_messages() {
+        let channel = Uuid::new_v4();
+        let mut queue = EventQueue::new(DedupMode::Queue);
+        let entries = [("normal", false), ("scoped", true)]
+            .into_iter()
+            .map(|(text, scoped)| {
+                let queued = entry(channel, text, scoped);
+                BatchEvent {
+                    event: queued.event,
+                    prompt_tag: queued.prompt_tag,
+                    received_at: queued.received_at,
+                }
+            })
+            .collect();
+        queue.cancelled_batches.insert(channel, entries);
+        queue.cancel_reasons.insert(channel, CancelReason::Steer);
+        let scoped = queue.flush_next().unwrap();
+        assert_eq!(scoped.events.len(), 1);
+        assert_eq!(scoped.events[0].event.content, "scoped");
+        assert!(scoped.cancelled_events.is_empty());
+        queue.mark_complete(channel);
+        assert_eq!(
+            queue.flush_next().unwrap().events[0].event.content,
+            "normal"
         );
     }
 }

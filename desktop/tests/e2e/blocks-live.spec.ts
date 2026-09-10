@@ -105,6 +105,63 @@ async function screenshot(
   await page.screenshot({ path: path.join(directory, name), fullPage: true });
 }
 
+async function captureProposalReceiptEvidence(
+  page: import("@playwright/test").Page,
+  directory: string,
+  harnessProject: string,
+  instanceId: string,
+) {
+  if (!/^[0-9a-f]{64}$/.test(instanceId))
+    throw new Error("Invalid proposal evidence event ID");
+  const browser = await page.evaluate(
+    (id) => ({
+      nativeCommandCount: (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (entry) => entry.command === "execute_agent_proposal",
+      ).length,
+      remainingNativeOutcomes:
+        window.__BUZZ_E2E__?.mock?.agentProposalExecutionOutcomes?.map(
+          (outcome) => outcome.status,
+        ) ?? [],
+      receiptSigningAttempts: (window.__BUZZ_E2E_SIGNED_EVENTS__ ?? []).filter(
+        (event) =>
+          event.kind === 40011 &&
+          event.tags.some((tag) => tag[0] === "e" && tag[1] === id),
+      ),
+    }),
+    instanceId,
+  );
+  const { stdout } = await execFile(
+    "docker",
+    [
+      "compose",
+      "-p",
+      harnessProject,
+      "-f",
+      "docker-compose.harness.yml",
+      "exec",
+      "-T",
+      "postgres",
+      "psql",
+      "-U",
+      "buzz",
+      "-d",
+      "buzz",
+      "-tAc",
+      "SELECT COALESCE(json_agg(json_build_object(" +
+        "'id', encode(id, 'hex'), 'pubkey', encode(pubkey, 'hex'), " +
+        "'sig', encode(sig, 'hex'), 'created_at', extract(epoch FROM created_at)::bigint, " +
+        "'kind', kind, 'content', content, 'tags', tags)), '[]'::json) " +
+        `FROM events WHERE kind IN (40010, 40011) AND tags::text LIKE '%${instanceId}%'`,
+    ],
+    { cwd: path.resolve("..") },
+  );
+  await writeEvidence(directory, "agent-proposal-receipts.json", {
+    browser,
+    storedEvents: JSON.parse(stdout),
+  });
+  console.log(`AGENT_PROPOSAL_RECEIPTS ${JSON.stringify(browser)}`);
+}
+
 /**
  * Gate C intentionally owns neither relay nor ACP lifecycle.  The invoking
  * harness provides a running relay, an ACP fixture configured with
@@ -685,6 +742,13 @@ test.describe("Blocks live Gate C", () => {
       .fill("Gate C Researcher approved");
     const submit = proposalDialog.getByTestId("persona-dialog-submit");
     await expect(submit).toBeEnabled();
+    expect(
+      await page.evaluate(() =>
+        window.__BUZZ_E2E__?.mock?.agentProposalExecutionOutcomes?.map(
+          (outcome) => outcome.status,
+        ),
+      ),
+    ).toEqual(["applied"]);
     await submit.evaluate((element) => {
       (element as HTMLElement).click();
       (element as HTMLElement).click();
@@ -706,9 +770,21 @@ test.describe("Blocks live Gate C", () => {
         ),
       )
       .toBe(1);
-    await expect(proposalRows[0].getByText("Completed.")).toBeVisible({
-      timeout: 30_000,
-    });
+    try {
+      await expect(proposalRows[0].getByText("Completed.")).toBeVisible({
+        timeout: 30_000,
+      });
+    } finally {
+      // Capture accepted signed receipts and final command count even when
+      // the DOM assertion fails. An early count of one cannot distinguish a
+      // later receipt retry from a missing or rejected receipt.
+      await captureProposalReceiptEvidence(
+        page,
+        evidence,
+        harnessProject,
+        proposalIds[0] ?? "",
+      );
+    }
     await proposalRows[1].getByRole("button", { name: "Review agent" }).click();
     const decline = proposalDialog.getByRole("button", { name: "Decline" });
     await expect(decline).toBeEnabled();

@@ -1,6 +1,7 @@
 import { waitForAnimations } from "../tests/helpers/animations.ts";
 import { verifyReload } from "./reload-smoke.mjs";
 import { verifyImport } from "./import-smoke.mjs";
+import { verifyTerminal } from "./terminal-smoke.mjs";
 import { ELECTRON_BETA_RELAY } from "../scripts/electron-package-config.mjs";
 // Real Electron + Rust smoke gate. No mock native bridge or personal browser data.
 import { _electron as electron } from "@playwright/test";
@@ -273,6 +274,9 @@ try {
   });
   assert.equal(denied, true);
   console.log("Remote view isolation and business revocation: PASS");
+  await verifyTerminal(application, page, {
+    proofDir: process.env.COLONY_SMOKE_PROOF_DIR,
+  });
   await verifyImport(application, page);
   console.log("Evidence:", path.join(data, "actual-app.png"));
   await application.close();

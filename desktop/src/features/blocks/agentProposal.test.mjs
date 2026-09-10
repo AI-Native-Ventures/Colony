@@ -586,3 +586,90 @@ test("production agent-management authorization no longer depends on observer fr
   assert.doesNotMatch(dialog, /useAgentManagement/);
   assert.match(observerStore, /control_result/);
 });
+
+test("ordinary proposal approvals cannot request first-job staffing", () => {
+  const preparation = {
+    mode: "first-job-worker",
+    ownerPubkey: "a".repeat(64),
+    communityRelayUrl: "wss://colony.example",
+    channelId: "channel",
+    leaderPubkey: "b".repeat(64),
+    roleId: "writer",
+    roleTitle: "Writer",
+  };
+  const proposed = createProposal();
+  const safe = action({
+    definition: {
+      displayName: "Researcher",
+      systemPrompt: "Research qualified leads.",
+      behavior: { respondTo: "owner-only", parallelism: 1 },
+    },
+    preparation,
+  });
+  assert.equal(parseAgentProposalSafeAction(safe, proposed), null);
+  assert.deepEqual(
+    parseAgentProposalSafeAction(safe, proposed, undefined, preparation),
+    safe,
+  );
+  for (const key of Object.keys(preparation)) {
+    assert.equal(
+      parseAgentProposalSafeAction(
+        { ...safe, preparation: { ...preparation, [key]: "substituted" } },
+        proposed,
+        undefined,
+        preparation,
+      ),
+      null,
+      key,
+    );
+  }
+  for (const definition of [
+    { ...safe.definition, model: "pinned-model" },
+    { ...safe.definition, runtime: "codex" },
+    { ...safe.definition, provider: "openai" },
+    { ...safe.definition, behavior: { respondTo: "anyone", parallelism: 1 } },
+    {
+      ...safe.definition,
+      behavior: { respondTo: "owner-only", parallelism: 2 },
+    },
+    {
+      ...safe.definition,
+      behavior: {
+        respondTo: "owner-only",
+        parallelism: 1,
+        respondToAllowlist: ["c".repeat(64)],
+      },
+    },
+  ])
+    assert.equal(
+      parseAgentProposalSafeAction(
+        { ...safe, definition },
+        proposed,
+        undefined,
+        preparation,
+      ),
+      null,
+    );
+  assert.equal(
+    parseAgentProposalSafeAction(
+      { ...safe, runOn: { type: "provider", id: "remote" } },
+      proposed,
+      undefined,
+      preparation,
+    ),
+    null,
+  );
+  assert.equal(
+    parseAgentProposalSafeAction(
+      { ...safe, preparation: { ...preparation, access: "all" } },
+      proposed,
+      undefined,
+      preparation,
+    ),
+    null,
+  );
+  assert.equal(
+    parseAgentProposalSafeAction(action(), proposed, undefined, preparation),
+    null,
+  );
+});

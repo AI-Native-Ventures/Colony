@@ -34,6 +34,8 @@ const EVENT_ID_RE = /^[0-9a-f]{64}$/;
  * one of these reviewed product digests must match.
  */
 export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
+  // media 1.1.0; retain the prior digest for pinned conversation history.
+  "dc672b9514f8a31ae871d2935899e96aeb10d929a9e6c5a2546a9b8fb07335da",
   "d9a3804173fb77c5c3a084889b528519188f48a5520bc3fcea3a39fffb3c78fb",
   "613baba8284b6e0a474b621de8d3444d62cafc709ab9b7c4d41b1f0e7025ef8f",
   "0cc52eb39da3700731b60de102b42cb0efdefc38327f4dc562346a8d4918ff5d",

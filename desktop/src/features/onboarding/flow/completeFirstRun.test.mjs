@@ -28,6 +28,7 @@ function makeIo(overrides = {}) {
       rememberFounderBrief: () => calls.push("brief"),
       takePendingWelcomeChannelForDirectEntry: () => {},
       navigateToChannel: (id) => calls.push(`nav:${id}`),
+      ensureBusinessContext: async () => calls.push("business-context"),
       ...overrides,
     },
   };
@@ -359,6 +360,7 @@ test("new first run saves explicit handoff before Welcome and focuses the actual
     "nav:chan-1",
     "suggestion",
     `thread:chan-1:${root}`,
+    "business-context",
     `complete:${suggestionDeps.pubkey}:wss://acme.test`,
   ]);
 });
@@ -394,4 +396,66 @@ test("suggestion mode fails before effects if explicit adapters are absent", asy
     /handoff.*unavailable/i,
   );
   assert.deepEqual(calls, []);
+});
+
+test("business context is saved with the acknowledged full root scope before completion", async () => {
+  const root = "b".repeat(64);
+  const { io, calls } = makeIo({
+    markExplicitHandoff: async () => {},
+    deliverSuggestion: async () => ({ eventId: root }),
+    navigateToThread: () => calls.push("thread"),
+    ensureBusinessContext: async (scope, payload) => {
+      assert.deepEqual(scope, {
+        ownerPubkey: suggestionDeps.pubkey,
+        relayUrl: suggestionDeps.relayUrl,
+        channelId: "chan-1",
+        threadRootId: root,
+        requestId: payload.requestId,
+      });
+      calls.push("business-context");
+      throw new Error("profile receipt missing");
+    },
+  });
+  await assert.rejects(
+    completeFirstRun(suggestionDeps, io),
+    /profile receipt missing/,
+  );
+  assert.deepEqual(calls, [
+    "channels",
+    "nav:chan-1",
+    "thread",
+    "business-context",
+  ]);
+  io.ensureBusinessContext = undefined;
+  calls.length = 0;
+  await assert.rejects(
+    completeFirstRun(suggestionDeps, io),
+    /handoff.*unavailable/,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("leaving during canonical business retention does not mark another community complete", async () => {
+  let active = true;
+  const { io, calls } = makeIo({
+    markExplicitHandoff: async () => {},
+    deliverSuggestion: async () => ({ eventId: "b".repeat(64) }),
+    navigateToThread: () => {},
+    ensureBusinessContext: async () => {
+      active = false;
+    },
+  });
+  await assert.rejects(
+    completeFirstRun(
+      {
+        ...suggestionDeps,
+        assertCurrent: () => {
+          if (!active) throw new Error("run ended");
+        },
+      },
+      io,
+    ),
+    /run ended/,
+  );
+  assert.deepEqual(calls, ["channels", "nav:chan-1"]);
 });

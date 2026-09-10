@@ -1,3 +1,6 @@
+import { verifyEvent } from "nostr-tools/pure";
+import { parseCompanyHead } from "../../src/features/company/contracts";
+import { parseCompanyReceipt } from "../../src/features/company/workRepository";
 import { waitForAnimations } from "../helpers/animations";
 import { expect, test } from "@playwright/test";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
@@ -46,6 +49,9 @@ test("public first run: account, business and power reach Welcome with the owner
     page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible();
   await describeFounderBusiness(page);
+  await page
+    .getByLabel("Website", { exact: false })
+    .fill("https://horizon.example");
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-business-1440.png",
@@ -97,4 +103,40 @@ test("public first run: account, business and power reach Welcome with the owner
   await expect(
     page.getByRole("heading", { name: /Pick who|Put something/ }),
   ).toHaveCount(0);
+  // Real React completion must retain business context through a signed owner
+  // action, relay receipt and canonical readback; this transport is synthetic.
+  const retained = await page.evaluate(() => ({
+    broker: window.__BUZZ_E2E_MOCK_COMPANY_BROKER__?.(),
+    signed: window.__BUZZ_E2E_COMMAND_PAYLOADS__?.filter(
+      (entry) => entry.command === "sign_community_profile_update",
+    ),
+    launched: window.__BUZZ_E2E_COMMANDS__?.filter(
+      (command) => command === "start_managed_agent",
+    ),
+  }));
+  expect(retained.signed).toHaveLength(1);
+  expect(retained.launched ?? []).toHaveLength(0);
+  const heads = retained.broker?.profileHeads ?? [];
+  expect(heads).toHaveLength(2);
+  const initial = parseCompanyHead(heads[0], heads[0].pubkey);
+  const saved = parseCompanyHead(heads[1], heads[1].pubkey);
+  expect(initial.ok).toBe(true);
+  expect(initial.ok && initial.value.summary).toBe("");
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.message);
+  expect(saved.value.tradingName).toBe("Horizon Labs");
+  expect(saved.value.summary).toBe(
+    "We build websites and manage social media for small businesses.",
+  );
+  expect(saved.value.website).toBe("https://horizon.example");
+  const receipt = retained.broker?.receipts.find((entry) =>
+    entry.tags.some((tag) => tag[0] === "a" && tag[1]?.startsWith("30179:")),
+  );
+  expect(receipt).toBeDefined();
+  if (!receipt) throw new Error("Missing canonical business receipt");
+  expect(verifyEvent(receipt)).toBe(true);
+  const actionId = receipt.tags.find((tag) => tag[0] === "e")?.[1] ?? "";
+  const parsed = parseCompanyReceipt(receipt, heads[1].pubkey, actionId);
+  expect(parsed?.outcome).toBe("applied");
+  expect(parsed?.headEventId).toBe(heads[1].id);
 });

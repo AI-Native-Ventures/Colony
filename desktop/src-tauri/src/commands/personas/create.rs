@@ -32,9 +32,20 @@ pub(crate) async fn create_persona_with_id(
     definition_id: Option<String>,
     app: AppHandle,
 ) -> Result<AgentDefinition, String> {
+    create_persona_with_preparation(input, definition_id, app, None).await
+}
+
+/// The approved first-job path fences its definition write against identity changes.
+pub(crate) async fn create_persona_with_preparation(
+    input: CreatePersonaRequest,
+    definition_id: Option<String>,
+    app: AppHandle,
+    preparation: Option<crate::commands::agent_proposals::preparation::AgentProposalPreparation>,
+) -> Result<AgentDefinition, String> {
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
+        let _identity = preparation.as_ref().map(|p| p.lock(&state)).transpose()?;
         let display_name = trim_required(&input.display_name, "Display name")?;
         let (role_id, role_title) = normalize_persona_role(input.role_id, input.role_title)?;
         // System prompt optional: core memory is auto-injected. Empty is valid.
