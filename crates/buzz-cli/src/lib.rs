@@ -2129,6 +2129,33 @@ pub enum WebsiteCmd {
         #[arg(long)]
         file: String,
     },
+    /// Package a built static site into a revision payload
+    Bundle {
+        /// Built static-site output directory
+        #[arg(long)]
+        dir: String,
+        /// Editable source directory or existing archive
+        #[arg(long)]
+        source: String,
+        /// Before capture PNG
+        #[arg(long)]
+        before: String,
+        /// Desktop capture PNG
+        #[arg(long)]
+        desktop: String,
+        /// Mobile capture PNG
+        #[arg(long)]
+        mobile: String,
+        /// Manifest entrypoint path
+        #[arg(long, default_value = "index.html")]
+        entrypoint: String,
+        /// Public HTTPS source reference passthrough
+        #[arg(long = "source-url")]
+        source_url: Option<String>,
+        /// Write the JSON payload to this path as well as stdout
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Record independent QA from a reviewer report file
     Qa {
         /// Channel UUID

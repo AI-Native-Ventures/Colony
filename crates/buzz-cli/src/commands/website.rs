@@ -336,9 +336,22 @@ async fn cmd_revision(
     file: &str,
 ) -> Result<(), CliError> {
     let value = read_json_file(file)?;
-    let op: WebsiteActionOp = serde_json::from_value::<RevisionWire>(value)
-        .map_err(|error| CliError::Usage(format!("invalid revision file: {error}")))?
-        .into_op()?;
+    let wire: RevisionWire = serde_json::from_value(value)
+        .map_err(|error| CliError::Usage(format!("invalid revision file: {error}")))?;
+    let default_revision = match wire.revision {
+        Some(revision) => revision,
+        None => {
+            let (head, _) = latest_head(client, channel, task)
+                .await?
+                .ok_or_else(|| CliError::Usage("no website head exists for this task".into()))?;
+            let head_event = serde_json::from_value::<nostr::Event>(head)
+                .map_err(|error| CliError::Other(error.to_string()))?;
+            let review = buzz_sdk::website::parse_website_head(&head_event)
+                .map_err(|error| CliError::Other(error.to_string()))?;
+            review.current_revision.saturating_add(1)
+        }
+    };
+    let op = wire.into_op(default_revision)?;
     cmd_mutation(client, &WebsiteCmd::Revision {
         channel: channel.to_owned(),
         task: task.to_owned(),
@@ -374,7 +387,8 @@ async fn cmd_handover(
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RevisionWire {
-    revision: u32,
+    #[serde(default)]
+    revision: Option<u32>,
     manifest: PreviewArtifactRef,
     source_url: String,
     archive: PreviewArtifactRef,
@@ -382,9 +396,9 @@ struct RevisionWire {
 }
 
 impl RevisionWire {
-    fn into_op(self) -> Result<WebsiteActionOp, CliError> {
+    fn into_op(self, default_revision: u32) -> Result<WebsiteActionOp, CliError> {
         Ok(WebsiteActionOp::AddRevision {
-            revision: self.revision,
+            revision: self.revision.unwrap_or(default_revision),
             manifest: self.manifest,
             source_url: self.source_url,
             archive: self.archive,
@@ -531,6 +545,29 @@ pub async fn dispatch(cmd: WebsiteCmd, client: &BuzzClient) -> Result<(), CliErr
         }
         WebsiteCmd::BeginWork { .. } => {
             cmd_mutation(client, &cmd, WebsiteActionOp::BeginWork).await
+        }
+        WebsiteCmd::Bundle {
+            dir,
+            source,
+            before,
+            desktop,
+            mobile,
+            entrypoint,
+            source_url,
+            out,
+        } => {
+            crate::commands::website_bundle::run(
+                client,
+                &dir,
+                &source,
+                &before,
+                &desktop,
+                &mobile,
+                &entrypoint,
+                source_url.as_deref(),
+                out.as_deref(),
+            )
+            .await
         }
         WebsiteCmd::Revision { .. } => {
             let (channel, task, thread, generation, file) = match &cmd {

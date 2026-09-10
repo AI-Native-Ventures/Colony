@@ -335,7 +335,43 @@ buzz website handover --channel <uuid> --task <id> --thread <hex> [--generation 
 
 `--generation` is read from the current head when omitted. `revision` and `handover` files match the wire structs; `handover` may include `accessRequest`. `qa` publishes the signed task report carrying the `website-qa` binding tag first, then the `recordQa` action referencing it.
 
-The artifact bundler is not part of this phase: `buzz website bundle` will need to hash and upload the built static site through existing Blossom, preserve relative paths, reject symlinks/traversal/unsupported files, and emit the preview manifest, source archive, and before/desktop/mobile capture refs that `revision` consumes. No live deployment is created by any command here.
+### Bundling a built site
+
+```
+buzz website bundle --dir <built-site> --source <editable-source-dir-or-archive> \
+    --before <png> --desktop <png> --mobile <png> \
+    [--entrypoint index.html] [--source-url <https-url>] [--out revision.json]
+```
+
+The command packages an already-built site; it never runs a build. It walks `--dir`
+(sorted, deterministic), validates every path and MIME against the preview
+contract, rejects symlinks, case-fold collisions, unknown types, >16 MiB files,
+and >64 MiB totals, uploads every file plus the manifest, the source archive,
+and the three PNG captures through the authenticated Blossom client, downloads
+each upload back, and refuses success unless the readback bytes hash and size
+match exactly. A source directory becomes a deterministic uncompressed ustar
+archive; `node_modules`, `.git`, `target`, `__pycache__`, `.env`, and symlinks
+are refused rather than silently dropped. Because generic uploads are capped at
+50 MiB, an archive over that bound fails clearly; pass a smaller source or a
+pre-built archive.
+
+Output is exactly what `buzz website revision --file` consumes; a missing
+`revision` field is filled from the current head by the revision command, so
+the two commands chain without hand editing.
+
+Transport vs preview MIME rule: the authenticated upload infers a transport
+Content-Type (text assets commonly go as `application/octet-stream` and are
+served as downloads), while the preview manifest declares the MIME the native
+loader uses for isolated serving. The loader trusts the manifest MIME, not the
+transport header, so no upload policy changes are needed; the manifest is what
+must list only allowed preview MIMEs.
+
+The command does not fetch resources linked from the built HTML. The agent must
+localize required assets into the built directory before bundling; anything not
+present is reported by the walker as a missing file at build time and never
+silently omitted. A user-visible preview always renders the actual produced
+site files from the manifest, never a screenshot-only archive.
+
 
 
 ## 9. Shared vectors

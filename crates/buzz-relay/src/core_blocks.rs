@@ -315,7 +315,7 @@ mod tests {
     ///
     /// Editing a manifest therefore fails this test until the timestamp moves
     /// with it. Update both fields together: that is the point, not a chore.
-    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 24] = [
+    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 25] = [
         (
             "actions",
             1785369600,
@@ -435,6 +435,11 @@ mod tests {
             "report",
             1785369600,
             "d7c03f0a0f3d4b603394cfcf388efeebfb1b6bcae080f24fb9291ddc19e3c885",
+        ),
+        (
+            "website-job",
+            1785369600,
+            "df62e00412b314d4b036d07bcf547e0f7a9dbc562e013a6d3832f0c51bb7ad6f",
         ),
     ];
 
