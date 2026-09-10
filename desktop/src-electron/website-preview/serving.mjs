@@ -15,6 +15,7 @@
 
 import { collectInlineAuthorizations } from "./inline-script.mjs";
 import {
+  PREVIEW_CSP,
   parsePreviewUrl,
   previewCsp,
   previewHeaders,
@@ -47,14 +48,17 @@ function servedPath(entry, path) {
 }
 
 /**
- * CSP for one served file. HTML pages are authorized from their own verified
- * bytes and cached per path; other files keep the entrypoint CSP because the
- * header is ignored on non-documents. Truncation is surfaced once per entry so
- * the renderer can show a recoverable "some inline scripts stay blocked"
- * state instead of claiming full interaction.
+ * CSP for one served file.
+ *
+ * `resolved` is the canonical listed path (`""` was already mapped to the
+ * entrypoint), so the origin root and the explicit entrypoint share one cache
+ * entry and one truncation push. Every `text/html` response is authorized
+ * from its own verified bytes; non-HTML responses get the base CSP with no
+ * inline authorizations at all. Truncation flips once per entry and pushes
+ * exactly one scoped state update through `entry.onInlineTruncated`.
  */
 function cspForFile(entry, resolved, file) {
-  if (file.mime !== "text/html") return entry.csp;
+  if (file.mime !== "text/html") return PREVIEW_CSP;
   if (entry.cspByPath === null || entry.cspByPath === undefined) {
     entry.cspByPath = new Map();
   }

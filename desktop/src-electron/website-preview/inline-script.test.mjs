@@ -49,17 +49,35 @@ test("hashes CRLF and UTF-8 handler text as the served bytes", () => {
   assert.deepEqual(result.handlerHashes, [tokenFor("caf\u00e9()")]);
 });
 
-test("decodes character entities and clamps out-of-range numerics", () => {
+test("decodes character entities and clamps invalid numerics", () => {
   const html =
     '<button onclick="a(&#233;)">x</button>' +
     '<button onclick="b(&#x110000;)">y</button>' +
-    '<button onclick="c(&amp;)">z</button>';
+    '<button onclick="c(&#xD800;)">z</button>' +
+    '<button onclick="d(&amp;)">w</button>';
   const result = collectInlineAuthorizations(Buffer.from(html, "utf8"));
   assert.deepEqual(result.handlerHashes, [
     tokenFor("a(\u00e9)"),
     tokenFor("b(\uFFFD)"),
-    tokenFor("c(&)"),
+    tokenFor("c(\uFFFD)"),
+    tokenFor("d(&)"),
   ]);
+  assert.equal(result.truncated, false);
+});
+
+test("an undecodable handler stays unauthorized and counts as truncation", () => {
+  const html = '<button onclick="x(&#65;)">x</button>';
+  const original = String.fromCodePoint;
+  String.fromCodePoint = () => {
+    throw new RangeError("decode failed");
+  };
+  try {
+    const result = collectInlineAuthorizations(Buffer.from(html, "utf8"));
+    assert.deepEqual(result.handlerHashes, []);
+    assert.equal(result.truncated, true);
+  } finally {
+    String.fromCodePoint = original;
+  }
 });
 
 test("caps authorizations and reports truncation", () => {

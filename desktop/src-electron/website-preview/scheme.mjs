@@ -50,9 +50,9 @@ const TEXTUAL_MIMES = new Set([
  * Only verified same-origin files may load. External images, fonts, media,
  * frames, objects, workers, connections, and form posts are all refused.
  * Inline styles are allowed because they do not execute. Inline scripts are
- * authorized only by the SHA-256 hashes of the verified entrypoint bytes
- * (`previewCsp`), never by `'unsafe-inline'`, and `wasm-unsafe-eval` keeps
- * allowlisted `application/wasm` files usable without opening eval.
+ * authorized only by the SHA-256 hashes of each verified HTML document's own
+ * bytes (`previewCsp`), never by `'unsafe-inline'`, and `wasm-unsafe-eval`
+ * keeps allowlisted `application/wasm` files usable without opening eval.
  */
 export const PREVIEW_CSP_DIRECTIVES = Object.freeze([
   "default-src 'none'",
@@ -76,10 +76,10 @@ export const PREVIEW_CSP_DIRECTIVES = Object.freeze([
  * Build the response CSP, authorizing only the supplied hash tokens.
  *
  * `scriptHashes` and `handlerHashes` are pre-formatted CSP source expressions
- * (`'sha256-...'`) computed from the verified entrypoint bytes. Inline event
- * handler attributes additionally require `'unsafe-hashes'`, so that token is
- * added only when handler hashes exist. There is no code path that adds
- * `'unsafe-inline'` to `script-src`.
+ * (`'sha256-...'`) computed from one verified HTML document's bytes. Inline
+ * event handler attributes additionally require `'unsafe-hashes'`, so that
+ * token is added only when handler hashes exist. There is no code path that
+ * adds `'unsafe-inline'` to `script-src`.
  */
 export function previewCsp({
   scriptHashes = [],
@@ -97,7 +97,6 @@ export function previewCsp({
 
 /** The no-hash CSP (documents that authorize no inline script at all). */
 export const PREVIEW_CSP = previewCsp();
-
 
 function hasControlCharacter(value) {
   for (const character of value) {

@@ -16,7 +16,7 @@
 
 import { createHash } from "node:crypto";
 
-/** Upper bound on authorized inline tokens per entrypoint. */
+/** Upper bound on authorized inline tokens per HTML document. */
 export const MAX_INLINE_AUTHORIZATIONS = 128;
 
 const SCRIPT_TAG_PATTERN = /<script\b([^>]*)>/gi;
@@ -31,9 +31,11 @@ function hashToken(bytes) {
 
 /**
  * Decode the small entity set that can appear in a quoted event-handler
- * attribute. Numeric entities outside Unicode are replaced with U+FFFD, the
- * same as HTML parsing. Returns `null` when the value cannot be reproduced,
- * which leaves that one handler blocked rather than opening the document.
+ * attribute. Out-of-range and surrogate numeric entities clamp to U+FFFD, the
+ * same as HTML parsing, and never throw. Returns `null` only when the value
+ * cannot be reproduced at all; the caller then leaves that handler
+ * unauthorized and counts it like truncation so the renderer can surface a
+ * recoverable state.
  */
 function decodeAttributeValue(value) {
   try {
@@ -42,7 +44,12 @@ function decodeAttributeValue(value) {
         const parsed = code.startsWith("x")
           ? Number.parseInt(code.slice(1), 16)
           : Number.parseInt(code, 10);
-        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 0x10ffff) {
+        if (
+          !Number.isFinite(parsed) ||
+          parsed < 0 ||
+          parsed > 0x10ffff ||
+          (parsed >= 0xd800 && parsed <= 0xdfff)
+        ) {
           return "\uFFFD";
         }
         return String.fromCodePoint(parsed);
@@ -63,8 +70,11 @@ function decodeAttributeValue(value) {
  *
  * Returns `{ scriptHashes, handlerHashes, truncated }`, where each entry is a
  * formatted `'sha256-...'` source expression. Only the first
- * `MAX_INLINE_AUTHORIZATIONS` tokens are returned; `truncated` tells the host
- * that further inline scripts stay blocked (a safe, visible degradation).
+ * `MAX_INLINE_AUTHORIZATIONS` tokens are returned; `truncated` is true when
+ * more inline content existed than was authorized, including a handler whose
+ * value could not be reproduced. Truncation is a recoverable state: the
+ * document still loads, the authorized inline content still runs, and the
+ * host surfaces that some inline scripts stay blocked.
  */
 export function collectInlineAuthorizations(
   bytes,
@@ -106,7 +116,12 @@ export function collectInlineAuthorizations(
       break;
     }
     const value = decodeAttributeValue(match[1] ?? match[2]);
-    if (value === null) continue;
+    if (value === null) {
+      // The handler cannot be reproduced, so it stays unauthorized. Count it
+      // like truncation; the host pushes the same recoverable state.
+      truncated = true;
+      continue;
+    }
     const token = hashToken(Buffer.from(value, "utf8"));
     if (seenHandlers.has(token)) continue;
     seenHandlers.add(token);

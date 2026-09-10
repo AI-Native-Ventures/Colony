@@ -21,7 +21,6 @@ import { randomBytes } from "node:crypto";
 
 import { loadWebsitePreview } from "./artifact.mjs";
 import { PreviewHostError } from "./host-errors.mjs";
-import { collectInlineAuthorizations } from "./inline-script.mjs";
 import {
   PREVIEW_FIRST_LOAD_TIMEOUT_MS,
   applyEntryBorderRadius,
@@ -30,7 +29,6 @@ import {
   mountEntry,
 } from "./lifecycle.mjs";
 import { MAX_TOTAL_BYTES } from "./manifest.mjs";
-import { previewCsp } from "./scheme.mjs";
 import {
   normalizeOpenError,
   normalizeRadius,
@@ -279,7 +277,6 @@ export class WebsitePreviewHost {
       protocolHandled: false,
       clearWebRequest: null,
       removeWindowListener: null,
-      csp: null,
       cspByPath: new Map(),
       inlineScriptsTruncated: false,
       onInlineTruncated: null,
@@ -402,15 +399,13 @@ export class WebsitePreviewHost {
     entry.loadedBytes = total;
     entry.reservedBytes = 0;
 
-    // Authorize only the verified entrypoint's own inline script bytes. The
-    // tokens are content hashes, so no path adds `'unsafe-inline'`.
+    // The entrypoint bytes must exist up front so a malformed loader cannot
+    // mount a view that can never paint. Inline authorizations are computed
+    // per served HTML page by the request layer, not here.
     const entrypoint = site.getFile(site.entrypoint);
     if (entrypoint === null || !Buffer.isBuffer(entrypoint.bytes)) {
       throw invalid("invalid_artifact", "the verified entrypoint has no bytes");
     }
-    const authorizations = collectInlineAuthorizations(entrypoint.bytes);
-    entry.csp = previewCsp(authorizations);
-    entry.inlineScriptsTruncated = authorizations.truncated;
   }
 
   applyLayout(entry) {

@@ -462,6 +462,14 @@ async function boot() {
       return {
         ok: false,
         error: error instanceof Error ? error.message : error,
+        // Stable typed codes (for example `preview_closed`) survive the IPC
+        // boundary as data; the preload prefixes them onto the thrown message.
+        code:
+          error !== null &&
+          typeof error === "object" &&
+          typeof error.code === "string"
+            ? error.code
+            : null,
       };
     }
   });

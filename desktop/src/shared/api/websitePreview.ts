@@ -77,19 +77,40 @@ export type WebsitePreviewState = {
   error: string | null;
 };
 
-export type WebsitePreviewSetBounds = {
-  bounds: WebsitePreviewRect;
-  clip?: WebsitePreviewClip | null;
-  zoom?: number;
-  radius?: number;
+/**
+ * One bounds update in app CSS pixels, matching the feature
+ * `WebsiteHostBoundsUpdate`. `element` is the full, unclipped element rect and
+ * `clip` is the visible app window; the host intersects them itself and
+ * derives the fit from `element`. `intersection` is informational and ignored.
+ *
+ * No zoom factor is sent: the app pins the native webview zoom to 1
+ * (`useWebviewZoomShortcuts`) and scales text through the root font-size, so
+ * `getBoundingClientRect()` values are already in window coordinates.
+ */
+export type WebsitePreviewBoundsUpdate = {
+  element: WebsitePreviewRect;
+  clip: WebsitePreviewClip | null;
+  intersection?: WebsitePreviewRect | null;
+  visible: boolean;
+};
+
+/** Minimal handle state, matching the feature `WebsiteNativeHandleState`. */
+export type WebsiteNativeHandleStateLike = {
+  status: "opening" | "ready" | "failed" | "closed";
+  visible: boolean;
+  error?: string | null;
 };
 
 export type WebsitePreviewHandle = {
   readonly handle: string;
   readonly scopeId: string;
-  setBounds(input: WebsitePreviewSetBounds): void;
+  setBounds(update: WebsitePreviewBoundsUpdate): void;
   setVisible(visible: boolean): void;
   close(): Promise<void>;
+  /** Scoped state stream for this exact handle; stale handles never fire. */
+  subscribe(
+    listener: (state: WebsiteNativeHandleStateLike) => void,
+  ): () => void;
 };
 
 export type WebsitePreviewRequestError = {
@@ -102,8 +123,6 @@ export type WebsiteLoadedArtifact = {
   /** Blob URL over locally re-verified bytes; revoke when unmounted. */
   objectUrl: string;
   verifiedSha256: string;
-  size: number;
-  contentType: string | null;
   revoke: () => void;
 };
 
@@ -172,6 +191,19 @@ export function isWebsitePreviewAvailable(): boolean {
   return electronDesktop() !== undefined;
 }
 
+/**
+ * Extract the stable native error code from a rejected request.
+ *
+ * The trusted transport prefixes typed native failures as
+ * `"<code>: <message>"`; a plain failure has no prefix and returns null. This
+ * never guesses a code from unrelated message text.
+ */
+export function websitePreviewErrorCode(error: unknown): string | null {
+  if (typeof error !== "string") return null;
+  const match = /^([a-z][a-z0-9_]*): /.exec(error);
+  return match === null ? null : match[1];
+}
+
 /** Subscribe to every scoped host state update. */
 export function subscribeWebsitePreviewState(
   listener: (state: WebsitePreviewState) => void,
@@ -235,29 +267,43 @@ export function createWebsitePreviewAdapter(
       ) => {
         events.onError?.({ handle: state.handle, operation, error });
       };
+      let visible = state.visible;
+      const applyVisible = (next: boolean) => {
+        if (next === visible) return;
+        visible = next;
+        void api
+          .request("website-preview:visible", {
+            communityId,
+            handle: state.handle,
+            visible: next,
+          })
+          .catch((error) => report("setVisible", error));
+      };
       return {
         handle: state.handle,
         scopeId: state.scopeId,
-        setBounds(input) {
+        setBounds(update) {
           void api
             .request("website-preview:bounds", {
               communityId,
               handle: state.handle,
-              bounds: input.bounds,
-              clip: input.clip ?? null,
-              zoom: input.zoom,
-              radius: input.radius,
+              bounds: update.element,
+              clip: update.clip,
             })
             .catch((error) => report("setBounds", error));
+          applyVisible(update.visible === true);
         },
-        setVisible(visible) {
-          void api
-            .request("website-preview:visible", {
-              communityId,
-              handle: state.handle,
-              visible,
-            })
-            .catch((error) => report("setVisible", error));
+        setVisible(next) {
+          applyVisible(next === true);
+        },
+        subscribe(listener) {
+          return subscribeWebsitePreviewHandle(state.handle, (next) => {
+            listener({
+              status: next.status,
+              visible: next.visible,
+              error: next.error,
+            });
+          });
         },
         close: async () => {
           unsubscribe();
@@ -277,6 +323,12 @@ function toUint8Array(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (Array.isArray(value)) return Uint8Array.from(value as number[]);
+  // Tolerate a Node Buffer shape if a transport ever serializes it as
+  // `{ type: "Buffer", data: number[] }`; the digest check still gates use.
+  if (value !== null && typeof value === "object") {
+    const data = (value as { data?: unknown }).data;
+    if (Array.isArray(data)) return Uint8Array.from(data as number[]);
+  }
   throw new Error("The verified artifact bytes were not recognized");
 }
 
@@ -302,8 +354,6 @@ export async function loadWebsiteArtifact(
   if (isAborted(signal)) throw abortError();
   const result = await api.request<{
     bytes: unknown;
-    sha256: string;
-    size: number;
     contentType: string | null;
   }>("website-artifact:load", { communityId, manifest: { ...ref } });
   if (isAborted(signal)) throw abortError();
@@ -321,8 +371,6 @@ export async function loadWebsiteArtifact(
   return {
     objectUrl,
     verifiedSha256,
-    size: bytes.byteLength,
-    contentType: result.contentType ?? null,
     revoke: () => URL.revokeObjectURL(objectUrl),
   };
 }

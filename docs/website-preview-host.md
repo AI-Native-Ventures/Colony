@@ -181,19 +181,23 @@ switch or reload cannot be raced by a late load.
   `no-store`.
 - **Restrictive CSP with verified inline hashes, per served page.**
   `default-src 'none'`; every `text/html` response computes `script-src`
-  hashes from that document's own verified bytes, cached per path, so a
-  verified second page with its own inline menu or tab script works.
-  `script-src` is `'self'`
-  `'wasm-unsafe-eval'` plus `'sha256-...'` tokens, and `'unsafe-hashes'` plus
-  handler hashes for inline event handler attributes. There is no code path
-  that adds `'unsafe-inline'` to `script-src`; inline content not present in a
-  verified document stays blocked. Up to 128 tokens per page are authorized;
-  beyond that `inlineScriptsTruncated` flips to true, a scoped state update is
-  pushed, and the extra scripts stay blocked as a visible, recoverable
-  unsupported state rather than a silently broken preview. `style-src 'self'
-  'unsafe-inline'`, `img-src 'self' data: blob:`, `connect-src 'self'`,
-  `worker-src 'none'`, `frame-src 'none'`, `object-src 'none'`,
-  `form-action 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`.
+  hashes from that document's own verified bytes, cached per canonical listed
+  path, so a verified second page with its own inline menu or tab script
+  works. Non-HTML responses get the base CSP with no inline authorizations at
+  all. `script-src` is `'self'` `'wasm-unsafe-eval'` plus `'sha256-...'`
+  tokens, and `'unsafe-hashes'` plus handler hashes for inline event handler
+  attributes. There is no code path that adds `'unsafe-inline'` to
+  `script-src`; inline content not present in a verified document stays
+  blocked. Up to 128 tokens per page are authorized, and an out-of-range or
+  surrogate numeric entity clamps to U+FFFD exactly as HTML parsing does
+  rather than throwing. When more inline content exists than was authorized,
+  or a handler value cannot be reproduced at all, `inlineScriptsTruncated`
+  flips to true, exactly one scoped state update is pushed, and the
+  unauthorized content stays blocked as a visible, recoverable state rather
+  than a silently broken preview. `style-src 'self' 'unsafe-inline'`,
+  `img-src 'self' data: blob:`, `connect-src 'self'`, `worker-src 'none'`,
+  `frame-src 'none'`, `object-src 'none'`, `form-action 'none'`,
+  `base-uri 'self'`, `frame-ancestors 'none'`.
 - **Network, frames, and plugins are refused twice.** CSP plus a
   partition-scoped `webRequest.onBeforeRequest` that cancels every URL outside
   the entry's own `colony-preview://<token>/` origin.
@@ -229,26 +233,41 @@ aligned. Scrolling under a header clips instead of rescaling.
   undocumented Electron assumption. Do not make it the default until the
   pixel proof is green on every shipped platform.
 
-### Frontend mapping
+### Frontend mapping and zoom
+
+The app pins the native webview zoom to `1`
+(`desktop/src/app/useWebviewZoomShortcuts.ts` calls
+`setWebviewZoom(1)` and applies Cmd +/- by scaling the root font-size). The
+renderer therefore cannot and must not call `webContents.getZoomFactor()`:
+`getBoundingClientRect()` already returns window coordinates. The adapter
+sends no zoom field at all, and the host defaults to the owning window's
+pinned factor of `1`.
 
 `websitePreview.ts` exposes `WebsitePreviewNativeAdapter.attach(container,
 request, signal)`. `container` is accepted for interface compatibility but
-unused: the preview is a native overlay, and geometry arrives through
-`setBounds`. The feature hook must pass the **unclipped** element rect plus the
-clip rect and app zoom:
+unused: the preview is a native overlay, and geometry arrives through the
+handle, matching the feature `WebsiteHostBoundsUpdate`:
 
 ```ts
 handle.setBounds({
-  bounds: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+  element: {
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+  },
   clip: clipRef.current?.() ?? null,
-  zoom: window.webContents?.getZoomFactor?.() ?? 1,
+  intersection, // informational; the host intersects natively
+  visible,      // false while a dialog or hidden tab covers the pane
 });
 ```
 
-Applying `intersectHostBounds` first and passing only the clipped rect makes
-the fit input shrink while scrolling, so the preview appears to rescale.
-`intersectHostBounds` remains correct for the DOM placeholder, not for the
-native handle.
+`element` is always the full, unclipped rect. Applying `intersectHostBounds`
+first and passing only the clipped rect makes the fit input shrink while
+scrolling, so the preview appears to rescale; that function remains correct
+for the DOM placeholder, never for the native handle. The adapter forwards
+`visible` as a separate visibility update and the host clips `element`
+against `clip` itself.
 
 ## Integration API (implemented)
 
@@ -259,11 +278,11 @@ permissive path through terminal IPC.
 
 | request type | payload | notes |
 | --- | --- | --- |
-| `website-preview:open` | open request plus `communityId` | requires the current `businessContext` and a matching community |
-| `website-preview:bounds` | `{ communityId, handle, bounds, clip, zoom, radius }` | |
+| `website-preview:open` | open request plus `communityId` | requires the current `businessContext` and a matching community; resolves only after the first main-frame load succeeded |
+| `website-preview:bounds` | `{ communityId, handle, bounds, clip }` | `bounds` is the full element rect; the client maps the feature `element` to it and sends no zoom |
 | `website-preview:visible` | `{ communityId, handle, visible }` | |
 | `website-preview:close` | `{ communityId, handle }` | stale handles are a no-op |
-| `website-artifact:load` | `{ communityId, manifest }` | bounded to 16 MiB, digest re-verified, generation re-checked |
+| `website-artifact:load` | `{ communityId, manifest }` | capped at 16 MiB, digest re-verified, generation re-checked |
 | `website-handover:download` | `{ communityId, items }` | opens the directory picker in main |
 
 Every request must carry the expected `communityId`, checked against the live
@@ -272,9 +291,35 @@ business context. The trusted `window` is applied **last**
 The dispatcher captures `{ context, generation }` before async work, links an
 `AbortController` to business invalidation, aborts in-flight fetches, and
 re-checks the captured context and generation after the await and before any
-bytes are returned or handover files are finalized. State updates are pushed as
-`{ type: "website-preview", payload: state }` over the existing
-`colony:event` subscription.
+bytes are returned or handover files are finalized.
+
+State updates are pushed as `{ type: "website-preview", payload: state }` over
+the existing `colony:event` subscription, where `state` is:
+
+```ts
+{
+  handle: string;          // opaque per-mount handle
+  scopeId: string;         // deterministic semantic scope key
+  communityId: string; jobId: string; threadRoot: string;
+  revision: number; manifestSha256: string;
+  viewport: "desktop" | "mobile";
+  pixelWidth: number; pixelHeight: number;
+  status: "opening" | "ready" | "failed" | "closed";
+  visible: boolean;
+  inlineScriptsTruncated: boolean;
+  error: string | null;
+}
+```
+
+Typed native failures survive IPC for `website-*` requests only: `ipcMain`
+returns `{ ok: false, error, code }` for every type (additive), and the
+preload prefixes `"<code>: <message>"` only when the request type starts with
+`website-`. Every other request type (terminal, browser, identity, files)
+keeps its historical thrown value exactly, even though native fs and other
+errors can also carry a string `code`. The shared client's
+`websitePreviewErrorCode(error)` extracts the stable code; a business switch
+that aborts a pending open surfaces `preview_closed`, and a caller abort
+surfaces `preview_aborted`.
 
 Business invalidation is synchronous and rotates the generation at four points:
 
@@ -297,22 +342,27 @@ and after the first-frame wait.
 - `isWebsitePreviewAvailable()`
 - `subscribeWebsitePreviewState(listener)` and
   `subscribeWebsitePreviewHandle(handle, listener)` so a card can observe
-  `failed` and `closed` for its own handle.
+  `failed` and `closed` for its own handle; a stale handle never receives a
+  later mount's events.
 - `createWebsitePreviewAdapter({ onState, onError })` returning a
   `WebsitePreviewNativeAdapter` or `null` without the Electron shell. A late
   attach after `signal` aborts closes its handle before rejecting, a non-ready
   open result is closed instead of reported interactive, and `setBounds`,
-  `setVisible`, and `close` failures are delivered to `onError` because the
-  feature handle contract is synchronous.
-- `loadWebsiteArtifact(ref, communityId, signal)` which asks the native side
-  for the bounded verified bytes, re-verifies the digest locally with
-  WebCrypto, and returns a revocable blob URL.
-- `createWebsiteArtifactLoader(communityId)` binding that loader to the
-  feature `WebsiteArtifactLoader` shape.
+  `setVisible`, and `close` failures are delivered to `onError`.
+- The returned handle is structurally compatible with the feature
+  `WebsitePreviewHostHandle`: `setBounds` takes `{ element, clip,
+  intersection?, visible }`, applies `visible` as a visibility update, and
+  `subscribe` maps full state onto
+  `{ status, visible, error }` (`WebsiteNativeHandleState`). The UI can pass
+  this adapter through a thin mapping layer without re-deriving geometry.
+- `loadWebsiteArtifact(ref, communityId, signal)` asks the native side for the
+  capped verified bytes, re-verifies the digest locally with WebCrypto, and
+  returns exactly `{ objectUrl, verifiedSha256, revoke }`.
+- `createWebsiteArtifactLoader(communityId)` binds that loader to the feature
+  `WebsiteArtifactLoader` shape.
 - `downloadWebsiteHandover(items, communityId)` for approved source/assets.
-
-A thin website UI adapter (frontend-owned) maps the feature element and clip
-rectangles to `setBounds`; this module keeps only the stable native contract.
+- `websitePreviewErrorCode(error)` extracts a typed native code from a
+  rejection (`"preview_closed: ..."` -> `"preview_closed"`).
 
 ## Handover download
 
@@ -391,20 +441,30 @@ Exact limits of the current evidence:
 
 1. The native clipping pixel proof has not run; `"hide"` remains the
    production default and `"clip"` is not adopted. `desktopCapturer` may be
-   unavailable on a CI runner; that is recorded as `unavailable`, not proof.
+   unavailable on a CI runner; that is recorded as `unavailable`, not proof,
+   and the workflow deliberately fails only on `failed`.
 2. Second-page CSP behavior is proven by source tests and by the fixture proof
    only. Real generated sites with unusual inline constructs (template-literal
-   scripts containing `</script>` text, attribute values with entities we do
-   not decode, or more than 128 inline scripts) may degrade to the visible
-   `inlineScriptsTruncated` state; none of that is proven against a real
+   scripts containing `</script>` text, attribute values we decode
+   differently, or more than 128 inline scripts) may degrade to the visible
+   `inlineScriptsTruncated` state; none of that is proven against real
    generator output yet.
-3. The frontend feature hook still clips before calling the native handle
-   (`desktop/src/features/website` is owned by the frontend worker); the
-   adapter mapping in this document is the required correction.
-4. The production loader path against a real public CDN and the relay review
+3. The zoom rule (webview zoom pinned to 1, text scaled by root font-size) is
+   a source-reading conclusion in `useWebviewZoomShortcuts.ts`. The fixture
+   proof drives the host directly and does not execute the renderer adapter,
+   so the rect-to-host path with Cmd +/- text scaling is not measured.
+4. The typed error prefix (`"<code>: <message>"`) and the structured-clone
+   bytes path are source-proven; neither has been exercised across a live
+   `colony:request` IPC boundary with a real renderer.
+5. The frontend feature layer still needs its thin mapping to pass the full
+   `element` rect plus `clip` into this adapter
+   (`desktop/src/features/website` is owned by the frontend worker) and to
+   consume `subscribe`/`visible`; the native contract is ready but not yet
+   adopted there.
+6. The production loader path against a real public CDN and the relay review
    record integration are not exercised by the fixture proof.
-5. Business-generation re-checks are unit-proven at the handover and host
+7. Business-generation re-checks are unit-proven at the handover and host
    levels; the full switch/reload race against real IPC timing is not yet
    exercised end to end.
-6. Packaged Colony adoption (real window, real user flows, real artifacts)
+8. Packaged Colony adoption (real window, real user flows, real artifacts)
    has not been demonstrated.

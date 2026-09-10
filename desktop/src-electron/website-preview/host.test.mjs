@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import { PREVIEW_LOADING_RESERVE_BYTES } from "./host.mjs";
-import { PREVIEW_SCHEME, PREVIEW_SCHEME_DESCRIPTOR } from "./scheme.mjs";
+import {
+  PREVIEW_CSP,
+  PREVIEW_SCHEME,
+  PREVIEW_SCHEME_DESCRIPTOR,
+} from "./scheme.mjs";
 import {
   MANIFEST_URL,
   SHA,
@@ -187,6 +191,9 @@ test("the partition protocol serves only verified listed files", async () => {
   );
   assert.equal(script.headers.get("x-content-type-options"), "nosniff");
   assert.equal(script.headers.get("cache-control"), "no-store");
+  // Non-HTML responses carry the base CSP and never inline authorizations.
+  assert.equal(script.headers.get("content-security-policy"), PREVIEW_CSP);
+  assert.ok(!script.headers.get("content-security-policy").includes("sha256-"));
   assert.match(
     script.headers.get("content-security-policy"),
     /default-src 'none'/,
@@ -239,7 +246,9 @@ test("the partition protocol serves only verified listed files", async () => {
 });
 
 test("inline authorizations are computed per served HTML page", async () => {
-  const secondPage = "<!doctype html><script>window.__p2 = true;</script>";
+  const secondPage =
+    "<!doctype html><script>window.__p2 = true;</script>" +
+    '<button onclick="window.__p2click = true">x</button>';
   const { host, world } = createHost({
     site: fakeSite({
       fileList: [
@@ -271,12 +280,13 @@ test("inline authorizations are computed per served HTML page", async () => {
     .split("; ")
     .find((directive) => directive.startsWith("script-src"));
   assert.ok(secondScript.includes(hashToken("window.__p2 = true;")));
+  assert.ok(secondScript.includes(hashToken("window.__p2click = true")));
   assert.ok(!secondScript.includes(hashToken("window.__ready = true;")));
   assert.equal(state.inlineScriptsTruncated, false);
   await host.close({ window, handle: state.handle });
 });
 
-test("an over-limit page reports recoverable inline truncation", async () => {
+test("an over-limit page reports recoverable inline truncation once", async () => {
   const many = Array.from(
     { length: 129 },
     (_, index) => `<script>x${index}</script>`,
@@ -303,10 +313,53 @@ test("an over-limit page reports recoverable inline truncation", async () => {
     .get(world.partitions[0])
     .protocol.handlers.get(PREVIEW_SCHEME);
   const base = `${PREVIEW_SCHEME}://${tokenFor(world.partitions[0])}`;
-  await handler({ url: `${base}/page2.html`, method: "GET" });
+  const first = await handler({ url: `${base}/page2.html`, method: "GET" });
+  const second = await handler({ url: `${base}/page2.html`, method: "GET" });
 
+  assert.equal(
+    first.headers.get("content-security-policy"),
+    second.headers.get("content-security-policy"),
+  );
   assert.equal(host.byHandle.get(state.handle).inlineScriptsTruncated, true);
-  assert.equal(states.at(-1).inlineScriptsTruncated, true);
+  assert.equal(
+    states.filter((value) => value.inlineScriptsTruncated === true).length,
+    1,
+  );
+  await host.close({ window, handle: state.handle });
+});
+
+test("the origin root and explicit entrypoint share one authorization", async () => {
+  const many = Array.from(
+    { length: 129 },
+    (_, index) => `<script>y${index}</script>`,
+  ).join("");
+  const { host, world } = createHost({
+    site: fakeSite({
+      fileList: [["index.html", `<!doctype html>${many}`, "text/html"]],
+    }),
+  });
+  const states = [];
+  host.subscribe((value) => states.push(value));
+  const window = createWindow();
+  const state = await host.open(requestFor(window));
+  const handler = world.sessions
+    .get(world.partitions[0])
+    .protocol.handlers.get(PREVIEW_SCHEME);
+  const base = `${PREVIEW_SCHEME}://${tokenFor(world.partitions[0])}`;
+
+  const root = await handler({ url: `${base}/`, method: "GET" });
+  const explicit = await handler({ url: `${base}/index.html`, method: "GET" });
+  assert.equal(root.status, 200);
+  assert.equal(explicit.status, 200);
+  assert.equal(
+    root.headers.get("content-security-policy"),
+    explicit.headers.get("content-security-policy"),
+  );
+  assert.equal(host.byHandle.get(state.handle).cspByPath.size, 1);
+  assert.equal(
+    states.filter((value) => value.inlineScriptsTruncated === true).length,
+    1,
+  );
   await host.close({ window, handle: state.handle });
 });
 
