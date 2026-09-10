@@ -270,7 +270,7 @@ export function BlockTable({
         <span aria-live="polite">
           {visibleRows.length}
           {tools && query ? ` of ${rows.length}` : ""}{" "}
-          {visibleRows.length === 1 ? "row" : "rows"}
+          {rows.length === 1 ? "row" : "rows"}
         </span>
         {selectionMode === "none" && rowActions.length === 0 ? (
           <span>Read-only</span>
