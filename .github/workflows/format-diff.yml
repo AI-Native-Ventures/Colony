@@ -9,6 +9,13 @@ name: Format diff
 
 on:
   workflow_dispatch:
+  # `workflow_dispatch` only resolves workflows that exist on the default
+  # branch, so agent branches also trigger it on push. The job only uploads a
+  # patch; it never writes to the repository.
+  push:
+    branches:
+      - "codex/**"
+      - "agent/**"
 
 permissions:
   contents: read
