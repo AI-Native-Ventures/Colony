@@ -244,6 +244,14 @@ buzz messages send --channel "$CHANNEL_ID" --content "Hey @someone" | jq .
 buzz messages send --channel "$CHANNEL_ID" \
   --content "Check with nostr:npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg on this" | jq .
 
+# messages send with Discovery entity references - one signed
+# ["discovery", kind, id, label] tag per entity, which the desktop renders as a
+# rich tile and a receiving agent resolves into current Discovery context. Stable
+# ids come from `buzz discovery search`; the label is presentation only, and a
+# reference this identity cannot resolve fails the whole send.
+buzz messages send --channel "$CHANNEL_ID" --content "Here they are." \
+  --discovery campaign_leads:<campaign-id> | jq .
+
 # messages send from stdin — safe path for content with shell metacharacters
 # (backticks, $vars, code blocks) that would otherwise be expanded by the shell.
 echo 'Body with `backticks` and $vars stays literal.' \
