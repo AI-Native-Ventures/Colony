@@ -152,7 +152,7 @@ pub fn build_website_qa_task_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::website::{WebsiteActionOp, WEBSITE_ACTION_SCHEMA};
+    use buzz_core::website::WebsiteActionOp;
     use nostr::Keys;
     use serde_json::json;
 
@@ -240,6 +240,25 @@ mod tests {
         let receipt = parse_website_receipt(&event).expect("receipt parses");
         assert_eq!(receipt.op, "create");
         assert_eq!(receipt.generation, 1);
-        let _ = WEBSITE_ACTION_SCHEMA;
+    }
+
+    #[test]
+    fn receipt_round_trips_through_encode_and_parse() {
+        let receipt = WebsiteReceipt {
+            schema: "colony.website-receipt/v1".to_owned(),
+            op: "requestChanges".to_owned(),
+            outcome: "applied".to_owned(),
+            job_id: Uuid::from_u128(9),
+            generation: 2,
+            revision: 1,
+            head_event_id: HASH.to_owned(),
+            decision_id: Some(Uuid::from_u128(5).to_string()),
+        };
+        let content = receipt.encode().expect("receipt encodes");
+        let event = EventBuilder::new(Kind::Custom(KIND_WEBSITE_RECEIPT as u16), content)
+            .sign_with_keys(&Keys::generate())
+            .expect("sign");
+        let parsed = parse_website_receipt(&event).expect("receipt parses");
+        assert_eq!(parsed, receipt);
     }
 }

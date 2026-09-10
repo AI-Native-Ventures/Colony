@@ -7,9 +7,9 @@ use uuid::Uuid;
 use crate::kind::KIND_WEBSITE_ACTION;
 use crate::website::{
     is_reserved_website_action_id, parse_website_action, parse_website_decision_action, sha256_hex,
-    validate_public_url, PreviewArtifactRef, WebsiteAction, WebsiteActionOp, WebsiteCommandError,
-    WebsiteReceipt, WebsiteReview, WEBSITE_ACTION_SCHEMA, WEBSITE_APPROVE_ACTION_ID,
-    WEBSITE_REQUEST_CHANGES_ACTION_ID,
+    validate_public_url, HandoverAccessRequest, HandoverAsset, PreviewArtifactRef, WebsiteAction,
+    WebsiteActionOp, WebsiteCommandError, WebsiteReceipt, WebsiteReview, WEBSITE_ACTION_SCHEMA,
+    WEBSITE_APPROVE_ACTION_ID, WEBSITE_REQUEST_CHANGES_ACTION_ID,
 };
 
 const CHANNEL: &str = "0d1e2f30-0000-4000-8000-000000000001";
@@ -45,6 +45,21 @@ fn signed(keys: &Keys, content: &Value, generation: Option<u64>) -> nostr::Event
         content.to_string(),
     )
     .tags(tags)
+    .sign_with_keys(keys)
+    .expect("sign action")
+}
+
+/// Sign the exact event an action encodes, including its own request UUID.
+///
+/// The parser tests above deliberately use unrelated tags; a round-trip test
+/// must use the encoder's own tags or it compares fixture state the wire never
+/// carried.
+fn signed_action(keys: &Keys, action: &WebsiteAction) -> nostr::Event {
+    EventBuilder::new(
+        Kind::Custom(KIND_WEBSITE_ACTION as u16),
+        action.content_value().to_string(),
+    )
+    .tags(action.event_tags().expect("action tags"))
     .sign_with_keys(keys)
     .expect("sign action")
 }
@@ -391,9 +406,45 @@ fn content_round_trips_through_parse() {
             review_personas: vec!["persona-review".to_owned()],
         },
     };
-    let content = action.content_value();
-    let parsed = parse_website_action(&signed(&Keys::generate(), &content, action.generation))
+    let parsed = parse_website_action(&signed_action(&Keys::generate(), &action))
         .expect("round trip parses");
+    assert_eq!(
+        WebsiteAction {
+            actor: parsed.actor.clone(),
+            ..action
+        },
+        parsed
+    );
+}
+
+#[test]
+fn handover_round_trips_with_access_request() {
+    let action = WebsiteAction {
+        channel_id: CHANNEL.parse().expect("channel"),
+        task_id: TASK.to_owned(),
+        thread_root: THREAD.to_owned(),
+        instance_event_id: None,
+        manifest_event_id: None,
+        request_id: Uuid::new_v4(),
+        generation: Some(4),
+        actor: Keys::generate().public_key(),
+        op: WebsiteActionOp::Handover {
+            approved_revision: 2,
+            approved_manifest_sha256: HASH.to_owned(),
+            source_url: "https://source.colony.test/sites/acme".to_owned(),
+            source_archive: artifact("https://cdn.colony.test/archives/r2.tar", HASH),
+            assets: vec![HandoverAsset {
+                path: "index.html".to_owned(),
+                artifact: artifact("https://cdn.colony.test/site/index.html", HASH),
+            }],
+            access_request: Some(HandoverAccessRequest {
+                text: "Point the apex at our host.\nDNS: A -> 203.0.113.7".to_owned(),
+                authored_by: COORDINATOR.to_owned(),
+            }),
+        },
+    };
+    let parsed = parse_website_action(&signed_action(&Keys::generate(), &action))
+        .expect("handover round trip parses");
     assert_eq!(
         WebsiteAction {
             actor: parsed.actor.clone(),
