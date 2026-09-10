@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { verifyEvent } from "nostr-tools/pure";
+import { expect } from "@playwright/test";
 import { waitForAnimations } from "../../tests/helpers/animations.ts";
 
 const OWNER =
@@ -138,6 +139,20 @@ export async function completeFixtureOnboarding({
   await screenshot(page, proofDirectory, "joined-business.png");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByTestId("onboarding-power").waitFor({ state: "visible" });
+  await expect(page.getByLabel("Default model", { exact: true })).toHaveValue(
+    "deepseek-v4-flash",
+    { timeout: 30_000 },
+  );
+  assert.ok(
+    proxy.requests.some(
+      (request) =>
+        request.host === proxy.businessHost &&
+        request.method === "GET" &&
+        request.path === "/gateway/openai/v1/models" &&
+        request.status === 200,
+    ),
+    "Power reads the real scoped relay catalog before continuing",
+  );
   await page
     .getByRole("button", { name: "Open my Colony", exact: true })
     .click({ trial: true });
