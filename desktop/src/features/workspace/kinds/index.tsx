@@ -33,6 +33,10 @@ import {
   agentKindDefinition,
 } from "@/features/workspace/kinds/agentKind";
 import {
+  BoardBody,
+  boardKindDefinition,
+} from "@/features/workspace/kinds/boardKind";
+import {
   CommGraphBody,
   commGraphKindDefinition,
 } from "@/features/workspace/kinds/commGraphKind";
@@ -111,6 +115,10 @@ export function registerAllTabKinds(): void {
     // without the Factory tab cannot restore an agent tab it cannot render.
     registerTabKind(agentKindDefinition);
     bodies.set(agentKindDefinition.kind, AgentBody);
+    // The tickets board is a Factory surface too: same flag, same project
+    // channel rule as the canvas it is opened from.
+    registerTabKind(boardKindDefinition);
+    bodies.set(boardKindDefinition.kind, BoardBody);
     // The graph is part of the same surface, on the same flag.
     registerTabKind(commGraphKindDefinition);
     bodies.set(commGraphKindDefinition.kind, CommGraphBody);

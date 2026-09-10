@@ -15,6 +15,7 @@ import {
   COMM_GRAPH_TAB_KIND,
   COMM_GRAPH_TAB_TITLE,
 } from "@/features/factory/lib/commGraphTab";
+import { openBoardTab } from "@/features/workspace/kinds/boardKind";
 import { projectChipLabel } from "../lib/projectChannel";
 import { useProjectsQuery } from "@/features/projects/hooks";
 import { findProjectForChannel } from "@/features/factory/lib/projectChannel";
@@ -158,6 +159,36 @@ export function FactoryToolbar({
     [channelId, commit, factoryTabId, state],
   );
 
+  // One board per canvas: a second copy of the same project's tickets is a
+  // duplicate, not a second view, so an existing one is focused instead.
+  const existingBoardTabId =
+    workspace.tabs.find(
+      (candidate) =>
+        candidate.kind === "board" && tabIdsInTree.includes(candidate.id),
+    )?.id ?? null;
+  const handleOpenBoard = React.useCallback(() => {
+    if (existingBoardTabId) {
+      const pane = collectPanes(state.root).find((candidate) =>
+        candidate.tabIds.includes(existingBoardTabId),
+      );
+      if (pane) {
+        setActiveTab(channelId, factoryTabId);
+        commit({
+          ...addTabToPane(state, pane.id, existingBoardTabId, {
+            activate: true,
+          }),
+          focusedPaneId: pane.id,
+        });
+        return;
+      }
+    }
+    const tabId = openBoardTab(channelId);
+    // `openTab` makes the new tab the workspace's active one, which would
+    // replace the canvas with the bare tile. The canvas owns it instead.
+    setActiveTab(channelId, factoryTabId);
+    commit(addTabToPane(state, state.focusedPaneId, tabId, { activate: true }));
+  }, [channelId, commit, existingBoardTabId, factoryTabId, state]);
+
   const chipText = project
     ? projectChipLabel(project)
     : "Unknown project · main";
@@ -262,6 +293,15 @@ export function FactoryToolbar({
       >
         <Network className="mr-1 h-3 w-3" />
         Graph
+      </Button>
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={handleOpenBoard}
+        title="Open this project's tickets board"
+        data-testid="factory-open-board-btn"
+      >
+        Board
       </Button>
       <Button
         size="xs"

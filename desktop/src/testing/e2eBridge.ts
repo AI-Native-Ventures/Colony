@@ -3456,6 +3456,12 @@ const mockUserInitiativeRequests = new Map<
   { initiativeId: string; idempotencyKey: string }
 >();
 
+/** Same idempotency for a Task created by hand: one id per request id. */
+const mockUserTaskRequests = new Map<
+  string,
+  { taskId: string; idempotencyKey: string }
+>();
+
 let mockRelayMembers: RawRelayMember[] = [];
 
 // --- Colony company work context ------------------------------------------
@@ -3550,6 +3556,7 @@ function seedMockCompanyRecords(
   mockCompanyReceipts.length = 0;
   mockCompanyActions.length = 0;
   mockUserInitiativeRequests.clear();
+  mockUserTaskRequests.clear();
   mockRefuseInitiativeRead = config?.refuseInitiativeRead ?? false;
 
   if (config) {
@@ -14702,6 +14709,69 @@ export function maybeInstallE2eTauriMocks() {
           },
         );
         return JSON.stringify(action);
+      }
+      case "create_user_task": {
+        // Which team owns a hand-created Task, what it is charged to, and
+        // that it starts Ready are decided in `user_task.rs` and proven
+        // there. What the desktop owns is publishing the action and reading
+        // the Task back, so this returns the envelope that flow carries.
+        const config = activeConfig?.mock?.companyWorkContext;
+        if (!config) {
+          throw new Error("no company is seeded for this task");
+        }
+        const request = payload as {
+          requestId?: string;
+          channelId?: string;
+          title?: string;
+          assigneePersonaIds?: string[];
+        };
+        const requestId = request.requestId ?? crypto.randomUUID();
+        let minted = mockUserTaskRequests.get(requestId);
+        if (!minted) {
+          minted = {
+            taskId: `user-task:${crypto.randomUUID()}`,
+            idempotencyKey: crypto.randomUUID(),
+          };
+          mockUserTaskRequests.set(requestId, minted);
+        }
+        const record = {
+          ...mockTaskRecord(config, request.title ?? "", {
+            id: minted.taskId,
+            title: request.title ?? "",
+            // A Task created by hand belongs to no initiative and is real
+            // work rather than the cost of a chat turn.
+            initiativeId: null,
+            status: "ready",
+            assigneePersonaIds: request.assigneePersonaIds ?? [],
+            sourceChannelId: request.channelId ?? "",
+          }),
+          implicit: false,
+          createdAt: Math.floor(Date.now() / 1000),
+          updatedAt: Math.floor(Date.now() / 1000),
+        };
+        const action = await signWithIdentity(
+          identity ?? DEFAULT_REAL_IDENTITY,
+          {
+            kind: 40013,
+            content: JSON.stringify({ payload: { record } }),
+            tags: [
+              ["p", MOCK_RELAY_SELF_PUBKEY],
+              ["a", `30181:${MOCK_RELAY_SELF_PUBKEY}:${minted.taskId}`],
+              [
+                "company-action",
+                "1",
+                "create",
+                requestId,
+                minted.idempotencyKey,
+              ],
+            ],
+          },
+        );
+        return {
+          taskId: minted.taskId,
+          owningTeamId: record.owningTeamId,
+          signedAction: JSON.stringify(action),
+        };
       }
       case "create_initiative": {
         // Which persona answers for the initiative, what it is charged to,

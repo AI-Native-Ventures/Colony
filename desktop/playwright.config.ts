@@ -79,6 +79,7 @@ export default defineConfig({
         "**/sidebar-project-channels.spec.ts",
         "**/workspace-factory-agent.spec.ts",
         "**/workspace-factory-asks.spec.ts",
+        "**/workspace-factory-board.spec.ts",
         "**/workspace-factory-delegate.spec.ts",
         "**/workspace-factory-graph.spec.ts",
         "**/workspace-web.spec.ts",
