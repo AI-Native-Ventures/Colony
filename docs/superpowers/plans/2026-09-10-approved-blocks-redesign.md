@@ -13,9 +13,9 @@
 Files: crates/buzz-cli/src/{lib.rs,commands/blocks.rs}; crates/buzz-core/src/block.rs and schema fixtures; core question/details/interview JSON; desktop/src/features/blocks/{contracts.ts,blockValidation.ts}; ui/primitives/{types.ts,resolvers.ts,BlockQuestion.tsx}; ui/BlockRenderContext.tsx; ACP base and onboarding prompts.
 
 - [x] Add `buzz blocks describe --handle` resolving the active manifest and reporting schema/examples/actions/customizable paths in one response.
-- [ ] Add optional closed presentation fields agreed in the spec, Question.mode_path, Details.items_path and table column formats. Reject unsupported tokens and malformed paths consistently in Rust and TypeScript.
-- [ ] Make new Question data-driven. Validate selected IDs, uniqueness and single/multi bounds against the exact pinned instance on the relay. Keep old pinned schemas and hashes accepted.
-- [ ] Make Details list data-driven and wire Interview unknown input from the fact field only for the trusted core contract. Correct plain-file/processor invocation documentation.
+- [x] Add optional closed presentation fields agreed in the spec, Question.mode_path, Details.items_path and table column formats. Reject unsupported tokens and malformed paths consistently in Rust and TypeScript.
+- [x] Make new Question data-driven. Validate selected IDs, uniqueness and single/multi bounds against the exact pinned instance on the relay. Keep old pinned schemas and hashes accepted.
+- [x] Make Details list data-driven and wire Interview unknown input from the fact field only for the trusted core contract. Correct plain-file/processor invocation documentation.
 - [x] Author focused schema and action regressions; check success/failure fixtures in GitHub CI.
 
 ## Task 2 — Native presentation (Mill)
@@ -25,7 +25,7 @@ Files: desktop/src/features/blocks/ui/primitives/Block{Card,CardList,Chart,Detai
 - [x] Apply approved spacing, hierarchy, colors, overflow and empty-state behavior using semantic theme and named text tokens.
 - [x] Implement closed presentation variants without inspecting business block handles.
 - [x] Preserve real controls, keyboard focus, live action state and reduced-motion preferences.
-- [ ] Check small/large/empty tables, Boolean/number formatting, long Details, layouts and all chart kinds through existing primitive rendering tests on GitHub.
+- [x] Check small/large/empty tables, Boolean/number formatting, long Details, layouts and all chart kinds through existing primitive rendering tests on GitHub.
 
 ## Task 3 — Media collections (Fermat)
 
@@ -44,7 +44,7 @@ Files: desktop/src/shared/ui/diagram-preview/{diagramModel.ts,diagramRuntime.ts,
 - [x] Lazy-load pinned Mermaid; use strict fixed configuration, source/edge bounds, cancellation checks, serialized per-theme rendering, and output as a declarative SVG image.
 - [x] Flatten library CSS to allowed presentation attributes and discard active/external output; keep current native SVG contract unchanged.
 - [x] Add Fit/zoom/expand/download with both themes and no source editing.
-- [ ] Test source rejection, static SVG conversion and representative diagram output in GitHub-hosted browser execution.
+- [x] Test source rejection, static SVG conversion and representative diagram output in GitHub-hosted browser execution.
 
 ## Task 5 — Composites and catalogue (root)
 
@@ -89,3 +89,14 @@ CI run `34477025102` at `32855e89ef5032cca65b419d3a164cbe48522e97` passed all 48
 Remaining first-run failures were an outdated ACP prompt assertion, bounded-media test expectations, duplicated image selectors, seeded channel membership, virtualized-history assumptions, old Question roles/submission semantics, small-table controls, and the Mermaid flow/ER conversion. Corrective tests retain trust, signed completion and fallback assertions. The diagram failure was reproduced in a three-example standalone headless probe using the pinned package; its generated unused shadow filters are now narrowly removed, all three diagrams render, and a focused regression fails on the old code and passes on the fix. Arbitrary, referenced or modified filters and HTML remain rejected. No local app build or full CI ran.
 
 The corrected commit still requires a fresh full GitHub run, its new diagram/channel/thread captures, and protected promotion before publication and live verification.
+
+
+## Second hosted evidence and remaining action gate
+
+CI run `34483241364` at `c0975aa8292839dfd030b2937a261e6cd80f0336` passed all 62 approved-design scenarios on their first attempt. All 131 approved captures are present and distinct, including the 96 core definition/theme/conversation-width captures. Review confirms the corrected Blueprint/Brief frames and continuous rows, quiet tables, narrow spreadsheet heading, populated details, collections, and complex themed diagrams. The existing rich-file scenarios also passed on their first attempt. An unrelated existing terminal scenario passed on retry.
+
+Full unit tests, Rust lint, desktop core, both server architectures, relay/backend integration, agent asks, and both desktop relay integration shards passed. Hosted first-job workflow `34483241385` and both Electron package/migration jobs in `34483241398` passed. These native-package fixtures are separate from the owner's installed application.
+
+The broad Blocks browser test correctly rejected its old placeholder signature. The fixture now selects the existing real test-key signer and grants its seeded channel membership; signature and signed-receipt checks are retained. Cases skipped after that assertion still need the next GitHub run.
+
+The isolated real-relay gate timed out while publishing the second Agent Proposal's Decline action. A later unrelated publish was acknowledged, so the connection was not globally dead. The trace contains earlier rate limiting but no WebSocket frames to attribute this specific action. The configured relay log was omitted from CI artifacts by an incorrect filename. Preserve bounded action/acknowledgement metadata and failure-path receipt evidence on the next run; do not raise quotas, lengthen the production timeout, or count the earlier successful run as proof for this head. Auto-merge is temporarily disabled until this action gate is resolved and the final head is green.
