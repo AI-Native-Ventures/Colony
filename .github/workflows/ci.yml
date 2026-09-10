@@ -1603,6 +1603,7 @@ jobs:
             -p buzz-relay \
             -p buzz-acp \
             -p buzz-agent \
+            -p buzz-browser \
             -p buzz-dev-mcp \
             -p git-credential-nostr \
             -p git-sign-nostr

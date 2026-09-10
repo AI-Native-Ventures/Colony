@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- build(desktop): ship the `buzz-browserd` browser daemon as a packaged sidecar, so the browser MCP server is available to managed agents in installed builds and not only in a source checkout.
+
 ## v0.16.12
 
 - fix(desktop): prepare and verify the business coordination Team before starting a first job, including recovery when its relay projection is missing. Preserve existing team choices and owner approvals.
