@@ -875,7 +875,7 @@ mod tests {
 
     #[test]
     fn early_event_rejections_identify_the_event_and_preserve_the_notice() {
-        let event_id = nostr::EventId::from_hex("ab".repeat(32)).expect("event ID");
+        let event_id = nostr::EventId::from_hex(&"ab".repeat(32)).expect("event ID");
         for reason in [
             "rate-limited: quota exceeded; retry in 1s",
             "rate-limited: shared admission unavailable",
