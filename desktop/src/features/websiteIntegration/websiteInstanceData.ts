@@ -12,12 +12,11 @@
  * from the canonical `handover.accessRequest`.
  */
 
-import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { verifyEvent } from "nostr-tools/pure";
 
 import { parseBlockInstance } from "@/features/blocks/blockTags";
-import { relayClient } from "@/shared/api/relayClient";
+import { getEventById } from "@/shared/api/tauri";
 
 import type { WebsiteBriefView } from "@/features/website/types";
 
@@ -173,8 +172,15 @@ export function useWebsiteInstanceData(input: {
       channelId,
       head?.instanceEventId ?? null,
     ],
-    queryFn: () =>
-      relayClient.fetchFirstEvent({ ids: [head?.instanceEventId ?? ""] }),
+    queryFn: async () => {
+      const instanceEventId = head?.instanceEventId ?? "";
+      if (!instanceEventId) return null;
+      try {
+        return await getEventById(instanceEventId);
+      } catch {
+        return null;
+      }
+    },
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
   });

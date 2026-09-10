@@ -26,6 +26,7 @@ import type {
   WebsiteArtifactRef,
   WebsiteCaptures,
   WebsiteDecisionRecord,
+  WebsiteHandoverAsset,
   WebsiteHandoverRecord,
   WebsiteJobStatus,
   WebsiteQaEvidence,
@@ -129,16 +130,6 @@ function singleTag(event: RelayEvent, name: string): string | null {
   return matches.length === 1 && matches[0]?.length === 2
     ? (matches[0][1] ?? null)
     : null;
-}
-
-function optionalTag(
-  event: RelayEvent,
-  name: string,
-): { ok: true; value: string | null } | { ok: false } {
-  const matches = event.tags.filter((tag) => tag[0] === name);
-  if (matches.length === 0) return { ok: true, value: null };
-  if (matches.length !== 1 || matches[0]?.length !== 2) return { ok: false };
-  return { ok: true, value: matches[0][1] ?? null };
 }
 
 function parseArtifactRef(value: unknown): WebsiteArtifactRef | null {
@@ -343,7 +334,7 @@ function parseHandover(value: unknown): WebsiteHandoverRecord | null {
   }
   if (typeof sourceUrl !== "string" || sourceUrl.length === 0) return null;
   if (!sourceArchive || !Array.isArray(assetsValue)) return null;
-  const assets: WebsiteHandoverRecord["assets"] = [];
+  const assets: WebsiteHandoverAsset[] = [];
   for (const asset of assetsValue) {
     if (!isRecord(asset)) return null;
     const path = asset.path;

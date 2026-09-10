@@ -20,7 +20,11 @@ export type VerifiedArtifactState =
       message: string;
       /** Optional technical detail (hashes, loader errors) for diagnostics. */
       diagnostics?: string;
-      retry: () => void;
+      /**
+       * Restarts the exact same request. Present on every error state returned
+       * by the hook; optional so stored entries can be constructed without it.
+       */
+      retry?: () => void;
     };
 
 type LoadedEntry = {

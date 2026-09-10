@@ -1,4 +1,3 @@
-import * as React from "react";
 import { ExternalLink, Globe2 } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";

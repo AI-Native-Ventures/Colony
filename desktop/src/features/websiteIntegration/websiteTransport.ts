@@ -17,7 +17,7 @@ import {
 } from "@/features/blocks/blockActions";
 import { parseBlockInstance } from "@/features/blocks/blockTags";
 import { relayClient } from "@/shared/api/relayClient";
-import { signRelayEvent } from "@/shared/api/tauri";
+import { getEventById, signRelayEvent } from "@/shared/api/tauri";
 import { KIND_WEBSITE_ACTION } from "@/shared/constants/kinds";
 
 import type {
@@ -122,9 +122,12 @@ export function resolveWebsiteInstanceRef(
   const cached = instanceRefCache.get(head.instanceEventId);
   if (cached) return cached;
   const request = (async (): Promise<WebsiteInstanceRef | null> => {
-    const event = await relayClient.fetchFirstEvent({
-      ids: [head.instanceEventId],
-    });
+    let event: Awaited<ReturnType<typeof getEventById>> | null = null;
+    try {
+      event = await getEventById(head.instanceEventId);
+    } catch {
+      return null;
+    }
     if (!event || !HEX_64.test(event.id)) return null;
     if (event.pubkey.toLowerCase() !== head.coordinatorPubkey) return null;
     const parsed = parseBlockInstance(event.tags);

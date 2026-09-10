@@ -1,4 +1,3 @@
-import * as React from "react";
 import { Check, ChevronRight, X } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";

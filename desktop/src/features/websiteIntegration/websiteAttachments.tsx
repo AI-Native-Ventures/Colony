@@ -25,6 +25,7 @@ import type {
   WebsiteDecisionRequest,
   WebsitePreviewHostAdapter,
   WebsiteReviewRecord,
+  WebsiteStartRequest,
 } from "@/features/website/types";
 import { WebsiteBrief } from "@/features/website/WebsiteBrief";
 import { WebsiteDecisionPanel } from "@/features/website/WebsiteDecisionPanel";
@@ -192,7 +193,16 @@ function WebsiteRootAttachment({
     [communityId],
   );
   const onStart = React.useCallback(
-    () => submitWebsiteBeginWork(communityId, head),
+    (request: WebsiteStartRequest): void => {
+      if (
+        request.jobId !== head.jobId ||
+        request.taskId !== head.taskId ||
+        request.channel !== head.channelId
+      ) {
+        return;
+      }
+      void submitWebsiteBeginWork(communityId, head);
+    },
     [communityId, head],
   );
   const isReviewState =
