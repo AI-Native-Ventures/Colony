@@ -11365,6 +11365,22 @@ function sendToMockSocket(args: {
       return;
     }
 
+    // Ask closures (kind 44301 resolution, 44302 withdrawal) name the ask they
+    // close with an `e` tag and carry no channel tag at all, so they must not
+    // fall through to the channel requirement below. Storing them where REQ
+    // can read them back is what lets a spec prove the whole loop: answer a
+    // card, watch the ask leave the open list on the closure refetch.
+    if ([44301, 44302].includes(event.kind)) {
+      window.__BUZZ_E2E_SEEDED_EVENTS__ ??= [];
+      window.__BUZZ_E2E_SEEDED_EVENTS__.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+      window.__BUZZ_E2E_PUBLISHED_EVENTS__?.push(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     const channelId = getChannelIdFromTags(event.tags);
     if (!channelId) {
       sendWsText(socket.handler, [

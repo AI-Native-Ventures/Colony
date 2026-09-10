@@ -11,6 +11,12 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/shared/ui/context-menu";
+import {
+  collectAgentTabPubkeys,
+  parseAgentTabPayload,
+} from "@/features/factory/lib/agentTabPayload";
+import { useAgentsWithOpenAsks } from "@/features/factory/ui/useAgentTileAsks";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { DropZone } from "@/features/factory/lib/dropGeometry";
 import type { TilePane } from "@/features/factory/lib/tileTree";
 import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
@@ -66,6 +72,16 @@ export function FactoryPane({
   const activeTab = workspaceTabs.find((t) => t.id === activeTabId) ?? null;
   const BodyComponent = activeTab ? getTabBody(activeTab.kind) : null;
   const dropZone = drag.target?.paneId === pane.id ? drag.target.zone : null;
+  // Which of this pane's agent tabs are blocked on the owner. The read is the
+  // shared open-asks query, so every pane and the toolbar answer from one
+  // fetch rather than one per tab strip.
+  const agentPubkeys = collectAgentTabPubkeys(workspaceTabs, pane.tabIds);
+  const askingAgents = useAgentsWithOpenAsks(agentPubkeys);
+  const tabHasOpenAsk = (tab: WorkspaceTab | undefined): boolean => {
+    if (tab?.kind !== "agent") return false;
+    const pubkey = parseAgentTabPayload(tab.payload)?.agentPubkey;
+    return pubkey !== undefined && askingAgents.has(normalizePubkey(pubkey));
+  };
 
   return (
     // Focus follows the pointer rather than a click so it lands before a tab
@@ -90,6 +106,7 @@ export function FactoryPane({
             const tab = workspaceTabs.find((t) => t.id === tabId);
             const title = tab?.title ?? tabId;
             const isActive = tabId === activeTabId;
+            const hasOpenAsk = tabHasOpenAsk(tab);
             return (
               <ContextMenu key={tabId}>
                 <ContextMenuTrigger asChild>
@@ -100,8 +117,16 @@ export function FactoryPane({
                         ? "bg-background border border-border text-foreground shadow-sm"
                         : "text-muted-foreground hover:bg-background/60",
                     )}
+                    data-ask={hasOpenAsk ? "true" : undefined}
                     data-testid={`factory-tab-${tabId}`}
                   >
+                    {hasOpenAsk ? (
+                      <span
+                        aria-hidden
+                        className="mr-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-warning ring-2 ring-warning/25"
+                        data-testid={`factory-tab-ask-dot-${tabId}`}
+                      />
+                    ) : null}
                     <button
                       className={cn(
                         "max-w-[8rem] truncate text-left outline-none",

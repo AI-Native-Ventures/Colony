@@ -17,6 +17,7 @@ import {
   LaunchAgentDialog,
   type LaunchedAgent,
 } from "@/features/factory/ui/LaunchAgentDialog";
+import { useAgentsWithOpenAsks } from "@/features/factory/ui/useAgentTileAsks";
 import {
   getActiveTurnsForAgent,
   subscribeActiveAgentTurns,
@@ -82,6 +83,7 @@ export function FactoryToolbar({
     subscribeActiveAgentTurns,
     readWorkingCount,
   );
+  const needsYouCount = useAgentsWithOpenAsks(agentPubkeys).size;
 
   const handleLaunched = React.useCallback(
     ({ name, pubkey, threadRootId }: LaunchedAgent) => {
@@ -124,6 +126,17 @@ export function FactoryToolbar({
         >
           {agentPubkeys.length} agent{agentPubkeys.length !== 1 ? "s" : ""} ·{" "}
           {workingCount} working
+          {needsYouCount > 0 ? (
+            <>
+              {" · "}
+              <b
+                className="font-medium text-warning"
+                data-testid="factory-needs-you-count"
+              >
+                {needsYouCount} need{needsYouCount === 1 ? "s" : ""} you
+              </b>
+            </>
+          ) : null}
         </span>
       ) : null}
       <div className="flex-1" />

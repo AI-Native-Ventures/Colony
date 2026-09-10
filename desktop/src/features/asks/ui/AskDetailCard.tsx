@@ -17,12 +17,20 @@ import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { relayClient } from "@/shared/api/relayClient";
 import { KIND_ASK } from "@/shared/constants/kinds";
+import { cn } from "@/shared/lib/cn";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 type AskDetailCardProps = {
   ask: OpenAsk;
   onAnswer: (answer: AskAnswerInput) => Promise<void>;
   isSubmitting: boolean;
+  /**
+   * Tighten the card for a narrow surface (a Factory pane, which can be a
+   * quarter of the window wide). Same fields and the same answer, minus the
+   * optional rationale box: at that width it doubles the card's height for
+   * something nobody types under a pane.
+   */
+  compact?: boolean;
 };
 
 /**
@@ -117,6 +125,7 @@ export function AskDetailCard({
   ask,
   onAnswer,
   isSubmitting,
+  compact = false,
 }: AskDetailCardProps): React.JSX.Element {
   const [decision, setDecision] = React.useState("");
   const [rationale, setRationale] = React.useState("");
@@ -158,20 +167,41 @@ export function AskDetailCard({
   };
 
   return (
-    <div className="flex flex-col gap-4 p-4" data-testid="ask-detail-card">
+    <div
+      className={cn(
+        "flex flex-col",
+        compact ? "gap-3 p-3" : "gap-4 p-4",
+        compact && "text-sm",
+      )}
+      data-compact={compact ? "true" : undefined}
+      data-testid="ask-detail-card"
+    >
       <div className="flex flex-col gap-1">
         <span className="text-2xs uppercase tracking-wide text-muted-foreground">
           Ask · {ask.askType}
         </span>
-        <h2 className="text-base font-medium text-foreground">
+        <h2
+          className={cn(
+            "font-medium text-foreground",
+            compact ? "text-sm leading-5" : "text-base",
+          )}
+        >
           {ask.headline}
         </h2>
         {ask.costOfDelay ? (
-          <p className="text-sm text-muted-foreground">
+          <p
+            className={cn(
+              "text-muted-foreground",
+              compact ? "text-xs leading-4" : "text-sm",
+            )}
+          >
             Waiting costs: {ask.costOfDelay}
           </p>
         ) : null}
-        <AskRoutingNote ask={ask} />
+        {/* Routing provenance answers "why me?", which only comes up on a
+            surface that gathers other people's asks. In a tile the answer is
+            already on screen: this is that agent's own pane. */}
+        {compact ? null : <AskRoutingNote ask={ask} />}
         <AskDeadlineNote
           askCreatedAt={ask.createdAt}
           error={askState.error}
@@ -200,16 +230,18 @@ export function AskDetailCard({
         </label>
       )}
 
-      <label className="flex flex-col gap-1">
-        <span className="text-xs text-muted-foreground">Why (optional)</span>
-        <textarea
-          className="min-h-16 rounded-md border border-border bg-background p-2 text-sm outline-none"
-          data-testid="ask-answer-rationale"
-          onChange={(event) => setRationale(event.target.value)}
-          placeholder="Reasoning the agent should carry forward."
-          value={rationale}
-        />
-      </label>
+      {compact ? null : (
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Why (optional)</span>
+          <textarea
+            className="min-h-16 rounded-md border border-border bg-background p-2 text-sm outline-none"
+            data-testid="ask-answer-rationale"
+            onChange={(event) => setRationale(event.target.value)}
+            placeholder="Reasoning the agent should carry forward."
+            value={rationale}
+          />
+        </label>
+      )}
 
       <button
         className="self-start rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"

@@ -1,6 +1,7 @@
 import type * as React from "react";
 import {
   ChevronDown,
+  CircleAlert,
   GitBranch,
   Loader2,
   RotateCw,
@@ -38,6 +39,7 @@ import {
 } from "@/shared/ui/dropdown-menu";
 
 const STATUS_PILL_CLASS: Record<AgentTileStatus, string> = {
+  "needs-you": "border-warning/50 bg-warning-bg text-warning",
   working: "border-primary/40 bg-primary/10 text-primary",
   idle: "border-border bg-muted/50 text-muted-foreground",
   stopped: "border-border bg-muted/40 text-muted-foreground",
@@ -114,6 +116,9 @@ export function AgentTileHeader({
           >
             {status === "working" ? (
               <Loader2 aria-hidden className="h-3 w-3 animate-spin" />
+            ) : null}
+            {status === "needs-you" ? (
+              <CircleAlert aria-hidden className="h-3 w-3" />
             ) : null}
             {AGENT_TILE_STATUS_LABEL[status]}
           </span>

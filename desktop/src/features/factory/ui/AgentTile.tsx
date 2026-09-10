@@ -8,8 +8,10 @@ import {
   withThreadRootId,
 } from "@/features/factory/lib/agentTabPayload";
 import { deriveAgentTileStatus } from "@/features/factory/lib/agentTileStatus";
+import { AgentTileAsks } from "@/features/factory/ui/AgentTileAsks";
 import { AgentTileComposer } from "@/features/factory/ui/AgentTileComposer";
 import { AgentTileHeader } from "@/features/factory/ui/AgentTileHeader";
+import { useAgentOpenAsks } from "@/features/factory/ui/useAgentTileAsks";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
 import { updateTabPayload } from "@/features/workspace/lib/workspaceTabs";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -32,6 +34,7 @@ export function AgentTile({ channelId, tab }: TabBodyProps): React.JSX.Element {
     );
   }, [agentPubkey, agentsQuery.data]);
   const activeTurns = useActiveAgentTurns(agentPubkey || null);
+  const openAsks = useAgentOpenAsks(agentPubkey);
 
   const handleThreadRooted = React.useCallback(
     (rootEventId: string) => {
@@ -61,7 +64,11 @@ export function AgentTile({ channelId, tab }: TabBodyProps): React.JSX.Element {
     );
   }
 
-  const status = deriveAgentTileStatus(agent, activeTurns.length > 0);
+  const status = deriveAgentTileStatus(
+    agent,
+    activeTurns.length > 0,
+    openAsks.length > 0,
+  );
 
   return (
     <div
@@ -70,6 +77,7 @@ export function AgentTile({ channelId, tab }: TabBodyProps): React.JSX.Element {
       data-testid="factory-agent-tile"
     >
       <AgentTileHeader agent={agent} status={status} />
+      <AgentTileAsks agentName={agent.name} asks={openAsks} />
       <ManagedAgentSessionPanel
         agent={agent}
         autoTail
