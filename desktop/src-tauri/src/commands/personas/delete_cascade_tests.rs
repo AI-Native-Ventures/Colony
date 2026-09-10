@@ -17,6 +17,7 @@ fn make_agent(
     runtime_pid: Option<u32>,
 ) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        working_dir: None,
         tier: None,
         manager: None,
         pubkey: pubkey.to_string(),
