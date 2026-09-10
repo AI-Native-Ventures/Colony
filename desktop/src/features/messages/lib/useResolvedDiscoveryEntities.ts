@@ -44,7 +44,7 @@ export function useResolvedDiscoveryEntities(
   const cacheKey = discoveryEntityRefsKey(refs);
   // The request is sorted so it matches the cache key exactly; without that a
   // hit built from one message's order would be zipped onto another's.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: cacheKey is the value identity of refs — the array is rebuilt on every render of the row that parsed it, so depending on it directly would recompute forever
+  // biome-ignore lint/correctness/useExhaustiveDependencies: cacheKey is the value identity of refs, the array is rebuilt on every render of the row that parsed it, so depending on it directly would recompute forever
   const sortedRefs = React.useMemo(
     () =>
       [...refs].sort((left, right) =>
