@@ -5,11 +5,11 @@
 
 use anyhow::Context;
 use buzz_core::{
-    CommunityId,
     block::{
-        BlockCatalogEntry, BlockCatalogStatus, BlockError, BlockManifest, parse_manifest,
-        validate_manifest,
+        parse_manifest, validate_manifest, BlockCatalogEntry, BlockCatalogStatus, BlockError,
+        BlockManifest,
     },
+    CommunityId,
 };
 use nostr::{Event, Timestamp};
 
@@ -248,15 +248,15 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use buzz_core::block::{
-        BlockManifest, BlockValidationState, validate_instance, validate_manifest_instance,
+        validate_instance, validate_manifest_instance, BlockManifest, BlockValidationState,
     };
     use buzz_core::kind::{KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST};
     use buzz_db::event::EventQuery;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     use super::{
-        CORE_BLOCK_ASSETS, build_core_catalog_event, build_core_manifest_event,
-        core_block_manifests, ensure_core_blocks_with,
+        build_core_catalog_event, build_core_manifest_event, core_block_manifests,
+        ensure_core_blocks_with, CORE_BLOCK_ASSETS,
     };
 
     const PRIMITIVE_HANDLES: [&str; 11] = [
@@ -1351,12 +1351,10 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(
-            question
-                .get("max_selections")
-                .and_then(Value::as_u64)
-                .is_some_and(|maximum| maximum > 1)
-        );
+        assert!(question
+            .get("max_selections")
+            .and_then(Value::as_u64)
+            .is_some_and(|maximum| maximum > 1));
         assert_eq!(
             question.get("options_path").and_then(Value::as_str),
             Some("/choices")
@@ -1543,13 +1541,12 @@ mod tests {
         let newer_head =
             build_core_catalog_event(&newer_manifest, &newer_manifest_event, &relay_keys)
                 .expect("newer catalog head");
-        assert!(
-            db.replace_parameterized_event(community, &newer_head, "section", None)
-                .await
-                .expect("select newer head")
-                .1
-                .was_inserted()
-        );
+        assert!(db
+            .replace_parameterized_event(community, &newer_head, "section", None)
+            .await
+            .expect("select newer head")
+            .1
+            .was_inserted());
 
         assert_eq!(
             ensure_core_blocks_with(&db, &relay_keys, community)
