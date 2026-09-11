@@ -7,30 +7,12 @@
     "pubkey": "8259fec890c36aa78c506c73629b16f0e20d68e3513e699e086d084d01623a8b",
     "sig": "4ec8aceb89c6b2a3f2aeb8a9eaa833458773b4c303d76b284c9dc460d1dbbb3ef1e21d58adbac464d88a7d6c467640a1f070983f2327010cbe2660b2e42701d0",
     "tags": [
-      [
-        "d",
-        "8259fec890c36aa78c506c73629b16f0e20d68e3513e699e086d084d01623a8b"
-      ],
-      [
-        "role",
-        "sales"
-      ],
-      [
-        "name",
-        "Sales"
-      ],
-      [
-        "rank",
-        "leader"
-      ],
-      [
-        "provisioned",
-        "sales"
-      ],
-      [
-        "version",
-        "2"
-      ]
+      ["d", "8259fec890c36aa78c506c73629b16f0e20d68e3513e699e086d084d01623a8b"],
+      ["role", "sales"],
+      ["name", "Sales"],
+      ["rank", "leader"],
+      ["provisioned", "sales"],
+      ["version", "2"]
     ]
   },
   {
@@ -41,30 +23,12 @@
     "pubkey": "8259fec890c36aa78c506c73629b16f0e20d68e3513e699e086d084d01623a8b",
     "sig": "09f2e27f3ff7585e2b954059964fe59db5d195e22b9c8add14ebe00dc8fffacef2f0c5f9f47ea92f5ea2f18f78bc02e4a2eb61e9a77ba325d5471985e5ee80c0",
     "tags": [
-      [
-        "d",
-        "8259fec890c36aa78c506c73629b16f0e20d68e3513e699e086d084d01623a8b"
-      ],
-      [
-        "role",
-        "sales"
-      ],
-      [
-        "name",
-        "Sales"
-      ],
-      [
-        "rank",
-        "leader"
-      ],
-      [
-        "provisioned",
-        "sales"
-      ],
-      [
-        "version",
-        "2"
-      ]
+      ["d", "8259fec890c36aa78c506c73629b16f0e20d68e3513e699e086d084d01623a8b"],
+      ["role", "sales"],
+      ["name", "Sales"],
+      ["rank", "leader"],
+      ["provisioned", "sales"],
+      ["version", "2"]
     ]
   }
 ]
