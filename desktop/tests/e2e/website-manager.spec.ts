@@ -710,9 +710,7 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   await expect(
     threadAttachment.getByRole("button", { name: "Close preview" }),
   ).toBeVisible();
-  await threadAttachment
-    .getByRole("button", { name: "Close preview" })
-    .click();
+  await threadAttachment.getByRole("button", { name: "Close preview" }).click();
   await expect(
     threadAttachment.getByText(/Read-only view of Version 1/),
   ).toHaveCount(0);
@@ -728,9 +726,7 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "review");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
-  await expect(
-    rootAttachment.getByText("Ready for your review"),
-  ).toBeVisible();
+  await expect(rootAttachment.getByText("Ready for your review")).toBeVisible();
   const mobileButton = rootAttachment.getByRole("button", {
     name: "Mobile preview",
   });
@@ -745,12 +741,8 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await rootAttachment
     .getByRole("button", { name: "Redesign", exact: true })
     .click();
-  await rootAttachment
-    .getByRole("button", { name: "Desktop preview" })
-    .click();
-  await rootAttachment
-    .getByRole("button", { name: "Expand preview" })
-    .click();
+  await rootAttachment.getByRole("button", { name: "Desktop preview" }).click();
+  await rootAttachment.getByRole("button", { name: "Expand preview" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", { name: "Back to review" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -772,9 +764,7 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await expect(
     threadAttachment.getByRole("button", { name: "Approve design" }),
   ).toBeDisabled();
-  await threadAttachment
-    .getByRole("button", { name: "Close preview" })
-    .click();
+  await threadAttachment.getByRole("button", { name: "Close preview" }).click();
   await expect(
     threadAttachment.getByRole("button", { name: "Approve design" }),
   ).toBeEnabled();
@@ -792,9 +782,7 @@ test("mocked Revision state shows the exact change request", async ({
   const rootAttachment = page.getByTestId("website-root-attachment").first();
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = await expectCompositeThread(page);
-  await expect(
-    rootAttachment.getByText("Changes requested"),
-  ).toBeVisible();
+  await expect(rootAttachment.getByText("Changes requested")).toBeVisible();
   const changeRequest = threadAttachment.getByRole("region", {
     name: "Change request",
   });
@@ -813,9 +801,7 @@ test("mocked Handover state shows confirmed resources and the draft request", as
   const { job } = await seedJob(page, "handover");
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = await expectCompositeThread(page);
-  await expect(
-    threadAttachment.getByText("Handover prepared"),
-  ).toBeVisible();
+  await expect(threadAttachment.getByText("Handover prepared")).toBeVisible();
   await expect(
     threadAttachment.getByText(
       /Please share who manages the horizon-labs.example domain/,
@@ -870,9 +856,9 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   });
   await replaceBlockEvents(page, [manifestEvent, confirmed]);
   await emitSignedEvent(page, CHANNEL, confirmed);
-  await expect(
-    threadAttachment.getByText("Saving your decision."),
-  ).toHaveCount(0);
+  await expect(threadAttachment.getByText("Saving your decision.")).toHaveCount(
+    0,
+  );
   await expect(
     threadAttachment.getByRole("region", { name: "Change request" }),
   ).toBeVisible();
@@ -886,9 +872,9 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   await expect(
     reloadedThread.getByRole("region", { name: "Change request" }),
   ).toBeVisible();
-  await expect(
-    reloadedThread.getByText("Saving your decision."),
-  ).toHaveCount(0);
+  await expect(reloadedThread.getByText("Saving your decision.")).toHaveCount(
+    0,
+  );
   expect(
     await page.evaluate(
       () =>
