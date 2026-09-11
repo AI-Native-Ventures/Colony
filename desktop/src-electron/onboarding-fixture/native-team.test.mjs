@@ -523,7 +523,7 @@ test("worker coordinate refuses noncanonical whitespace and root slash", () => {
   assert.throws(() =>
     scopedFirstJobDefinitionId({
       ...action,
-      requestId: action.requestId + "\n",
+      requestId: `${action.requestId}\n`,
     }),
   );
   assert.throws(() =>
@@ -531,7 +531,7 @@ test("worker coordinate refuses noncanonical whitespace and root slash", () => {
       ...action,
       preparation: {
         ...action.preparation,
-        ownerPubkey: action.preparation.ownerPubkey + "\n",
+        ownerPubkey: `${action.preparation.ownerPubkey}\n`,
       },
     }),
   );
@@ -732,7 +732,7 @@ test("native publish observation is bounded and never prevents subsequent real d
     for (const callback of callbacks)
       callback({ type: "channel", payload: { type: "Text", data } });
   };
-  deliver('["OK",' + "x".repeat(40_000));
+  deliver(`["OK",${"x".repeat(40_000)}`);
   for (let i = 0; i < 21; i += 1)
     deliver(JSON.stringify(["OK", "e".repeat(64), false, "refused"]));
   assert.equal(actual, 22);
