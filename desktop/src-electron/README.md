@@ -87,6 +87,33 @@ keyring entry. Set `COLONY_SMOKE_PROOF_DIR` to save account and recovery screens
 Account requests to any other destination are blocked. The beta workflow requires
 both this flow and the compiled hosted-endpoint check before uploading an artifact.
 
+## Release variants
+
+One script packages every channel. The variant is selected by flags and owns the
+product name, bundle identifier, executable name, output directory, updater
+endpoint and keyring service, so a channel cannot be half applied by a workflow.
+
+| Flags | Product name | Bundle identifier | Executable | Updater |
+|---|---|---|---|---|
+| (none) | Colony Electron Beta | `ventures.ainative.colony.electron-beta` | Colony Electron Beta | none |
+| `--production` | Colony | `xyz.block.buzz.app` | `buzz-desktop` | `colony-desktop-latest` |
+| `--production --canary` | Colony Canary | `ventures.ainative.colony.canary` | `colony-canary` | `colony-canary-latest` |
+
+The canary is the macOS lane shipped nightly from `develop` by
+`.github/workflows/colony-desktop-canary.yml`. It is the same Electron shell as
+production, so the app a tester runs is the app the owner ships. It keeps its
+own userData directory (`colony-electron-canary`), its own keychain service
+(`colony-canary-desktop`) and its own updater endpoint, so it installs beside
+stable and never updates into it. The executable name differs from stable on
+purpose: the two apps must be separate, separately killable processes.
+
+An installed Tauri canary cannot auto-update into the Electron canary. The first
+Electron canary is a manual download and install, once. See RELEASING.md.
+
+Add `--ad-hoc` to package a release variant locally without Apple credentials.
+`--canary` also needs `BUZZ_UPDATER_PUBLIC_KEY` in the environment, because a
+release variant with no updater trust key is a build that cannot update itself.
+
 ## Run
 
 From the repository root, activate Hermit and install workspace dependencies:
