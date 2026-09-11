@@ -49,7 +49,8 @@ export type WebsiteHeadsLoaderEnvironment = {
 type LoaderEntry = {
   input: WebsiteHeadsLoaderInput;
   inFlight: Promise<void> | null;
-  loadedAt: number;
+  /** Null until the first successful load; a real timestamp can be 0. */
+  loadedAt: number | null;
   cooldownUntil: number;
   retryTimer: ReturnType<typeof setTimeout> | null;
 };
@@ -96,7 +97,7 @@ export function createWebsiteHeadsLoader(
       entry = {
         input,
         inFlight: null,
-        loadedAt: 0,
+        loadedAt: null,
         cooldownUntil: 0,
         retryTimer: null,
       };
@@ -110,7 +111,10 @@ export function createWebsiteHeadsLoader(
       return Promise.resolve();
     }
     if (entry.inFlight) return entry.inFlight;
-    if (entry.loadedAt > 0 && now - entry.loadedAt < WEBSITE_HEADS_FRESH_MS) {
+    if (
+      entry.loadedAt !== null &&
+      now - entry.loadedAt < WEBSITE_HEADS_FRESH_MS
+    ) {
       return Promise.resolve();
     }
 
