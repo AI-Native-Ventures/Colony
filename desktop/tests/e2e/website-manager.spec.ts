@@ -784,8 +784,17 @@ async function openThreadForRoot(page: Page, rootId: string) {
     element.scrollIntoView({ block: "center" }),
   );
   await waitForAnimations(page);
-  await summary.click();
+  // The seeded agent replies give the row a hover preview, and that popper
+  // covers the summary the moment the pointer lands on it, so a real click is
+  // intercepted (Playwright names the popper's own "Open thread" button).
+  // Dispatch the click on the summary itself, then park the pointer away from
+  // the timeline so no hover card is open when the state is captured.
+  await summary.dispatchEvent("click");
   await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+  await page.mouse.move(0, 0);
+  await expect(
+    page.locator("[data-radix-popper-content-wrapper]"),
+  ).toHaveCount(0);
 }
 
 /**
