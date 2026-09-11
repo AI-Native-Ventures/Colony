@@ -227,7 +227,7 @@ fn parse_rejects_oversized_review() {
     let mut bytes = serde_json::to_vec(&review).expect("review serializes");
     assert!(bytes.len() < MAX_REVIEW_BYTES);
     let padding = MAX_REVIEW_BYTES + 1 - bytes.len();
-    bytes.extend(std::iter::repeat(b' ').take(padding));
+    bytes.extend(std::iter::repeat_n(b' ', padding));
     let error = WebsiteReview::parse(&bytes).expect_err("oversized record is refused");
     assert_eq!(error.code(), "review_too_large");
 }

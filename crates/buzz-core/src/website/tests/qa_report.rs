@@ -141,7 +141,10 @@ fn rejects_oversized_report_bytes() {
     ]);
     let mut bytes = value.to_string().into_bytes();
     assert!(bytes.len() < MAX_QA_REPORT_BYTES);
-    bytes.extend(std::iter::repeat(b' ').take(MAX_QA_REPORT_BYTES + 1 - bytes.len()));
+    bytes.extend(std::iter::repeat_n(
+        b' ',
+        MAX_QA_REPORT_BYTES + 1 - bytes.len(),
+    ));
     assert_eq!(
         parse_qa_report(&bytes).unwrap_err().code(),
         "qa_report_too_large"

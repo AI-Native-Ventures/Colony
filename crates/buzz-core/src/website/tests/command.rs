@@ -18,7 +18,6 @@ const THREAD: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 const INSTANCE: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 const MANIFEST: &str = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
 const COORDINATOR: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-const OWNER: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HASH: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
 fn artifact(url: &str, sha256: &str) -> PreviewArtifactRef {
@@ -410,7 +409,7 @@ fn content_round_trips_through_parse() {
         .expect("round trip parses");
     assert_eq!(
         WebsiteAction {
-            actor: parsed.actor.clone(),
+            actor: parsed.actor,
             ..action
         },
         parsed
@@ -447,7 +446,7 @@ fn handover_round_trips_with_access_request() {
         .expect("handover round trip parses");
     assert_eq!(
         WebsiteAction {
-            actor: parsed.actor.clone(),
+            actor: parsed.actor,
             ..action
         },
         parsed
