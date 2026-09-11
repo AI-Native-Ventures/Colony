@@ -30,6 +30,9 @@ const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
 /// the agent's enthusiasm.
 const MAX_CAPTURED_AGENT_TEXT: usize = 64 * 1024;
 
+/// Package and binary name used by Buzz's Pi ACP fork.
+pub(crate) const BUZZ_PI_ACP_NAME: &str = "buzz-pi-acp";
+
 /// An MCP server configuration passed to `session/new`.
 ///
 /// Corresponds to the `McpServerStdio` variant in the ACP schema.
@@ -446,9 +449,11 @@ fn build_client_capabilities() -> serde_json::Value {
 
 /// How to deliver a system prompt on `session/new`.
 ///
-/// The two variants match the two mechanisms supported by current adapters:
+/// The variants match the mechanisms supported by current adapters:
 ///
 /// - **`Field`** - bare `systemPrompt` field (ACP protocol v2, buzz-agent).
+/// - **`PiMeta`** - `_meta.systemPrompt: text`, used by the Buzz pi-acp fork
+///   to replace Pi's native system prompt.
 /// - **`ClaudeMeta`** - `_meta.systemPrompt: {"append": text}`, used by
 ///   `claude-agent-acp` to append to the adapter's own native system prompt
 ///   while keeping its tool-use preset intact.
@@ -456,6 +461,8 @@ fn build_client_capabilities() -> serde_json::Value {
 pub enum SystemPromptTransport<'a> {
     /// Deliver as a bare top-level `systemPrompt` field.
     Field(&'a str),
+    /// Deliver as `_meta.systemPrompt: text`.
+    PiMeta(&'a str),
     /// Deliver as `_meta.systemPrompt: {"append": text}`.
     ClaudeMeta(&'a str),
 }
@@ -525,8 +532,17 @@ impl AcpClient {
         if let Some(prepared) = &prepared_codex_usage {
             cmd.args(&prepared.args_prefix);
         }
-        cmd.args(args)
-            .stdin(Stdio::piped())
+        cmd.args(args);
+        if crate::config::normalize_agent_command_identity(command) == BUZZ_PI_ACP_NAME {
+            if !args.iter().any(|arg| arg == "--") {
+                cmd.arg("--");
+            }
+            // Desktop launches buzz-acp in the Buzz nest; adapters inherit that
+            // workspace. Keep managed skills tied to launch CWD across sessions.
+            cmd.arg("--skill")
+                .arg(std::env::current_dir()?.join(".agents/skills"));
+        }
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Inherit stderr so agent logs are visible in the harness terminal.
             .stderr(Stdio::inherit())
@@ -780,16 +796,18 @@ impl AcpClient {
     ///
     /// `system_prompt` controls how the prompt text is delivered:
     ///
-    /// - `None` - no system-prompt field in the request (legacy framing).
-    /// - `Some(SystemPromptTransport::Field(text))` - bare `systemPrompt` field
-    ///   (ACP protocol v2, buzz-agent, goose unused).
-    /// - `Some(SystemPromptTransport::ClaudeMeta(text))` - `_meta.systemPrompt`
+    /// - `None` — no system-prompt field in the request (legacy framing).
+    /// - `Some(SystemPromptTransport::Field(text))` — bare `systemPrompt` field
+    ///   (ACP protocol v2, buzz-agent; goose unused).
+    /// - `Some(SystemPromptTransport::PiMeta(text))` — `_meta.systemPrompt`
+    ///   as a replacement string for the Buzz pi-acp fork.
+    /// - `Some(SystemPromptTransport::ClaudeMeta(text))` — `_meta.systemPrompt`
     ///   as `{"append": text}`, keeping claude-agent-acp's native preset intact.
     ///
     /// `session_title` rides in `_meta.sessionTitle` when `Some`; `_meta` is
     /// omitted entirely otherwise, since adapters may distinguish an absent
-    /// member from a null one. When both `ClaudeMeta` and `session_title` are
-    /// present the two `_meta` members are merged into a single object.
+    /// member from a null one. Metadata prompt transports and the title are
+    /// merged into a single object.
     ///
     /// Callers use [`extract_model_config_options`] and [`extract_model_state`]
     /// to pull model info from the raw result.
@@ -808,6 +826,9 @@ impl AcpClient {
             Some(SystemPromptTransport::Field(sp)) => {
                 params["systemPrompt"] = serde_json::Value::String(sp.to_owned());
             }
+            Some(SystemPromptTransport::PiMeta(sp)) => {
+                params["_meta"]["systemPrompt"] = serde_json::Value::String(sp.to_owned());
+            }
             Some(SystemPromptTransport::ClaudeMeta(sp)) => {
                 // Merge into _meta so sessionTitle (set below) is not clobbered.
                 params["_meta"]["systemPrompt"] = serde_json::json!({ "append": sp });
@@ -815,7 +836,7 @@ impl AcpClient {
             None => {}
         }
         if let Some(title) = session_title {
-            // Merge - _meta may already carry systemPrompt from ClaudeMeta above.
+            // Merge — _meta may already carry a system prompt from an adapter extension.
             params["_meta"]["sessionTitle"] = serde_json::Value::String(title.to_owned());
         }
         let result = self.send_request("session/new", params).await?;
@@ -859,6 +880,14 @@ impl AcpClient {
         match system_prompt {
             Some(SystemPromptTransport::Field(sp)) => {
                 params["systemPrompt"] = serde_json::Value::String(sp.to_owned());
+            }
+            Some(SystemPromptTransport::PiMeta(sp)) => {
+                // The Buzz pi-acp fork replaces Pi's native prompt outright,
+                // so the value is a bare string rather than an append object.
+                m.insert(
+                    "systemPrompt".to_owned(),
+                    serde_json::Value::String(sp.to_owned()),
+                );
             }
             Some(SystemPromptTransport::ClaudeMeta(sp)) => {
                 m.insert(
@@ -4657,44 +4686,9 @@ mod tests {
         );
     }
 
-    // ── Goose-native steer scaffold (PR follow-up to #1160) ──────────────
+    // ── claude-agent-acp _meta.systemPrompt transport ─────────────────────
 
-    /// Helper: spawn an inert `cat` subprocess so we have a real AcpClient
-    /// to drive `handle_session_update` against. `cat` never writes back,
-    /// which is fine — these tests don't read from the agent, they just
-    /// feed JSON into the parser.
-    async fn spawn_inert_client() -> AcpClient {
-        AcpClient::spawn("cat", &[], &[], false, None)
-            .await
-            .expect("spawn cat as inert client")
-    }
-
-    /// Build a `session/update` JSON-RPC notification carrying a
-    /// `session_info_update` with the given `_meta.goose.activeRunId` value.
-    /// Pass `None` to omit the `activeRunId` field entirely.
-    ///
-    /// `_meta` is nested inside the `update` object (per the ACP
-    /// `SessionInfoUpdate` schema), matching what goose and buzz-agent
-    /// emit on the wire.
-    fn session_info_update_msg(active_run_id: Option<serde_json::Value>) -> serde_json::Value {
-        let mut goose = serde_json::Map::new();
-        if let Some(v) = active_run_id {
-            goose.insert("activeRunId".to_string(), v);
-        }
-        let mut meta = serde_json::Map::new();
-        meta.insert("goose".to_string(), serde_json::Value::Object(goose));
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "session/update",
-            "params": {
-                "sessionId": "test-session",
-                "update": {
-                    "sessionUpdate": "session_info_update",
-                    "_meta": serde_json::Value::Object(meta),
-                },
-            }
-        })
-    }
+    include!("acp/system_prompt_tests.rs");
 
     #[tokio::test]
     async fn active_run_id_sets_on_string() {

@@ -64,7 +64,8 @@ pub(crate) fn preset_catalog_entry(
     // after following the first. #7335 carries the vendor half.
     let install_hint = match (&availability, def.underlying_cli_install_hint) {
         (AcpAvailabilityStatus::NotInstalled, Some(cli_hint)) => {
-            format!("{} {}", def.install_hint, cli_hint)
+            // Vendor first: the adapter is useless without the CLI it wraps.
+            format!("{} {}", cli_hint, def.install_hint)
         }
         _ => def.install_hint.to_string(),
     };
@@ -115,13 +116,13 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
     PresetHarness {
         id: "pi",
         label: "Pi",
-        command: "pi-acp",
+        command: "buzz-pi-acp",
         args: &[],
-        install_instructions_url: "https://github.com/svkozak/pi-acp",
-        install_hint: "Install the Pi ACP adapter with npm install -g pi-acp.",
+        install_instructions_url: "https://github.com/salman1993/pi-acp",
+        install_hint: "Requires Node.js 22 or newer. Install the Pi ACP adapter with `npm install -g --install-links=true git+https://github.com/salman1993/pi-acp.git#main`. Restart Buzz, then select Pi as the agent harness. Run the same install command again to update the adapter.",
         underlying_cli: Some("pi"),
         underlying_cli_install_hint: Some(
-            "Install Pi with npm install -g --ignore-scripts @earendil-works/pi-coding-agent.",
+            "Install Pi with `npm install -g @earendil-works/pi-coding-agent`, then run `pi` to configure its model provider.",
         ),
         // Pi carries no provider env key: the adapter reads its own config.
         provider_env_var: None,
@@ -415,17 +416,17 @@ mod tests {
             .expect("Pi preset should be present");
 
         assert_eq!(preset.label, "Pi");
-        assert_eq!(preset.command, "pi-acp");
+        assert_eq!(preset.command, "buzz-pi-acp");
         assert!(preset.args.is_empty());
         assert_eq!(preset.underlying_cli, Some("pi"));
 
         let available = preset_catalog_entry(preset, |command| match command {
-            "pi-acp" => Some(PathBuf::from("/usr/local/bin/pi-acp")),
+            "buzz-pi-acp" => Some(PathBuf::from("/usr/local/bin/buzz-pi-acp")),
             "pi" => Some(PathBuf::from("/usr/local/bin/pi")),
             _ => None,
         });
         assert_eq!(available.availability, AcpAvailabilityStatus::Available);
-        assert_eq!(available.command.as_deref(), Some("pi-acp"));
+        assert_eq!(available.command.as_deref(), Some("buzz-pi-acp"));
         assert!(available.default_args.is_empty());
         assert_eq!(
             available.underlying_cli_path.as_deref(),
@@ -441,11 +442,33 @@ mod tests {
         );
         assert!(adapter_missing.command.is_none());
         assert!(adapter_missing.default_args.is_empty());
+        assert_eq!(
+            adapter_missing.install_hint,
+            "Requires Node.js 22 or newer. Install the Pi ACP adapter with `npm install -g --install-links=true git+https://github.com/salman1993/pi-acp.git#main`. Restart Buzz, then select Pi as the agent harness. Run the same install command again to update the adapter."
+        );
+        assert_eq!(
+            adapter_missing.install_instructions_url,
+            "https://github.com/salman1993/pi-acp"
+        );
+
+        // Adapter present, vendor CLI absent stays Available and selectable
+        // here: routing presets through the full classify_runtime would flip
+        // this to CliMissing, which preset_entry_stays_available_when_adapter_
+        // present_but_cli_absent exists to prevent.
+        let adapter_only = preset_catalog_entry(preset, |command| {
+            (command == "buzz-pi-acp").then(|| PathBuf::from("/usr/local/bin/buzz-pi-acp"))
+        });
+        assert_eq!(adapter_only.availability, AcpAvailabilityStatus::Available);
+        assert_eq!(adapter_only.command.as_deref(), Some("buzz-pi-acp"));
 
         let not_installed = preset_catalog_entry(preset, |_| None);
         assert_eq!(
             not_installed.availability,
             AcpAvailabilityStatus::NotInstalled
+        );
+        assert_eq!(
+            not_installed.install_hint,
+            "Install Pi with `npm install -g @earendil-works/pi-coding-agent`, then run `pi` to configure its model provider. Requires Node.js 22 or newer. Install the Pi ACP adapter with `npm install -g --install-links=true git+https://github.com/salman1993/pi-acp.git#main`. Restart Buzz, then select Pi as the agent harness. Run the same install command again to update the adapter."
         );
     }
 

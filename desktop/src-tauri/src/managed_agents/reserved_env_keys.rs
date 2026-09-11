@@ -57,9 +57,6 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     "COLONY_ELECTRON_BROWSER_ROOT",
     "COLONY_ELECTRON_BROWSER_COMMAND",
     "COLONY_ELECTRON_BROWSER_ADAPTER",
-    // pi-acp's executable override is reserved for Buzz's generated launcher,
-    // which injects the managed system prompt and skills.
-    "PI_ACP_PI_COMMAND",
     // Control-plane parallelism: the Desktop resolves the effective
     // worker-pool size (applying any per-harness cap) and writes it into
     // launch.policy_env. A user-supplied BUZZ_ACP_AGENTS would bypass the
