@@ -336,9 +336,7 @@ fn merge_personas(mut stored: Vec<AgentDefinition>, now: &str) -> (Vec<AgentDefi
     // as ours, but their id is the recipe's, not a code-shipped built-in,
     // and demoting them here would silently undo that on the next load.
     for record in stored.iter_mut() {
-        if record.is_builtin
-            && record.provisioned.is_none()
-            && built_in_order(&record.id).is_none()
+        if record.is_builtin && record.provisioned.is_none() && built_in_order(&record.id).is_none()
         {
             record.is_builtin = false;
             record.updated_at = now.to_string();
