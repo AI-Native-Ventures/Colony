@@ -113,3 +113,17 @@ test("a canary build carries the canary endpoint and never the stable one", () =
     /No updater endpoint/,
   );
 });
+
+test("a release candidate still packages with the stable endpoint", () => {
+  // `--production-candidate` sets channel "candidate" while staying a stable
+  // build, so packaging it must resolve an endpoint rather than throw.
+  const variant = electronPackageVariant(["--production-candidate"]);
+  assert.equal(variant.channel, "candidate");
+  assert.ok(variant.release);
+  assert.deepEqual(
+    channelUpdaterConfig(variant.channel, {
+      BUZZ_UPDATER_PUBLIC_KEY: "fixture",
+    }).plugins.updater,
+    { pubkey: "fixture", endpoints: [STABLE_UPDATER_ENDPOINT] },
+  );
+});
