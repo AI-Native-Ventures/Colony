@@ -159,6 +159,7 @@ for line in sys.stdin:
                         "command":"/usr/bin/sandbox-exec",
                         "args":["-f", "/synthetic/native-owned.sb", "/synthetic/work-tool"]
                     }}),
+                    host_login: None,
                 },
                 _directory: directory,
             }
