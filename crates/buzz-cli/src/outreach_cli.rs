@@ -75,7 +75,7 @@ anything reaches the relay, so a bad field fails loudly and posts nothing.",
         /// Event ID to thread the card under.
         #[arg(long)]
         reply_to: Option<String>,
-        /// Pubkey that answers the card's buttons. Defaults to your own.
+        /// Pubkey that answers the card's buttons. Leave it out: the relay then names the owner who decides, so the owner's desktop sends on Approve.
         #[arg(long)]
         processor: Option<String>,
     },
