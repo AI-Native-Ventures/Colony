@@ -278,8 +278,8 @@ mod tests {
         assert!(!environment.contains_key("CODEX_HOME"));
         assert_eq!(
             environment.get("USER").map(String::as_str),
-            std::env::var("USER").ok().as_deref(),
-            "the keychain lookup needs USER"
+            Some("owner"),
+            "the keychain lookup needs the owner's name from the configuration"
         );
     }
 
