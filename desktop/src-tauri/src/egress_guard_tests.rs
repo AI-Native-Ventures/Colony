@@ -442,7 +442,14 @@ fn ncryptsec_handling_is_confined_to_allowlisted_files() {
         "src/egress_guard_tests.rs",
         "src/commands/identity.rs",
         "src/commands/identity_key_backup_tests.rs",
-        "src/lib.rs", // module registration + invoke handler
+        "src/lib.rs", // module registration
+        // The invoke-handler list, which names the identity backup commands
+        // and nothing else. It lived in lib.rs until that file hit the
+        // desktop file-size ratchet; the entries are command NAMES, not
+        // NIP-49 handling, and moving them must not silently widen where the
+        // codec may be touched, so the file is allowlisted explicitly rather
+        // than the check being loosened.
+        "src/command_registry.rs",
         // boundary wiring (guard call sites name the module, not the codec):
         "src/relay.rs",
         "src/relay/submit.rs",
