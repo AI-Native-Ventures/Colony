@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- fix(desktop): start Codex teammates from the ChatGPT login already on this Mac, so an existing business no longer hits a Power setup screen it cannot open. Claude Code still needs Power setup: its login lives in the macOS keychain rather than in a config directory, so there is nothing on disk to adopt.
+- fix(desktop): start Claude Code and Codex teammates from the provider login already on this Mac, so an existing business no longer hits a Power setup screen it cannot open. Codex seeds a private per-business profile from the existing login. Claude Code runs against the existing login directly, because its credential lives in the macOS login keychain, which a remapped HOME cannot reach.
 
 ## v0.17.1
 

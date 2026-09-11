@@ -47,7 +47,7 @@ pub(crate) fn preflight(
         relay_url: relay.to_owned(),
     };
     let profile = scope.profile(app, runtime)?;
-    if !profile.is_dir() && !host_login::adopt(&profile, runtime) {
+    if host_login::resolve(&profile, runtime) == host_login::Provision::Unavailable {
         return Err(
             "Connect a subscription for this business in Power setup before starting the agent."
                 .into(),
@@ -98,18 +98,32 @@ pub(super) fn prepare(
         relay_url: key.relay_url.clone(),
     };
     let profile = scope.profile(app, runtime)?;
-    if !profile.is_dir() && !host_login::adopt(&profile, runtime) {
-        return Err(
+    // Claude's credential is in the login keychain, which a remapped HOME and an
+    // exported CLAUDE_CONFIG_DIR both hide, so a Mac that is already signed in
+    // runs the vendor CLI under the owner's own home. That process, and only
+    // that process, sees the owner's home: the agent's shell, file and browser
+    // tools stay inside the captured tool policy below, exactly as they do for a
+    // scoped profile. See `host_login` for the measurements behind this.
+    let provision = host_login::resolve(&profile, runtime);
+    let (profile, host_login) = match &provision {
+        host_login::Provision::Scoped(profile) => (profile.clone(), None),
+        host_login::Provision::HostLogin { home, config_dir } => {
+            (config_dir.clone(), Some((home, config_dir)))
+        }
+        host_login::Provision::Unavailable => return Err(
             "Connect a subscription for this business in Power setup before starting the agent."
                 .into(),
-        );
+        ),
+    };
+    if host_login.is_none() {
+        // Every directory is host-owned; never follow a worker-supplied profile
+        // link. A host login is the owner's own directory and is left alone.
+        let levels: Vec<_> = profile.ancestors().take(3).collect();
+        for directory in levels.into_iter().rev() {
+            launch::private_directory(directory)?;
+        }
+        launch::private_directory(&profile.join("tmp"))?;
     }
-    // Every directory is host-owned; never follow a worker-supplied profile link.
-    let levels: Vec<_> = profile.ancestors().take(3).collect();
-    for directory in levels.into_iter().rev() {
-        launch::private_directory(directory)?;
-    }
-    launch::private_directory(&profile.join("tmp"))?;
     let vendor = find_command(runtime)
         .ok_or("Install the selected provider's CLI before starting the agent")?;
     let model = get("BUZZ_ACP_MODEL");
@@ -150,8 +164,13 @@ pub(super) fn prepare(
         &browser_args,
     )?;
     browser["env"]["ELECTRON_RUN_AS_NODE"] = json!("1");
-    let config = json!({"runtime":runtime,"vendor_binary":vendor,"profile":profile,"workspace":workspace,"model":model,
+    let mut config = json!({"runtime":runtime,"vendor_binary":vendor,"profile":profile,"workspace":workspace,"model":model,
         "mcp_servers":{"colony_work":work,"colony_browser":browser}});
+    // Absent for a scoped profile, so an older bridge never reads a field it
+    // does not know about and a newer one never guesses the mode.
+    if let Some((home, config_dir)) = host_login {
+        config["host_login"] = json!({"home":home,"config_dir":config_dir});
+    }
     // The coordinator holds scoped relay identity and vendor profile routing, but
     // model-requested shell/file/browser work only runs in the captured tool policy.
     let mut command = Command::new(&harness);

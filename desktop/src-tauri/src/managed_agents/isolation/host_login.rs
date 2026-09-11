@@ -8,18 +8,40 @@
 //! scoped profile is missing and the host holds a usable subscription login,
 //! the profile is created and seeded from it.
 //!
-//! Only Codex can be adopted. Its credential is a file inside `CODEX_HOME`
-//! (`auth.json`), which is exactly what the scoped profile is set to, so a copy
-//! is enough. Claude Code on macOS keeps its login in the login keychain rather
-//! than in `CLAUDE_CONFIG_DIR`, and a fresh config directory does not resolve
-//! it, so there is no file to seed and `adopt` reports it unavailable. Claude
-//! therefore keeps today's behaviour and today's error text.
+//! The two providers need different answers, because they keep a login in
+//! different places.
+//!
+//! Codex is seeded. Its credential is a file inside `CODEX_HOME` (`auth.json`),
+//! which is exactly what the scoped profile is set to, so copying that one file
+//! into a fresh profile signs it in and the strong isolation is kept.
+//!
+//! Claude Code cannot be seeded, so it runs against the host login instead.
+//! On macOS its credential lives in the login keychain, not under
+//! `CLAUDE_CONFIG_DIR`, and the keychain is unreachable from a remapped
+//! identity in two separate ways. `security` resolves the login keychain
+//! through `$HOME/Library/Keychains`, so a remapped `HOME` hides it outright.
+//! Independently, Claude derives its keychain service name from the presence of
+//! `CLAUDE_CONFIG_DIR`: unset it uses `Claude Code-credentials`, and set it uses
+//! that name suffixed with a hash of the path, so exporting the variable signs
+//! the process out even when it is set to the very directory that is already
+//! the default. Measured on 2026-09-11 against the real CLI: `HOME` plus `USER`
+//! with `CLAUDE_CONFIG_DIR` unset reports the owner's Max plan, and the same
+//! environment with `CLAUDE_CONFIG_DIR=$HOME/.claude` reports signed out.
+//! Seeding files into a scoped profile therefore cannot work at all, and
+//! [`Provision::HostLogin`] runs the vendor CLI with the owner's real home,
+//! which is how these teammates ran before the Electron path existed.
+//!
+//! If Claude later exposes a way to name the login keychain explicitly, or an
+//! environment override for the credential service, the scoped profile becomes
+//! reachable for Claude too and this mode can be retired. Nothing in the CLI's
+//! current surface offers that, so it is a note rather than a code path.
 //!
 //! Seeding copies, never links. The subscription bridge points `HOME` and
-//! `CODEX_HOME` at the profile, so the profile has to be a real private
+//! `CODEX_HOME` at the profile, so a scoped profile has to be a real private
 //! directory this app owns rather than a view onto the owner's home.
 
 use super::launch;
+use crate::managed_agents::subscriptions::{claude_state_from_path, HarnessState};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -28,14 +50,88 @@ use std::path::{Path, PathBuf};
 /// truncated.
 const MAX_CREDENTIAL_BYTES: u64 = 64 * 1024;
 
+/// Ceiling for the Claude account file, which is only ever read and never
+/// copied. It accumulates caches and is routinely tens of kilobytes, so it gets
+/// a far looser bound than a credential does.
+const MAX_ACCOUNT_BYTES: u64 = 4 * 1024 * 1024;
+
 /// The single file a Codex profile needs before the CLI considers itself
 /// signed in. `codex_policy` supplies every other setting as a `-c` override,
 /// so no host `config.toml` is read or copied.
 const CODEX_CREDENTIAL: &str = "auth.json";
 
-/// What adoption did, for callers and for tests.
+/// Host locations, relative to the owner's home directory.
+const CODEX_HOST_DIRECTORY: &str = ".codex";
+const CLAUDE_HOST_DIRECTORY: &str = ".claude";
+const CLAUDE_HOST_ACCOUNT: &str = ".claude.json";
+
+/// How a teammate's vendor process should be given a provider login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Provision {
+    /// Run against an isolated per-business profile this app owns, either one
+    /// Power setup connected or one Codex adoption just seeded.
+    Scoped(PathBuf),
+    /// Run the vendor CLI with the owner's own home and its default config
+    /// directory, the way it ran before the Electron path existed.
+    HostLogin { home: PathBuf, config_dir: PathBuf },
+    /// Nothing to run against. The caller keeps its existing error.
+    Unavailable,
+}
+
+/// Decide how this teammate's provider login is supplied.
+pub(super) fn resolve(profile: &Path, runtime: &str) -> Provision {
+    match dirs::home_dir() {
+        Some(home) => resolve_from(profile, runtime, &home),
+        None => Provision::Unavailable,
+    }
+}
+
+/// Resolution against an explicit home so tests never read a real one.
+fn resolve_from(profile: &Path, runtime: &str, home: &Path) -> Provision {
+    if !matches!(runtime, "claude" | "codex") {
+        return Provision::Unavailable;
+    }
+    if profile.is_dir() {
+        return Provision::Scoped(profile.to_path_buf());
+    }
+    if runtime == "claude" {
+        return claude_host_login(home);
+    }
+    match adopt_from(profile, runtime, &home.join(CODEX_HOST_DIRECTORY)) {
+        Outcome::Adopted | Outcome::AlreadyPresent => Provision::Scoped(profile.to_path_buf()),
+        Outcome::Unavailable => Provision::Unavailable,
+    }
+}
+
+/// Claude's host login, when this Mac actually holds one.
+///
+/// The signed-in signal is the repo's own: an `oauthAccount` in `~/.claude.json`
+/// is what [`claude_state_from_path`] already treats as signed in, so there is
+/// one definition of the question rather than two. Reading a file keeps this off
+/// the network; `claude auth status` would reach out on a launch hot path.
+fn claude_host_login(home: &Path) -> Provision {
+    let config_dir = home.join(CLAUDE_HOST_DIRECTORY);
+    if !is_private_directory(home) || !is_private_directory(&config_dir) {
+        return Provision::Unavailable;
+    }
+    let Some(account) = readable_file(&home.join(CLAUDE_HOST_ACCOUNT), MAX_ACCOUNT_BYTES) else {
+        return Provision::Unavailable;
+    };
+    if !matches!(
+        claude_state_from_path(&account, true),
+        HarnessState::SignedIn { .. }
+    ) {
+        return Provision::Unavailable;
+    }
+    Provision::HostLogin {
+        home: home.to_path_buf(),
+        config_dir,
+    }
+}
+
+/// What Codex adoption did, for [`resolve_from`] and for tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Outcome {
+enum Outcome {
     /// The profile was created and seeded from the host login.
     Adopted,
     /// The profile already held a credential; nothing was read or written.
@@ -44,32 +140,12 @@ pub(super) enum Outcome {
     Unavailable,
 }
 
-/// Seed `profile` from this Mac's provider login when it has no credential yet.
-///
-/// Returns `false` when the profile still cannot start a teammate, which leaves
-/// the caller to report the Power setup message it reported before.
-pub(super) fn adopt(profile: &Path, runtime: &str) -> bool {
-    let outcome = host_directory(runtime).map_or(Outcome::Unavailable, |host| {
-        adopt_from(profile, runtime, &host)
-    });
-    matches!(outcome, Outcome::Adopted | Outcome::AlreadyPresent)
-}
-
-/// Default location of the host login for a runtime, or `None` when this
-/// runtime has no adoptable on-disk credential.
-fn host_directory(runtime: &str) -> Option<PathBuf> {
-    match runtime {
-        "codex" => dirs::home_dir().map(|home| home.join(".codex")),
-        _ => None,
-    }
-}
-
 /// Adoption against an explicit host directory so tests never read a real home.
 fn adopt_from(profile: &Path, runtime: &str, host: &Path) -> Outcome {
     if runtime != "codex" {
         return Outcome::Unavailable;
     }
-    if readable_credential(&profile.join(CODEX_CREDENTIAL)).is_some() {
+    if readable_file(&profile.join(CODEX_CREDENTIAL), MAX_CREDENTIAL_BYTES).is_some() {
         return Outcome::AlreadyPresent;
     }
     // Refuse a linked source at both levels. A symlinked home directory or
@@ -78,7 +154,7 @@ fn adopt_from(profile: &Path, runtime: &str, host: &Path) -> Outcome {
     if !is_private_directory(host) {
         return Outcome::Unavailable;
     }
-    let Some(credential) = readable_credential(&host.join(CODEX_CREDENTIAL)) else {
+    let Some(credential) = readable_file(&host.join(CODEX_CREDENTIAL), MAX_CREDENTIAL_BYTES) else {
         return Outcome::Unavailable;
     };
     let Ok(contents) = std::fs::read_to_string(&credential) else {
@@ -100,13 +176,13 @@ fn adopt_from(profile: &Path, runtime: &str, host: &Path) -> Outcome {
     }
 }
 
-/// A regular, non-empty, non-symlinked file small enough to copy.
-fn readable_credential(path: &Path) -> Option<PathBuf> {
+/// A regular, non-empty, non-symlinked file within `limit` bytes.
+fn readable_file(path: &Path, limit: u64) -> Option<PathBuf> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     let usable = metadata.is_file()
         && !metadata.file_type().is_symlink()
         && metadata.len() > 0
-        && metadata.len() <= MAX_CREDENTIAL_BYTES;
+        && metadata.len() <= limit;
     usable.then(|| path.to_path_buf())
 }
 
@@ -252,16 +328,179 @@ mod tests {
     }
 
     #[test]
-    fn claude_is_not_adopted_because_its_login_is_not_on_disk() {
+    fn claude_is_never_seeded_because_its_login_is_not_on_disk() {
         let root = tempfile::tempdir().unwrap();
         let host = host_with(root.path(), "host-codex", &subscription());
         let profile = profile(root.path());
         assert_eq!(adopt_from(&profile, "claude", &host), Outcome::Unavailable);
-        assert!(
-            !adopt(&profile, "claude"),
-            "Claude has no adoptable host directory"
-        );
         assert!(!profile.exists());
+    }
+
+    /// A home that looks exactly like a signed-in Mac: a real `.claude`
+    /// directory and a `.claude.json` carrying an `oauthAccount`.
+    fn signed_in_home(root: &Path, name: &str) -> PathBuf {
+        let home = root.join(name);
+        std::fs::create_dir_all(home.join(CLAUDE_HOST_DIRECTORY)).unwrap();
+        std::fs::write(
+            home.join(CLAUDE_HOST_ACCOUNT),
+            serde_json::json!({"oauthAccount":{"organizationType":"claude_max"}}).to_string(),
+        )
+        .unwrap();
+        home
+    }
+
+    #[test]
+    fn claude_runs_against_the_host_login_when_no_scoped_profile_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let home = signed_in_home(root.path(), "signed-in-home");
+        let profile = profile(root.path());
+        assert_eq!(
+            resolve_from(&profile, "claude", &home),
+            Provision::HostLogin {
+                home: home.clone(),
+                config_dir: home.join(CLAUDE_HOST_DIRECTORY),
+            }
+        );
+        assert!(
+            !profile.exists(),
+            "host-login mode must never create a scoped profile"
+        );
+    }
+
+    #[test]
+    fn a_scoped_claude_profile_still_wins_and_the_host_is_not_consulted() {
+        let root = tempfile::tempdir().unwrap();
+        let home = signed_in_home(root.path(), "signed-in-home");
+        let profile = root.path().join("connected-profile");
+        std::fs::create_dir_all(&profile).unwrap();
+        assert_eq!(
+            resolve_from(&profile, "claude", &home),
+            Provision::Scoped(profile.clone())
+        );
+    }
+
+    #[test]
+    fn a_mac_without_a_claude_login_keeps_todays_power_setup_error() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = profile(root.path());
+
+        let bare = root.path().join("bare-home");
+        std::fs::create_dir_all(bare.join(CLAUDE_HOST_DIRECTORY)).unwrap();
+        assert_eq!(
+            resolve_from(&profile, "claude", &bare),
+            Provision::Unavailable,
+            "no account file means no login to run against"
+        );
+
+        let signed_out = root.path().join("signed-out-home");
+        std::fs::create_dir_all(signed_out.join(CLAUDE_HOST_DIRECTORY)).unwrap();
+        std::fs::write(
+            signed_out.join(CLAUDE_HOST_ACCOUNT),
+            serde_json::json!({"numStartups":3}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_from(&profile, "claude", &signed_out),
+            Provision::Unavailable,
+            "an account file without oauthAccount is not signed in"
+        );
+
+        let unparseable = root.path().join("unparseable-home");
+        std::fs::create_dir_all(unparseable.join(CLAUDE_HOST_DIRECTORY)).unwrap();
+        std::fs::write(unparseable.join(CLAUDE_HOST_ACCOUNT), "not json at all").unwrap();
+        assert_eq!(
+            resolve_from(&profile, "claude", &unparseable),
+            Provision::Unavailable
+        );
+
+        let missing_directory = root.path().join("no-config-directory-home");
+        std::fs::create_dir_all(&missing_directory).unwrap();
+        std::fs::write(
+            missing_directory.join(CLAUDE_HOST_ACCOUNT),
+            serde_json::json!({"oauthAccount":{"organizationType":"claude_max"}}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_from(&profile, "claude", &missing_directory),
+            Provision::Unavailable,
+            "an account file alone is not a usable config directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_claude_config_directory_is_refused() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let real = signed_in_home(root.path(), "signed-in-home");
+        let linked = root.path().join("linked-home");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::copy(
+            real.join(CLAUDE_HOST_ACCOUNT),
+            linked.join(CLAUDE_HOST_ACCOUNT),
+        )
+        .unwrap();
+        symlink(
+            real.join(CLAUDE_HOST_DIRECTORY),
+            linked.join(CLAUDE_HOST_DIRECTORY),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_from(&profile(root.path()), "claude", &linked),
+            Provision::Unavailable
+        );
+
+        let linked_account = root.path().join("linked-account-home");
+        std::fs::create_dir_all(linked_account.join(CLAUDE_HOST_DIRECTORY)).unwrap();
+        symlink(
+            real.join(CLAUDE_HOST_ACCOUNT),
+            linked_account.join(CLAUDE_HOST_ACCOUNT),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_from(&profile(root.path()), "claude", &linked_account),
+            Provision::Unavailable
+        );
+    }
+
+    #[test]
+    fn codex_is_seeded_into_a_scoped_profile_and_never_runs_on_the_host_login() {
+        let root = tempfile::tempdir().unwrap();
+        let home = signed_in_home(root.path(), "signed-in-home");
+        std::fs::create_dir_all(home.join(CODEX_HOST_DIRECTORY)).unwrap();
+        std::fs::write(
+            home.join(CODEX_HOST_DIRECTORY).join(CODEX_CREDENTIAL),
+            subscription(),
+        )
+        .unwrap();
+        let profile = profile(root.path());
+        assert_eq!(
+            resolve_from(&profile, "codex", &home),
+            Provision::Scoped(profile.clone()),
+            "Codex keeps the stronger isolation because its credential is a file"
+        );
+        assert_eq!(
+            std::fs::read_to_string(profile.join(CODEX_CREDENTIAL)).unwrap(),
+            subscription()
+        );
+
+        let empty = root.path().join("empty-home");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(
+            resolve_from(&profile.join("absent"), "codex", &empty),
+            Provision::Unavailable,
+            "Codex never falls back to the host login"
+        );
+    }
+
+    #[test]
+    fn an_unsupported_runtime_is_never_provisioned() {
+        let root = tempfile::tempdir().unwrap();
+        let home = signed_in_home(root.path(), "signed-in-home");
+        assert_eq!(
+            resolve_from(&profile(root.path()), "goose", &home),
+            Provision::Unavailable
+        );
     }
 
     #[cfg(unix)]
