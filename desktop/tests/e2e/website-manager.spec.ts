@@ -664,10 +664,10 @@ test("mocked Brief state renders the brief and start action", async ({
   const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(rootAttachment).toBeVisible();
   await expect(
-    page.getByText("Keep the business facts and useful content."),
+    rootAttachment.getByText("Keep the business facts and useful content."),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Start redesign" }),
+    rootAttachment.getByRole("button", { name: "Start redesign" }),
   ).toBeVisible();
   await captureBothWidths(page, "brief", rootAttachment);
 });
@@ -682,10 +682,13 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   const { job } = await seedJob(page, "working");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(rootAttachment).toBeVisible();
-  await expect(page.getByText("In progress").first()).toBeVisible();
-  await expect(page.getByText("Understand the existing site")).toBeVisible();
+  await expect(rootAttachment.getByText("In progress")).toBeVisible();
+  // Stage rows live in the first <ol>; the evidence disclosure below uses its
+  // own <ul> and repeats the stage label, so scope rows to the stage list.
+  const stageList = rootAttachment.locator("ol").first();
   const stageRow = (label: string) =>
-    rootAttachment.locator("li").filter({ hasText: label });
+    stageList.locator("li").filter({ hasText: label });
+  await expect(stageRow("Understand the existing site")).toBeVisible();
   await expect(stageRow("Understand the existing site")).toContainText("Done");
   await expect(stageRow("Design and build")).toContainText("Working");
   await openThreadForRoot(page, job.root.id);
@@ -698,12 +701,18 @@ test("mocked Working state shows stages and earlier-version inspection", async (
     .filter({ hasText: "Version 1" })
     .getByRole("button", { name: "View" })
     .click();
-  await expect(page.getByText(/Read-only view of Version 1/)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Close preview" }),
+    threadAttachment.getByText(/Read-only view of Version 1/),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Close preview" }).click();
-  await expect(page.getByText(/Read-only view of Version 1/)).toHaveCount(0);
+  await expect(
+    threadAttachment.getByRole("button", { name: "Close preview" }),
+  ).toBeVisible();
+  await threadAttachment
+    .getByRole("button", { name: "Close preview" })
+    .click();
+  await expect(
+    threadAttachment.getByText(/Read-only view of Version 1/),
+  ).toHaveCount(0);
   await captureBothWidths(page, "working", rootAttachment);
 });
 
@@ -716,19 +725,29 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "review");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
-  await expect(page.getByText("Ready for your review").first()).toBeVisible();
-  const mobileButton = page.getByRole("button", { name: "Mobile preview" });
+  await expect(
+    rootAttachment.getByText("Ready for your review"),
+  ).toBeVisible();
+  const mobileButton = rootAttachment.getByRole("button", {
+    name: "Mobile preview",
+  });
   await mobileButton.click();
   await expect(mobileButton).toHaveAttribute("aria-pressed", "true");
-  const beforeButton = page.getByRole("button", {
+  const beforeButton = rootAttachment.getByRole("button", {
     name: "Before",
     exact: true,
   });
   await beforeButton.click();
   await expect(beforeButton).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Redesign", exact: true }).click();
-  await page.getByRole("button", { name: "Desktop preview" }).click();
-  await page.getByRole("button", { name: "Expand preview" }).click();
+  await rootAttachment
+    .getByRole("button", { name: "Redesign", exact: true })
+    .click();
+  await rootAttachment
+    .getByRole("button", { name: "Desktop preview" })
+    .click();
+  await rootAttachment
+    .getByRole("button", { name: "Expand preview" })
+    .click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", { name: "Back to review" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -744,11 +763,15 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
     .filter({ hasText: "Version 1" })
     .getByRole("button", { name: "View" })
     .click();
-  await expect(page.getByText(/Read-only view of Version 1/)).toBeVisible();
+  await expect(
+    threadAttachment.getByText(/Read-only view of Version 1/),
+  ).toBeVisible();
   await expect(
     threadAttachment.getByRole("button", { name: "Approve design" }),
   ).toBeDisabled();
-  await page.getByRole("button", { name: "Close preview" }).click();
+  await threadAttachment
+    .getByRole("button", { name: "Close preview" })
+    .click();
   await expect(
     threadAttachment.getByRole("button", { name: "Approve design" }),
   ).toBeEnabled();
@@ -763,10 +786,17 @@ test("mocked Revision state shows the exact change request", async ({
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "revision");
+  const rootAttachment = page.getByTestId("website-root-attachment").first();
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = await expectCompositeThread(page);
-  await expect(page.getByText("Changes requested").first()).toBeVisible();
-  await expect(page.getByText(REQUEST_NOTE)).toBeVisible();
+  await expect(
+    rootAttachment.getByText("Changes requested"),
+  ).toBeVisible();
+  const changeRequest = threadAttachment.getByRole("region", {
+    name: "Change request",
+  });
+  await expect(changeRequest).toBeVisible();
+  await expect(changeRequest.getByText(REQUEST_NOTE)).toBeVisible();
   await captureBothWidths(page, "revision", threadAttachment);
 });
 
@@ -780,12 +810,16 @@ test("mocked Handover state shows confirmed resources and the draft request", as
   const { job } = await seedJob(page, "handover");
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = await expectCompositeThread(page);
-  await expect(page.getByText("Handover prepared").first()).toBeVisible();
   await expect(
-    page.getByText(/Please share who manages the horizon-labs.example domain/),
+    threadAttachment.getByText("Handover prepared"),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Download" }).first(),
+    threadAttachment.getByText(
+      /Please share who manages the horizon-labs.example domain/,
+    ),
+  ).toBeVisible();
+  await expect(
+    threadAttachment.getByRole("button", { name: "Download" }).first(),
   ).toBeVisible();
   await captureBothWidths(page, "handover", threadAttachment);
 });
@@ -818,7 +852,9 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   ).toBeVisible();
 
   await threadAttachment.getByRole("button", { name: "Try again" }).click();
-  await expect(page.getByText("Saving your decision.")).toBeVisible();
+  await expect(
+    threadAttachment.getByText("Saving your decision."),
+  ).toBeVisible();
   const confirmed = signHead({
     jobId: job.jobId,
     taskId: job.taskId,
@@ -831,14 +867,25 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   });
   await replaceBlockEvents(page, [manifestEvent, confirmed]);
   await emitSignedEvent(page, CHANNEL, confirmed);
-  await expect(page.getByText("Saving your decision.")).toHaveCount(0);
-  await expect(page.getByText("Changes requested").first()).toBeVisible();
+  await expect(
+    threadAttachment.getByText("Saving your decision."),
+  ).toHaveCount(0);
+  await expect(
+    threadAttachment.getByRole("region", { name: "Change request" }),
+  ).toBeVisible();
 
   await page.reload();
   await openChannel(page, CHANNEL);
   await openThreadForRoot(page, job.root.id);
-  await expect(page.getByText("Changes requested").first()).toBeVisible();
-  await expect(page.getByText("Saving your decision.")).toHaveCount(0);
+  const reloadedThread = page
+    .getByTestId("message-thread-panel")
+    .getByTestId("website-job-composite");
+  await expect(
+    reloadedThread.getByRole("region", { name: "Change request" }),
+  ).toBeVisible();
+  await expect(
+    reloadedThread.getByText("Saving your decision."),
+  ).toHaveCount(0);
   expect(
     await page.evaluate(
       () =>
@@ -878,7 +925,9 @@ test("mocked community switch clears pending website state", async ({
   await threadAttachment
     .getByRole("button", { name: "Request changes" })
     .click();
-  await expect(page.getByText("Saving your decision.")).toBeVisible();
+  await expect(
+    threadAttachment.getByText("Saving your decision."),
+  ).toBeVisible();
 
   await page.getByTestId("community-rail-button-website-b").click();
   await expect(page.getByText("Saving your decision.")).toHaveCount(0);
