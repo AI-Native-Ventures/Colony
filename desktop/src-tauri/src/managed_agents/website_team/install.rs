@@ -666,8 +666,7 @@ fn patch_placement(
             .iter_mut()
             .find(|record| record.pubkey == pubkey)
             .ok_or_else(|| format!("agent {pubkey} is missing from this store"))?;
-        let (changed, upgrade) =
-            apply_recipe_to_agent(record, persona, manager_pubkey, &now_iso());
+        let (changed, upgrade) = apply_recipe_to_agent(record, persona, manager_pubkey, &now_iso());
         if changed {
             save_managed_agents(ctx.app, &records)?;
         }

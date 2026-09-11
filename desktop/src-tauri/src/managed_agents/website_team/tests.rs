@@ -228,7 +228,10 @@ fn definition_upgrade_refreshes_owned_content_and_preserves_user_settings() {
     let (changed, upgrade) =
         apply_recipe_to_definition(&mut definition, avery, "2026-02-01T00:00:00Z");
 
-    assert!(changed, "an outdated provisioned definition must be refreshed");
+    assert!(
+        changed,
+        "an outdated provisioned definition must be refreshed"
+    );
     assert!(upgrade.upgraded);
     assert_eq!(upgrade.from.as_deref(), Some("0.0.1"));
     assert_eq!(definition.display_name, "Avery");
