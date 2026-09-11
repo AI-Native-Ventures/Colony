@@ -664,7 +664,7 @@ test("mocked website-job fixture carries the bundled core digest", () => {
 test("mocked Brief state renders the brief and start action", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, "tyler");
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
@@ -686,7 +686,7 @@ test("mocked Brief state renders the brief and start action", async ({
 test("mocked Working state shows stages and earlier-version inspection", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, "tyler");
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
@@ -728,7 +728,7 @@ test("mocked Working state shows stages and earlier-version inspection", async (
 test("mocked Review state switches views, expands, and scopes decisions", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, "tyler");
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
@@ -782,7 +782,7 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
 test("mocked Revision state shows the exact change request", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, "tyler");
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
@@ -802,7 +802,7 @@ test("mocked Revision state shows the exact change request", async ({
 test("mocked Handover state shows confirmed resources and the draft request", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, "tyler");
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
@@ -824,7 +824,7 @@ test("mocked Handover state shows confirmed resources and the draft request", as
 test("mocked transport fails, retries, confirms from the head, and recovers on reload", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, "tyler");
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, {
     relaySelf: OWNER_PUBKEY,
@@ -901,7 +901,7 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
 test("mocked community switch clears pending website state", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, "tyler");
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await page.addInitScript(
     ({ list, active }) => {
@@ -943,7 +943,7 @@ test("mocked community switch clears pending website state", async ({
 test("mocked browser build reports the native preview as unavailable", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, "tyler");
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);

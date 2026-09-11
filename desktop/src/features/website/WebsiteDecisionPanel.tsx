@@ -62,10 +62,13 @@ export type WebsiteDecisionPanelProps = {
 export function WebsiteDecisionPanel({
   record,
   selectedRevision,
-  actor,
+  actor: actorProp,
   onDecision,
   className,
 }: WebsiteDecisionPanelProps) {
+  // Canonical lowercase hex, matching the owner builtBy/reviewer identities in
+  // the record; a differently cased or padded actor would read as unauthorized.
+  const actor = actorProp.trim().toLowerCase();
   const noteId = React.useId();
   const scopeKey = decisionScopeKey({
     channel: record.channel,
@@ -198,6 +201,9 @@ export function WebsiteDecisionPanel({
     <section
       aria-label="Your decision"
       className={cn("border-t border-border px-3.5 py-3", className)}
+      data-decision-reasons={eligibility.reasons
+        .map((reason) => reason.code)
+        .join(",")}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h4 className="text-xs font-medium text-foreground">

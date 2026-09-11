@@ -17,6 +17,7 @@ import * as React from "react";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import type { TimelineMessage } from "@/features/messages/types";
+import { useIdentityQuery } from "@/shared/api/hooks";
 
 import { markWebsiteCompositeRendered } from "./websiteCompositeRegistry";
 import { useWebsiteHeads } from "./useWebsiteHeads";
@@ -49,6 +50,7 @@ export default function WebsiteJobComposite({
     [message.tags],
   );
   const relaySelf = useRelaySelfQuery(Boolean(communityId)).data ?? null;
+  const identityQuery = useIdentityQuery();
   const heads = useWebsiteHeads({
     communityId: communityId || null,
     channelId: channelId || null,
@@ -77,6 +79,7 @@ export default function WebsiteJobComposite({
     <div data-testid="website-job-composite" ref={containerRef}>
       {showBody && head && communityId ? (
         <WebsiteThreadBody
+          actorPubkey={identityQuery.data?.pubkey}
           communityId={communityId}
           head={head}
           message={message}

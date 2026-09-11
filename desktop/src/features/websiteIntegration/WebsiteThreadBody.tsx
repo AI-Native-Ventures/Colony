@@ -52,6 +52,11 @@ export type WebsiteThreadBodyProps = {
   message: TimelineMessage;
   /** Message-row profiles; fetched when omitted (composite path). */
   profiles?: UserProfileLookup;
+  /**
+   * Current viewer pubkey from the row/thread context. Falls back to the
+   * shared identity query (composite path) when the row does not provide one.
+   */
+  actorPubkey?: string;
   testId: string;
   className?: string;
 };
@@ -61,11 +66,15 @@ export function WebsiteThreadBody({
   head,
   message,
   profiles: profilesProp,
+  actorPubkey,
   testId,
   className,
 }: WebsiteThreadBodyProps) {
   const record = head.record;
-  const pubkeys = React.useMemo(() => collectWebsiteAgentPubkeys(head), [head]);
+  const pubkeys = React.useMemo(
+    () => collectWebsiteAgentPubkeys(head),
+    [head],
+  );
   const profilesQuery = useUsersBatchQuery(pubkeys, {
     enabled: profilesProp === undefined && pubkeys.length > 0,
   });
@@ -75,7 +84,13 @@ export function WebsiteThreadBody({
     [head, profiles],
   );
   const identityQuery = useIdentityQuery();
-  const currentPubkey = identityQuery.data?.pubkey;
+  const actor = (
+    actorPubkey ??
+    identityQuery.data?.pubkey ??
+    ""
+  )
+    .trim()
+    .toLowerCase();
   const threadRef = React.useRef<HTMLElement | null>(null);
   const getClipBounds = useAttachmentClipBounds(threadRef);
   const artifactLoader = React.useMemo(
@@ -176,8 +191,8 @@ export function WebsiteThreadBody({
         selectedRevision={selected}
       />
       <WebsiteDecisionPanel
-        actor={currentPubkey ?? ""}
-        onDecision={currentPubkey ? onDecision : undefined}
+        actor={actor}
+        onDecision={actor ? onDecision : undefined}
         record={record}
         selectedRevision={selected}
       />

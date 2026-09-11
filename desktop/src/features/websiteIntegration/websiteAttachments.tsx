@@ -194,6 +194,7 @@ export function WebsiteMessageAttachment(props: WebsiteMessageAttachmentProps) {
 
 function WebsiteAttachmentInner({
   channelId,
+  currentPubkey,
   layoutVariant = "default",
   message,
   profiles,
@@ -221,6 +222,7 @@ function WebsiteAttachmentInner({
   if (compositeRendered) return null;
   return (
     <WebsiteThreadBody
+      actorPubkey={currentPubkey}
       communityId={communityId}
       head={head}
       message={message}
