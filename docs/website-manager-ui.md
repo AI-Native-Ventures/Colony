@@ -168,7 +168,8 @@ placement is by event id, not by composite rendering.
 | file | responsibility |
 | --- | --- |
 | `websiteHeads.ts` | Strict head (30203) and receipt (40028) parsing, relay-self trust, generation guard, community+channel store, thread/instance indexes, receipt waiters. |
-| `useWebsiteHeads.ts` | Channel-scoped query (`kinds: [30203]`, `#h`) for reload recovery plus live head/receipt subscriptions, exposed through `useSyncExternalStore`. |
+| `useWebsiteHeads.ts` | Channel-scoped binding: one ref-counted live head/receipt subscription per key, plus a module-level loader that guarantees exactly one query per (community, channel, relay self), joins concurrent mounts on one in-flight promise, reuses a fresh load for 30s, and backs off (60s on relay rate limits, 5s otherwise) without surfacing an error. Reads a referentially stable store snapshot. |
+| `websiteHeadsLoaderCore.ts` | Pure loader state machine (injected fetch/apply/clock/timer) covering dedupe, freshness, and rate-limit backoff; unit-tested under node --test. |
 | `websiteInstanceData.ts` | Parses and verifies the coordinator card's inline `website-job` data (`taskId`, `threadRoot`, `sourceUrl`, `brief`), requiring id === head `instance`, signer === head coordinator, manifest match, and record match. Supplies `WebsiteBriefView`. |
 | `websiteTransport.ts` | Builds the exact reserved Block actions (`website.approve`, `website.request-changes`) and kind-40027 `beginWork`; deterministic idempotency UUID; confirms from the canonical head or a matching receipt. |
 | `nativePreviewAdapter.ts` | Feature host adapter over `createWebsitePreviewAdapter`, artifact loader over `createWebsiteArtifactLoader`, handover download over `downloadWebsiteHandover`, error-code mapping. |
@@ -177,6 +178,7 @@ placement is by event id, not by composite rendering.
 | `WebsiteThreadBody.tsx` | The shared job body (preview, QA, version history, handover, decisions) used by both the plain event-id attachment and the delegated Block composite. |
 | `WebsiteJobComposite.tsx` | Delegated presentation for a trusted core `website-job` Block instance: in the right thread it renders `WebsiteThreadBody`; in the channel timeline and whenever no verified head exists it keeps the manifest's primitive tree (with an honest preparing note when the head is absent). |
 | `websiteCompositeRegistry.ts` | Marks instance event ids presented by the composite so the plain thread attachment stays hidden (no duplicated controls). |
+| `WebsiteAttachmentBoundary.tsx` | Local error boundary: a projection defect degrades to nothing rendered for that row and logs once, never taking the timeline into the app error boundary. |
 | `websiteAgentDirectory.ts` | Profile-backed agent directory plus the stable identity colour hash. |
 | `websiteAttachments.tsx` | `WebsiteMessageAttachment`: channel root (id === head `thread`) renders the brief/working/review projection; the thread card renders through the composite or the plain attachment, whichever owns it. |
 | `resetWebsiteIntegrationState.ts` | One `resetCommunityState()` entry clearing heads, receipt waiters, cached instance refs, and the composite registry. |

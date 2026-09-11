@@ -660,6 +660,13 @@ type ChannelBucket = {
   indexedInstances: Map<string, string>;
 };
 
+/**
+ * Shared empty snapshot. `useSyncExternalStore.getSnapshot` must return a
+ * referentially stable value when nothing changed; a fresh `[]` per call made
+ * React loop every message row in channels with no website heads.
+ */
+const EMPTY_CHANNEL_HEADS: readonly WebsiteHead[] = [];
+
 function bucketKey(communityId: string, channelId: string): string {
   return `${communityId}\u0000${channelId}`;
 }
@@ -695,7 +702,10 @@ export class WebsiteHeadsStore {
   };
 
   channelHeads(communityId: string, channelId: string): readonly WebsiteHead[] {
-    return this.buckets.get(bucketKey(communityId, channelId))?.snapshot ?? [];
+    return (
+      this.buckets.get(bucketKey(communityId, channelId))?.snapshot ??
+      EMPTY_CHANNEL_HEADS
+    );
   }
 
   headForThread(

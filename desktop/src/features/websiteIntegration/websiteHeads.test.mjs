@@ -142,6 +142,25 @@ test("the store keeps the highest generation per thread root", () => {
   assert.equal(store.channelHeads("community", CHANNEL).length, 1);
 });
 
+test("channel snapshots are referentially stable", () => {
+  const store = new WebsiteHeadsStore();
+  // An unknown channel must reuse one shared empty snapshot: a fresh array per
+  // getSnapshot call is what made every message row loop after mount.
+  assert.equal(
+    store.channelHeads("community", CHANNEL),
+    store.channelHeads("community", CHANNEL),
+  );
+  const event = headEvent(draftRecord());
+  assert.equal(store.applyEvent("community", CHANNEL, RELAY_PUBKEY, event), true);
+  const loaded = store.channelHeads("community", CHANNEL);
+  assert.equal(loaded, store.channelHeads("community", CHANNEL));
+  assert.equal(loaded.length, 1);
+  assert.notEqual(
+    loaded,
+    store.channelHeads("community", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb51"),
+  );
+});
+
 test("receipts parse for the relay signer and resolve waiters", async () => {
   const actionId = "1".repeat(64);
   const event = finalizeEvent(

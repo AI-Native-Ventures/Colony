@@ -1,16 +1,16 @@
 /**
  * React binding for the canonical website head store.
  *
- * One channel-scoped query (explicit kind + `#h` filter) recovers heads on
- * reload, and one ref-counted live subscription per community+channel carries
- * head and receipt updates. Ref-counting matters: the attachment hook renders
- * for every message row, so without it a busy channel would open one REQ per
- * row. Both paths write through the verified store; the UI reads a stable
- * snapshot keyed by community + channel.
+ * Every message row mounts this hook, so network work is not owned here: a
+ * module-level loader guarantees exactly one query per
+ * (community, channel, relay-self), joins concurrent mounts on one in-flight
+ * promise, reuses a fresh load for a quiet window, and backs off on relay
+ * rate limits without surfacing an error. One ref-counted live subscription
+ * per key carries head and receipt updates. The UI reads a stable snapshot
+ * keyed by community + channel.
  */
 
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
 
 import { relayClient } from "@/shared/api/relayClient";
 import {
@@ -19,8 +19,10 @@ import {
 } from "@/shared/constants/kinds";
 
 import { websiteHeadsStore, type WebsiteHead } from "./websiteHeads";
-
-const HEAD_QUERY_STALE_MS = 10_000;
+import {
+  createWebsiteHeadsLoader,
+  type WebsiteHeadsLoaderInput,
+} from "./websiteHeadsLoaderCore";
 
 type LiveSubscription = {
   count: number;
@@ -29,19 +31,27 @@ type LiveSubscription = {
 
 const liveSubscriptions = new Map<string, LiveSubscription>();
 
-function subscriptionKey(input: {
-  communityId: string;
-  channelId: string;
-  relaySelfPubkey: string;
-}): string {
+export const websiteHeadsLoader = createWebsiteHeadsLoader({
+  fetchEvents: (filter) => relayClient.fetchEvents(filter),
+  applyEvents: (input, events) =>
+    websiteHeadsStore.applyEvents(
+      input.communityId,
+      input.channelId,
+      input.relaySelfPubkey,
+      events,
+    ),
+  now: () => Date.now(),
+  setTimer: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+  clearTimer: (timer) => globalThis.clearTimeout(timer),
+});
+
+function subscriptionKey(input: WebsiteHeadsLoaderInput): string {
   return `${input.communityId}\u0000${input.channelId}\u0000${input.relaySelfPubkey}`;
 }
 
-function acquireWebsiteChannelSubscription(input: {
-  communityId: string;
-  channelId: string;
-  relaySelfPubkey: string;
-}): () => void {
+function acquireWebsiteChannelSubscription(
+  input: WebsiteHeadsLoaderInput,
+): () => void {
   const key = subscriptionKey(input);
   const existing = liveSubscriptions.get(key);
   if (existing) {
@@ -86,7 +96,9 @@ function acquireWebsiteChannelSubscription(input: {
     dispose: () => {
       disposed = true;
       for (const promise of pending) {
-        void promise.then((unsubscribe) => unsubscribe()).catch(() => {});
+        void promise
+          .then((unsubscribe) => unsubscribe())
+          .catch(() => {});
       }
     },
   });
@@ -102,10 +114,14 @@ function releaseWebsiteChannelSubscription(key: string): void {
   entry.dispose();
 }
 
-/** Dispose every shared live subscription at a community boundary. */
+/**
+ * Dispose every shared live subscription and pending load at a community
+ * boundary. The store reset drops the data; this drops the transport work.
+ */
 export function resetWebsiteHeadsLiveSubscriptions(): void {
   for (const entry of [...liveSubscriptions.values()]) entry.dispose();
   liveSubscriptions.clear();
+  websiteHeadsLoader.reset();
 }
 
 export function useWebsiteHeads(input: {
@@ -116,35 +132,14 @@ export function useWebsiteHeads(input: {
   const { communityId, channelId, relaySelfPubkey } = input;
   const enabled = Boolean(communityId && channelId && relaySelfPubkey);
 
-  const query = useQuery({
-    queryKey: ["website-heads", communityId, channelId, relaySelfPubkey],
-    queryFn: () =>
-      relayClient.fetchEvents({
-        kinds: [KIND_WEBSITE_HEAD],
-        "#h": [channelId as string],
-        limit: 100,
-      }),
-    enabled,
-    staleTime: HEAD_QUERY_STALE_MS,
-  });
-
   React.useEffect(() => {
-    if (
-      !enabled ||
-      !communityId ||
-      !channelId ||
-      !relaySelfPubkey ||
-      !query.data
-    ) {
-      return;
-    }
-    websiteHeadsStore.applyEvents(
+    if (!enabled || !communityId || !channelId || !relaySelfPubkey) return;
+    void websiteHeadsLoader.ensure({
       communityId,
       channelId,
       relaySelfPubkey,
-      query.data,
-    );
-  }, [channelId, communityId, enabled, query.data, relaySelfPubkey]);
+    });
+  }, [channelId, communityId, enabled, relaySelfPubkey]);
 
   React.useEffect(() => {
     if (!enabled || !communityId || !channelId || !relaySelfPubkey) return;

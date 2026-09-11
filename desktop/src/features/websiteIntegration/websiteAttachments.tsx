@@ -40,6 +40,7 @@ import {
 } from "./websiteCompositeRegistry";
 import { useWebsiteHeads } from "./useWebsiteHeads";
 import { buildWebsiteAgentDirectory } from "./websiteAgentDirectory";
+import { WebsiteAttachmentBoundary } from "./WebsiteAttachmentBoundary";
 import {
   deriveWebsiteProgress,
   deriveWebsiteStageAgents,
@@ -165,17 +166,7 @@ function WebsiteRootAttachment({
   );
 }
 
-/**
- * One small insertion point for the message row and thread panel. It renders
- * nothing unless this exact event id maps to a verified head on the surface it
- * belongs to.
- */
-export function WebsiteMessageAttachment({
-  channelId,
-  layoutVariant = "default",
-  message,
-  profiles,
-}: {
+type WebsiteMessageAttachmentProps = {
   channelId?: string | null;
   /**
    * Accepted for the message-row call site; the shared body resolves the
@@ -185,7 +176,30 @@ export function WebsiteMessageAttachment({
   layoutVariant?: "default" | "thread-reply";
   message: TimelineMessage;
   profiles?: UserProfileLookup;
-}) {
+};
+
+/**
+ * One small insertion point for the message row and thread panel. It renders
+ * nothing unless this exact event id maps to a verified head on the surface it
+ * belongs to. The boundary keeps a projection defect from taking down the
+ * whole timeline.
+ */
+export function WebsiteMessageAttachment(
+  props: WebsiteMessageAttachmentProps,
+) {
+  return (
+    <WebsiteAttachmentBoundary>
+      <WebsiteAttachmentInner {...props} />
+    </WebsiteAttachmentBoundary>
+  );
+}
+
+function WebsiteAttachmentInner({
+  channelId,
+  layoutVariant = "default",
+  message,
+  profiles,
+}: WebsiteMessageAttachmentProps) {
   const { communityId, head, surface } = useWebsiteAttachmentContext({
     channelId: channelId ?? null,
     layoutVariant,
