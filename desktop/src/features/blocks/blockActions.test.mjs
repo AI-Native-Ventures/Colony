@@ -7,6 +7,7 @@ import {
   containsSecretBearingField,
   createBlockActionSubmitter,
   isRetryableBlockActionTransportError,
+  declaresApprovalPermission,
   resolveApprovalActionInputForSubmission,
   resolveApprovalActionInputs,
   resetInFlightBlockActions,
@@ -216,8 +217,28 @@ test("Approval grant disables on mutation, hash mismatch, or expiry", () => {
   );
 });
 
+const APPROVAL_MANIFEST = {
+  permissions: [{ capability: "external-action.approve" }],
+  actions: [
+    { id: "approval.approve", permissions: ["external-action.approve"] },
+    { id: "approval.deny", permissions: [] },
+  ],
+};
+
+// The composite that sends a real email. Its approving action is named
+// `outreach.approve`, so nothing keyed on the string `approval.approve` would
+// ever hash it.
+const OUTREACH_MANIFEST = {
+  permissions: [{ capability: "external-action.approve" }],
+  actions: [
+    { id: "outreach.approve", permissions: ["external-action.approve"] },
+    { id: "outreach.skip", permissions: [] },
+  ],
+};
+
 test("Approval derives only exact approve and deny payloads while pending", () => {
   const result = resolveApprovalActionInputs(
+    APPROVAL_MANIFEST,
     {
       action: "email.send",
       destination: "mailto:owner@example.com",
@@ -235,6 +256,7 @@ test("Approval derives only exact approve and deny payloads while pending", () =
   assert.deepEqual(result.inputs.get("approval.deny"), {});
   assert.equal(
     resolveApprovalActionInputs(
+      APPROVAL_MANIFEST,
       {
         action: "email.send",
         destination: "mailto:owner@example.com",
@@ -248,6 +270,59 @@ test("Approval derives only exact approve and deny payloads while pending", () =
   );
 });
 
+test("the approval hash follows the capability, not the action id", () => {
+  const outreach = {
+    action: "Send this email from your Gmail",
+    business_name: "Atlantic Plumbing",
+    destination: "info@atlanticplumb.co.za",
+    from: "basheer@horizonlabs.co.za",
+    content: {
+      subject: "Winter boiler special for Sea Point homes",
+      body: "Hi Atlantic Plumbing team,",
+    },
+    expires_at: 2_000,
+    status: "pending",
+  };
+  const result = resolveApprovalActionInputs(
+    OUTREACH_MANIFEST,
+    outreach,
+    1_000,
+  );
+  assert.equal(result.ok, true);
+  const { approval_hash: hash } = result.inputs.get("outreach.approve");
+  assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.deepEqual(result.inputs.get("outreach.skip"), {});
+
+  // The subject and body are inside `content`, so editing either one must
+  // produce a different hash. Otherwise a yes covers text nobody read.
+  const edited = {
+    ...outreach,
+    content: { ...outreach.content, body: "Something else entirely." },
+  };
+  assert.notEqual(
+    resolveApprovalActionInputs(OUTREACH_MANIFEST, edited, 1_000).inputs.get(
+      "outreach.approve",
+    ).approval_hash,
+    hash,
+  );
+
+  const sent = resolveApprovalActionInputs(
+    OUTREACH_MANIFEST,
+    { ...outreach, status: "sent" },
+    1_000,
+  );
+  assert.equal(sent.ok, false);
+  assert.match(sent.reason, /already been resolved/);
+});
+
+test("declaresApprovalPermission reads the manifest, not the handle", () => {
+  assert.equal(declaresApprovalPermission(OUTREACH_MANIFEST), true);
+  assert.equal(
+    declaresApprovalPermission({ permissions: [], actions: [] }),
+    false,
+  );
+});
+
 test("Approval submission rechecks expiry at the signing boundary", () => {
   const approval = {
     action: "email.send",
@@ -257,11 +332,16 @@ test("Approval submission rechecks expiry at the signing boundary", () => {
     status: "pending",
   };
   assert.equal(
-    resolveApprovalActionInputForSubmission(approval, "approval.approve", 1_999)
-      .ok,
+    resolveApprovalActionInputForSubmission(
+      APPROVAL_MANIFEST,
+      approval,
+      "approval.approve",
+      1_999,
+    ).ok,
     true,
   );
   const expired = resolveApprovalActionInputForSubmission(
+    APPROVAL_MANIFEST,
     approval,
     "approval.approve",
     2_000,

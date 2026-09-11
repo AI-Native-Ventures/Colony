@@ -25,6 +25,7 @@ pub mod mem;
 pub mod messages;
 pub mod moderation;
 pub mod notes;
+pub mod outreach;
 pub mod pack;
 pub mod parties;
 pub mod patches;

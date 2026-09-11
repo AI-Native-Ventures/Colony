@@ -15,7 +15,7 @@ use nostr::{Event, Timestamp};
 
 use crate::state::AppState;
 
-const CORE_BLOCK_ASSETS: [(&str, &str); 24] = [
+const CORE_BLOCK_ASSETS: [(&str, &str); 25] = [
     (
         "primitives/section.json",
         include_str!("core_blocks/primitives/section.json"),
@@ -111,6 +111,10 @@ const CORE_BLOCK_ASSETS: [(&str, &str); 24] = [
     (
         "composites/deliverable.json",
         include_str!("core_blocks/composites/deliverable.json"),
+    ),
+    (
+        "composites/outreach-email.json",
+        include_str!("core_blocks/composites/outreach-email.json"),
     ),
 ];
 
@@ -272,7 +276,7 @@ mod tests {
         "actions",
         "question",
     ];
-    const COMPOSITE_HANDLES: [&str; 13] = [
+    const COMPOSITE_HANDLES: [&str; 14] = [
         "lead-card",
         "approval",
         "agent-proposal",
@@ -286,6 +290,7 @@ mod tests {
         "initiative",
         "handover",
         "deliverable",
+        "outreach-email",
     ];
 
     /// Every bundled manifest, pinned by content digest against the
@@ -309,7 +314,7 @@ mod tests {
     ///
     /// Editing a manifest therefore fails this test until the timestamp moves
     /// with it. Update both fields together: that is the point, not a chore.
-    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 24] = [
+    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 25] = [
         (
             "actions",
             1785369600,
@@ -424,6 +429,11 @@ mod tests {
             "receipt",
             1785369601,
             "30422971240c5644ba5677410f12671bc581610bf8428e1496ef40ead1d0fb6e",
+        ),
+        (
+            "outreach-email",
+            1789084800,
+            "1c728cad458df614ddc8036dbcef502484b363ddc791df5a8a0454d5ae3e84c0",
         ),
         (
             "report",
@@ -1192,15 +1202,15 @@ mod tests {
     }
 
     #[test]
-    fn loads_twenty_four_unique_valid_manifests_and_examples() {
+    fn loads_twenty_five_unique_valid_manifests_and_examples() {
         let manifests = core_block_manifests().expect("Core manifests should validate");
-        assert_eq!(manifests.len(), 24);
+        assert_eq!(manifests.len(), 25);
 
         let handles: BTreeSet<_> = manifests
             .iter()
             .map(|manifest| manifest.handle.as_str())
             .collect();
-        assert_eq!(handles.len(), 24);
+        assert_eq!(handles.len(), 25);
 
         let expected: BTreeSet<_> = PRIMITIVE_HANDLES
             .into_iter()
@@ -1491,8 +1501,8 @@ mod tests {
             ensure_core_blocks_with(&db, &relay_keys, community)
                 .await
                 .expect("first seed"),
-            48,
-            "the first seed inserts twenty-four manifests and twenty-four heads"
+            50,
+            "the first seed inserts twenty-five manifests and twenty-five heads"
         );
         assert_eq!(
             ensure_core_blocks_with(&db, &relay_keys, community)
@@ -1522,8 +1532,8 @@ mod tests {
             })
             .await
             .expect("stored heads");
-        assert_eq!(manifests.len(), 24);
-        assert_eq!(heads.len(), 24);
+        assert_eq!(manifests.len(), 25);
+        assert_eq!(heads.len(), 25);
 
         let mut newer_manifest = core_block_manifests()
             .expect("bundled manifests")

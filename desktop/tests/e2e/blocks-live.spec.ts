@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -81,6 +82,17 @@ async function eventually<T>(fn: () => Promise<T | undefined>): Promise<T> {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw lastError ?? new Error("live gate did not converge before timeout");
+}
+
+// Mirrors `buzz_core::block::canonical_json`: recursively sorted keys, no
+// insignificant whitespace. The proposal is flat strings and one integer, so
+// sorting the top level is the whole canonical form.
+function approvalHash(proposal: Record<string, unknown>): string {
+  const canonical = `{${Object.keys(proposal)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${JSON.stringify(proposal[key])}`)
+    .join(",")}}`;
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
 async function writeEvidence(directory: string, name: string, value: unknown) {
@@ -322,11 +334,14 @@ test.describe("Blocks live Gate C", () => {
       score: 94,
       evidence: ["Active catalog version", "Old instance remains pinned"],
     });
-    await writeEvidence(evidence, "approval.json", {
+    const approvalProposal = {
       action: "Send Gate C evidence",
       destination: "gate-c@example.com",
       content: "Deliberate retry proof.",
       expires_at: Math.floor(Date.now() / 1000) + 3600,
+    };
+    await writeEvidence(evidence, "approval.json", {
+      ...approvalProposal,
       status: "pending",
     });
     await writeEvidence(evidence, "brainstorm.json", {
@@ -715,8 +730,10 @@ test.describe("Blocks live Gate C", () => {
 
     // A retry keeps one idempotency key. The relay durable claim is verified
     // below; issuing two CLI writes makes that property observable outside UI.
+    // The relay binds an approving action to a hash over the exact proposal
+    // its instance carries, so an invented hash is refused at ingest.
     await writeEvidence(evidence, "approval-input.json", {
-      approval_hash: "a".repeat(64),
+      approval_hash: approvalHash(approvalProposal),
     });
     const idempotencyKey = "10000000-0000-4000-8000-000000000701";
     const firstAction = await runCli(cli, relayHttpUrl, [

@@ -198,7 +198,43 @@ export type ApprovalProposal = {
   expires_at: number;
 };
 
+// Every terminal state an approving Block can land in. A card in one of these
+// is history, not a decision, so the reader is told it is already answered
+// rather than that its proposal is malformed.
+const RESOLVED_APPROVAL_STATUSES = new Set([
+  "approved",
+  "denied",
+  "sent",
+  "skipped",
+  "failed",
+  "superseded",
+]);
+
+/** Capability that makes a Block action an exact external approval. */
+export const EXTERNAL_ACTION_APPROVE = "external-action.approve";
+
+/** The shape of a manifest this module reads; the full type lives elsewhere. */
+export type ApprovalManifestShape = {
+  permissions: readonly { capability: string }[];
+  actions: readonly { id: string; permissions?: readonly string[] }[];
+};
+
+/**
+ * Whether a manifest binds its actions to the Approval contract.
+ *
+ * The capability, not the handle, is what makes a card consequential, so
+ * `@outreach-email` is hashed on exactly the same terms as `@approval`.
+ */
+export function declaresApprovalPermission(
+  manifest: ApprovalManifestShape,
+): boolean {
+  return manifest.permissions.some(
+    (permission) => permission.capability === EXTERNAL_ACTION_APPROVE,
+  );
+}
+
 export function resolveApprovalActionInputs(
+  manifest: ApprovalManifestShape,
   value: unknown,
   nowSeconds: number,
 ):
@@ -214,16 +250,15 @@ export function resolveApprovalActionInputs(
   if (
     typeof action !== "string" ||
     typeof destination !== "string" ||
-    typeof content !== "string" ||
+    content === undefined ||
     !Number.isSafeInteger(expiresAt) ||
     status !== "pending"
   ) {
     return {
       ok: false,
-      reason:
-        status === "approved" || status === "denied"
-          ? "This approval has already been resolved."
-          : "The approval proposal is invalid.",
+      reason: RESOLVED_APPROVAL_STATUSES.has(status as string)
+        ? "This approval has already been resolved."
+        : "The approval proposal is invalid.",
     };
   }
   const proposal: ApprovalProposal = {
@@ -240,14 +275,19 @@ export function resolveApprovalActionInputs(
   if (!validation.ok) return validation;
   return {
     ok: true,
-    inputs: new Map<string, unknown>([
-      ["approval.approve", { approval_hash: validation.approvalHash }],
-      ["approval.deny", {}],
-    ]),
+    inputs: new Map<string, unknown>(
+      manifest.actions.map((declaration) => [
+        declaration.id,
+        declaration.permissions?.includes(EXTERNAL_ACTION_APPROVE)
+          ? { approval_hash: validation.approvalHash }
+          : {},
+      ]),
+    ),
   };
 }
 
 export function resolveApprovalActionInputForSubmission(
+  manifest: ApprovalManifestShape,
   value: unknown,
   actionId: string,
   nowSeconds: number,
@@ -257,7 +297,7 @@ export function resolveApprovalActionInputForSubmission(
       ok: false;
       reason: string;
     } {
-  const current = resolveApprovalActionInputs(value, nowSeconds);
+  const current = resolveApprovalActionInputs(manifest, value, nowSeconds);
   if (!current.ok) return current;
   if (!current.inputs.has(actionId)) {
     return { ok: false, reason: "This approval action is not available." };
