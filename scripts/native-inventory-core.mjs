@@ -10,8 +10,22 @@ const QUOTED_LITERAL = /["'`]([A-Za-z0-9_:|.-]+)["'`]/g;
 const CALL_SITE = (name) => new RegExp(`(?<![A-Za-z0-9_])${name}\\s*\\(`);
 const FN_DEFINITION = (name) => new RegExp(`\\bfn\\s+${name}\\b`);
 
+// Files whose `generate_handler!` lists register commands with the app.
+//
+// `command_registry.rs` holds the app's own list. It used to live inline in
+// `lib.rs` and moved out when that file hit the desktop file-size ratchet; the
+// macro it defines expands back into `lib.rs`, so the commands are registered
+// exactly as before, but this scanner reads FILES rather than resolving
+// symbols and saw only the six entries literally left behind. Registered fell
+// from 373 to 6 and `native-inventory.json` was regenerated wrong, which is
+// the file the packaging and boundary gates read.
+//
+// If the list is ever split again, add the new file here. The "registered and
+// defined counts must agree" invariant in the sibling test is what catches a
+// forgotten entry, and it names both numbers.
 const REGISTERED_IN = [
   "src-tauri/src/lib.rs",
+  "src-tauri/src/command_registry.rs",
   "src-tauri/src/native_websocket.rs",
 ];
 
