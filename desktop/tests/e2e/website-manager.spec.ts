@@ -1194,6 +1194,15 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
     "confirmed canonical head renders the change request (pre-reload)",
   ).toBeVisible();
 
+  // The retry really published: assert it before the reload, because a reload
+  // re-initializes the mock bridge and empties its published-event record.
+  expect(
+    await page.evaluate(
+      () =>
+        (window as BlocksE2eWindow).__BUZZ_E2E_PUBLISHED_EVENTS__?.length ?? 0,
+    ),
+  ).toBeGreaterThan(0);
+
   await page.reload();
   await openChannel(page, CHANNEL);
   // A reload re-initializes the mock bridge, so restore the fixtures the
@@ -1217,12 +1226,6 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   await expect(reloadedThread.getByText("Saving your decision.")).toHaveCount(
     0,
   );
-  expect(
-    await page.evaluate(
-      () =>
-        (window as BlocksE2eWindow).__BUZZ_E2E_PUBLISHED_EVENTS__?.length ?? 0,
-    ),
-  ).toBeGreaterThan(0);
 });
 
 test("mocked community switch clears pending website state", async ({
