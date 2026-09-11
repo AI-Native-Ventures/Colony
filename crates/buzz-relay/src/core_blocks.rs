@@ -15,7 +15,7 @@ use nostr::{Event, Timestamp};
 
 use crate::state::AppState;
 
-const CORE_BLOCK_ASSETS: [(&str, &str); 25] = [
+const CORE_BLOCK_ASSETS: [(&str, &str); 26] = [
     (
         "primitives/section.json",
         include_str!("core_blocks/primitives/section.json"),
@@ -281,7 +281,7 @@ mod tests {
         "actions",
         "question",
     ];
-    const COMPOSITE_HANDLES: [&str; 14] = [
+    const COMPOSITE_HANDLES: [&str; 15] = [
         "lead-card",
         "approval",
         "agent-proposal",
@@ -320,7 +320,7 @@ mod tests {
     ///
     /// Editing a manifest therefore fails this test until the timestamp moves
     /// with it. Update both fields together: that is the point, not a chore.
-    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 25] = [
+    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 26] = [
         (
             "actions",
             1785369600,
