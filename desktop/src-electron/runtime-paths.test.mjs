@@ -71,3 +71,23 @@ test("development keeps explicit host and validated Vite origin", () => {
     /absolute/,
   );
 });
+
+test("a packaged canary keeps its own name and user data directory", () => {
+  const common = {
+    packaged: true,
+    appPath: "/Applications/Colony Canary.app/Contents/Resources/app.asar",
+    resourcesPath: "/Applications/Colony Canary.app/Contents/Resources",
+    env: {},
+  };
+  const canary = runtimePaths({ ...common, channel: "canary" });
+  const stable = runtimePaths({ ...common, channel: "stable" });
+  assert.equal(canary.canary, true);
+  assert.equal(canary.stable, false);
+  assert.equal(canary.name, "Colony Canary");
+  assert.equal(canary.profile, "colony-electron-canary");
+  assert.notEqual(canary.profile, stable.profile);
+  assert.equal(
+    runtimePaths({ ...common, packaged: false, channel: "canary" }).canary,
+    false,
+  );
+});

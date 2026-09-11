@@ -10,6 +10,7 @@ export function runtimePaths({
 }) {
   const stable = packaged && channel === "stable";
   const candidate = packaged && channel === "candidate";
+  const canary = packaged && channel === "canary";
   const devUrl = packaged ? undefined : env.COLONY_ELECTRON_DEV_URL;
   if (devUrl && new URL(devUrl).origin !== "http://127.0.0.1:1425")
     throw new Error("Unexpected development origin");
@@ -28,19 +29,26 @@ export function runtimePaths({
       packaged ? "runtime-config.json" : "src-tauri/tauri.conf.json",
     ),
     stable,
+    canary,
     name: stable
       ? "Colony"
-      : candidate
-        ? "Colony Candidate"
-        : packaged
-          ? "Colony Electron Beta"
-          : "Colony Electron Development",
+      : canary
+        ? "Colony Canary"
+        : candidate
+          ? "Colony Candidate"
+          : packaged
+            ? "Colony Electron Beta"
+            : "Colony Electron Development",
+    // Canary keeps its own userData directory, so the two installed apps never
+    // share app data, sockets or managed-agent state.
     profile: stable
       ? "colony-electron"
-      : candidate
-        ? "colony-electron-candidate"
-        : packaged
-          ? "colony-electron-beta"
-          : "colony-electron-development",
+      : canary
+        ? "colony-electron-canary"
+        : candidate
+          ? "colony-electron-candidate"
+          : packaged
+            ? "colony-electron-beta"
+            : "colony-electron-development",
   };
 }

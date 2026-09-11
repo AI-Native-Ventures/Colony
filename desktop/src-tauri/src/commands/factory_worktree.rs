@@ -14,9 +14,15 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use tauri::State;
 
-use super::project_git_exec::clean_branch;
+use super::project_git_exec::{
+    build_git_auth_config, build_git_clone_auth_config, clean_branch,
+    validate_local_clone_url_for_workspace,
+};
+use super::project_git_workflow::{clone_project_repository_blocking, ProjectRepoCloneResult};
 use super::project_repo_paths::find_local_repo_dir;
+use crate::app_state::AppState;
 use crate::managed_agents::resolve_command;
 
 /// Directory under the repositories root holding every factory worktree.
@@ -48,6 +54,8 @@ pub struct FactoryWorktreeResult {
     pub branch: String,
     /// `false` when an existing worktree for this branch was reused.
     pub created: bool,
+    /// `true` when the project's repository was cloned to get a checkout.
+    pub created_checkout: bool,
 }
 
 /// Turn a branch name into a single, safe path segment.
@@ -151,13 +159,63 @@ fn display_path(path: &Path) -> String {
 
 /// Create — or reuse — the worktree an agent runs in.
 ///
-/// Fails when the project has no local checkout: an agent is never silently
-/// dropped into the user's home directory, which is where a checkout-less
-/// terminal would land.
+/// A project whose repository has never been cloned on this machine is cloned
+/// first, the way [`open_project_terminal`](super::project_terminal) already
+/// does, so launching an agent from a project channel never asks the owner to
+/// clone by hand. Without a clone URL there is nothing to branch from and the
+/// call fails: an agent is never silently dropped into the user's home
+/// directory, which is where a checkout-less terminal would land.
 #[tauri::command]
-pub fn factory_worktree_create(
+pub async fn factory_worktree_create(
     request: FactoryWorktreeRequest,
+    state: State<'_, AppState>,
 ) -> Result<FactoryWorktreeResult, String> {
+    let clone_url = request
+        .clone_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    // Validate and build the credentials outside the blocking task: both
+    // borrow Tauri state, which must not cross into it.
+    let auth = match clone_url.as_deref() {
+        Some(clone_url) => {
+            validate_local_clone_url_for_workspace(clone_url, &state)?;
+            build_git_clone_auth_config(clone_url, &state)
+        }
+        None => build_git_auth_config(&state),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let default_branch = request.from.clone();
+        let repos_dir = request.repos_dir.clone();
+        let project_dtag = request.project_dtag.trim().to_string();
+        factory_worktree_create_blocking(request, |clone_url| {
+            let auth = auth?;
+            clone_project_repository_blocking(
+                repos_dir.as_deref(),
+                &project_dtag,
+                clone_url,
+                default_branch.as_deref(),
+                &auth,
+            )
+        })
+    })
+    .await
+    .map_err(|error| format!("factory worktree task failed: {error}"))?
+}
+
+/// The body of [`factory_worktree_create`], with the clone step injected.
+///
+/// The command passes the real relay clone; tests pass a local one, because
+/// the workspace clone-URL validation only accepts http(s) Colony or GitHub
+/// URLs and a test has neither.
+fn factory_worktree_create_blocking<F>(
+    request: FactoryWorktreeRequest,
+    clone: F,
+) -> Result<FactoryWorktreeResult, String>
+where
+    F: FnOnce(&str) -> Result<ProjectRepoCloneResult, String>,
+{
     let branch = clean_branch(Some(request.branch.clone()))
         .ok_or_else(|| "worktree branch name is not valid".to_string())?;
     let from = clean_branch(request.from.clone()).unwrap_or_else(|| "HEAD".to_string());
@@ -172,12 +230,37 @@ pub fn factory_worktree_create(
         return Err("worktree branch name is not valid".to_string());
     }
 
-    let checkout = find_local_repo_dir(
+    let clone_url = request
+        .clone_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let existing = match find_local_repo_dir(
         request.repos_dir.as_deref(),
         project_dtag,
         request.clone_url.as_deref(),
-    )?
-    .ok_or_else(|| "this project has no local checkout to branch from".to_string())?;
+    ) {
+        Ok(found) => found,
+        // A repos root that does not exist yet (fresh machine, nothing cloned)
+        // is not fatal when there is something to clone: the clone below
+        // creates the root. An explicit, misconfigured reposDir still errors
+        // there, and with no clone URL the original error stands.
+        Err(error) => {
+            if clone_url.is_none() {
+                return Err(error);
+            }
+            None
+        }
+    };
+    let (checkout, created_checkout) = match existing {
+        Some(checkout) => (checkout, false),
+        None => {
+            let clone_url = clone_url
+                .ok_or_else(|| "this project has no local checkout to branch from".to_string())?;
+            let cloned = clone(clone_url)?;
+            (PathBuf::from(&cloned.path), cloned.cloned)
+        }
+    };
     let repos_root = checkout
         .parent()
         .ok_or_else(|| "the project checkout has no repositories root".to_string())?
@@ -196,6 +279,7 @@ pub fn factory_worktree_create(
                 ),
                 branch,
                 created: false,
+                created_checkout,
             }),
             Some(existing) => Err(format!(
                 "{} already holds branch {existing}",
@@ -228,6 +312,7 @@ pub fn factory_worktree_create(
         path: display_path(&resolved),
         branch,
         created: true,
+        created_checkout,
     })
 }
 
@@ -260,6 +345,11 @@ mod tests {
         }
     }
 
+    /// The command's body with a clone step that must never run.
+    fn create(request: FactoryWorktreeRequest) -> Result<FactoryWorktreeResult, String> {
+        factory_worktree_create_blocking(request, |_| Err("this test must not clone".to_string()))
+    }
+
     #[test]
     fn branch_slug_flattens_and_trims() {
         assert_eq!(
@@ -283,7 +373,7 @@ mod tests {
     fn creates_a_worktree_for_a_new_branch() {
         let root = tempfile::tempdir().expect("tempdir");
         fixture_repo(root.path(), "factory-fixture");
-        let result = factory_worktree_create(request(
+        let result = create(request(
             root.path(),
             "factory-fixture",
             "feat/factory-worktrees",
@@ -299,10 +389,10 @@ mod tests {
     fn reuses_an_existing_worktree_for_the_same_branch() {
         let root = tempfile::tempdir().expect("tempdir");
         fixture_repo(root.path(), "factory-fixture");
-        let first = factory_worktree_create(request(root.path(), "factory-fixture", "feat/reuse"))
-            .expect("first worktree");
-        let second = factory_worktree_create(request(root.path(), "factory-fixture", "feat/reuse"))
-            .expect("second worktree");
+        let first =
+            create(request(root.path(), "factory-fixture", "feat/reuse")).expect("first worktree");
+        let second =
+            create(request(root.path(), "factory-fixture", "feat/reuse")).expect("second worktree");
         assert!(first.created);
         assert!(!second.created);
         assert_eq!(first.path, second.path);
@@ -313,9 +403,8 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let checkout = fixture_repo(root.path(), "factory-fixture");
         run_local_git(&["branch", "feat/existing"], &checkout).expect("create branch");
-        let result =
-            factory_worktree_create(request(root.path(), "factory-fixture", "feat/existing"))
-                .expect("worktree for existing branch");
+        let result = create(request(root.path(), "factory-fixture", "feat/existing"))
+            .expect("worktree for existing branch");
         assert!(result.created);
         assert_eq!(
             checked_out_branch(Path::new(&result.path)).as_deref(),
@@ -326,16 +415,66 @@ mod tests {
     #[test]
     fn refuses_a_project_without_a_local_checkout() {
         let root = tempfile::tempdir().expect("tempdir");
-        let error = factory_worktree_create(request(root.path(), "missing-project", "feat/x"))
+        let error = create(request(root.path(), "missing-project", "feat/x"))
             .expect_err("missing checkout must fail");
         assert!(error.contains("no local checkout"), "unexpected: {error}");
+    }
+
+    #[test]
+    fn clones_the_project_when_there_is_no_checkout() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        fixture_repo(source.path(), "factory-fixture");
+        let bare = source.path().join("factory-fixture.git");
+        run_local_git(
+            &[
+                "clone",
+                "--bare",
+                &display_path(&source.path().join("factory-fixture")),
+                &display_path(&bare),
+            ],
+            source.path(),
+        )
+        .expect("bare clone");
+
+        // An empty repos root: nothing has ever been cloned on this machine.
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut request = request(root.path(), "factory-fixture", "feat/first-launch");
+        request.clone_url = Some(display_path(&bare));
+        let cloned_to = root.path().join("factory-fixture");
+        let result = factory_worktree_create_blocking(request, |clone_url| {
+            run_local_git(
+                &["clone", clone_url, &display_path(&cloned_to)],
+                root.path(),
+            )?;
+            Ok(ProjectRepoCloneResult {
+                path: display_path(&cloned_to),
+                cloned: true,
+                message: "cloned".to_string(),
+            })
+        })
+        .expect("worktree after clone");
+
+        assert!(result.created);
+        assert!(result.created_checkout);
+        assert_eq!(result.branch, "feat/first-launch");
+        assert!(result.path.ends_with("feat-first-launch"));
+        assert!(Path::new(&result.path).join("README.md").exists());
+    }
+
+    #[test]
+    fn reports_no_clone_when_the_checkout_already_exists() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fixture_repo(root.path(), "factory-fixture");
+        let result = create(request(root.path(), "factory-fixture", "feat/no-clone"))
+            .expect("worktree creation");
+        assert!(!result.created_checkout);
     }
 
     #[test]
     fn refuses_a_flag_shaped_branch() {
         let root = tempfile::tempdir().expect("tempdir");
         fixture_repo(root.path(), "factory-fixture");
-        let error = factory_worktree_create(request(
+        let error = create(request(
             root.path(),
             "factory-fixture",
             "--upload-pack=evil",

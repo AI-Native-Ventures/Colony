@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   productionSigning,
+  CANARY_UPDATER_ENDPOINT,
+  channelUpdaterConfig,
   stableUpdaterConfig,
   STABLE_UPDATER_ENDPOINT,
 } from "./electron-release-contract.mjs";
@@ -84,6 +86,44 @@ test("existing updater endpoint cannot drift or silently omit the trust key", ()
   );
   assert.deepEqual(
     stableUpdaterConfig({ BUZZ_UPDATER_PUBLIC_KEY: "fixture" }).plugins.updater,
+    { pubkey: "fixture", endpoints: [STABLE_UPDATER_ENDPOINT] },
+  );
+});
+
+test("a canary build carries the canary endpoint and never the stable one", () => {
+  const updater = channelUpdaterConfig("canary", {
+    BUZZ_UPDATER_PUBLIC_KEY: "fixture",
+  }).plugins.updater;
+  assert.deepEqual(updater, {
+    pubkey: "fixture",
+    endpoints: [CANARY_UPDATER_ENDPOINT],
+  });
+  assert.notEqual(CANARY_UPDATER_ENDPOINT, STABLE_UPDATER_ENDPOINT);
+  assert.match(CANARY_UPDATER_ENDPOINT, /colony-canary-latest\/latest\.json$/);
+  assert.throws(
+    () =>
+      channelUpdaterConfig("canary", {
+        BUZZ_UPDATER_PUBLIC_KEY: "fixture",
+        BUZZ_UPDATER_ENDPOINT: STABLE_UPDATER_ENDPOINT,
+      }),
+    /canary updater endpoint cannot change/,
+  );
+  assert.throws(
+    () => channelUpdaterConfig("beta", { BUZZ_UPDATER_PUBLIC_KEY: "fixture" }),
+    /No updater endpoint/,
+  );
+});
+
+test("a release candidate still packages with the stable endpoint", () => {
+  // `--production-candidate` sets channel "candidate" while staying a stable
+  // build, so packaging it must resolve an endpoint rather than throw.
+  const variant = electronPackageVariant(["--production-candidate"]);
+  assert.equal(variant.channel, "candidate");
+  assert.ok(variant.release);
+  assert.deepEqual(
+    channelUpdaterConfig(variant.channel, {
+      BUZZ_UPDATER_PUBLIC_KEY: "fixture",
+    }).plugins.updater,
     { pubkey: "fixture", endpoints: [STABLE_UPDATER_ENDPOINT] },
   );
 });

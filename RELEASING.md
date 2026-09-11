@@ -169,15 +169,29 @@ resolves to it. The release page is
 | Updater endpoint | `colony-desktop-latest/latest.json` | `colony-canary-latest/latest.json` |
 | Relay | `wss://relay.colony.ainative.ventures` | identical (shared, see below) |
 | Version | `<v>` from the tag | `<desktop package.json version>-canary.<run_number>` |
-| Signing | ad-hoc Apple identity + shared Tauri updater key | identical |
+| Executable | `buzz-desktop` | `colony-canary` |
+| Shell | Electron | Electron |
+| Signing | ad-hoc Apple identity + shared updater key | identical |
+
+Both channels ship the Electron shell, packaged by the same script. The canary
+is the `--canary` variant in `desktop/scripts/electron-package-config.mjs`, so
+it differs from stable only in the rows above. Until 2026-09-11 this lane ran
+`tauri build`, which meant the canary a tester installed was a different
+application from the one production ships.
+
+**One manual install.** An already installed Tauri canary cannot auto-update
+into the Electron canary: the archive its updater downloads carries a different
+shell and a different executable name, so the first Electron canary has to be
+downloaded from the link above and installed by hand, once. Identity survives
+that, because both shells read the same `colony-canary-desktop` keychain
+service. Locally saved interface state does not: the Tauri to Electron frontend
+migration runs for stable only.
 
 The different identifier and product name together are what let the canary
 install beside stable: macOS keys application support, preferences and
 keychain items off the identifier, and Finder, the Dock and the menu bar off
-the bundle name. Both come from `desktop/scripts/build-release-config.mjs`
-with `BUZZ_RELEASE_CHANNEL=canary`, which also writes an `Info.canary.plist`
-overlay, because the checked-in `Info.plist` hardcodes `CFBundleName` and
-those keys beat `productName` in the built app.
+the bundle name. The executable name differs as well, so the two apps are
+separate processes: `pkill buzz-desktop` no longer takes both down.
 
 Signing is deliberately shared with stable. A second updater keypair would be
 a second one-way door to lose, and the channels are already separated by
@@ -192,19 +206,34 @@ How it runs:
 - `workflow_dispatch` takes a `ref` input, so any branch can be handed to a
   tester without merging it first, and a `force` input to rebuild an unchanged
   tree.
+- `workflow_dispatch` also takes `dry_run`. A dry run builds, signs and
+  verifies everything, then uploads the dmg, the signed update archive and the
+  `latest.json` it would have published as the `colony-canary-dry-run` run
+  artifact, and writes nothing to colony-releases. That is how a change to this
+  lane is proven from a branch:
+
+  ```
+  gh workflow run colony-desktop-canary.yml --ref <branch> -f dry_run=true
+  ```
+
+  Never run this lane without `dry_run` from an unmerged branch: the rolling
+  canary tag is what real installs poll.
 - A hosted `decide` job compares HEAD against the `canary-sha:` line in the
   rolling release body and exits early when nothing moved, so an idle
   `develop` costs nothing on the self-hosted Mac (which is also somebody's
   development machine).
 - That sha is written **after** every verification passes, so a run that built
   and then failed to publish does not suppress the next night's rebuild.
-- Mandatory gate: the job runs `strings` over the shipped binary and refuses to
-  publish unless `wss://relay.colony.ainative.ventures` is compiled in. Nothing
+- Mandatory gate: `desktop/scripts/electron-verify-distribution.sh` runs
+  `strings` over the packaged native host and refuses to publish unless
+  `wss://relay.colony.ainative.ventures` is compiled in. Nothing
   in the dmg, the plist, the signature or the manifest reveals a wrong
   compiled-in relay, and the fallback when `BUZZ_RELAY_URL` is missing is
   `ws://localhost:3000`. The canary-scoped keyring service
   (`colony-canary-desktop`) is gated the same way: sharing stable's keychain
-  service means reading and rewriting the stable install's identity blob.
+  service means reading and rewriting the stable install's identity blob. The
+  same gate requires the canary updater endpoint and refuses a canary that
+  carries the stable one, which would update the canary into stable.
 - Mandatory gate: `relay-parity` refuses to publish a canary whose relay half
   production does not already serve. See the section below.
 - macOS aarch64 only in v1.
