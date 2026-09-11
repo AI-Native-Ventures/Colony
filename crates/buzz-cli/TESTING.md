@@ -573,6 +573,66 @@ agent was created or changed.
 
 ---
 
+## 7a. Outreach email cards
+
+`buzz outreach` is the sales employee's path to the bundled `@outreach-email`
+Block. It needs a retained Discovery Lead the signing key can read, and a
+channel whose owner will see the card.
+
+```bash
+LEAD_ID="<retained-lead-uuid>"          # from `buzz discovery leads`
+OWN_PUBKEY=$(buzz users get | jq -r '.[0].pubkey')
+
+cat > /tmp/outreach-body.txt <<'EOF'
+Hi team,
+
+Winter callouts are about to spike. Ten minutes on a call this week?
+
+Basheer
+EOF
+
+# Draft one card. Expect {"accepted":true,...,"event_id":...,"instance_id":...}
+buzz outreach draft \
+  --channel "$CHANNEL_ID" \
+  --lead "$LEAD_ID" \
+  --from you@yourcompany.com \
+  --subject "Winter boiler special" \
+  --body - \
+  --expires-in 72h \
+  < /tmp/outreach-body.txt | jq .
+
+# The card is an ordinary kind:9 message: it must carry the outreach-email
+# block tag, the owner `p` tag, and the attention marker.
+buzz messages get --channel "$CHANNEL_ID" --limit 1 | jq '.[0].tags'
+
+# Track decisions. Status starts at pending and follows actions and receipts.
+buzz outreach list --channel "$CHANNEL_ID" | jq .
+buzz outreach list --channel "$CHANNEL_ID" --status pending --limit 20 | jq .
+buzz --format compact outreach list --channel "$CHANNEL_ID" | jq .
+```
+
+Verify the refusals, none of which may publish anything:
+
+```bash
+# A Lead with no email, and no --to: usage error naming that Lead.
+buzz outreach draft --channel "$CHANNEL_ID" --lead "$LEAD_WITHOUT_EMAIL" \
+  --from you@yourcompany.com --subject s --body b
+
+# A malformed recipient: schema failure naming the field, before any write.
+buzz outreach draft --channel "$CHANNEL_ID" --lead "$LEAD_ID" \
+  --from you@yourcompany.com --subject s --body b --to not-an-email
+
+# A zero or malformed expiry.
+buzz outreach draft --channel "$CHANNEL_ID" --lead "$LEAD_ID" \
+  --from you@yourcompany.com --subject s --body b --expires-in 0h
+```
+
+Then approve the card from the desktop app and re-run `buzz outreach list`: the
+row must move from `pending` to `approved`, and to `sent` once a receipt
+reports the approved send succeeded.
+
+---
+
 ## 7b. Colony company work records
 
 Company, Initiative, and Task heads are **relay-authored**. The CLI never signs
