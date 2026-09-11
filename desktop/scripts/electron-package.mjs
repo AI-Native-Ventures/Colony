@@ -16,13 +16,14 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 import {
+  CANARY_KEYRING_SERVICE,
   electronBetaBuildEnv,
   ELECTRON_BETA_RELAY,
   electronPackageVariant,
 } from "./electron-package-config.mjs";
 import {
+  channelUpdaterConfig,
   productionSigning,
-  stableUpdaterConfig,
 } from "./electron-release-contract.mjs";
 import { stageNodePty } from "./electron-stage-node-pty.mjs";
 
@@ -34,10 +35,15 @@ const cargoProfile = profile === "debug" ? "dev" : "release";
 const variant = electronPackageVariant(process.argv);
 const buildEnv = electronBetaBuildEnv(process.env);
 const signing = variant.developerId ? productionSigning(process.env) : {};
-if (variant.stable) {
-  const updaterConfig = stableUpdaterConfig(process.env);
+if (variant.release) {
+  const updaterConfig = channelUpdaterConfig(variant.channel, process.env);
   buildEnv.TAURI_CONFIG = JSON.stringify(updaterConfig);
   buildEnv.BUZZ_UPDATER_ENDPOINT = updaterConfig.plugins.updater.endpoints[0];
+}
+if (variant.canary) {
+  // Owned by the variant, not by the workflow: a canary that inherits the
+  // stable keyring service takes over the stable install's identity.
+  buildEnv.BUZZ_DESKTOP_KEYRING_SERVICE = CANARY_KEYRING_SERVICE;
 }
 // Build tools need public release metadata, never the signing credentials.
 for (const key of Object.keys(buildEnv)) {
@@ -161,7 +167,11 @@ try {
   await writeFile(
     path.join(appDir, "package.json"),
     JSON.stringify({
-      name: variant.stable ? "colony" : "colony-electron-beta",
+      name: variant.stable
+        ? "colony"
+        : variant.canary
+          ? "colony-canary"
+          : "colony-electron-beta",
       productName: variant.name,
       version: metadata.version,
       type: "module",
@@ -220,9 +230,10 @@ try {
     executableName: variant.executableName,
     appBundleId: variant.bundleId,
     appVersion: metadata.version,
-    protocols: variant.production
-      ? [{ name: "Colony", schemes: ["buzz"] }]
-      : [],
+    protocols:
+      variant.production || variant.canary
+        ? [{ name: variant.name, schemes: ["buzz"] }]
+        : [],
     electronVersion: metadata.devDependencies.electron,
     platform: "darwin",
     arch: process.arch,

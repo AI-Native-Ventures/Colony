@@ -21,55 +21,86 @@ export function electronBetaBuildEnv(env) {
   return configured;
 }
 
+/**
+ * The canary keyring service the Tauri canary already bakes in. A canary that
+ * used the stable service would read and rewrite the stable install's identity
+ * blob, which broke first-run signup on 2026-08-27.
+ */
+export const CANARY_KEYRING_SERVICE = "colony-canary-desktop";
+
 /** Fixture transports are an explicit, separately named build, never a beta default. */
 export function electronPackageVariant(args) {
   const fixture = args.includes("--onboarding-fixture");
   const production = args.includes("--production");
   const adHoc = args.includes("--ad-hoc");
   const candidate = args.includes("--production-candidate");
-  if (adHoc && !production)
-    throw new Error("Explicit ad-hoc distribution requires --production");
-  const stable = production || candidate;
+  const canary = args.includes("--canary");
+  if (adHoc && !production && !canary)
+    throw new Error(
+      "Explicit ad-hoc distribution requires --production or --canary",
+    );
+  // Canary is a distribution of its own. It borrows production's signing and
+  // packaging, never production's name, identifier or updater channel.
+  const stable = !canary && (production || candidate);
+  const release = stable || canary;
   if (
-    stable &&
+    release &&
     (fixture || args.includes("--debug") || (production && candidate))
   )
     throw new Error(
       "Production packages cannot use fixture, debug or conflicting release modes",
     );
-  const name = stable
-    ? "Colony"
-    : fixture
-      ? "Colony Onboarding Fixture"
-      : "Colony Electron Beta";
+  if (canary && candidate)
+    throw new Error("A canary package cannot also be a production candidate");
+  const name = canary
+    ? "Colony Canary"
+    : stable
+      ? "Colony"
+      : fixture
+        ? "Colony Onboarding Fixture"
+        : "Colony Electron Beta";
   return {
     fixture,
     production,
+    canary,
     developerId: production && !adHoc,
     candidate,
     stable,
-    channel: production ? "stable" : candidate ? "candidate" : "beta",
+    release,
+    channel: canary
+      ? "canary"
+      : production
+        ? "stable"
+        : candidate
+          ? "candidate"
+          : "beta",
     name,
-    executableName: stable ? "buzz-desktop" : name,
-    bundleId: stable
-      ? "xyz.block.buzz.app"
-      : fixture
-        ? "ventures.ainative.colony.onboarding-fixture"
-        : "ventures.ainative.colony.electron-beta",
-    outputSuffix: stable
-      ? production
-        ? "-stable"
-        : "-candidate"
-      : fixture
-        ? "-onboarding-fixture"
-        : "",
+    // Never buzz-desktop for the canary: the two apps must be distinguishable
+    // in Activity Monitor and killable one at a time.
+    executableName: canary ? "colony-canary" : stable ? "buzz-desktop" : name,
+    bundleId: canary
+      ? "ventures.ainative.colony.canary"
+      : stable
+        ? "xyz.block.buzz.app"
+        : fixture
+          ? "ventures.ainative.colony.onboarding-fixture"
+          : "ventures.ainative.colony.electron-beta",
+    outputSuffix: canary
+      ? "-canary"
+      : stable
+        ? production
+          ? "-stable"
+          : "-candidate"
+        : fixture
+          ? "-onboarding-fixture"
+          : "",
     helperFeatures: fixture
       ? [
           "--features",
           "buzz-acp/onboarding-fixture,buzz-cli/onboarding-fixture",
         ]
       : [],
-    hostFeatures: stable
+    hostFeatures: release
       ? "electron-stable"
       : fixture
         ? "electron-host,onboarding-fixture,tauri/custom-protocol"
