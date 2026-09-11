@@ -19,14 +19,20 @@ function BlockTree({
   data: unknown;
   manifest: BlockManifest;
 }) {
-  const { actionEnvironment, actionError, actionNotice, attentionResolution } =
-    useBlockRenderContext();
+  const {
+    actionEnvironment,
+    actionError,
+    actionNotice,
+    attentionResolution,
+    attentionStatusLabel,
+  } = useBlockRenderContext();
   return (
     <>
       <BlockPrimitive
         context={{
           actionEnvironment,
           attentionResolution,
+          attentionStatusLabel,
           data,
           rootData: data,
         }}
@@ -61,6 +67,7 @@ export function BlockRenderer({
   data,
   instance,
   latestAttentionStatus,
+  latestAttentionStatusLabel,
   latestStatus,
   manifest,
   message,
@@ -73,6 +80,7 @@ export function BlockRenderer({
   data: unknown;
   instance: BlockInstanceRef;
   latestAttentionStatus?: "succeeded" | "denied";
+  latestAttentionStatusLabel?: string;
   latestStatus?: "pending" | "succeeded" | "denied" | "failed" | "timed-out";
   manifest: BlockManifest;
   message: TimelineMessage;
@@ -92,6 +100,9 @@ export function BlockRenderer({
   return (
     <BlockRenderProvider
       attentionResolution={attentionResolution}
+      {...(attentionResolution && latestAttentionStatusLabel
+        ? { attentionStatusLabel: latestAttentionStatusLabel }
+        : {})}
       completedActionIds={completedActionIds}
       data={data}
       instance={instance}

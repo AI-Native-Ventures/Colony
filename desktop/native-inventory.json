@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 509,
-    "rust_lines": 186258,
-    "tauri_coupled": 202,
+    "rust_total": 510,
+    "rust_lines": 186535,
+    "tauri_coupled": 203,
     "portable": 307,
-    "portable_lines": 105193,
+    "portable_lines": 105195,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -79,6 +79,7 @@
       "src-tauri/src/commands/openrouter_quota.rs",
       "src-tauri/src/commands/org_placement.rs",
       "src-tauri/src/commands/os_idle.rs",
+      "src-tauri/src/commands/outreach_send.rs",
       "src-tauri/src/commands/pairing.rs",
       "src-tauri/src/commands/personas/card.rs",
       "src-tauri/src/commands/personas/create.rs",
@@ -523,10 +524,10 @@
     ]
   },
   "commands": {
-    "registered": 372,
-    "defined": 372,
+    "registered": 373,
+    "defined": 373,
     "by_reach": {
-      "frontend": 361,
+      "frontend": 362,
       "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
@@ -544,7 +545,7 @@
   },
   "params": {
     "AppHandle": 410,
-    "State": 268,
+    "State": 269,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
@@ -552,7 +553,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 407,
-      "State": 268,
+      "State": 269,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -707,6 +708,7 @@
     "src-tauri/src/commands/personas/create.rs": 1,
     "src-tauri/src/electron_host/deep_links.rs": 1,
     "src-tauri/src/commands/agent_proposals.rs": 1,
+    "src-tauri/src/commands/outreach_send.rs": 1,
     "src-tauri/src/commands/factory_worktree.rs": 1,
     "src-tauri/src/commands/block_data.rs": 1,
     "src-tauri/src/commands/join_policy.rs": 1,
@@ -825,7 +827,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:288",
+        "src/features/communities/useCommunityInit.ts:290",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -1701,6 +1703,15 @@
         "src/shared/api/companyBlueprint.ts:69"
       ]
     },
+    "execute_outreach_send": {
+      "defining_file": "src-tauri/src/commands/outreach_send.rs",
+      "module": "outreach_send",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/outreachSend.ts:33"
+      ]
+    },
     "export_agent_snapshot": {
       "defining_file": "src-tauri/src/commands/personas/snapshot.rs",
       "module": "snapshot",
@@ -2511,7 +2522,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:274",
+        "src/features/communities/useCommunityInit.ts:276",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:88"
       ]

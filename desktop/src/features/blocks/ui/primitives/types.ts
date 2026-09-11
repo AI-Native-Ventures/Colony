@@ -207,6 +207,8 @@ export type BlockPrimitiveRenderContext = {
   rootData?: unknown;
   /** Terminal resolution for an instance that required user attention. */
   attentionResolution?: "succeeded" | "denied";
+  /** Processor-supplied wording for that resolution, such as "sent". */
+  attentionStatusLabel?: string;
   actionEnvironment?: BlockActionEnvironment;
   mediaItems?: readonly BlockMediaItem[];
   renderChild?: (

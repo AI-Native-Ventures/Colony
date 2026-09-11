@@ -164,6 +164,28 @@ test("terminal attention replaces a pending data-backed status without overwriti
   assert.doesNotMatch(independent, /Completed/);
 });
 
+test("a receipt's own wording names the resolved state instead of the generic word", () => {
+  const node = { type: "status", label: "Decision", state_path: "/status" };
+  const sent = render(BlockStatus, {
+    attentionResolution: "succeeded",
+    attentionStatusLabel: "sent",
+    data: { status: "pending" },
+    node,
+  });
+  assert.match(sent, /sent/);
+  assert.doesNotMatch(sent, /Completed/);
+  assert.doesNotMatch(sent, /pending/i);
+
+  const skipped = render(BlockStatus, {
+    attentionResolution: "denied",
+    attentionStatusLabel: "skipped",
+    data: { status: "pending" },
+    node,
+  });
+  assert.match(skipped, /skipped/);
+  assert.doesNotMatch(skipped, /Declined/);
+});
+
 test("block actions resolver disables undeclared and non-Core presentation controls", () => {
   const signed = {
     label: "Approve",

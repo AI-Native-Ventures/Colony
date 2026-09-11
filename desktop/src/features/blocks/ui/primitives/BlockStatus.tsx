@@ -23,12 +23,14 @@ function StatusIcon({ tone }: { tone: BlockTone }) {
 
 export function BlockStatus({
   attentionResolution,
+  attentionStatusLabel,
   className,
   data,
   node,
   rootData,
 }: {
   attentionResolution?: "succeeded" | "denied";
+  attentionStatusLabel?: string;
   className?: string;
   data: unknown;
   node: BlockStatusNode;
@@ -40,18 +42,22 @@ export function BlockStatus({
     !node.state_path ||
     resolvedState === "pending" ||
     resolvedState === "pending review";
+  // A processor may name the state its receipt actually produced ("sent",
+  // "skipped"), which is truer than the generic outcome word. The label only
+  // replaces the pill's text; the tone still follows the outcome.
+  const resolvedLabel = attentionStatusLabel?.trim();
   const status =
     attentionResolution && isPendingAttentionStatus
       ? attentionResolution === "succeeded"
         ? {
-            label: "Completed",
-            state: "Completed",
+            label: resolvedLabel || "Completed",
+            state: resolvedLabel || "Completed",
             tone: "success" as const,
             progress: undefined,
           }
         : {
-            label: "Declined",
-            state: "Declined",
+            label: resolvedLabel || "Declined",
+            state: resolvedLabel || "Declined",
             tone: "warning" as const,
             progress: undefined,
           }
