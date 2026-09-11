@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   balancedSlice,
   buildInventory,
+  runNativeInventory,
   stripComments,
   withoutVolatileCounts,
 } from "./native-inventory-core.mjs";
@@ -609,6 +610,46 @@ test("the churning size fields are computed but never persisted", async () => {
     // Tolerant of a file committed before this change, which still carries
     // them, so the first run after the change does not report stale.
     assert.ok(isDeepStrictEqual(withoutVolatileCounts(persisted), persisted));
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("a committed inventory carrying the volatile fields is an error, not a tolerance", async () => {
+  // The compare strips these from both sides so the fix could land without
+  // forcing every open branch to regenerate. That same tolerance is how they
+  // creep back: a branch that regenerated before the change carries them in,
+  // nothing complains, and the next regeneration reintroduces them for
+  // everyone. So the committed copy carrying one is its own error.
+  const desktop = await makeFixture();
+  const checkPath = path.join(desktop, "native-inventory.json");
+  try {
+    const data = await buildInventory(desktop);
+    const stale = withoutVolatileCounts(data);
+    stale.files = { ...stale.files, rust_lines: 12345 };
+    await fs.writeFile(checkPath, `${JSON.stringify(stale, null, 2)}\n`);
+
+    const errors = [];
+    const originalError = console.error;
+    const originalExitCode = process.exitCode;
+    console.error = (message) => errors.push(String(message));
+    try {
+      await runNativeInventory({ projectRoot: desktop, checkPath });
+    } finally {
+      console.error = originalError;
+    }
+    const failed = process.exitCode === 1;
+    process.exitCode = originalExitCode;
+
+    assert.ok(failed, "a committed rust_lines must fail the check");
+    assert.ok(
+      errors.some((message) => message.includes("rust_lines")),
+      `the error must name the field, got: ${errors.join(" | ")}`,
+    );
+    assert.ok(
+      errors.some((message) => message.includes("generate:native-inventory")),
+      "the error must name the one-line fix",
+    );
   } finally {
     await fs.rm(desktop, { recursive: true, force: true });
   }
