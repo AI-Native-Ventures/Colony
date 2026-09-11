@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.17.4
+
 - fix(desktop): pass the owner's account name to Claude teammates, so the login on this Mac is actually found. 0.17.3 reached the CLI but reported a signed-out account, because the coordinator is spawned with a cleared environment and the keychain item is keyed on that name.
 
 ## v0.17.3
