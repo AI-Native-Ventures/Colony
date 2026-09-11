@@ -562,13 +562,21 @@ async function seedJob(
   };
 }
 
+/**
+ * Open the right thread through the app's own reply affordance. The hash-only
+ * route did not open the panel for these mock-seeded roots; the summary click
+ * is the path other thread specs use and it is what sets the route.
+ */
 async function openThreadForRoot(page: Page, rootId: string) {
-  await page.evaluate(
-    ({ channel, id }) => {
-      window.location.hash = `/channels/${channel}?thread=${id}&threadRootId=${id}`;
-    },
-    { channel: CHANNEL, id: rootId },
+  const summary = page.locator(
+    `[data-testid="message-thread-summary"][data-thread-head-id="${rootId}"]`,
   );
+  await expect(summary).toBeVisible();
+  await summary.evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
+  await waitForAnimations(page);
+  await summary.click();
   await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 }
 
@@ -865,6 +873,13 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
 
   await page.reload();
   await openChannel(page, CHANNEL);
+  // A reload re-initializes the mock bridge, so restore the fixtures the
+  // canonical head references before opening the thread again.
+  await replaceBlockEvents(page, [manifestEvent, confirmed]);
+  await emitSignedEvent(page, CHANNEL, job.root);
+  await emitSignedEvent(page, CHANNEL, job.card);
+  await emitSignedEvent(page, CHANNEL, confirmed);
+  await settleTimelineAtLatest(page);
   await openThreadForRoot(page, job.root.id);
   const reloadedThread = page
     .getByTestId("message-thread-panel")
