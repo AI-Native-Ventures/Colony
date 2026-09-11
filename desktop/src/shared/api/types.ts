@@ -340,9 +340,6 @@ export type ManagedAgent = {
    * Recipe id when this agent is provided by Colony, else null. Provisioned
    * agents cannot be deleted by the owner; the recipe upgrades them.
    */
-  provisioned?: string | null;
-  /** Recipe version that last wrote the provisioned content. */
-  provisionedVersion?: string | null;
   relayUrl: string;
   acpCommand: string;
   /** Resolved/effective harness command (persona-wins, override-honored). */

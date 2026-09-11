@@ -211,8 +211,7 @@ pub(super) fn merge_teams_impl(
 pub fn validate_team_deletion(team: &TeamRecord) -> Result<(), String> {
     if let Some(handle) = team.provisioned.as_deref() {
         return Err(super::provisioned::provisioned_delete_refusal(
-            &team.name,
-            handle,
+            &team.name, handle,
         ));
     }
 
