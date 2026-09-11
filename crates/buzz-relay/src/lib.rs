@@ -44,6 +44,7 @@ pub mod conformance;
 pub mod connection;
 /// Relay-bundled Core Block manifests and deterministic event construction.
 pub mod core_blocks;
+pub mod core_employees;
 
 pub mod credit_packs;
 /// Relay error types.

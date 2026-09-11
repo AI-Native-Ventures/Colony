@@ -2510,13 +2510,23 @@ CREATE TABLE IF NOT EXISTS employees (
     -- The owner who hired this employee, and the hire request that asked for
     -- it. The request is owner-signed, so anyone can re-derive authority from
     -- events alone rather than trusting this table.
-    hired_by      BYTEA NOT NULL,
-    hire_event    BYTEA NOT NULL,
+    -- Both admit NULL since migration 0071: a provisioned employee answers no
+    -- hire request, because no owner signed one. The provenance constraint
+    -- below keeps that narrow.
+    hired_by      BYTEA,
+    hire_event    BYTEA,
     -- The agent this employee reports to, one rung up the interrupt ladder
     -- (migration 0061). NULL means no manager: the root marker for
     -- executives and the Unassigned-tray state for everyone else. Read by
     -- interrupt_gate::agent_manager before any event is consulted.
     manager       BYTEA,
+    -- The employees Colony provides (migration 0071). The handle is the stable
+    -- identity of a bundled entry across every workspace and every relay
+    -- version: seeding is idempotent on it, and every refusal path keys on it
+    -- to know the row is not a user's to change. NULL in both means a user's
+    -- own employee, hired the normal way.
+    provisioned_handle   TEXT,
+    provisioned_version  INTEGER,
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
     created_at    BIGINT NOT NULL,
     updated_at    BIGINT NOT NULL,
@@ -2524,7 +2534,15 @@ CREATE TABLE IF NOT EXISTS employees (
     CHECK (LENGTH(pubkey) = 32),
     CHECK (LENGTH(hired_by) = 32),
     CHECK (LENGTH(hire_event) = 32),
-    CONSTRAINT employees_manager_len CHECK (manager IS NULL OR LENGTH(manager) = 32)
+    CONSTRAINT employees_manager_len CHECK (manager IS NULL OR LENGTH(manager) = 32),
+    CONSTRAINT employees_provisioned_pair CHECK (
+        (provisioned_handle IS NULL AND provisioned_version IS NULL)
+        OR (provisioned_handle IS NOT NULL AND provisioned_version IS NOT NULL)
+    ),
+    CONSTRAINT employees_hire_provenance CHECK (
+        provisioned_handle IS NOT NULL
+        OR (hired_by IS NOT NULL AND hire_event IS NOT NULL)
+    )
 );
 
 -- Hiring is driven by a best-effort side effect, which may run more than once
@@ -2538,6 +2556,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS employees_hire_event_uniq
 -- refilled after its holder is retired.
 CREATE UNIQUE INDEX IF NOT EXISTS employees_active_role_uniq
     ON employees (community_id, role_id) WHERE status = 'active';
+
+-- One row per bundled employee per workspace (migration 0071). Seeding relies
+-- on this: a second startup, or a second relay pod starting at the same
+-- moment, cannot mint a second identity for the same employee.
+CREATE UNIQUE INDEX IF NOT EXISTS employees_provisioned_handle_uniq
+    ON employees (community_id, provisioned_handle)
+    WHERE provisioned_handle IS NOT NULL;
 
 -- 0044/0058: durable employee job queue and task-linked recovery state.
 -- The lease row is the authority for one machine at a time; checkpoint and

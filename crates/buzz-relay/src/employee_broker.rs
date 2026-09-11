@@ -241,6 +241,18 @@ pub async fn enforce_employee_update(
             parsed.pubkey_hex
         ));
     }
+
+    // An employee Colony provides is not the workspace's to retire, rename,
+    // re-rank or re-line. Colony maintains it, and the next bundled version
+    // is what changes it. Refused here, at ingest, so the owner sees why
+    // rather than watching an update quietly do nothing.
+    if employee.provisioned_handle.is_some() {
+        let verb = if parsed.retire { "retired" } else { "changed" };
+        return Err(format!(
+            "{} is provided by Colony and cannot be {verb}.",
+            employee.display_name
+        ));
+    }
     let target = PublicKey::from_slice(&target_bytes)
         .map_err(|_| "internal error: stored employee pubkey is not valid".to_string())?;
 
@@ -621,13 +633,15 @@ async fn publish_head_for_new_hire(
         .manager
         .as_deref()
         .and_then(|hex| hex::decode(hex).ok());
+    let hire_event_hex = hire_event.id.to_hex();
     let fields = HeadFields {
         role_id: &request.role_id,
         display_name: &request.display_name,
         rank: request.rank,
         manager: manager.as_deref(),
-        hired_by_hex,
-        hire_event_hex: &hire_event.id.to_hex(),
+        hired_by_hex: Some(hired_by_hex),
+        hire_event_hex: Some(&hire_event_hex),
+        provisioned: None,
     };
     sign_store_and_fan_out_head(tenant, state, keys, &fields).await;
 }
@@ -654,13 +668,23 @@ async fn republish_employee_head(
             return;
         }
     };
+    let hired_by_hex = row.hired_by.as_deref().map(hex::encode);
+    let hire_event_hex = row.hire_event.as_deref().map(hex::encode);
+    let provisioned = row
+        .provisioned_handle
+        .as_ref()
+        .zip(row.provisioned_version)
+        .map(|(handle, version)| (handle.clone(), version));
     let fields = HeadFields {
         role_id: &row.role_id,
         display_name: &row.display_name,
         rank,
         manager: row.manager.as_deref(),
-        hired_by_hex: &hex::encode(&row.hired_by),
-        hire_event_hex: &hex::encode(&row.hire_event),
+        hired_by_hex: hired_by_hex.as_deref(),
+        hire_event_hex: hire_event_hex.as_deref(),
+        provisioned: provisioned
+            .as_ref()
+            .map(|(handle, version)| (handle.as_str(), *version)),
     };
     sign_store_and_fan_out_head(tenant, state, keys, &fields).await;
 }
@@ -673,8 +697,16 @@ struct HeadFields<'a> {
     rank: AgentTier,
     /// Raw manager pubkey bytes; `None` publishes no `manager` tag.
     manager: Option<&'a [u8]>,
-    hired_by_hex: &'a str,
-    hire_event_hex: &'a str,
+    /// The owner who hired this employee. `None` on a provisioned employee,
+    /// which no owner hired, and which therefore publishes no `hired-by` tag.
+    hired_by_hex: Option<&'a str>,
+    /// The hire request being answered. `None` for the same reason.
+    hire_event_hex: Option<&'a str>,
+    /// The bundled entry and version this employee was seeded from, when it
+    /// was seeded at all. Published as `provisioned` and `version` tags: the
+    /// field every client keys on to know this employee is provided by
+    /// Colony and is not the workspace's to change.
+    provisioned: Option<(&'a str, i32)>,
 }
 
 /// Sign and store an employee head (kind 30190) for `fields`, then fan it
@@ -692,9 +724,17 @@ async fn sign_store_and_fan_out_head(
         Tag::parse(["role", fields.role_id]),
         Tag::parse(["name", fields.display_name]),
         Tag::parse(["rank", fields.rank.as_str()]),
-        Tag::parse(["hired-by", fields.hired_by_hex]),
-        Tag::parse(["e", fields.hire_event_hex]),
     ];
+    if let Some(hired_by_hex) = fields.hired_by_hex {
+        tag_parts.push(Tag::parse(["hired-by", hired_by_hex]));
+    }
+    if let Some(hire_event_hex) = fields.hire_event_hex {
+        tag_parts.push(Tag::parse(["e", hire_event_hex]));
+    }
+    if let Some((handle, version)) = fields.provisioned {
+        tag_parts.push(Tag::parse(["provisioned", handle]));
+        tag_parts.push(Tag::parse(["version", &version.to_string()]));
+    }
     // The `manager` TAG is authoritative; see `agent_manager` for the read
     // side and `direct_reports` for the query side.
     if let Some(manager) = fields.manager {
