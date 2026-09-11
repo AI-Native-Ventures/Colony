@@ -538,7 +538,9 @@ mod tests {
         inserted
     }
 
+    // Requires BUZZ_TEST_DATABASE_URL (or DATABASE_URL) with migrations applied.
     #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn one_task_owns_one_job() {
         let (pool, community, channel) = setup().await;
         let first = insert_job(&pool, community, channel, Uuid::new_v4(), "task-a")
@@ -554,7 +556,9 @@ mod tests {
         );
     }
 
+    // Requires BUZZ_TEST_DATABASE_URL (or DATABASE_URL) with migrations applied.
     #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn generation_cas_refuses_a_stale_writer() {
         let (pool, community, channel) = setup().await;
         let job_id = Uuid::new_v4();
@@ -604,7 +608,9 @@ mod tests {
         assert!(stale.is_none(), "a stale generation must match no row");
     }
 
+    // Requires BUZZ_TEST_DATABASE_URL (or DATABASE_URL) with migrations applied.
     #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn action_claim_is_once_only_and_records_the_digest() {
         let (pool, community, channel) = setup().await;
         let job_id = Uuid::new_v4();

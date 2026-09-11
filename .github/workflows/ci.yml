@@ -1322,6 +1322,10 @@ jobs:
           # for the member/channel seeds, RELAY_HTTP_URL for the NIP-11 and
           # bundled-manifest lookups), single-threaded for shared job rows.
           cargo test -p buzz-test-client --test e2e_website -- --ignored --nocapture --test-threads 1
+          # Postgres-backed website-job storage invariants (unique task row,
+          # generation CAS, once-only action claims) run against the same
+          # DATABASE_URL fixture the relay suites use.
+          cargo test -p buzz-db website_jobs -- --ignored --nocapture --test-threads 1
           # Discovery entity mention hydration against the live relay: strict
           # ["discovery", kind, id] message tags, permission-checked
           # resolve_entities, and the opaque cross-community refusal. This
