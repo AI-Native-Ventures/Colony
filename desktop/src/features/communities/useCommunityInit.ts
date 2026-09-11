@@ -38,6 +38,7 @@ import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 import { resetAgentProposalReview } from "@/features/blocks/agentProposal";
 import { resetBlockActionQueue } from "@/features/blocks/blockActionQueue";
 import { resetInFlightBlockActions } from "@/features/blocks/blockActions";
+import { resetOutreachSendBroker } from "@/features/blocks/useOutreachSendBroker";
 import { resetBlockRepository } from "@/features/blocks/blockRepository";
 import { resetEmployeeHeadsState } from "@/features/agents/employeeHeads";
 import { resetManagedAgentHeadsState } from "@/features/agents/managedAgentHeads";
@@ -86,6 +87,7 @@ function resetCommunityState({
   resetAgentWorkingSignal();
   resetAgentProposalReview();
   resetInFlightBlockActions();
+  resetOutreachSendBroker();
   resetBlockActionQueue();
   resetBlockRepository();
   resetEmployeeHeadsState();

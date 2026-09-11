@@ -23,6 +23,7 @@ import { registerTerminalIpc } from "./terminal-ipc.mjs";
 import { RendererHost } from "./renderer-host.mjs";
 import { BrowserViews } from "./browser/views.mjs";
 import { startBroker } from "./browser/broker.mjs";
+import { executeOutreachSend } from "./browser/outreach-send.mjs";
 import { shellCommand } from "./shell-commands.mjs";
 import { ManagedBrowser, normalizeRelay } from "./browser/managed-workers.mjs";
 import { runtimePaths } from "./runtime-paths.mjs";
@@ -214,6 +215,9 @@ async function boot() {
   const views = new BrowserViews(window, (payload) =>
     send({ type: "browser", payload }),
   );
+  // Approvals this process has already begun a send for. Never cleared: a
+  // journey that failed after clicking Send has still sent.
+  const outreachAttempts = new Set();
   resources.add(() => views.closeAll());
   const terminalService = new TerminalService();
   const terminalIpc = registerTerminalIpc({
@@ -337,6 +341,14 @@ async function boot() {
       businessContext = null;
       views.setBusiness(null);
     }
+    // The owner's approved outreach email never reaches the native host: the
+    // Web tab it sends from belongs to this shell, not to the daemon.
+    if (type === "invoke" && payload.command === "execute_outreach_send")
+      return executeOutreachSend(payload.args, {
+        tabs: () => views.ownerTabs(),
+        send: ({ tabId, ...message }) => views.ownerMailSend(tabId, message),
+        attempted: outreachAttempts,
+      });
     // Only the original WebKit page can supply a migration snapshot.
     if (
       type === "invoke" &&

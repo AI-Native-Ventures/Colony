@@ -17,6 +17,37 @@ const SUBJECT = "Subject";
 const BODY = "Message Body";
 const SEND = "Send";
 
+/** Environment variable the Rust daemon gates `mail_send` on (PR #700). */
+export const MAIL_SEND_ENV = "BUZZ_BROWSER_MAIL_SEND";
+const MAIL_SEND_ENV_ENABLED = "enabled";
+
+/** The refusal the Rust tool returns when the gate is closed, word for word. */
+export const MAIL_SEND_DISABLED =
+  "mail_send is disabled: sending email requires the owner's outreach approval flow; the desktop enables it only for an approved send job";
+
+/**
+ * True only when `BUZZ_BROWSER_MAIL_SEND` is exactly "enabled".
+ *
+ * The agent-facing tool is off by default in both shells. An agent sends mail
+ * by writing an outreach card the owner approves, never by calling this tool
+ * itself, so nothing the desktop spawns today sets the variable.
+ */
+export function mailSendEnabledFromEnv(env = process.env) {
+  return env[MAIL_SEND_ENV] === MAIL_SEND_ENV_ENABLED;
+}
+
+/**
+ * Refuse the agent-facing journey unless the gate is open.
+ *
+ * Both callers go through here so the refusal cannot drift: the MCP adapter
+ * refuses early in the worker's own process, and the main process refuses
+ * again where the tool actually runs, because a worker holds the broker socket
+ * path and its grant token and can speak to the broker without the adapter.
+ */
+export function assertMailSendEnabled(env = process.env) {
+  if (!mailSendEnabledFromEnv(env)) throw new Error(MAIL_SEND_DISABLED);
+}
+
 const seconds = () => Math.floor(Date.now() / 1000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

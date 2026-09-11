@@ -261,3 +261,50 @@ test("receipt updates for the newest action still use their event ordering", () 
   assert.equal(state.latestStatus, "succeeded");
   assert.equal(state.latestAttentionStatus, "succeeded");
 });
+
+test("a resolving receipt may name the state it produced, within narrow limits", () => {
+  const fixture = signedFixture();
+  const labelled = (content) =>
+    deriveBlockActionViewState(
+      {
+        id: fixture.instance.id,
+        blockEvent: fixture.instance,
+        blockState: {
+          actions: [fixture.action],
+          receipts: [
+            signedEvent(
+              fixture.processorSecret,
+              40011,
+              3,
+              [
+                ["h", CHANNEL],
+                ["e", fixture.action.id, "", "block-action"],
+                ["e", fixture.instance.id, "", "block-instance"],
+                ["block-attention", "1", "resolved"],
+                ["block-receipt", "1", INSTANCE_ID, IDEMPOTENCY, "succeeded"],
+              ],
+              content,
+            ),
+          ],
+        },
+      },
+      INSTANCE_ID,
+      MANIFEST,
+    ).latestAttentionStatusLabel;
+  assert.equal(labelled('{"status_label":"sent"}'), "sent");
+  assert.equal(
+    labelled('{"summary":"Action succeeded."}'),
+    undefined,
+    "a receipt without a label leaves the generic wording alone",
+  );
+  assert.equal(
+    labelled('{"status_label":"<img src=x onerror=alert(1)>"}'),
+    undefined,
+    "the pill renders a short plain word, never arbitrary processor text",
+  );
+  assert.equal(
+    labelled("not json"),
+    undefined,
+    "an unreadable receipt body is not a label",
+  );
+});

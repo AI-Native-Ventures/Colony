@@ -19,14 +19,20 @@ function BlockTree({
   data: unknown;
   manifest: BlockManifest;
 }) {
-  const { actionEnvironment, actionError, actionNotice, attentionResolution } =
-    useBlockRenderContext();
+  const {
+    actionEnvironment,
+    actionError,
+    actionNotice,
+    attentionResolution,
+    attentionStatusLabel,
+  } = useBlockRenderContext();
   return (
     <>
       <BlockPrimitive
         context={{
           actionEnvironment,
           attentionResolution,
+          attentionStatusLabel,
           data,
           rootData: data,
         }}
@@ -61,6 +67,7 @@ export function BlockRenderer({
   data,
   instance,
   latestAttentionStatus,
+  latestAttentionStatusLabel,
   latestStatus,
   manifest,
   message,
@@ -73,6 +80,7 @@ export function BlockRenderer({
   data: unknown;
   instance: BlockInstanceRef;
   latestAttentionStatus?: "succeeded" | "denied";
+  latestAttentionStatusLabel?: string;
   latestStatus?: "pending" | "succeeded" | "denied" | "failed" | "timed-out";
   manifest: BlockManifest;
   message: TimelineMessage;
@@ -88,10 +96,18 @@ export function BlockRenderer({
     manifest.validation.requires_attention,
     latestAttentionStatus,
   );
+  // A processor that named its own outcome says it once, in both places.
+  const resolvedStatusSentence =
+    attentionResolution && latestAttentionStatusLabel
+      ? `${latestAttentionStatusLabel.charAt(0).toUpperCase()}${latestAttentionStatusLabel.slice(1)}.`
+      : undefined;
   const shellTier = blockShellTier(manifest.tree);
   return (
     <BlockRenderProvider
       attentionResolution={attentionResolution}
+      {...(attentionResolution && latestAttentionStatusLabel
+        ? { attentionStatusLabel: latestAttentionStatusLabel }
+        : {})}
       completedActionIds={completedActionIds}
       data={data}
       instance={instance}
@@ -124,9 +140,9 @@ export function BlockRenderer({
             {latestStatus === "pending"
               ? "Action submitted. Waiting for the responsible agent."
               : latestStatus === "succeeded"
-                ? "Completed."
+                ? (resolvedStatusSentence ?? "Completed.")
                 : latestStatus === "denied"
-                  ? "Declined."
+                  ? (resolvedStatusSentence ?? "Declined.")
                   : latestStatus === "timed-out"
                     ? "The action timed out. You can try again."
                     : "The action failed. You can try again."}
