@@ -607,7 +607,7 @@ fn apply_inbound_team(
                 persona_ids: resolved.persona_ids,
                 lead_persona_id: resolved.lead_persona_id,
                 is_builtin: is_coordination,
-                provisioned_by: None,
+                provisioned: None,
                 provisioned_version: None,
                 source_dir: None,
                 is_symlink: false,

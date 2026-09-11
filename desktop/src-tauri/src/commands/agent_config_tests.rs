@@ -66,6 +66,9 @@ fn goose_runtime() -> &'static KnownAcpRuntime {
 
 fn agent_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,
@@ -114,7 +117,7 @@ fn agent_record() -> ManagedAgentRecord {
         runtime: None,
         name_pool: Vec::new(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -144,7 +147,7 @@ fn persona_with_model(model: &str) -> AgentDefinition {
         provider: None,
         name_pool: Vec::new(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,

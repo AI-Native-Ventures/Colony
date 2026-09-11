@@ -3,6 +3,7 @@ mod app_menu;
 mod app_state;
 mod archive;
 mod colony_provisioning;
+mod command_registry;
 mod commands;
 mod company;
 mod deep_link;
@@ -510,6 +511,7 @@ pub fn run() {
             electron_host::start(&app_handle)?;
             Ok(())
         })
+<<<<<<< HEAD
         .invoke_handler(tauri::generate_handler![
             electron_host::updater::electron_check_for_update,
             electron_host::updater::electron_download_update,
@@ -890,6 +892,9 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             tray_menu::update_tray_agent_activity,
         ])
+=======
+        .invoke_handler(crate::app_invoke_handler!())
+>>>>>>> origin/develop
         .build(electron_host::context(tauri::generate_context!()))
         .expect("error while building tauri application");
 

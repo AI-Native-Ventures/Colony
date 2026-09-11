@@ -130,7 +130,7 @@ fn definition_from_snapshot(
         provider: member.definition.provider.clone(),
         name_pool: member.definition.name_pool.clone(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -180,7 +180,7 @@ pub(crate) fn build_import_team(
         lead_persona_id: None,
         instructions: snapshot.team.instructions.clone(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         source_dir: None,
         is_symlink: false,
@@ -561,6 +561,10 @@ pub async fn confirm_team_snapshot_import(
 
         // Build the ManagedAgentRecord for this member.
         let record = ManagedAgentRecord {
+            // An agent created here is the workspace's own, never provisioned.
+            provisioned: None,
+            provisioned_version: None,
+            provisioned_requires_commands: Vec::new(),
             working_dir: None,
             tier: None,
             manager: None,
@@ -620,7 +624,7 @@ pub async fn confirm_team_snapshot_import(
             },
             respond_to_allowlist: definition.respond_to_allowlist.clone(),
             is_builtin: false,
-            provisioned_by: None,
+            provisioned: None,
             provisioned_version: None,
             is_active: true,
             shared: false,

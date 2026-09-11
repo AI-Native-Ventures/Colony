@@ -146,7 +146,7 @@ export function TeamsSection({
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
-                        disabled={isPending || Boolean(team.provisionedBy)}
+                        disabled={isPending || Boolean(team.provisioned)}
                         onClick={() => onDelete(team)}
                       >
                         <Trash2 className="h-4 w-4" />
@@ -166,7 +166,7 @@ export function TeamsSection({
                 teamName={team.name}
                 version={team.version}
               >
-                {team.provisionedBy ? (
+                {team.provisioned ? (
                   <p className="border-t border-border/20 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
                     Provided by Colony
                   </p>

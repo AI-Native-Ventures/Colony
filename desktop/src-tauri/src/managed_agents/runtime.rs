@@ -262,6 +262,7 @@ pub fn build_managed_agent_summary(
         working_dir: record.working_dir.clone(),
         pubkey: record.pubkey.clone(),
         owner_identified: super::owner_scope::effective_owner_pubkey(record).is_some(),
+        provisioned: record.provisioned.clone(),
         isolated: pair_runtime.is_some_and(|runtime| runtime.isolation_network.is_some()),
         browser_generation: pair_runtime
             .filter(|runtime| runtime.isolation_network.is_some())
@@ -270,7 +271,7 @@ pub fn build_managed_agent_summary(
         persona_id: record.persona_id.clone(),
         runtime: record.runtime.clone(),
         team_id: record.team_id.clone(),
-        provisioned_by: record.provisioned_by.clone(),
+        provisioned: record.provisioned.clone(),
         provisioned_version: record.provisioned_version.clone(),
         relay_url: record.relay_url.clone(),
         acp_command: record.acp_command.clone(),

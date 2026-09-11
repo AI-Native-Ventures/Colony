@@ -24,7 +24,7 @@ fn local_in_app() -> AgentDefinition {
         provider: Some("anthropic".to_string()),
         name_pool: vec!["Local".to_string()],
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -55,7 +55,7 @@ fn inbound_for(d_tag: &str, display_name: &str) -> AgentDefinition {
         provider: Some("openai".to_string()),
         name_pool: vec!["Remote".to_string()],
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -170,6 +170,9 @@ const AGENT_PUBKEY: &str = "agentpubkeyhex00000000000000000000000000000000000000
 /// event must NEVER be able to overwrite.
 fn local_agent() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,
@@ -224,7 +227,7 @@ fn local_agent() -> ManagedAgentRecord {
         runtime: None,
         name_pool: Vec::new(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,

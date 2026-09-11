@@ -409,7 +409,7 @@ fn resolve_chat_agent_persona(
             provider: agent.provider.clone(),
             name_pool: Vec::new(),
             is_builtin: false,
-            provisioned_by: None,
+            provisioned: None,
             provisioned_version: None,
             is_active: true,
             shared: false,

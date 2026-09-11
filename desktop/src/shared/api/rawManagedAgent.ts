@@ -10,10 +10,11 @@ export type RawManagedAgent = {
   pubkey: string;
   name: string;
   persona_id: string | null;
+  provisioned: string | null;
   // Optional: pre-feature fixtures may omit it. The record's harness/runtime id.
   runtime?: string | null;
   team_id?: string | null;
-  provisioned_by?: string | null;
+  provisioned?: string | null;
   provisioned_version?: string | null;
   relay_url: string;
   acp_command: string;
@@ -60,9 +61,10 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     pubkey: agent.pubkey,
     name: agent.name,
     personaId: agent.persona_id,
+    provisioned: agent.provisioned ?? null,
     runtime: agent.runtime ?? null,
     teamId: agent.team_id ?? null,
-    provisionedBy: agent.provisioned_by ?? null,
+    provisioned: agent.provisioned ?? null,
     provisionedVersion: agent.provisioned_version ?? null,
     relayUrl: agent.relay_url,
     acpCommand: agent.acp_command,

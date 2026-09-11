@@ -195,7 +195,7 @@ fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
             provider: None,
             name_pool: persona.name_pool.iter().map(|s| s.to_string()).collect(),
             is_builtin: true,
-            provisioned_by: None,
+            provisioned: None,
             provisioned_version: None,
             is_active: persona.default_active,
             shared: false,
@@ -337,7 +337,7 @@ fn merge_personas(mut stored: Vec<AgentDefinition>, now: &str) -> (Vec<AgentDefi
     // and demoting them here would silently undo that on the next load.
     for record in stored.iter_mut() {
         if record.is_builtin
-            && record.provisioned_by.is_none()
+            && record.provisioned.is_none()
             && built_in_order(&record.id).is_none()
         {
             record.is_builtin = false;
@@ -426,9 +426,10 @@ pub fn validate_persona_deletion(
     persona: &AgentDefinition,
     referenced_by_team: bool,
 ) -> Result<(), String> {
-    if persona.provisioned_by.is_some() {
-        return Err(super::provisioned::provisioned_deletion_error(
+    if let Some(handle) = persona.provisioned.as_deref() {
+        return Err(super::provisioned::provisioned_delete_refusal(
             &persona.display_name,
+            handle,
         ));
     }
 
@@ -591,7 +592,7 @@ mod chief_of_staff_prompt_tests {
                 provider: None,
                 name_pool: Vec::new(),
                 is_builtin: true,
-                provisioned_by: None,
+                provisioned: None,
                 provisioned_version: None,
                 is_active: true,
                 shared: false,
@@ -636,7 +637,7 @@ mod chief_of_staff_prompt_tests {
             provider: None,
             name_pool: Vec::new(),
             is_builtin: true,
-            provisioned_by: None,
+            provisioned: None,
             provisioned_version: None,
             is_active: true,
             shared: false,

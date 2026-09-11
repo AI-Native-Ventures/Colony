@@ -91,7 +91,7 @@ pub(crate) async fn create_persona_with_preparation(
             provider,
             name_pool,
             is_builtin: false,
-            provisioned_by: None,
+            provisioned: None,
             provisioned_version: None,
             is_active: true,
             shared: false,

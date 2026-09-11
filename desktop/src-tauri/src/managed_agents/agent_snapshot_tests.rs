@@ -11,6 +11,9 @@ use std::collections::BTreeMap;
 /// relevant to snapshot export are filled; the rest use defaults.
 fn minimal_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,
@@ -70,7 +73,7 @@ fn minimal_record() -> ManagedAgentRecord {
         runtime: Some("goose".to_string()),
         name_pool: vec!["Alice".to_string(), "Bob".to_string()],
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,

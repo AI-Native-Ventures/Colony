@@ -285,7 +285,7 @@ fn persona_with_provider(
         provider: provider.map(str::to_string),
         name_pool: Vec::new(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,

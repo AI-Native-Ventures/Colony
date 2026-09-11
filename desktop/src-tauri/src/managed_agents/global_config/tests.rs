@@ -357,6 +357,9 @@ fn default_global_config_serializes_all_fields() {
 
 fn bare_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,
@@ -407,7 +410,7 @@ fn bare_record() -> ManagedAgentRecord {
         runtime: None,
         name_pool: vec![],
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -435,7 +438,7 @@ fn persona(id: &str, model: Option<&str>, provider: Option<&str>) -> AgentDefini
         provider: provider.map(str::to_string),
         name_pool: vec![],
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -701,7 +704,7 @@ fn record_runtime_wins_over_persona_runtime_for_command_resolution() {
         provider: None,
         name_pool: vec![],
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,

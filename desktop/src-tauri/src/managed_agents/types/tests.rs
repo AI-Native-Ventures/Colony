@@ -535,7 +535,7 @@ fn sample_persona() -> AgentDefinition {
         provider: Some("openai".to_string()),
         name_pool: vec!["Nimble".to_string()],
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -759,6 +759,7 @@ fn summary_fixture(
     restart_diff: Vec<crate::managed_agents::spawn_snapshot::RestartDiffEntry>,
 ) -> super::ManagedAgentSummary {
     super::ManagedAgentSummary {
+        provisioned: None,
         working_dir: None,
         owner_identified: false,
         isolated: false,
@@ -768,7 +769,7 @@ fn summary_fixture(
         persona_id: None,
         runtime: None,
         team_id: None,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         relay_url: String::new(),
         acp_command: "buzz-acp".into(),

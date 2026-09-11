@@ -631,6 +631,30 @@ export async function listRelayAgents(): Promise<RelayAgent[]> {
   );
 }
 
+/** What adoption did for one provisioned employee. Mirrors `AdoptionOutcome`. */
+export type ProvisionedAdoption =
+  | { outcome: "adopted"; handle: string; name: string; pubkey: string }
+  | { outcome: "unchanged"; handle: string; pubkey: string }
+  | { outcome: "refused"; handle: string; reason: string }
+  | { outcome: "failed"; handle: string; reason: string };
+
+/**
+ * Take custody of every employee Colony provides in this community, so this
+ * machine can run them.
+ *
+ * Idempotent and safe to call on every community init: an employee already
+ * adopted at the current bundled version costs one relay query and nothing
+ * else. Each employee reports its own outcome, so one that this build cannot
+ * serve never hides one that works.
+ */
+export async function adoptProvisionedEmployees(): Promise<
+  ProvisionedAdoption[]
+> {
+  return await invokeTauri<ProvisionedAdoption[]>(
+    "adopt_provisioned_employees",
+  );
+}
+
 export async function listManagedAgents(): Promise<ManagedAgent[]> {
   return (await invokeTauri<RawManagedAgent[]>("list_managed_agents")).map(
     fromRawManagedAgent,

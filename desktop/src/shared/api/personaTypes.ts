@@ -21,7 +21,7 @@ export type AgentPersona = {
    * Recipe id when this persona is provided by Colony, else null/absent.
    * Provisioned personas cannot be deleted and are upgraded by the recipe.
    */
-  provisionedBy?: string | null;
+  provisioned?: string | null;
   /** Recipe version that last wrote the provisioned content. */
   provisionedVersion?: string | null;
   isActive: boolean;

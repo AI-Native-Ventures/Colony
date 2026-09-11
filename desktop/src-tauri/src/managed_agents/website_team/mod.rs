@@ -23,7 +23,7 @@
 //! instead of duplicating, and nothing is shared across communities.
 //!
 //! Provisioning contract: the records this installer writes are provided by
-//! Colony. They are stamped `is_builtin` + `provisioned_by` +
+//! Colony. They are stamped `is_builtin` + `provisioned` +
 //! `provisioned_version`, cannot be deleted by the user, and are upgraded in
 //! place when `RECIPE_VERSION` moves: only recipe-owned content is refreshed
 //! (persona name/role/prompt, team name/description/instructions, agent tier

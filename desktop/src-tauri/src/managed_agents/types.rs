@@ -42,7 +42,7 @@ pub struct AgentDefinition {
     /// as provided by Colony: the owner cannot delete it, and its owned
     /// content is upgraded when the recipe version changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provisioned_by: Option<String>,
+    pub provisioned: Option<String>,
     /// Recipe version that last wrote the content Colony owns. Compared
     /// against the recipe's current version to decide whether an upgrade is
     /// due; a `None` version on a provisioned record reads as "unknown, not
@@ -110,6 +110,10 @@ impl AgentDefinition {
     /// event coordinate (`d_tag = slug`) across the fold.
     pub fn into_agent_record(self) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            // An agent created here is the workspace's own, never provisioned.
+            provisioned: None,
+            provisioned_version: None,
+            provisioned_requires_commands: Vec::new(),
             working_dir: None,
             tier: None,
             manager: None,
@@ -164,7 +168,7 @@ impl AgentDefinition {
             runtime: self.runtime,
             name_pool: self.name_pool,
             is_builtin: self.is_builtin,
-            provisioned_by: self.provisioned_by,
+            provisioned: self.provisioned,
             provisioned_version: self.provisioned_version,
             is_active: self.is_active,
             // Catalog visibility is relay+owner scoped, not definition-global.
@@ -202,7 +206,7 @@ impl ManagedAgentRecord {
             provider: self.provider.clone(),
             name_pool: self.name_pool.clone(),
             is_builtin: self.is_builtin,
-            provisioned_by: self.provisioned_by.clone(),
+            provisioned: self.provisioned.clone(),
             provisioned_version: self.provisioned_version.clone(),
             is_active: self.is_active,
             // Projected by `list_personas` from the active retention scope.
@@ -263,6 +267,30 @@ pub struct RelayAgentInfo {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ManagedAgentRecord {
+    /// The bundled entry this agent was provisioned from, e.g. `sales`, or
+    /// `None` for an agent the workspace created itself.
+    ///
+    /// This is the field every locking decision keys on. An employee Colony
+    /// provides is not the workspace's to edit or delete: the relay refuses
+    /// every such write at ingest, and the desktop must not offer an action
+    /// it knows the relay will reject. `#[serde(default)]` so a store written
+    /// before this field existed loads as an ordinary agent, which is what
+    /// those records are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned: Option<String>,
+    /// The bundled version last adopted, so a newer definition can be
+    /// recognised as newer without re-reading the relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_version: Option<i64>,
+    /// The `buzz` subcommands this employee's brief depends on, copied from
+    /// the definition at adoption.
+    ///
+    /// Checked again at every launch, not only at adoption, because the app
+    /// can be downgraded under a record that was adopted by a newer build.
+    /// That skew is the whole reason the gate exists: an employee whose
+    /// binary lost a command it was briefed to use starts and improvises.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provisioned_requires_commands: Vec<String>,
     pub pubkey: String,
     pub name: String,
     #[serde(default)]
@@ -498,15 +526,11 @@ pub struct ManagedAgentRecord {
     /// Absorbed from `AgentDefinition.is_builtin`.
     #[serde(default)]
     pub is_builtin: bool,
-    /// Absorbed from `AgentDefinition.provisioned_by` — the recipe that
+    /// Absorbed from `AgentDefinition.provisioned` — the recipe that
     /// provisioned this record. `Some` marks the agent as provided by
     /// Colony, so the user cannot delete it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provisioned_by: Option<String>,
     /// Absorbed from `AgentDefinition.provisioned_version` — the recipe
     /// version that last wrote the owned content.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provisioned_version: Option<String>,
     /// Absorbed from `AgentDefinition.is_active` — `false` means an archived
     /// definition hidden from pickers. Defaults `true` for existing records.
     #[serde(default = "default_record_active")]
@@ -611,6 +635,13 @@ pub struct ManagedAgentSummary {
     /// Whether the saved record identifies its hiring owner. Browser sharing
     /// rejects legacy records whose display-only ownership fallback is unknown.
     pub owner_identified: bool,
+    /// The bundled entry this agent was provisioned from, or `None` for one
+    /// the workspace created itself.
+    ///
+    /// Surfaced to the UI so it can present a provisioned employee as locked.
+    /// The refusals live in the commands, not here: hiding a control is a
+    /// courtesy, and a courtesy is not a guarantee.
+    pub provisioned: Option<String>,
     pub name: String,
     pub persona_id: Option<String>,
     /// The record's harness/runtime id (mirror of `ManagedAgentRecord.runtime`).
@@ -620,11 +651,7 @@ pub struct ManagedAgentSummary {
     pub team_id: Option<String>,
     /// Recipe id when this agent is provided by Colony. The UI marks its
     /// provenance and withholds the delete action for a `Some` value.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provisioned_by: Option<String>,
     /// Recipe version that last wrote the provisioned content.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provisioned_version: Option<String>,
     pub relay_url: String,
     pub acp_command: String,
     pub agent_command: String,
@@ -900,7 +927,7 @@ pub struct TeamRecord {
     /// by Colony: the owner cannot delete it, and its owned content is
     /// upgraded when the recipe version changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provisioned_by: Option<String>,
+    pub provisioned: Option<String>,
     /// Recipe version that last wrote the content Colony owns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provisioned_version: Option<String>,

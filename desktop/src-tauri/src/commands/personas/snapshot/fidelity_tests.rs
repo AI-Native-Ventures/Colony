@@ -11,6 +11,9 @@ use std::collections::BTreeMap;
 
 fn make_definition(slug: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,
@@ -62,7 +65,7 @@ fn make_definition(slug: &str) -> ManagedAgentRecord {
         runtime: None,
         name_pool: vec![],
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: false,
         shared: false,

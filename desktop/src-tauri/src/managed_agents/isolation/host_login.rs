@@ -73,7 +73,15 @@ pub(super) enum Provision {
     Scoped(PathBuf),
     /// Run the vendor CLI with the owner's own home and its default config
     /// directory, the way it ran before the Electron path existed.
-    HostLogin { home: PathBuf, config_dir: PathBuf },
+    HostLogin {
+        home: PathBuf,
+        config_dir: PathBuf,
+        /// The owner's account name. Claude's keychain item is keyed on it, and
+        /// the coordinator's environment is cleared before it is spawned, so the
+        /// bridge cannot read it back from its own environment. It has to
+        /// travel with the rest of the mode.
+        user: String,
+    },
     /// Nothing to run against. The caller keeps its existing error.
     Unavailable,
 }
@@ -123,9 +131,16 @@ fn claude_host_login(home: &Path) -> Provision {
     ) {
         return Provision::Unavailable;
     }
+    // Measured on 2026-09-11: `HOME` and `PATH` alone report signed out, and
+    // adding `USER` reports the owner's plan. The keychain item's account
+    // attribute is the owner's user name, so the lookup needs it.
+    let Some(user) = std::env::var("USER").ok().filter(|user| !user.is_empty()) else {
+        return Provision::Unavailable;
+    };
     Provision::HostLogin {
         home: home.to_path_buf(),
         config_dir,
+        user,
     }
 }
 
@@ -350,15 +365,41 @@ mod tests {
     }
 
     #[test]
+    fn claude_host_login_needs_the_owner_name_for_the_keychain() {
+        // Claude's keychain item is keyed on the owner's account name, and the
+        // coordinator is spawned with a cleared environment, so a run without a
+        // USER cannot sign in. Refusing here keeps the reported reason honest
+        // rather than starting a teammate that reports a signed-out account.
+        let root = tempfile::tempdir().unwrap();
+        let home = signed_in_home(root.path(), "nameless-home");
+        let profile = profile(root.path());
+        let restore = std::env::var("USER").ok();
+        std::env::remove_var("USER");
+        let outcome = resolve_from(&profile, "claude", &home);
+        if let Some(user) = restore {
+            std::env::set_var("USER", user);
+        }
+        assert_eq!(outcome, Provision::Unavailable);
+    }
+
+    #[test]
     fn claude_runs_against_the_host_login_when_no_scoped_profile_exists() {
         let root = tempfile::tempdir().unwrap();
         let home = signed_in_home(root.path(), "signed-in-home");
         let profile = profile(root.path());
+        let restore = std::env::var("USER").ok();
+        std::env::set_var("USER", "fixture-owner");
+        let outcome = resolve_from(&profile, "claude", &home);
+        match restore {
+            Some(user) => std::env::set_var("USER", user),
+            None => std::env::remove_var("USER"),
+        }
         assert_eq!(
-            resolve_from(&profile, "claude", &home),
+            outcome,
             Provision::HostLogin {
                 home: home.clone(),
                 config_dir: home.join(CLAUDE_HOST_DIRECTORY),
+                user: "fixture-owner".into(),
             }
         );
         assert!(

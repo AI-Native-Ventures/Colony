@@ -23,7 +23,7 @@ fn team() -> TeamRecord {
         persona_ids: vec![],
         lead_persona_id: None,
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         source_dir: None,
         is_symlink: false,
@@ -204,7 +204,7 @@ fn provisioned_definition(persona: &RecipePersona, version: &str) -> AgentDefini
         provider: Some("user-provider".to_string()),
         name_pool: vec!["user-pool".to_string()],
         is_builtin: false,
-        provisioned_by: Some(RECIPE_ID.to_string()),
+        provisioned: Some(RECIPE_ID.to_string()),
         provisioned_version: Some(version.to_string()),
         is_active: true,
         shared: false,
@@ -278,7 +278,7 @@ fn a_same_version_user_edit_is_not_rewritten() {
 #[test]
 fn team_upgrade_refreshes_owned_content_and_keeps_membership_edits() {
     let mut existing = team();
-    existing.provisioned_by = Some(RECIPE_ID.to_string());
+    existing.provisioned = Some(RECIPE_ID.to_string());
     existing.provisioned_version = Some("0.0.1".to_string());
     existing.persona_ids = vec![PERSONAS[1].persona_id.to_string()];
     existing.lead_persona_id = Some(PERSONAS[1].persona_id.to_string());
@@ -329,7 +329,7 @@ fn agent_upgrade_refreshes_tier_and_preserves_user_fields() {
         model: Some("user-model".to_string()),
         working_dir: Some("/tmp/work".to_string()),
         tier: Some("leader".to_string()),
-        provisioned_by: Some(RECIPE_ID.to_string()),
+        provisioned: Some(RECIPE_ID.to_string()),
         provisioned_version: Some("0.0.1".to_string()),
         ..Default::default()
     };

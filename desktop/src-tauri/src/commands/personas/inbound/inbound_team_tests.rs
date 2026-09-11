@@ -26,7 +26,7 @@ pub(super) fn local_team() -> TeamRecord {
         persona_ids: vec!["p-local".to_string()],
         lead_persona_id: Some("p-local".to_string()),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         source_dir: Some(std::path::PathBuf::from("/local/team/dir")),
         is_symlink: true,

@@ -1221,6 +1221,18 @@ jobs:
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Provisioned employee access and key release
+        # Workspace access (membership plus the Discovery grant) and the route
+        # that hands an owner an employee's runtime key. Lib tests rather than
+        # an integration target, so this is a filter on the package; the
+        # archive already contains the buzz-relay lib.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and test(/api::provisioned_employees::tests/)' \
+            --run-ignored all
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           REDIS_URL: redis://localhost:6379
       - name: Workflow owner-contact routing tests
         # Regression gate for the workflow-sink owner wall: a Worker/Leader

@@ -447,6 +447,28 @@ pub async fn start_managed_agent(
 
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
 
+        // An employee Colony provides runs the `buzz` this build ships, and a
+        // brief naming a command that binary lacks is broken before it starts:
+        // the agent reaches for something adjacent and produces work nobody
+        // can act on. Checked HERE and not only at adoption, because the app
+        // can be downgraded under a record a newer build wrote. Absent and
+        // explained beats started and improvising.
+        if !record.provisioned_requires_commands.is_empty() {
+            let available = crate::commands::available_cli_commands();
+            let missing = crate::managed_agents::provisioned::missing_commands(
+                &record.provisioned_requires_commands,
+                &available,
+            );
+            if !missing.is_empty() {
+                return Err(
+                    crate::managed_agents::provisioned::missing_commands_message(
+                        &record.name,
+                        &missing,
+                    ),
+                );
+            }
+        }
+
         // Profile reconcile: the carrier builder resolves the effective
         // harness through the one inheritance chain (the create-time snapshot
         // may be empty or stale for a persona-inherited harness).
@@ -613,7 +635,7 @@ fn validate_managed_agent_deletion(
     record: &crate::managed_agents::ManagedAgentRecord,
     force_remote_delete: bool,
 ) -> Result<(), String> {
-    if record.provisioned_by.is_some() {
+    if record.provisioned.is_some() {
         return Err(crate::managed_agents::provisioned_deletion_error(
             &record.name,
         ));
@@ -665,13 +687,22 @@ pub async fn delete_managed_agent(
                 state.clear_agent_session_caches(pubkey);
             }
 
-            // Guard: reject deletion of record the owner does not own. This
-            // turns "provided by Colony" and "don't orphan remote infra" from
-            // UI conventions into backend invariants: a buggy or compromised
-            // IPC caller cannot bypass either. Provisioned check first so its
-            // refusal names the product, then the deployed-remote check, which
-            // the frontend clears only after the user confirms the orphan
-            // warning. Both run before anything is stopped or removed.
+            // Guard: an employee Colony provides is not the workspace's to
+            // delete. Ingest refuses every destructive path anyway, so a
+            // delete here could only drop this machine's copy and leave the
+            // employee standing, and the next community init would adopt it
+            // straight back: a confusing no-op rather than an outcome. The
+            // same refusal covers a pack this app installed, which is the
+            // other way a record arrives already provided.
+            //
+            // Then the deployed-remote check, which the frontend clears only
+            // after the user confirms the orphan warning. Both run before
+            // anything is stopped or removed, so a buggy or compromised IPC
+            // caller cannot bypass either.
+            if let Some(record) = records.iter().find(|r| r.pubkey == pubkey) {
+                crate::managed_agents::provisioned::refuse_delete_if_provisioned(record)?;
+            }
+
             if let Some(record) = records.iter().find(|r| r.pubkey == pubkey) {
                 validate_managed_agent_deletion(record, force_remote_delete.unwrap_or(false))?;
             }

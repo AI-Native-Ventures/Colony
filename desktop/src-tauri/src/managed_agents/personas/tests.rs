@@ -26,7 +26,7 @@ fn custom_persona(id: &str, display_name: &str) -> AgentDefinition {
         provider: None,
         name_pool: Vec::new(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -442,7 +442,7 @@ fn validate_persona_deletion_rejects_builtins() {
 #[test]
 fn validate_persona_deletion_rejects_provisioned_personas() {
     let mut persona = custom_persona("website-manager-avery", "Avery");
-    persona.provisioned_by = Some("website-manager".to_string());
+    persona.provisioned = Some("website-manager".to_string());
     persona.provisioned_version = Some("0.1.0".to_string());
 
     let err = validate_persona_deletion(&persona, false).unwrap_err();

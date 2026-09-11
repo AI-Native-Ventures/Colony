@@ -321,7 +321,7 @@ function AgentPersonaCard({
         onOpenPersonaProfile(persona);
       }}
       statusBadge={
-        persona.provisionedBy || agent?.provisionedBy ? (
+        persona.provisioned || agent?.provisioned ? (
           <div className="flex flex-col items-start gap-1">
             <Badge variant="secondary">Provided by Colony</Badge>
             {agent?.personaOrphaned ? (
@@ -411,9 +411,9 @@ function StandaloneAgentCard({
         );
       }}
       statusBadge={
-        agent.provisionedBy || agent.personaOrphaned ? (
+        agent.provisioned || agent.personaOrphaned ? (
           <div className="flex flex-col items-start gap-1">
-            {agent.provisionedBy ? (
+            {agent.provisioned ? (
               <Badge variant="secondary">Provided by Colony</Badge>
             ) : null}
             {agent.personaOrphaned ? (

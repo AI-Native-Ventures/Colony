@@ -24,6 +24,9 @@ fn chat_team_id() -> String {
 
 pub(super) fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,
@@ -75,7 +78,7 @@ pub(super) fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
         runtime: None,
         name_pool: Vec::new(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,
@@ -98,7 +101,7 @@ pub(super) fn coordination_team() -> TeamRecord {
         persona_ids: vec!["builtin:fizz".to_string()],
         lead_persona_id: Some("builtin:fizz".to_string()),
         is_builtin: true,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         source_dir: None,
         is_symlink: false,

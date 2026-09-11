@@ -101,7 +101,7 @@ fn fizz() -> AgentDefinition {
         provider: None,
         name_pool: Vec::new(),
         is_builtin: true,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,

@@ -172,7 +172,7 @@ pub(crate) fn team_publishes_to_relay(team: &TeamRecord, relay_url: &str) -> boo
     // Provisioned teams are ours to publish wherever they apply: the relay
     // authorizes tasks against the owner's published team heads, so a
     // provided team that stayed local could not own any work.
-    if team.provisioned_by.is_some() {
+    if team.provisioned.is_some() {
         return team_applies_to_relay(team, relay_url);
     }
     if !team.is_builtin {
@@ -263,7 +263,7 @@ pub(crate) fn ensure_coordination_team_for_relay(
         persona_ids: vec![COORDINATION_TEAM_LEAD.to_string()],
         lead_persona_id: Some(COORDINATION_TEAM_LEAD.to_string()),
         is_builtin: true,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         source_dir: None,
         is_symlink: false,

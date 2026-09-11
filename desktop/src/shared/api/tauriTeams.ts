@@ -13,7 +13,7 @@ type RawTeam = {
   persona_ids: string[];
   lead_persona_id?: string | null;
   is_builtin?: boolean;
-  provisioned_by?: string | null;
+  provisioned?: string | null;
   provisioned_version?: string | null;
   source_dir?: string | null;
   is_symlink?: boolean;
@@ -32,7 +32,7 @@ function fromRawTeam(team: RawTeam): AgentTeam {
     personaIds: team.persona_ids,
     leadPersonaId: team.lead_persona_id ?? null,
     isBuiltin: team.is_builtin ?? false,
-    provisionedBy: team.provisioned_by ?? null,
+    provisioned: team.provisioned ?? null,
     provisionedVersion: team.provisioned_version ?? null,
     sourceDir: team.source_dir ?? null,
     isSymlink: team.is_symlink ?? false,
@@ -131,7 +131,7 @@ type RawTeamRecord = {
   lead_persona_id?: string | null;
   instructions: string | null;
   is_builtin: boolean;
-  provisioned_by?: string | null;
+  provisioned?: string | null;
   provisioned_version?: string | null;
   source_dir: string | null;
   is_symlink: boolean;

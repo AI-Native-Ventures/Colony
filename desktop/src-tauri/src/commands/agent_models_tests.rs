@@ -397,7 +397,7 @@ fn model_discovery_ignores_stale_record_for_linked_agent() {
         provider: Some("anthropic".to_string()),
         name_pool: Vec::new(),
         is_builtin: false,
-        provisioned_by: None,
+        provisioned: None,
         provisioned_version: None,
         is_active: true,
         shared: false,

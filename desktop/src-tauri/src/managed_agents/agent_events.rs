@@ -240,6 +240,9 @@ mod tests {
 
     pub(super) fn sample_agent() -> ManagedAgentRecord {
         ManagedAgentRecord {
+            provisioned: None,
+            provisioned_version: None,
+            provisioned_requires_commands: Vec::new(),
             working_dir: None,
             tier: None,
             manager: None,
@@ -296,7 +299,7 @@ mod tests {
             runtime: Some("goose".to_string()),
             name_pool: vec!["poolname".to_string()],
             is_builtin: true,
-            provisioned_by: None,
+            provisioned: None,
             provisioned_version: None,
             is_active: false,
             shared: false,

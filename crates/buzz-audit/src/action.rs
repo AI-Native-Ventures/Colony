@@ -28,6 +28,9 @@ pub enum AuditAction {
     RateLimitExceeded,
     /// A media file was uploaded via the Blossom endpoint.
     MediaUploaded,
+    /// A provisioned employee's runtime key was released to a workspace owner
+    /// or admin so their machine can run it.
+    EmployeeKeyReleased,
 }
 
 impl AuditAction {
@@ -45,6 +48,7 @@ impl AuditAction {
             Self::AuthFailure => "auth_failure",
             Self::RateLimitExceeded => "rate_limit_exceeded",
             Self::MediaUploaded => "media_uploaded",
+            Self::EmployeeKeyReleased => "employee_key_released",
         }
     }
 
@@ -60,6 +64,7 @@ impl AuditAction {
         Self::AuthFailure,
         Self::RateLimitExceeded,
         Self::MediaUploaded,
+        Self::EmployeeKeyReleased,
     ];
 }
 

@@ -68,8 +68,8 @@ pub(super) fn apply_recipe_to_definition(
         definition.system_prompt = persona_system_prompt(recipe);
         changed = true;
     }
-    if definition.provisioned_by.as_deref() != Some(RECIPE_ID) {
-        definition.provisioned_by = Some(RECIPE_ID.to_string());
+    if definition.provisioned.as_deref() != Some(RECIPE_ID) {
+        definition.provisioned = Some(RECIPE_ID.to_string());
         changed = true;
     }
     if definition.provisioned_version.as_deref() != Some(RECIPE_VERSION) {
@@ -104,8 +104,8 @@ pub(super) fn apply_recipe_to_team(team: &mut TeamRecord, now: &str) -> (bool, U
         team.instructions = Some(TEAM_INSTRUCTIONS.to_string());
         changed = true;
     }
-    if team.provisioned_by.as_deref() != Some(RECIPE_ID) {
-        team.provisioned_by = Some(RECIPE_ID.to_string());
+    if team.provisioned.as_deref() != Some(RECIPE_ID) {
+        team.provisioned = Some(RECIPE_ID.to_string());
         changed = true;
     }
     if team.provisioned_version.as_deref() != Some(RECIPE_VERSION) {
@@ -141,8 +141,8 @@ pub(super) fn apply_recipe_to_agent(
     let version_changed = previous.as_deref() != Some(RECIPE_VERSION);
     let mut changed = false;
 
-    if record.provisioned_by.as_deref() != Some(RECIPE_ID) {
-        record.provisioned_by = Some(RECIPE_ID.to_string());
+    if record.provisioned.as_deref() != Some(RECIPE_ID) {
+        record.provisioned = Some(RECIPE_ID.to_string());
         changed = true;
     }
     if record.provisioned_version.as_deref() != Some(RECIPE_VERSION) {

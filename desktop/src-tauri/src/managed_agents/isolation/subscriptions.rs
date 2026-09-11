@@ -107,9 +107,11 @@ pub(super) fn prepare(
     let provision = host_login::resolve(&profile, runtime);
     let (profile, host_login) = match &provision {
         host_login::Provision::Scoped(profile) => (profile.clone(), None),
-        host_login::Provision::HostLogin { home, config_dir } => {
-            (config_dir.clone(), Some((home, config_dir)))
-        }
+        host_login::Provision::HostLogin {
+            home,
+            config_dir,
+            user,
+        } => (config_dir.clone(), Some((home, config_dir, user))),
         host_login::Provision::Unavailable => return Err(
             "Connect a subscription for this business in Power setup before starting the agent."
                 .into(),
@@ -168,8 +170,8 @@ pub(super) fn prepare(
         "mcp_servers":{"colony_work":work,"colony_browser":browser}});
     // Absent for a scoped profile, so an older bridge never reads a field it
     // does not know about and a newer one never guesses the mode.
-    if let Some((home, config_dir)) = host_login {
-        config["host_login"] = json!({"home":home,"config_dir":config_dir});
+    if let Some((home, config_dir, user)) = host_login {
+        config["host_login"] = json!({"home":home,"config_dir":config_dir,"user":user});
     }
     // The coordinator holds scoped relay identity and vendor profile routing, but
     // model-requested shell/file/browser work only runs in the captured tool policy.

@@ -77,6 +77,17 @@ pub struct ProvisionedEmployee {
     /// One line describing what this employee does, shown wherever it is
     /// introduced.
     pub summary: String,
+    /// Top-level `buzz` subcommands this employee's brief tells it to use.
+    ///
+    /// An employee runs the `buzz` that ships inside the installed app, and a
+    /// brief naming a command that binary does not have is broken on arrival:
+    /// the agent improvises something adjacent and produces work nobody asked
+    /// for. So the brief declares its surface here and the client refuses to
+    /// launch an employee whose binary cannot satisfy it, naming the missing
+    /// command. An employee that stays absent until the app catches up is the
+    /// better failure.
+    #[serde(default)]
+    pub requires_commands: Vec<String>,
     /// The persona prompt, loaded from the manifest's companion file. Not a
     /// JSON field: it is filled in by [`core_employee_manifests`].
     #[serde(skip)]
@@ -128,6 +139,13 @@ pub fn core_employee_manifests() -> anyhow::Result<Vec<ProvisionedEmployee>> {
         }
         if employee.prompt.is_empty() {
             anyhow::bail!("bundled employee {path} has an empty persona prompt");
+        }
+        if employee
+            .requires_commands
+            .iter()
+            .any(|command| command.trim().is_empty())
+        {
+            anyhow::bail!("bundled employee manifest {path} names an empty required command");
         }
         if employee.tier().is_none() {
             anyhow::bail!(
@@ -219,9 +237,96 @@ pub async fn ensure_core_employees(
                 );
             }
         }
+
+        // Runs on every pass, not only when the row changed. Access is a
+        // separate fact from the row, it can be missing while the row is
+        // current (every employee seeded before this existed is in exactly
+        // that state), and both writes are idempotent, so reconciling here
+        // heals an existing workspace on its next relay start.
+        if let Err(error) = ensure_workspace_access(state, community, &employee.handle).await {
+            warn!(
+                community = %community,
+                handle = %employee.handle,
+                error = %error,
+                "provisioned employee workspace access could not be reconciled; continuing"
+            );
+        }
     }
 
     Ok(written)
+}
+
+/// Give a seeded employee what it needs to do its job: membership of the
+/// community, and the Discovery capability its brief depends on.
+///
+/// Neither is implied by the employees row. An employee that is not a relay
+/// member cannot authenticate at all, and one without a `discovery.run` actor
+/// grant is refused by the Discovery broker with "this agent has not been
+/// granted the Discovery capability". Both were being done by hand, per
+/// workspace, which is the definition of something provisioning should own.
+///
+/// `granted_by` is a real community owner, because the grant records who
+/// authorised the capability and a relay-invented grantor would make that
+/// record a lie. A community with no owner yet is left alone and reconciled
+/// on the next pass rather than granted by nobody.
+async fn ensure_workspace_access(
+    state: &AppState,
+    community: CommunityId,
+    handle: &str,
+) -> anyhow::Result<()> {
+    let Some(row) = state
+        .db
+        .find_provisioned_employee(community, handle)
+        .await
+        .context("failed to load the seeded employee")?
+    else {
+        return Ok(());
+    };
+
+    let owners = state
+        .db
+        .list_relay_owners(community, 1)
+        .await
+        .context("failed to look up a community owner")?;
+    let Some(owner_hex) = owners.first() else {
+        warn!(
+            community = %community,
+            handle,
+            "community has no owner yet; employee access will be reconciled on the next pass"
+        );
+        return Ok(());
+    };
+
+    let employee_hex = hex::encode(&row.pubkey);
+    let added = state
+        .db
+        .add_relay_member(community, &employee_hex, "member", Some(owner_hex))
+        .await
+        .context("failed to add the employee to the community")?;
+    if added {
+        info!(
+            community = %community,
+            handle,
+            "provisioned employee added to the community"
+        );
+    }
+
+    let actor: [u8; 32] = row
+        .pubkey
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("stored employee pubkey is not 32 bytes"))?;
+    let granted_by: [u8; 32] = hex::decode(owner_hex)
+        .ok()
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok())
+        .ok_or_else(|| anyhow::anyhow!("stored community owner pubkey is not 32 bytes"))?;
+    state
+        .db
+        .set_discovery_actor_grant(community, &actor, &granted_by, true)
+        .await
+        .context("failed to grant the employee the Discovery capability")?;
+
+    Ok(())
 }
 
 /// Ensure bundled employees for every active community on this relay.
@@ -521,6 +626,7 @@ fn build_agent_definition(
         "summary": employee.summary,
         "harness": employee.harness,
         "model": employee.model,
+        "requires_commands": employee.requires_commands,
         "system_prompt": employee.prompt,
         "provisioned": employee.handle,
         "version": employee.version,
@@ -561,9 +667,17 @@ mod tests {
             .find(|entry| entry.handle == "sales")
             .expect("the sales employee is bundled");
         assert_eq!(sales.display_name, "Sales");
-        assert_eq!(sales.version, 1);
+        assert_eq!(sales.version, 2);
         assert_eq!(sales.tier(), Some(AgentTier::Leader));
         assert!(sales.prompt.contains("outreach"));
+        assert_eq!(
+            sales.requires_commands,
+            vec![
+                "discovery".to_owned(),
+                "messages".to_owned(),
+                "outreach".to_owned()
+            ]
+        );
     }
 
     #[test]

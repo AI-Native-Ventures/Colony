@@ -241,7 +241,7 @@ mod tests {
             persona_ids: vec![],
             lead_persona_id: None,
             is_builtin: false,
-            provisioned_by: None,
+            provisioned: None,
             provisioned_version: None,
             source_dir: None,
             is_symlink: false,
@@ -256,6 +256,9 @@ mod tests {
     /// Build a minimal `ManagedAgentRecord` for use as a team member.
     fn agent_record(name: &str) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            provisioned: None,
+            provisioned_version: None,
+            provisioned_requires_commands: Vec::new(),
             working_dir: None,
             tier: None,
             manager: None,
@@ -311,7 +314,7 @@ mod tests {
             runtime: Some("goose".to_string()),
             name_pool: vec![],
             is_builtin: false,
-            provisioned_by: None,
+            provisioned: None,
             provisioned_version: None,
             is_active: true,
             shared: false,
