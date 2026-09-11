@@ -31,6 +31,7 @@ pub(crate) use metadata::{
 mod browser_shared;
 mod prime_agent_config;
 mod provisioned;
+mod workdir;
 pub(crate) use provisioned::{
     apply_spend_env_policy, configure_runtime_cli, provisioned_spawn_env,
     spawn_agent_child_with_lease,
@@ -285,6 +286,7 @@ pub fn build_managed_agent_summary(
         .to_string();
 
     Ok(ManagedAgentSummary {
+        working_dir: record.working_dir.clone(),
         pubkey: record.pubkey.clone(),
         owner_identified: super::owner_scope::effective_owner_pubkey(record).is_some(),
         isolated: pair_runtime.is_some_and(|runtime| runtime.isolation_network.is_some()),
@@ -519,8 +521,19 @@ fn spawn_agent_child_inner(
     );
 
     let mut command = std::process::Command::new(&resolved_acp_command);
-    if let Some(home) = super::default_agent_workdir() {
-        command.current_dir(home);
+    // The factory gives an agent its own git worktree; run the harness there.
+    // A record without one, or one whose worktree is gone, keeps the home dir.
+    match workdir::resolve_agent_working_dir(record.working_dir.as_deref()) {
+        Some(worktree) => {
+            command.env(super::COLONY_WORKTREE_ENV_KEY, &worktree);
+            command.current_dir(worktree);
+        }
+        None => {
+            command.env_remove(super::COLONY_WORKTREE_ENV_KEY);
+            if let Some(home) = super::default_agent_workdir() {
+                command.current_dir(home);
+            }
+        }
     }
     command.env_remove("BUZZ_WORKER_PROXY");
     if let Some(ref path) = augmented_path {

@@ -1,6 +1,10 @@
 import * as React from "react";
 
 import { useChannelTemplatesQuery } from "@/features/channel-templates/hooks";
+import {
+  useCreateChannelProject,
+  type CreateChannelProjectField,
+} from "@/features/projects/useCreateChannelProject";
 import { DEFAULT_EPHEMERAL_TTL_SECONDS } from "@/features/channels/lib/ephemeralChannel";
 import type { ChannelTemplate, ChannelVisibility } from "@/shared/api/types";
 
@@ -23,7 +27,8 @@ type UseCreateChannelFormOptions = {
   active: boolean;
   initialName?: string;
   isCreating: boolean;
-  onCreate: (input: CreateChannelInput) => Promise<void>;
+  /** Resolves with the created channel's id when the caller knows it. */
+  onCreate: (input: CreateChannelInput) => Promise<string | undefined>;
   onCreated?: () => void;
   autoFocusName?: boolean;
 };
@@ -44,6 +49,8 @@ export type CreateChannelFormState = {
   typePopoverOpen: boolean;
   setTypePopoverOpen: (open: boolean) => void;
   errorMessage: string | null;
+  /** Optional project this channel is linked to right after it is created. */
+  project: CreateChannelProjectField;
   selectedTemplateId: string | null;
   handleTemplateChange: (templateId: string) => void;
   handleTemplateCreated: (template: ChannelTemplate) => void;
@@ -83,6 +90,7 @@ export function useCreateChannelForm({
   const nameInputRef = React.useRef<HTMLInputElement>(null);
   const visibilityTouchedRef = React.useRef(false);
 
+  const project = useCreateChannelProject();
   const templatesQuery = useChannelTemplatesQuery();
   const templates = templatesQuery.data ?? [];
 
@@ -98,6 +106,7 @@ export function useCreateChannelForm({
     setErrorMessage(null);
     setSelectedTemplateId(null);
     setTypePopoverOpen(false);
+    project.reset();
     visibilityTouchedRef.current = false;
 
     if (!autoFocusName) return;
@@ -119,7 +128,7 @@ export function useCreateChannelForm({
       input.setSelectionRange(end, end);
     }, 50);
     return () => globalThis.clearTimeout(timerId);
-  }, [active, autoFocusName, initialName]);
+  }, [active, autoFocusName, initialName, project.reset]);
 
   const applyTemplate = React.useCallback((template: ChannelTemplate) => {
     setSelectedTemplateId(template.id);
@@ -159,13 +168,16 @@ export function useCreateChannelForm({
 
       void (async () => {
         try {
-          await onCreate({
+          const createdChannelId = await onCreate({
             name: trimmedName,
             description: description.trim() || undefined,
             visibility,
             ttlSeconds: ephemeral ? ttlSeconds : undefined,
             templateId: selectedTemplateId ?? undefined,
           });
+          if (createdChannelId) {
+            await project.linkCreatedChannel(createdChannelId);
+          }
           onCreated?.();
         } catch (error) {
           setErrorMessage(
@@ -183,6 +195,7 @@ export function useCreateChannelForm({
       name,
       onCreate,
       onCreated,
+      project.linkCreatedChannel,
       selectedTemplateId,
       ttlSeconds,
       visibility,
@@ -214,6 +227,7 @@ export function useCreateChannelForm({
     typePopoverOpen,
     setTypePopoverOpen,
     errorMessage,
+    project,
     selectedTemplateId,
     handleTemplateChange,
     handleTemplateCreated: applyTemplate,

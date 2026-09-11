@@ -9,6 +9,7 @@ import {
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 import { RichPreviewGallery } from "./RichPreviewGallery";
 
@@ -65,17 +66,34 @@ export function BlocksSettingsCard() {
         title="Blocks"
       />
 
-      <RichPreviewGallery />
-      <h2 className="mb-4 text-base font-medium">Workspace Blocks</h2>
-      <BlocksCatalogList
-        error={catalogQuery.error instanceof Error ? catalogQuery.error : null}
-        isLoading={
-          activeCommunity !== null &&
-          (channelsQuery.isLoading || catalogQuery.isLoading)
-        }
-        items={catalogQuery.data ?? []}
-        onSelect={handleSelect}
-      />
+      <Tabs defaultValue="workspace">
+        <TabsList aria-label="Block libraries" className="mb-5">
+          <TabsTrigger value="workspace">Workspace</TabsTrigger>
+          <TabsTrigger value="examples">Examples</TabsTrigger>
+        </TabsList>
+        <TabsContent value="workspace">
+          <h2 className="mb-2 text-base font-medium">Workspace Blocks</h2>
+          <p className="mb-5 text-sm leading-relaxed text-muted-foreground">
+            Browse the Blocks available here. Pick one to preview, then continue
+            in a conversation.
+          </p>
+          <BlocksCatalogList
+            error={
+              catalogQuery.error instanceof Error ? catalogQuery.error : null
+            }
+            isLoading={
+              activeCommunity !== null &&
+              (channelsQuery.isLoading || catalogQuery.isLoading)
+            }
+            items={catalogQuery.data ?? []}
+            onSelect={handleSelect}
+            key={activeCommunity?.id ?? "no-community"}
+          />
+        </TabsContent>
+        <TabsContent value="examples">
+          <RichPreviewGallery />
+        </TabsContent>
+      </Tabs>
     </section>
   );
 }

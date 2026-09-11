@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "deliverable",
-  "version": "1.0.0",
-  "created_at": 1785369600,
+  "version": "1.1.0",
+  "created_at": 1785369601,
   "name": "Deliverable",
   "description": "Finished work put in front of the person who asked for it, with three ways to answer: approve it, say what to change, or turn it down.",
   "origin": "core",
@@ -192,26 +192,31 @@
                 "label": "Fingerprint of this exact version",
                 "value": "{{content_hash}}"
               }
-            ]
+            ],
+            "presentation": "disclosure",
+            "summary": "Request and version details"
           },
           {
             "type": "status",
             "label": "Review",
             "state_path": "/status"
           }
-        ]
+        ],
+        "eyebrow": "Ready for your review"
       },
       {
         "type": "section",
         "title": "Earlier rounds of this work",
-        "text": "What was said last time, and what it led to."
+        "text": "What was said last time, and what it led to.",
+        "presentation": "body"
       },
       {
         "type": "table",
         "columns": [
           {
             "key": "version",
-            "label": "Round"
+            "label": "Round",
+            "format": "number"
           },
           {
             "key": "outcome",
@@ -248,7 +253,8 @@
       {
         "type": "section",
         "title": "Close, but not right yet?",
-        "text": "Say what to change instead of approving or rejecting. Whoever did the work gets your words exactly as you write them, and they stay on the record with the rest of this decision."
+        "text": "Say what to change instead of approving or rejecting. Whoever did the work gets your words exactly as you write them, and they stay on the record with the rest of this decision.",
+        "presentation": "body"
       },
       {
         "type": "question",

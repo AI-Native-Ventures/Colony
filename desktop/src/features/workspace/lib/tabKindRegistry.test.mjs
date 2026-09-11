@@ -61,6 +61,46 @@ test("registering the same kind twice is rejected", async () => {
   });
 });
 
+test("listCreatableTabKinds filters by isAvailable when context is given", async () => {
+  await freshRegistry((mod) => {
+    mod.registerTabKind({
+      kind: "available",
+      label: "Available",
+      createTitle: () => "Available",
+      createPayload: () => ({}),
+      canCreateFromNewTabPage: true,
+      isAvailable: ({ channelId }) => channelId === "project-ch",
+    });
+    mod.registerTabKind({
+      kind: "hidden",
+      label: "Hidden",
+      createTitle: () => "Hidden",
+      createPayload: () => ({}),
+      canCreateFromNewTabPage: true,
+      isAvailable: ({ channelId }) => channelId === "other-ch",
+    });
+    // No context = all creatable kinds visible.
+    assert.deepEqual(
+      mod.listCreatableTabKinds().map((d) => d.kind),
+      ["available", "hidden"],
+    );
+    // With matching context = only available kind visible.
+    assert.deepEqual(
+      mod
+        .listCreatableTabKinds({ channelId: "project-ch", projects: undefined })
+        .map((d) => d.kind),
+      ["available"],
+    );
+    // With non-matching context = hidden kind hidden.
+    assert.deepEqual(
+      mod
+        .listCreatableTabKinds({ channelId: "other-ch", projects: undefined })
+        .map((d) => d.kind),
+      ["hidden"],
+    );
+  });
+});
+
 test("creatable kinds keep registration order", async () => {
   await freshRegistry((mod) => {
     for (const kind of ["a", "b", "c"]) {

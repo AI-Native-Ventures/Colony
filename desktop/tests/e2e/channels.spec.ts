@@ -509,9 +509,12 @@ test("sidebar shows all channel types", async ({ page }) => {
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   await expect(page.getByTestId("sidebar-agents-count")).toHaveCount(0);
 
-  // Streams
+  // Streams. `general` is the mock's project channel, so it lives in the
+  // Projects section rather than the plain channel list.
   const streamList = page.getByTestId("stream-list");
-  await expect(streamList).toContainText("general");
+  await expect(page.getByTestId("project-channel-list")).toContainText(
+    "general",
+  );
   await expect(streamList).toContainText("random");
   await expect(streamList).toContainText("engineering");
   await expect(streamList).toContainText("agents");
@@ -2528,7 +2531,9 @@ test("manage channel updates details", async ({ page }) => {
   await expect(editDialog).toHaveCount(0);
 
   await expect(page.getByTestId("chat-title")).toHaveText(newName);
-  await expect(page.getByTestId("stream-list")).toContainText(newName);
+  // `general` is the mock's project channel, so the rename lands in the
+  // sidebar's Projects section.
+  await expect(page.getByTestId("project-channel-list")).toContainText(newName);
   await expect(page.getByTestId("channel-management-name-row")).toContainText(
     newName,
   );
@@ -2541,7 +2546,7 @@ test("manage channel updates details", async ({ page }) => {
   await page.getByTestId("channel-random").click();
   await expect(page.getByTestId("chat-title")).toHaveText("random");
 
-  await page.getByTestId("stream-list").getByText(newName).click();
+  await page.getByTestId("project-channel-list").getByText(newName).click();
   await expect(page.getByTestId("chat-title")).toHaveText(newName);
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
@@ -4747,7 +4752,11 @@ test("manage channel can archive and unarchive a stream", async ({ page }) => {
   await expect(page.getByTestId("channel-management-archive")).toBeVisible();
 
   await closeChannelManagement(page);
-  await expect(page.getByTestId("stream-list")).toContainText("general");
+  // Unarchiving returns `general` to the sidebar — to the Projects section,
+  // since the mock seeds it as a project channel.
+  await expect(page.getByTestId("project-channel-list")).toContainText(
+    "general",
+  );
   await expect(page.getByTestId("message-input")).toHaveAttribute(
     "contenteditable",
     "true",

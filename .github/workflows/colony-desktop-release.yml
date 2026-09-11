@@ -331,14 +331,15 @@ jobs:
       - name: Build sidecar binaries
         run: |
           cargo build --release --target "$TARGET" \
-            -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+            -p buzz-acp -p buzz-agent -p buzz-browser -p buzz-dev-mcp \
+            -p git-credential-nostr -p buzz-cli
           scripts/bundle-sidecars.sh "$TARGET"
 
       - name: Check sidecars are real binaries
         # Same stub guard as the Mac job: an installer with stub sidecars
         # installs fine and then cannot launch any agent.
         run: |
-          for bin in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
+          for bin in buzz-acp buzz-agent buzz-browserd buzz-dev-mcp git-credential-nostr buzz; do
             f="desktop/src-tauri/binaries/${bin}-${TARGET}.exe"
             size=$(stat -c %s "$f" 2>/dev/null || echo 0)
             if [ "$size" -lt 500000 ]; then

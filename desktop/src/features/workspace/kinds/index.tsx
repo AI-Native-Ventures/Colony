@@ -24,6 +24,22 @@ import {
   terminalKindDefinition,
 } from "@/features/workspace/kinds/terminalKind";
 import { WebBody, webKindDefinition } from "@/features/workspace/kinds/webKind";
+import {
+  FactoryBody,
+  factoryKindDefinition,
+} from "@/features/workspace/kinds/factoryKind";
+import {
+  AgentBody,
+  agentKindDefinition,
+} from "@/features/workspace/kinds/agentKind";
+import {
+  BoardBody,
+  boardKindDefinition,
+} from "@/features/workspace/kinds/boardKind";
+import {
+  CommGraphBody,
+  commGraphKindDefinition,
+} from "@/features/workspace/kinds/commGraphKind";
 import { getFeature } from "@/shared/features/manifest";
 import { resolveEnabled } from "@/shared/features/resolveEnabled";
 import { getOverrides } from "@/shared/features/store";
@@ -37,8 +53,21 @@ import { getOverrides } from "@/shared/features/store";
 const bodies = new Map<string, React.ComponentType<TabBodyProps>>();
 
 const WEB_TAB_FEATURE_ID = "workspaceWebTab";
+const FACTORY_TAB_FEATURE_ID = "workspaceFactoryTab";
 let stableKindsRegistered = false;
 let webKindRegistered = false;
+let factoryKindRegistered = false;
+
+function workspaceFactoryTabEnabled(): boolean {
+  const feature = getFeature(FACTORY_TAB_FEATURE_ID);
+  return feature
+    ? resolveEnabled(
+        FACTORY_TAB_FEATURE_ID,
+        getOverrides(),
+        feature.defaultEnabled,
+      )
+    : true; // Default on when not in manifest.
+}
 
 function workspaceWebTabEnabled(): boolean {
   // The Electron browser is a shipping surface, independent of the old Tauri preview.
@@ -77,6 +106,22 @@ export function registerAllTabKinds(): void {
     bodies.set(imageKindDefinition.kind, ImageBody);
     registerTabKind(terminalKindDefinition);
     bodies.set(terminalKindDefinition.kind, TerminalBody);
+  }
+  if (!factoryKindRegistered && workspaceFactoryTabEnabled()) {
+    factoryKindRegistered = true;
+    registerTabKind(factoryKindDefinition);
+    bodies.set(factoryKindDefinition.kind, FactoryBody);
+    // The agent tile is a Factory surface: it rides the same flag, so a build
+    // without the Factory tab cannot restore an agent tab it cannot render.
+    registerTabKind(agentKindDefinition);
+    bodies.set(agentKindDefinition.kind, AgentBody);
+    // The tickets board is a Factory surface too: same flag, same project
+    // channel rule as the canvas it is opened from.
+    registerTabKind(boardKindDefinition);
+    bodies.set(boardKindDefinition.kind, BoardBody);
+    // The graph is part of the same surface, on the same flag.
+    registerTabKind(commGraphKindDefinition);
+    bodies.set(commGraphKindDefinition.kind, CommGraphBody);
   }
   if (!webKindRegistered && workspaceWebTabEnabled()) {
     webKindRegistered = true;

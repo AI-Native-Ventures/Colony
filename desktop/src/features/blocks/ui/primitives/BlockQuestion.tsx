@@ -1,5 +1,5 @@
+import { resolveQuestionMode } from "../../dynamicBlockFields";
 import * as React from "react";
-import { Check } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -58,12 +58,18 @@ export function resolveQuestionSubmission({
 export function BlockQuestion({
   data,
   environment,
-  node,
+  node: definition,
 }: {
   data?: unknown;
   environment?: BlockActionEnvironment;
   node: BlockQuestionNode;
 }) {
+  const resolvedMode = React.useMemo(
+    () => resolveQuestionMode(definition, data),
+    [definition, data],
+  );
+  const node = resolvedMode.ok ? resolvedMode.node : definition;
+  const groupName = React.useId();
   const [selected, setSelected] = React.useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -85,10 +91,11 @@ export function BlockQuestion({
     environment?.declaredActionIds.has(node.submit_action) ?? false;
   const completed =
     environment?.completedActionIds?.has(node.submit_action) ?? false;
-  const answered =
-    completed || environment?.pendingActionId === node.submit_action;
+  const answered = completed;
+  const awaiting = environment?.pendingActionId === node.submit_action;
   const disabledReason =
     environment?.disabledReason ??
+    (!resolvedMode.ok ? resolvedMode.reason : undefined) ??
     (!optionsResult.ok
       ? optionsResult.reason
       : !environment?.trusted
@@ -96,7 +103,8 @@ export function BlockQuestion({
         : !actionDeclared
           ? "This question references an undeclared action."
           : undefined);
-  const disabled = Boolean(disabledReason) || localPending || answered;
+  const disabled =
+    Boolean(disabledReason) || localPending || awaiting || answered;
 
   const toggle = (id: string) => {
     if (disabled) return;
@@ -132,28 +140,28 @@ export function BlockQuestion({
 
   return (
     <fieldset
-      className="space-y-3"
+      className="min-w-0 space-y-4"
+      aria-busy={localPending || awaiting}
       data-block-primitive="question"
       disabled={disabled}
     >
-      <legend className="text-sm font-medium text-foreground">{prompt}</legend>
+      <legend className="block-native-copy text-sm font-medium leading-relaxed text-foreground">
+        {prompt}
+      </legend>
       <div className="grid gap-2 @sm:grid-cols-2">
         {options.map((option) => {
           const active = selected.has(option.id);
           return (
-            <button
-              aria-pressed={active}
+            <label
               className={cn(
-                "flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                "flex min-h-16 cursor-pointer items-start justify-between gap-3 rounded-xl border p-4 text-left text-sm transition-colors focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary has-disabled:cursor-default has-disabled:opacity-70",
                 active
                   ? "border-primary/60 bg-primary/10 text-foreground"
                   : "border-border/70 bg-background/60 text-muted-foreground hover:border-border hover:text-foreground",
               )}
               key={option.id}
-              onClick={() => toggle(option.id)}
-              type="button"
             >
-              <span className="min-w-0">
+              <span className="block-native-copy min-w-0 leading-relaxed">
                 <span className="block font-medium text-foreground">
                   {option.label}
                 </span>
@@ -163,8 +171,14 @@ export function BlockQuestion({
                   </span>
                 ) : null}
               </span>
-              {active ? <Check aria-hidden="true" className="size-4" /> : null}
-            </button>
+              <input
+                type={node.mode === "single-select" ? "radio" : "checkbox"}
+                name={groupName}
+                checked={active}
+                onChange={() => toggle(option.id)}
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+              />
+            </label>
           );
         })}
       </div>
@@ -178,19 +192,31 @@ export function BlockQuestion({
               ? "Add a short explanation…"
               : "Something else (optional)…"
           }
-          rows={2}
+          maxLength={2000}
+          rows={3}
           value={customInput}
         />
       ) : null}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="block-native-actions flex flex-wrap items-center gap-3">
         <Button
           disabled={disabled || !submission.ok}
           onClick={() => void submit()}
           size="sm"
           type="button"
         >
-          {answered ? "Answered" : localPending ? "Submitting…" : "Submit"}
+          {answered
+            ? "Answered"
+            : localPending
+              ? "Submitting…"
+              : awaiting
+                ? "Submitted"
+                : "Submit"}
         </Button>
+        {awaiting ? (
+          <p className="text-xs text-muted-foreground" role="status">
+            Your answer was sent. Waiting for the responsible teammate.
+          </p>
+        ) : null}
         {disabledReason ? (
           <p className="text-xs text-muted-foreground">{disabledReason}</p>
         ) : !answered && !submission.ok ? (

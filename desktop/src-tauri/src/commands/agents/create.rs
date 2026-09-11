@@ -303,7 +303,8 @@ pub(crate) async fn create_managed_agent_with_preparation(
 
         // The role two members' instances share, inherited from the linked
         // definition (docs/design/role-agents.html).
-        let record = crate::managed_agents::ManagedAgentRecord {
+        let mut record = crate::managed_agents::ManagedAgentRecord {
+            working_dir: None,
             pubkey: pubkey.clone(),
             name: name.clone(),
             role_id: linked_persona
@@ -398,6 +399,10 @@ pub(crate) async fn create_managed_agent_with_preparation(
                 relay_mesh.clone()
             },
         };
+
+        // Mirrors COLONY_WORKTREE into `env_vars` so the tile chip and the
+        // spawned child name the same directory.
+        record.set_working_dir(input.working_dir.clone());
 
         records.push(record);
 

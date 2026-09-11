@@ -4,12 +4,13 @@ import { setChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMo
 import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import {
   clearActiveTab,
-  closeTab,
   getWorkspace,
   openTab,
   setActiveTab,
   useWorkspace,
 } from "@/features/workspace/lib/workspaceTabs";
+import { closeWorkspaceTab } from "@/features/workspace/lib/closeWorkspaceTab";
+import { getStripDragHandler } from "@/features/factory/lib/factoryDragBridge";
 import { getTabBody } from "@/features/workspace/kinds";
 import { NewTabPage } from "@/features/workspace/ui/NewTabPage";
 import { WorkspaceTabStrip } from "@/features/workspace/ui/WorkspaceTabStrip";
@@ -53,26 +54,43 @@ export function ChannelWorkspace({
   }, [channelId]);
 
   const handleClose = React.useCallback(
-    (tabId: string) => {
+    async (tabId: string) => {
       const tab = tabs.find((candidate) => candidate.id === tabId);
       if (!tab) return;
-      const definition = getTabKind(tab.kind);
-      void Promise.resolve(definition?.dispose?.(tab))
-        .catch((error: unknown) => {
-          console.error("Failed to dispose workspace tab:", error);
-        })
-        .finally(() => {
-          closeTab(channelId, tabId);
-          if (getWorkspace(channelId).tabs.length === 0) {
-            setChannelSurfaceMode(channelId, "timeline");
-          }
-        });
+      await closeWorkspaceTab(channelId, tabId);
+      if (getWorkspace(channelId).tabs.length === 0) {
+        setChannelSurfaceMode(channelId, "timeline");
+      }
     },
     [channelId, tabs],
   );
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const Body = activeTab ? getTabBody(activeTab.kind) : undefined;
+
+  // Hide factory-owned workspace tabs from the strip when the factory
+  // tab is active. They remain in the store and reappear when the factory
+  // tab is closed.
+  const activeFactoryDef = activeTab ? getTabKind(activeTab.kind) : undefined;
+  const factoryOwnedTabIds =
+    activeTab && activeFactoryDef?.ownedTabIds
+      ? activeFactoryDef.ownedTabIds(activeTab)
+      : [];
+  const visibleTabs =
+    factoryOwnedTabIds.length > 0
+      ? tabs.filter((t) => !factoryOwnedTabIds.includes(t.id))
+      : tabs;
+
+  // A kind that owns tabs of its own can accept one dragged out of the strip.
+  // The shell only forwards the pointer down; the mounted body decides what a
+  // drag means, so nothing here knows which kind is active.
+  const activeKindArrangesTabs = Boolean(activeFactoryDef?.ownedTabIds);
+  const handleTabPointerDown = React.useCallback(
+    (tabId: string, event: React.PointerEvent) => {
+      getStripDragHandler()?.(tabId, event);
+    },
+    [],
+  );
 
   return (
     <div
@@ -90,7 +108,10 @@ export function ChannelWorkspace({
         onClose={handleClose}
         onNewTab={handleNewTab}
         onSelect={(tabId) => setActiveTab(channelId, tabId)}
-        tabs={tabs}
+        onTabPointerDown={
+          activeKindArrangesTabs ? handleTabPointerDown : undefined
+        }
+        tabs={visibleTabs}
       />
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">
         {activeTab && Body ? (
@@ -103,7 +124,7 @@ export function ChannelWorkspace({
             This tab needs a newer version of the app to open.
           </div>
         ) : (
-          <NewTabPage onCreate={handleCreate} />
+          <NewTabPage channelId={channelId} onCreate={handleCreate} />
         )}
       </div>
     </div>

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## v0.17.0
+
+- feat(desktop): the Software Factory. A `Factory` workspace tab for project channels lays the channel's tabs out as a tile tree (split, drag between panes, resize, layout presets, persisted per channel). Agent tiles show one managed agent with harness, model and effort chips, its live transcript and a composer that posts into the agent's thread; `+ Agent` launches an employee with a brief into its own git worktree. Delegate from a tile to another agent (reply expected), answer an agent's open asks where the work is, see who talks to whom in the communication graph, and track the project's tasks on the board tile.
+- feat(desktop): project channels. A channel a Project owns lives in its own sidebar section with a repository icon and default branch, carries a project header, and can be linked from channel settings or at creation.
+- feat(desktop): managed agents can run inside a per-agent git worktree (`workingDir`, `COLONY_WORKTREE`), and terminal tabs accept an explicit working directory.
+- fix(desktop): the sidebar reserves room for the unread pill so the last row is always clickable; a terminal closed inside a pane still tears down its PTY.
+
+## v0.16.13
+
+- feat(desktop): browse a searchable Blocks catalogue with one full preview, clearer cards and tables, and company plans, findings and review details that follow the light/dark theme and accent.
+- feat(desktop): switch between documents and media in an ordered collection while retaining reading position, and view expandable Mermaid flow, sequence and relationship diagrams inline in channels and threads. Download the originals for editing.
+- feat(agents): describe a Block's active schema and examples in one command, supply custom Question choices and Details, and distinguish a one-off choice from an Interview answered in the thread.
+- fix(desktop): recover from brief relay rate limits without leaving Block actions stuck, preserving the signed event, retry limits and workspace boundary.
+- build(desktop): ship the `buzz-browserd` browser daemon as a packaged sidecar, so the browser MCP server is available to managed agents in installed builds and not only in a source checkout.
+
+## relay-v0.11.10
+
+- feat(relay): publish the approved Core Block catalogue versions, including Question 2.0 and populated Details, while preserving pinned historical definitions and later owner-selected catalogue heads.
+- fix(relay): validate Question choices and selection limits against the posted Block instance, reject ambiguous Question composition, and derive Interview response fields from the trusted instance.
+- fix(relay): acknowledge rejected event submissions individually so clients can recover from rate limits while preserving existing quotas and backoff notices.
+
 ## v0.16.12
 
 - fix(desktop): prepare and verify the business coordination Team before starting a first job, including recovery when its relay projection is missing. Preserve existing team choices and owner approvals.

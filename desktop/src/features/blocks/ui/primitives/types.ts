@@ -45,12 +45,15 @@ export type BlockLayoutNode =
 
 export type BlockSectionNode = {
   type: "section";
+  presentation?: "lead" | "body" | "callout";
+  omit_empty_text?: boolean;
   title?: string;
   text?: string;
 };
 
 export type BlockMetricNode = {
   type: "metric";
+  comparison?: string;
   label: string;
   value: string;
   unit?: string;
@@ -58,11 +61,21 @@ export type BlockMetricNode = {
 
 export type BlockDetailsNode = {
   type: "details";
-  items: Array<{ label: string; value: string }>;
+  presentation?: "rows" | "disclosure";
+  summary?: string;
+  items: Array<{
+    label: string;
+    value: string;
+    format?: "date" | "boolean" | "text";
+  }>;
+  items_path?: string;
 };
 
 export type BlockStatusNode = {
   type: "status";
+  progress_path?: string;
+  position_path?: string;
+  total_path?: string;
   label: string;
   state_path?: string;
 };
@@ -76,6 +89,7 @@ export type BlockQuestionNode = {
   type: "question";
   prompt: string;
   mode: "single-select" | "multi-select";
+  mode_path?: string;
   options?: BlockQuestionOption[];
   options_path?: string;
   min_selections: number;
@@ -100,6 +114,9 @@ export type BlockTableNode = {
 
 export type BlockCardNode = {
   type: "card";
+  presentation?: "surface" | "row" | "rail";
+  eyebrow?: string;
+  subtitle?: string;
   title?: string;
   description?: string;
   children?: BlockPrimitiveNode[];
@@ -109,6 +126,7 @@ export type BlockCardListMode = "list" | "grid" | "carousel";
 
 export type BlockCardListNode = {
   type: "card-list";
+  presentation?: "separated" | "numbered";
   items_path: string;
   card: BlockPrimitiveNode;
   mode?: BlockCardListMode;
@@ -203,6 +221,8 @@ export type ResolvedStatus = {
   state: string;
   tone: BlockTone;
   progress?: number;
+  position?: number;
+  total?: number;
 };
 
 export type ResolvedChartDatum = {
@@ -213,4 +233,5 @@ export type ResolvedChartDatum = {
 export type ResolvedMedia = {
   item?: BlockMediaItem;
   reason?: string;
+  omittedCount?: number;
 };

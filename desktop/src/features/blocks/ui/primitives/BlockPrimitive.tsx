@@ -107,6 +107,7 @@ export function BlockPrimitive({
         <BlockCardList
           items={items}
           mode={node.mode}
+          presentation={node.presentation}
           renderItem={(item, index) =>
             renderChild(node.card, `card-list-${index}`, item)
           }
@@ -127,7 +128,7 @@ export function BlockPrimitive({
     case "question":
       return (
         <BlockQuestion
-          data={rootData}
+          data={context.data}
           environment={context.actionEnvironment}
           node={node}
         />

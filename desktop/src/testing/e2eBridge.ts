@@ -37,10 +37,12 @@ import {
 } from "./e2eBridgeCustomHarnesses.ts";
 
 import {
+  createNativeFactoryApi,
   NativeChannel,
   setNativeBridge,
   type NativeBridge,
   type NativeEvent,
+  type NativeFactoryApi,
   type NativeNotificationAction,
   type NativeUnlisten,
   type NativeUpdate,
@@ -290,10 +292,11 @@ type E2eConfig = {
       channelName: string;
       event: RelayEvent;
     }>;
-    /** Native external-Block fetch outcomes keyed by exact HTTPS URL. */
+    /** Native external-Block fetch outcomes keyed by exact HTTPS URL.
+     * `hold` waits for `__BUZZ_E2E_RELEASE_BLOCK_DATA__(url)` before returning. */
     blockDataResponses?: Record<
       string,
-      { body?: string; bytes?: number[]; error?: string }
+      { body?: string; bytes?: number[]; error?: string; hold?: boolean }
     >;
     /** Reject successive kind-40010 publications, then resume. */
     blockActionPublishErrors?: string[];
@@ -1056,6 +1059,7 @@ type RawManagedAgent = {
   model: string | null;
   provider?: string | null;
   env_vars?: Record<string, string>;
+  working_dir?: string | null;
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
   created_at: string;
@@ -1321,6 +1325,10 @@ declare global {
       kind: number;
     }) => boolean;
     __BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__?: () => void;
+    __BUZZ_E2E_BLOCK_DATA_HOLD_STATE__?: (
+      url: string,
+    ) => { observed: boolean; held: boolean } | null;
+    __BUZZ_E2E_RELEASE_BLOCK_DATA__?: (url: string) => void;
     __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -3448,6 +3456,12 @@ const mockUserInitiativeRequests = new Map<
   { initiativeId: string; idempotencyKey: string }
 >();
 
+/** Same idempotency for a Task created by hand: one id per request id. */
+const mockUserTaskRequests = new Map<
+  string,
+  { taskId: string; idempotencyKey: string }
+>();
+
 let mockRelayMembers: RawRelayMember[] = [];
 
 // --- Colony company work context ------------------------------------------
@@ -3542,6 +3556,7 @@ function seedMockCompanyRecords(
   mockCompanyReceipts.length = 0;
   mockCompanyActions.length = 0;
   mockUserInitiativeRequests.clear();
+  mockUserTaskRequests.clear();
   mockRefuseInitiativeRead = config?.refuseInitiativeRead ?? false;
 
   if (config) {
@@ -4005,6 +4020,10 @@ type MockCommandHandler = (
  * answers (and throws) exactly where the old library calls landed.
  */
 class E2eNativeBridge implements NativeBridge {
+  readonly factory: NativeFactoryApi = createNativeFactoryApi((command, args) =>
+    this.invoke(command, args),
+  );
+
   private readonly mockCommand: MockCommandHandler;
 
   constructor(mockCommand: MockCommandHandler) {
@@ -6678,12 +6697,32 @@ function buildMockProjectEvents(): RelayEvent[] {
         ["d", "buzz"],
         ["name", "buzz"],
         ["description", "The complete Buzz community platform."],
+        // Makes `general` a project channel in mock mode, which is what gates
+        // the workspace kinds that need a project (factory, project terminal).
+        ["buzz-channel", STARTER_GENERAL_CHANNEL_ID],
         ["a", `${KIND_REPO_ANNOUNCEMENT}:${projectOwner}:buzz`],
         ["a", `${KIND_REPO_ANNOUNCEMENT}:${ALICE_PUBKEY}:relay-tools`],
       ],
       projectOwner,
       now,
       "project-buzz".padEnd(64, "0"),
+    ),
+  );
+  // A second project the mock identity owns, deliberately with no
+  // `buzz-channel` tag: it is what the channel-settings "Project" row and the
+  // create-channel dialog offer as a linkable project.
+  events.push(
+    createMockEvent(
+      KIND_PROJECT_ANNOUNCEMENT,
+      "",
+      [
+        ["d", "side-quests"],
+        ["name", "side-quests"],
+        ["description", "Unlinked project used to prove channel linking."],
+      ],
+      projectOwner,
+      now,
+      "project-side-quests".padEnd(64, "0"),
     ),
   );
 
@@ -6709,7 +6748,11 @@ function isMockProjectScopedEvent(event: RelayEvent): boolean {
     (tag) => tag[0] === "a" && (tag[1] ?? "").startsWith("30617:"),
   );
   return (
-    (event.kind === KIND_REPO_ANNOUNCEMENT || hasRepoAddressTag) &&
+    (event.kind === KIND_REPO_ANNOUNCEMENT ||
+      // A project head carries no channel tag and need not carry a repository
+      // either (an empty project is valid), so kind alone identifies it.
+      event.kind === KIND_PROJECT_ANNOUNCEMENT ||
+      hasRepoAddressTag) &&
     (event.kind === 1 || MOCK_PROJECT_KINDS.has(event.kind))
   );
 }
@@ -9459,6 +9502,7 @@ async function handleCreateManagedAgent(
       model?: string;
       provider?: string;
       envVars?: Record<string, string>;
+      workingDir?: string;
       spawnAfterCreate?: boolean;
       startOnAppLaunch?: boolean;
       backend?:
@@ -9534,7 +9578,15 @@ async function handleCreateManagedAgent(
     avatar_url: avatarUrl,
     model: args.input.model?.trim() || linkedPersona?.model || null,
     provider: args.input.provider?.trim() || linkedPersona?.provider || null,
-    env_vars: { ...(args.input.envVars ?? {}) },
+    // The native create mirrors the worktree into COLONY_WORKTREE so the tile
+    // chip and the spawned child name the same directory; mirror it here too.
+    env_vars: {
+      ...(args.input.envVars ?? {}),
+      ...(args.input.workingDir
+        ? { COLONY_WORKTREE: args.input.workingDir }
+        : {}),
+    },
+    working_dir: args.input.workingDir ?? null,
     status: args.input.spawnAfterCreate ? "running" : "stopped",
     pid: args.input.spawnAfterCreate ? 42000 + mockManagedAgents.length : null,
     created_at: now,
@@ -9795,6 +9847,7 @@ async function handleUpdateManagedAgent(args: {
     model?: string | null;
     systemPrompt?: string | null;
     envVars?: Record<string, string>;
+    workingDir?: string | null;
     respondTo?: "owner-only" | "allowlist" | "anyone";
     respondToAllowlist?: string[];
   };
@@ -9811,6 +9864,18 @@ async function handleUpdateManagedAgent(args: {
   }
   if (args.input.envVars !== undefined) {
     agent.env_vars = { ...args.input.envVars };
+  }
+  // Applied after the env replacement, exactly like the native command: an
+  // env edit must not wipe the COLONY_WORKTREE mirror.
+  if (args.input.workingDir !== undefined) {
+    const workingDir = args.input.workingDir?.trim() || null;
+    agent.working_dir = workingDir;
+    if (workingDir) {
+      agent.env_vars = { ...agent.env_vars, COLONY_WORKTREE: workingDir };
+    } else {
+      const { COLONY_WORKTREE: _dropped, ...rest } = agent.env_vars ?? {};
+      agent.env_vars = rest;
+    }
   }
   if (args.input.respondTo !== undefined) {
     agent.respond_to = args.input.respondTo;
@@ -11362,6 +11427,22 @@ function sendToMockSocket(args: {
       return;
     }
 
+    // Ask closures (kind 44301 resolution, 44302 withdrawal) name the ask they
+    // close with an `e` tag and carry no channel tag at all, so they must not
+    // fall through to the channel requirement below. Storing them where REQ
+    // can read them back is what lets a spec prove the whole loop: answer a
+    // card, watch the ask leave the open list on the closure refetch.
+    if ([44301, 44302].includes(event.kind)) {
+      window.__BUZZ_E2E_SEEDED_EVENTS__ ??= [];
+      window.__BUZZ_E2E_SEEDED_EVENTS__.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+      window.__BUZZ_E2E_PUBLISHED_EVENTS__?.push(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     const channelId = getChannelIdFromTags(event.tags);
     if (!channelId) {
       sendWsText(socket.handler, [
@@ -11493,6 +11574,40 @@ export function maybeInstallE2eTauriMocks() {
   resetMockSaveSubscriptions(config);
   resetMockThreadCanvases(config);
   resetObserverArchivePolicyGate();
+  // Per-page, exact-fixture gates keep loading captures independent of runner
+  // speed. Releasing before a lookup is safe; no production transport changes.
+  const blockDataHolds = new Map<
+    string,
+    {
+      gate: Promise<void>;
+      release: () => void;
+      observed: boolean;
+      held: boolean;
+    }
+  >();
+  for (const [url, response] of Object.entries(
+    config.mock?.blockDataResponses ?? {},
+  )) {
+    if (!response.hold) continue;
+    if (blockDataHolds.size >= 10) {
+      throw new Error(`E2E block data hold cap (10) exceeded at ${url}`);
+    }
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    blockDataHolds.set(url, { gate, release, observed: false, held: true });
+  }
+  window.__BUZZ_E2E_BLOCK_DATA_HOLD_STATE__ = (url) => {
+    const hold = blockDataHolds.get(url);
+    return hold ? { observed: hold.observed, held: hold.held } : null;
+  };
+  window.__BUZZ_E2E_RELEASE_BLOCK_DATA__ = (url) => {
+    const hold = blockDataHolds.get(url);
+    if (!hold) return;
+    hold.held = false;
+    hold.release();
+  };
   resetMockPendingCommunityDeepLinks(config);
   initializeMockHuddle(config.mock?.huddle, config);
   mockWebsocketSendMutexWedged = false;
@@ -13445,6 +13560,11 @@ export function maybeInstallE2eTauriMocks() {
         if (!response) {
           throw new Error(`mock Block data is unavailable for ${url}`);
         }
+        const hold = blockDataHolds.get(url);
+        if (hold) {
+          hold.observed = true;
+          await hold.gate;
+        }
         if (response.error) {
           throw new Error(response.error);
         }
@@ -14344,6 +14464,25 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleGetChannelWindow>[0],
           activeConfig,
         );
+      case "factory_worktree_create": {
+        // The real command shells out to `git worktree add`; the mock answers
+        // with the path it would have produced so the launcher's worktree lane
+        // is exercised end to end without a checkout on disk.
+        const args = payload as {
+          request: {
+            reposDir: string | null;
+            projectDtag: string;
+            branch: string;
+          };
+        };
+        const slug = args.request.branch.replace(/[^A-Za-z0-9_.-]+/g, "-");
+        const root = args.request.reposDir ?? "/workspace/repos";
+        return {
+          path: `${root}/.colony-worktrees/${args.request.projectDtag}/${slug}`,
+          branch: args.request.branch,
+          created: true,
+        };
+      }
       case "send_channel_message":
         return handleSendChannelMessage(
           payload as Parameters<typeof handleSendChannelMessage>[0],
@@ -14570,6 +14709,69 @@ export function maybeInstallE2eTauriMocks() {
           },
         );
         return JSON.stringify(action);
+      }
+      case "create_user_task": {
+        // Which team owns a hand-created Task, what it is charged to, and
+        // that it starts Ready are decided in `user_task.rs` and proven
+        // there. What the desktop owns is publishing the action and reading
+        // the Task back, so this returns the envelope that flow carries.
+        const config = activeConfig?.mock?.companyWorkContext;
+        if (!config) {
+          throw new Error("no company is seeded for this task");
+        }
+        const request = payload as {
+          requestId?: string;
+          channelId?: string;
+          title?: string;
+          assigneePersonaIds?: string[];
+        };
+        const requestId = request.requestId ?? crypto.randomUUID();
+        let minted = mockUserTaskRequests.get(requestId);
+        if (!minted) {
+          minted = {
+            taskId: `user-task:${crypto.randomUUID()}`,
+            idempotencyKey: crypto.randomUUID(),
+          };
+          mockUserTaskRequests.set(requestId, minted);
+        }
+        const record = {
+          ...mockTaskRecord(config, request.title ?? "", {
+            id: minted.taskId,
+            title: request.title ?? "",
+            // A Task created by hand belongs to no initiative and is real
+            // work rather than the cost of a chat turn.
+            initiativeId: null,
+            status: "ready",
+            assigneePersonaIds: request.assigneePersonaIds ?? [],
+            sourceChannelId: request.channelId ?? "",
+          }),
+          implicit: false,
+          createdAt: Math.floor(Date.now() / 1000),
+          updatedAt: Math.floor(Date.now() / 1000),
+        };
+        const action = await signWithIdentity(
+          identity ?? DEFAULT_REAL_IDENTITY,
+          {
+            kind: 40013,
+            content: JSON.stringify({ payload: { record } }),
+            tags: [
+              ["p", MOCK_RELAY_SELF_PUBKEY],
+              ["a", `30181:${MOCK_RELAY_SELF_PUBKEY}:${minted.taskId}`],
+              [
+                "company-action",
+                "1",
+                "create",
+                requestId,
+                minted.idempotencyKey,
+              ],
+            ],
+          },
+        );
+        return {
+          taskId: minted.taskId,
+          owningTeamId: record.owningTeamId,
+          signedAction: JSON.stringify(action),
+        };
       }
       case "create_initiative": {
         // Which persona answers for the initiative, what it is charged to,

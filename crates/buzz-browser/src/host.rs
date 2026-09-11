@@ -10,11 +10,23 @@ use tokio::net::TcpListener;
 use crate::contracts::BrowserError;
 
 /// How to launch the browser for a spike run.
+///
+/// `persist_profile` is `false` by default (every existing caller keeps
+/// today's temp-profile behaviour). When set to `true`, the profile directory
+/// survives host teardown, which is what the desktop workspace Web tab's
+/// mailbox browser needs (`browser-profiles/<community-key>/mailbox`). A
+/// crashed previous run may leave stale `SingletonLock`, `SingletonSocket`,
+/// and `SingletonCookie` files inside the profile; `launch` removes them
+/// before spawning so Chromium does not refuse the profile.
 #[derive(Debug, Clone)]
 pub struct HostConfig {
     pub binary: Option<PathBuf>,
     pub profile_dir: PathBuf,
     pub headless: bool,
+    /// When `true`, the profile directory is preserved across restarts.
+    /// The mailbox Web tab uses this so a Gmail login survives a restart.
+    /// See singleton-file rule above.
+    pub persist_profile: bool,
 }
 
 impl Default for HostConfig {
@@ -24,6 +36,7 @@ impl Default for HostConfig {
             profile_dir: std::env::temp_dir()
                 .join(format!("buzz-browser-profile-{}", uuid::Uuid::new_v4())),
             headless: true,
+            persist_profile: false,
         }
     }
 }
@@ -45,6 +58,7 @@ pub struct BrowserHost {
 struct OwnedProcessState {
     child: Mutex<Option<Child>>,
     profile_dir: PathBuf,
+    persist_profile: bool,
 }
 
 /// Synchronously kill and reap a browser process and remove its profile.
@@ -63,11 +77,12 @@ struct OwnedBrowserGuard {
 }
 
 impl OwnedBrowserCleanup {
-    fn new(profile_dir: PathBuf) -> Self {
+    fn new(profile_dir: PathBuf, persist_profile: bool) -> Self {
         Self {
             state: Arc::new(OwnedProcessState {
                 child: Mutex::new(None),
                 profile_dir,
+                persist_profile,
             }),
         }
     }
@@ -92,24 +107,97 @@ impl OwnedBrowserCleanup {
         }
     }
 
-    /// Kill and reap the owned child before removing its profile directory.
+    /// Terminate and reap the owned child. When `persist_profile` is `false`,
+    /// also remove the profile directory; when `true`, leave it intact so a
+    /// mailbox login survives the restart.
+    ///
+    /// This is the crash fallback, and it runs from `Drop` on whatever thread
+    /// released the host, so it is deliberately bounded: it never waits more
+    /// than [`TERMINATE_GRACE`] before escalating to a kill. Callers that want
+    /// Chromium to flush a persistent profile cleanly should await
+    /// [`BrowserHost::close_gracefully`] first.
     pub fn cleanup(&self) {
         let child = match self.state.child.lock() {
             Ok(mut child) => child.take(),
             Err(error) => error.into_inner().take(),
         };
         if let Some(mut child) = child {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child(&mut child);
         }
-        let _ = std::fs::remove_dir_all(&self.state.profile_dir);
+        if !self.state.persist_profile {
+            let _ = std::fs::remove_dir_all(&self.state.profile_dir);
+        }
+    }
+
+    /// Poll for the owned child's exit for at most `timeout`, reaping it when
+    /// it goes. Returns `true` once no live child remains.
+    async fn wait_for_exit(&self, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            {
+                let mut slot = match self.state.child.lock() {
+                    Ok(slot) => slot,
+                    Err(error) => error.into_inner(),
+                };
+                match slot.as_mut() {
+                    None => return true,
+                    Some(child) => {
+                        if matches!(child.try_wait(), Ok(Some(_))) {
+                            *slot = None;
+                            return true;
+                        }
+                    }
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
+/// How long a synchronous teardown waits for `SIGTERM` before killing.
+const TERMINATE_GRACE: Duration = Duration::from_secs(2);
+
+/// How long [`BrowserHost::close_gracefully`] waits for a browser that has
+/// accepted `Browser.close` to actually exit.
+const GRACEFUL_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Stop a browser child without blocking for long.
+///
+/// This can run inside `Drop` on a tokio worker thread, so it must not stall
+/// that thread: the unix path asks with `SIGTERM` (which lets Chromium flush a
+/// persistent profile) and escalates to a kill after [`TERMINATE_GRACE`].
+fn terminate_child(child: &mut Child) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+
+        // The child has not been reaped yet, so its pid is still ours and
+        // cannot have been recycled onto an unrelated process. A failure here
+        // just means the process is already gone, which the wait below sees.
+        let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
+        let deadline = std::time::Instant::now() + TERMINATE_GRACE;
+        while std::time::Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 impl OwnedBrowserGuard {
-    fn new(profile_dir: PathBuf) -> Self {
+    fn new(profile_dir: PathBuf, persist_profile: bool) -> Self {
         Self {
-            cleanup: OwnedBrowserCleanup::new(profile_dir),
+            cleanup: OwnedBrowserCleanup::new(profile_dir, persist_profile),
             armed: true,
         }
     }
@@ -241,6 +329,31 @@ fn take_launch_pause() -> Option<LaunchPause> {
         .and_then(|mut pause| pause.take())
 }
 
+/// Remove stale singleton files left by a crashed previous Chromium run
+/// inside a persistent profile, so the new process does not refuse the profile.
+fn delete_stale_singleton_entries(profile_dir: &std::path::Path) {
+    if !profile_dir.exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(profile_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name_str) = file_name.to_str() else {
+            continue;
+        };
+        if name_str == "SingletonLock"
+            || name_str == "SingletonSocket"
+            || name_str == "SingletonCookie"
+        {
+            let path = entry.path();
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&path);
+        }
+    }
+}
+
 pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
     let binary = match &cfg.binary {
         Some(b) => b.clone(),
@@ -255,7 +368,8 @@ pub async fn launch(cfg: &HostConfig) -> Result<BrowserHost, BrowserError> {
             cfg.profile_dir.display()
         ))
     })?;
-    let guard = OwnedBrowserGuard::new(cfg.profile_dir.clone());
+    delete_stale_singleton_entries(&cfg.profile_dir);
+    let guard = OwnedBrowserGuard::new(cfg.profile_dir.clone(), cfg.persist_profile);
     let mut cmd = Command::new(&binary);
     cmd.arg(format!("--remote-debugging-port={port}"))
         .arg(format!("--user-data-dir={}", cfg.profile_dir.display()))
@@ -332,6 +446,53 @@ impl BrowserHost {
     /// Clone synchronous cleanup authority for an owned browser process.
     pub fn cleanup_handle(&self) -> Option<OwnedBrowserCleanup> {
         self.owned_process.clone()
+    }
+
+    /// Shut an owned browser down the way quitting it from its own UI would.
+    ///
+    /// Chromium only flushes its cookie database on a normal shutdown, so a
+    /// persistent profile loses its logins when the process is merely killed.
+    /// This sends the CDP `Browser.close` command on the browser-level
+    /// websocket (the same thing Puppeteer's `browser.close()` does), waits up
+    /// to ten seconds for the process to exit, and falls back to the bounded
+    /// synchronous teardown if it does not. The profile directory is left
+    /// alone whenever `persist_profile` is `true`.
+    ///
+    /// Attached hosts are a no-op: their process belongs to the shell that
+    /// started it, and Colony must never shut that down.
+    pub async fn close_gracefully(&self) {
+        let Some(cleanup) = self.owned_process.as_ref() else {
+            return;
+        };
+        if let Err(error) = self.request_browser_close().await {
+            tracing::debug!("browser graceful close request failed: {error}");
+        }
+        if !cleanup.wait_for_exit(GRACEFUL_CLOSE_TIMEOUT).await {
+            tracing::debug!("browser did not exit after Browser.close; falling back to signal");
+        }
+        cleanup.cleanup();
+    }
+
+    /// Send CDP `Browser.close` on this host's browser-level websocket.
+    async fn request_browser_close(&self) -> Result<(), BrowserError> {
+        let version = reqwest::get(format!("{}/json/version", self.base_url))
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        let ws_url = version["webSocketDebuggerUrl"].as_str().ok_or_else(|| {
+            BrowserError::Host(format!(
+                "no browser websocket advertised at {}",
+                self.base_url
+            ))
+        })?;
+        let mut client = crate::cdp::CdpClient::connect(ws_url).await?;
+        // Chromium often tears the websocket down before answering, which the
+        // client surfaces as a transport error even though the shutdown it was
+        // asked for is already under way. `wait_for_exit` is the real check.
+        let _ = client
+            .send_command("Browser.close", serde_json::json!({}))
+            .await;
+        Ok(())
     }
 
     /// Open a new blank page target ("tab") on this host via the DevTools
@@ -745,5 +906,200 @@ mod tests {
             "cancelled owned browser profile survived launch cancellation: {}",
             expected_profile.display()
         );
+    }
+
+    #[test]
+    fn cleanup_persistent_profile_keeps_directory_and_files() {
+        let tmp = std::env::temp_dir().join("test-persist-cleanup");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::File::create(tmp.join("keep-me")).unwrap();
+        let cleanup = super::OwnedBrowserCleanup::new(tmp.clone(), true);
+        cleanup.cleanup();
+        assert!(
+            tmp.exists(),
+            "persistent profile directory must survive cleanup"
+        );
+        assert!(
+            tmp.join("keep-me").exists(),
+            "persistent profile files must survive cleanup"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn cleanup_non_persistent_profile_removes_directory() {
+        let tmp = std::env::temp_dir().join("test-temp-cleanup");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::File::create(tmp.join("gone")).unwrap();
+        let cleanup = super::OwnedBrowserCleanup::new(tmp.clone(), false);
+        cleanup.cleanup();
+        assert!(
+            !tmp.exists(),
+            "non-persistent profile directory must be removed by cleanup"
+        );
+    }
+
+    #[test]
+    fn delete_stale_singleton_entries_removes_only_named_files() {
+        let tmp = std::env::temp_dir().join("test-singleton-remove");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::File::create(tmp.join("SingletonLock")).unwrap();
+        std::fs::File::create(tmp.join("SingletonSocket")).unwrap();
+        std::fs::File::create(tmp.join("SingletonCookie")).unwrap();
+        std::fs::File::create(tmp.join("Default")).unwrap();
+        std::fs::File::create(tmp.join("Preferences")).unwrap();
+
+        super::delete_stale_singleton_entries(&tmp);
+
+        assert!(
+            !tmp.join("SingletonLock").exists(),
+            "SingletonLock must be removed"
+        );
+        assert!(
+            !tmp.join("SingletonSocket").exists(),
+            "SingletonSocket must be removed"
+        );
+        assert!(
+            !tmp.join("SingletonCookie").exists(),
+            "SingletonCookie must be removed"
+        );
+        assert!(
+            tmp.join("Default").exists(),
+            "other profile files must be preserved"
+        );
+        assert!(
+            tmp.join("Preferences").exists(),
+            "other profile files must be preserved"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Real browser launch with a persistent profile: cookie set through CDP
+    /// survives a restart, and the profile directory remains intact.
+    #[tokio::test]
+    #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
+    async fn real_persistent_profile_cookie_survives_restart() {
+        if std::env::var("BUZZ_BROWSER_REAL").is_err() {
+            return;
+        }
+        use crate::cdp::CdpClient;
+        use serde_json::json;
+
+        let tmp_dir = std::env::temp_dir().join("buzz-browser-persist-cookie-test");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let cfg_first = HostConfig {
+            profile_dir: tmp_dir.clone(),
+            persist_profile: true,
+            ..HostConfig::default()
+        };
+        let host_first = launch(&cfg_first).await.unwrap();
+
+        let target_first = host_first.new_target().await.unwrap();
+        let mut client_first = CdpClient::connect(&target_first.ws_url).await.unwrap();
+        client_first
+            .send_command("Network.enable", json!({}))
+            .await
+            .unwrap();
+        client_first
+            .send_command("Page.navigate", json!({ "url": "https://example.com/" }))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // A cookie with no `expires` is a session cookie, which is in-memory by
+        // definition and never written to the profile. A Gmail login cookie is
+        // a persistent one, so give this an expiry too.
+        let expires = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 86_400;
+        let set_cookie_result = client_first
+            .send_command(
+                "Network.setCookie",
+                json!({
+                    "name": "mailbox_cookie",
+                    "value": "mailbox_value",
+                    "domain": "example.com",
+                    "url": "https://example.com/",
+                    "expires": expires,
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            set_cookie_result
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            "Network.setCookie must report success"
+        );
+
+        // A normal shutdown is what makes Chromium flush its cookie database.
+        host_first.close_gracefully().await;
+        drop(host_first);
+
+        // Profile must survive the first host drop.
+        assert!(
+            tmp_dir.exists(),
+            "persistent profile directory must survive first host drop"
+        );
+
+        let cfg_second = HostConfig {
+            profile_dir: tmp_dir.clone(),
+            persist_profile: true,
+            ..HostConfig::default()
+        };
+        let host_second = launch(&cfg_second).await.unwrap();
+
+        let target_second = host_second.new_target().await.unwrap();
+        let mut client_second = CdpClient::connect(&target_second.ws_url).await.unwrap();
+        client_second
+            .send_command("Network.enable", json!({}))
+            .await
+            .unwrap();
+
+        client_second
+            .send_command("Page.navigate", json!({ "url": "https://example.com/" }))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let cookies_result = client_second
+            .send_command(
+                "Network.getCookies",
+                json!({ "urls": ["https://example.com/"] }),
+            )
+            .await
+            .unwrap();
+
+        let cookies = cookies_result["cookies"].as_array().unwrap();
+        eprintln!(
+            "Cookie after restart (array length={}): mailbox_cookie found={}",
+            cookies.len(),
+            cookies
+                .iter()
+                .any(|c| c["name"].as_str() == Some("mailbox_cookie"))
+        );
+
+        assert!(
+            tmp_dir.exists(),
+            "persistent profile directory must survive restart: {}",
+            tmp_dir.display()
+        );
+        assert!(
+            cookies
+                .iter()
+                .any(|c| c["name"].as_str() == Some("mailbox_cookie")),
+            "mailbox_cookie must survive a graceful restart of the persistent profile, got: {cookies:?}"
+        );
+
+        host_second.close_gracefully().await;
+        drop(host_second);
+        let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 }

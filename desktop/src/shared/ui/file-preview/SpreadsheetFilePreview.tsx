@@ -82,7 +82,7 @@ export function SpreadsheetFilePreview({
             <tr>
               <th
                 scope="col"
-                className="border-b border-r border-border px-2 py-2 text-xs text-muted-foreground"
+                className="min-w-12 whitespace-nowrap border-b border-r border-border px-2 py-2 text-xs text-muted-foreground"
               >
                 Row
               </th>
@@ -102,7 +102,7 @@ export function SpreadsheetFilePreview({
               <tr key={sourceRow} className="even:bg-muted/25">
                 <th
                   scope="row"
-                  className="border-b border-r border-border bg-muted/30 px-2 py-2 text-xs font-normal tabular-nums text-muted-foreground"
+                  className="min-w-12 whitespace-nowrap border-b border-r border-border bg-muted/30 px-2 py-2 text-xs font-normal tabular-nums text-muted-foreground"
                 >
                   {sourceRow + 1}
                 </th>

@@ -1,14 +1,9 @@
 import type { ReactNode } from "react";
 
 import { cn } from "@/shared/lib/cn";
-import {
-  Attachment,
-  AttachmentContent,
-  AttachmentDescription,
-  AttachmentTitle,
-} from "@/shared/ui/attachment";
 
-import { resolveCard } from "./resolvers";
+import "./blockPresentation.css";
+import { resolveBlockTemplate, resolveCard } from "./resolvers";
 import type { BlockCardNode } from "./types";
 
 export function BlockCard({
@@ -25,30 +20,46 @@ export function BlockCard({
   rootData?: unknown;
 }) {
   const card = resolveCard(node, data, rootData);
+  const eyebrow = resolveBlockTemplate(node.eyebrow, data, rootData);
+  const subtitle = resolveBlockTemplate(node.subtitle, data, rootData);
   return (
-    <Attachment
-      className={cn(
-        "w-full min-w-0 border-border bg-card text-card-foreground shadow-none",
-        className,
-      )}
+    <div
+      className={cn("block-native-card", className)}
       data-block-primitive="card"
-      orientation="vertical"
+      data-presentation={node.presentation ?? "surface"}
     >
-      {(card.title || card.description) && (
-        <AttachmentContent className="w-full">
+      {eyebrow || card.title || subtitle || card.description ? (
+        <div className="block-native-card-header">
+          {eyebrow ? (
+            <p className="block-native-copy text-xs font-medium tracking-wide text-muted-foreground">
+              {eyebrow}
+            </p>
+          ) : null}
           {card.title ? (
-            <AttachmentTitle className="whitespace-normal break-words">
+            <h3
+              className={cn(
+                "block-native-copy font-semibold leading-snug text-foreground",
+                node.presentation === "row" || node.presentation === "rail"
+                  ? "text-base"
+                  : "text-xl",
+              )}
+            >
               {card.title}
-            </AttachmentTitle>
+            </h3>
+          ) : null}
+          {subtitle ? (
+            <p className="block-native-copy text-sm text-muted-foreground">
+              {subtitle}
+            </p>
           ) : null}
           {card.description ? (
-            <AttachmentDescription className="whitespace-pre-wrap break-words text-muted-foreground">
+            <p className="block-native-copy text-sm leading-relaxed text-muted-foreground">
               {card.description}
-            </AttachmentDescription>
+            </p>
           ) : null}
-        </AttachmentContent>
-      )}
-      {children ? <div className="w-full space-y-3">{children}</div> : null}
-    </Attachment>
+        </div>
+      ) : null}
+      {children ? <div className="min-w-0 space-y-4">{children}</div> : null}
+    </div>
   );
 }

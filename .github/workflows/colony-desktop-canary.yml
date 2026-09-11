@@ -350,8 +350,8 @@ jobs:
       - name: Build sidecar binaries
         run: |
           cargo build --release --target aarch64-apple-darwin \
-            -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp \
-            -p git-credential-nostr -p buzz-cli
+            -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-browser \
+            -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           scripts/bundle-sidecars.sh aarch64-apple-darwin
 
       - name: Check sidecars are real binaries
@@ -359,7 +359,7 @@ jobs:
         # when the staging step above was skipped or failed silently. A dmg
         # with stub sidecars installs fine and then cannot launch any agent.
         run: |
-          for bin in buzz-acp buzz-agent buzz-backend-kubernetes buzz-dev-mcp git-credential-nostr buzz; do
+          for bin in buzz-acp buzz-agent buzz-backend-kubernetes buzz-browserd buzz-dev-mcp git-credential-nostr buzz; do
             f="desktop/src-tauri/binaries/${bin}-aarch64-apple-darwin"
             size=$(stat -f %z "$f" 2>/dev/null || echo 0)
             if [ "$size" -lt 500000 ]; then

@@ -123,7 +123,11 @@
   display: none;
 }
 
-:root[data-buzz-sidebar] .colony-message-row [data-block-primitive="card"] {
+:root[data-buzz-sidebar]
+  .colony-message-row
+  [data-block-primitive="card"]:not([data-presentation="row"]):not(
+    [data-presentation="rail"]
+  ) {
   padding: 1rem;
   border-radius: 0.625rem;
   background: hsl(var(--card));

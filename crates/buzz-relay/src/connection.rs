@@ -564,9 +564,13 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
             let permit = match state.handler_semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(_) => {
-                    conn.send(RelayMessage::notice(
+                    for message in early_rejection_messages(
+                        None,
+                        Some(&event.id),
                         "rate-limited: too many concurrent requests",
-                    ));
+                    ) {
+                        conn.send(message);
+                    }
                     return;
                 }
             };
@@ -642,6 +646,17 @@ fn request_rejection_message(sub_id: Option<&str>, reason: &str) -> String {
     }
 }
 
+fn early_rejection_messages(
+    sub_id: Option<&str>,
+    event_id: Option<&nostr::EventId>,
+    reason: &str,
+) -> impl Iterator<Item = String> {
+    // Preserve the existing backoff signal, then settle this specific publish.
+    // A NOTICE alone cannot identify the EVENT that admission refused.
+    std::iter::once(request_rejection_message(sub_id, reason))
+        .chain(event_id.map(|id| RelayMessage::ok(&id.to_hex(), false, reason)))
+}
+
 async fn enforce_ws_admission(
     msg: &ClientMessage,
     conn: &ConnectionState,
@@ -676,7 +691,11 @@ async fn enforce_ws_admission(
         ClientMessage::Req { sub_id, .. } => Some(sub_id.as_str()),
         _ => None,
     };
-    if !send_admission_result(conn, ws_result, sub_id) {
+    let event_id = match msg {
+        ClientMessage::Event(event) => Some(&event.id),
+        _ => None,
+    };
+    if !send_admission_result(conn, ws_result, sub_id, event_id) {
         return false;
     }
 
@@ -695,7 +714,7 @@ async fn enforce_ws_admission(
             message_limit,
         )
         .await;
-        if !send_admission_result(conn, message_result, None) {
+        if !send_admission_result(conn, message_result, None, event_id) {
             return false;
         }
     }
@@ -707,23 +726,30 @@ fn send_admission_result(
     conn: &ConnectionState,
     result: Result<(), crate::admission::AdmissionError>,
     sub_id: Option<&str>,
+    event_id: Option<&nostr::EventId>,
 ) -> bool {
     match result {
         Ok(()) => true,
         Err(crate::admission::AdmissionError::Exceeded { reset_in_secs }) => {
             metrics::counter!("buzz_admission_rejections_total", "transport" => "websocket", "reason" => "quota").increment(1);
-            conn.send(request_rejection_message(
+            for message in early_rejection_messages(
                 sub_id,
+                event_id,
                 &format!("rate-limited: quota exceeded; retry in {reset_in_secs}s"),
-            ));
+            ) {
+                conn.send(message);
+            }
             false
         }
         Err(crate::admission::AdmissionError::Unavailable) => {
             metrics::counter!("buzz_admission_rejections_total", "transport" => "websocket", "reason" => "unavailable").increment(1);
-            conn.send(request_rejection_message(
+            for message in early_rejection_messages(
                 sub_id,
+                event_id,
                 "rate-limited: shared admission unavailable",
-            ));
+            ) {
+                conn.send(message);
+            }
             false
         }
     }
@@ -845,6 +871,46 @@ mod tests {
         let notice: serde_json::Value =
             serde_json::from_str(&request_rejection_message(None, reason)).expect("parse NOTICE");
         assert_eq!(notice, serde_json::json!(["NOTICE", reason]));
+    }
+
+    #[test]
+    fn early_event_rejections_identify_the_event_and_preserve_the_notice() {
+        let event_id = nostr::EventId::from_hex(&"ab".repeat(32)).expect("event ID");
+        for reason in [
+            "rate-limited: quota exceeded; retry in 1s",
+            "rate-limited: shared admission unavailable",
+            "rate-limited: too many concurrent requests",
+        ] {
+            let messages: Vec<serde_json::Value> =
+                early_rejection_messages(None, Some(&event_id), reason)
+                    .map(|message| serde_json::from_str(&message).expect("rejection JSON"))
+                    .collect();
+            assert_eq!(
+                messages,
+                vec![
+                    serde_json::json!(["NOTICE", reason]),
+                    serde_json::json!(["OK", event_id.to_hex(), false, reason]),
+                ],
+                "every early EVENT rejection must settle the exact pending publish"
+            );
+        }
+    }
+
+    #[test]
+    fn early_non_event_rejections_do_not_emit_publish_acknowledgements() {
+        let reason = "rate-limited: quota exceeded; retry in 1s";
+        for (sub_id, expected) in [
+            (
+                Some("history-123"),
+                serde_json::json!(["CLOSED", "history-123", reason]),
+            ),
+            (None, serde_json::json!(["NOTICE", reason])),
+        ] {
+            let messages: Vec<serde_json::Value> = early_rejection_messages(sub_id, None, reason)
+                .map(|message| serde_json::from_str(&message).expect("rejection JSON"))
+                .collect();
+            assert_eq!(messages, vec![expected]);
+        }
     }
 
     #[tokio::test]

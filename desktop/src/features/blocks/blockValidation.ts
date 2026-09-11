@@ -1,4 +1,9 @@
 import {
+  validateBlockFieldBindings,
+  validateDynamicBlockFields,
+} from "./dynamicBlockFields";
+import { validateQuestionComposition } from "./questionComposition";
+import {
   format,
   type OutputUnit,
   type Schema,
@@ -23,7 +28,7 @@ import {
 } from "./contracts";
 import {
   validateQuestionNodeDefinition,
-  validateQuestionOptionsData,
+  validateQuestionOptionsData as validateQuestionOptionsDataOnly,
 } from "./questionOptions";
 
 const SEMVER_RE =
@@ -82,6 +87,8 @@ const blockNodeSchema: z.ZodType<BlockNode> = z.lazy(() =>
     z
       .object({
         type: z.literal("section"),
+        presentation: z.enum(["lead", "body", "callout"]).optional(),
+        omit_empty_text: z.boolean().optional(),
         title: z.string().optional(),
         text: z.string().optional(),
       })
@@ -89,6 +96,7 @@ const blockNodeSchema: z.ZodType<BlockNode> = z.lazy(() =>
     z
       .object({
         type: z.literal("metric"),
+        comparison: z.string().optional(),
         label: z.string(),
         value: z.string(),
         unit: z.string().optional(),
@@ -97,16 +105,33 @@ const blockNodeSchema: z.ZodType<BlockNode> = z.lazy(() =>
     z
       .object({
         type: z.literal("details"),
+        presentation: z.enum(["rows", "disclosure"]).optional(),
+        summary: z.string().optional(),
         items: z.array(
-          z.object({ label: z.string(), value: z.string() }).strict(),
+          z
+            .object({
+              label: z.string(),
+              value: z.string(),
+              format: z.enum(["date", "boolean", "text"]).optional(),
+            })
+            .strict(),
         ),
+        items_path: z.string().min(1).max(256).optional(),
       })
       .strict(),
     z
       .object({
         type: z.literal("table"),
         columns: z.array(
-          z.object({ key: z.string(), label: z.string() }).strict(),
+          z
+            .object({
+              key: z.string(),
+              label: z.string(),
+              format: z
+                .enum(["text", "number", "currency", "date", "boolean"])
+                .optional(),
+            })
+            .strict(),
         ),
         rows_path: z.string(),
       })
@@ -114,6 +139,9 @@ const blockNodeSchema: z.ZodType<BlockNode> = z.lazy(() =>
     z
       .object({
         type: z.literal("card"),
+        presentation: z.enum(["surface", "row", "rail"]).optional(),
+        eyebrow: z.string().optional(),
+        subtitle: z.string().optional(),
         title: z.string().optional(),
         description: z.string().optional(),
         children: z.array(blockNodeSchema).default([]),
@@ -122,6 +150,8 @@ const blockNodeSchema: z.ZodType<BlockNode> = z.lazy(() =>
     z
       .object({
         type: z.literal("card-list"),
+        mode: z.enum(["list", "grid", "carousel"]).optional(),
+        presentation: z.enum(["separated", "numbered"]).optional(),
         items_path: z.string(),
         card: blockNodeSchema,
       })
@@ -146,6 +176,9 @@ const blockNodeSchema: z.ZodType<BlockNode> = z.lazy(() =>
     z
       .object({
         type: z.literal("status"),
+        progress_path: z.string().min(1).max(256).optional(),
+        position_path: z.string().min(1).max(256).optional(),
+        total_path: z.string().min(1).max(256).optional(),
         label: z.string(),
         state_path: z.string().optional(),
       })
@@ -168,6 +201,7 @@ const blockNodeSchema: z.ZodType<BlockNode> = z.lazy(() =>
         type: z.literal("question"),
         prompt: z.string(),
         mode: z.enum(["single-select", "multi-select"]),
+        mode_path: z.string().min(1).max(256).optional(),
         options: z
           .array(
             z
@@ -470,6 +504,8 @@ function validateTree(
         if (!result.ok) return result;
       }
     }
+    const bindingError = validateBlockFieldBindings(node);
+    if (bindingError) return failure("invalid-manifest", bindingError);
     if (node.type === "question") {
       const definitionError = validateQuestionNodeDefinition(node);
       if (definitionError) {
@@ -496,7 +532,10 @@ function validateTree(
     return { ok: true, value: true };
   }
 
-  return visit(manifest.tree, 1);
+  const bounded = visit(manifest.tree, 1);
+  if (!bounded.ok) return bounded;
+  const questionError = validateQuestionComposition(manifest.tree);
+  return questionError ? failure("invalid-manifest", questionError) : bounded;
 }
 
 function validateApprovalSchema(
@@ -881,4 +920,14 @@ export function isSignedInteraction(
   interaction: Extract<BlockInteraction, { type: "signed" }>;
 } {
   return action.interaction.type === "signed";
+}
+
+function validateQuestionOptionsData(
+  node: BlockNode,
+  data: unknown,
+): string | null {
+  return (
+    validateDynamicBlockFields(node, data) ??
+    validateQuestionOptionsDataOnly(node, data)
+  );
 }

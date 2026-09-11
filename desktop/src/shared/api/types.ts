@@ -372,6 +372,12 @@ export type ManagedAgent = {
   restartDiff: RestartDiffEntry[];
   /** Per-agent env vars. Layered on top of persona envVars. */
   envVars: Record<string, string>;
+  /**
+   * Absolute path of the git worktree the harness runs in, or `null` when the
+   * agent runs in the default home directory. Mirrored to the child (and to
+   * `envVars.COLONY_WORKTREE`) as `COLONY_WORKTREE`.
+   */
+  workingDir: string | null;
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
   createdAt: string;
@@ -441,6 +447,8 @@ export type CreateManagedAgentInput = {
   model?: string;
   provider?: string;
   envVars?: Record<string, string>;
+  /** Absolute worktree the harness runs in. Omitted = the home default. */
+  workingDir?: string;
   spawnAfterCreate?: boolean;
   startOnAppLaunch?: boolean;
   backend?: ManagedAgentBackend;
@@ -717,6 +725,11 @@ export type UpdateManagedAgentInput = {
    * (validated & normalized server-side).
    */
   respondToAllowlist?: string[];
+  /**
+   * Absent = don't touch. `null` = clear the worktree (home default). A path
+   * re-points the agent at that worktree.
+   */
+  workingDir?: string | null;
 };
 export type {
   AgentPersona,
