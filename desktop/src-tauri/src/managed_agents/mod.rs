@@ -28,6 +28,7 @@ pub(crate) mod persona_events;
 mod personas;
 #[cfg(windows)]
 mod process_lifecycle;
+pub(crate) mod provisioned;
 pub(crate) mod readiness;
 pub(crate) mod subscriptions;
 /// Re-exported for `commands::agent_subscriptions`, which needs a PATH probe

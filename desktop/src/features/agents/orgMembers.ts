@@ -250,9 +250,21 @@ export function useOrgMembers(
     // boot-reconcile leak cleanup) leave both the chart and the unranked
     // group. While that snapshot loads or errors it is `undefined`, which
     // maps to an empty set -- an unknown archive hides nothing.
+    // Employees Colony provides carry a `provisioned` tag on their 30190
+    // head, which is what lets their own kind-30177 definition be trusted
+    // without an owner signature; see `trustedManagedAgentHeads`.
+    const provisionedEmployees = new Set(
+      [...heads.values()]
+        .filter((head) => head.provisioned !== null)
+        .map((head) => head.pubkey),
+    );
     const { members, unrankedAgents } = orgMembersFromSources(
       [...heads.values()],
-      trustedManagedAgentHeads(headEventsQuery.data ?? [], owners),
+      trustedManagedAgentHeads(
+        headEventsQuery.data ?? [],
+        owners,
+        provisionedEmployees,
+      ),
       {
         retired,
         archived: archivedHiddenPubkeys(archivedSnapshotQuery.data),

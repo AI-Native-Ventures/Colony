@@ -65,6 +65,9 @@ fn test_runtime() -> &'static KnownAcpRuntime {
 
 fn test_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,

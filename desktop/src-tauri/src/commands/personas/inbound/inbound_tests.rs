@@ -166,6 +166,9 @@ const AGENT_PUBKEY: &str = "agentpubkeyhex00000000000000000000000000000000000000
 /// event must NEVER be able to overwrite.
 fn local_agent() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,

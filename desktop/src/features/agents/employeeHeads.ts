@@ -101,6 +101,17 @@ export type EmployeeHead = {
   rank: AgentRank;
   /** The agent one rung up that this employee reports to, or null. */
   manager: string | null;
+  /**
+   * The bundled entry this employee was provisioned from, or null for one the
+   * workspace hired itself.
+   *
+   * Only the relay can mint this head, because only the relay can open an
+   * employee's sealed key and ingest refuses an employee head signed by
+   * anyone else. So a `provisioned` tag here is the relay saying this is an
+   * employee Colony provides, and it is what corroborates the matching
+   * kind-30177 definition (see `trustedManagedAgentHeads`).
+   */
+  provisioned: string | null;
 };
 
 function tagValue(event: RelayEvent, name: string): string | undefined {
@@ -124,6 +135,7 @@ export function parseEmployeeHead(event: RelayEvent): EmployeeHead | null {
     name: tagValue(event, "name") ?? "",
     rank,
     manager: parseManagerTag(event),
+    provisioned: tagValue(event, "provisioned")?.trim() || null,
   };
 }
 

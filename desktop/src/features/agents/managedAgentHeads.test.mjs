@@ -28,12 +28,14 @@ function managedHeadEvent({
   roleId,
   tier,
   manager,
+  provisioned,
 }) {
   const content = {};
   if (roleId !== undefined) content.role_id = roleId;
   if (tier !== undefined) content.tier = tier;
   const tags = [["d", pubkey.toLowerCase()]];
   if (manager !== undefined) tags.push(["manager", manager]);
+  if (provisioned !== undefined) tags.push(["provisioned", provisioned]);
   return {
     id: "e".repeat(64),
     pubkey: author,
@@ -274,4 +276,124 @@ test("ranked head tags carry the d tag and only a valid manager", () => {
     ["d", AGENT],
     ["manager", OTHER_AGENT],
   ]);
+});
+
+// ── provisioned definitions ────────────────────────────────────────────────
+//
+// An employee Colony provides has no owner-authored definition and never
+// will: the relay mints it, signing with the EMPLOYEE's key rather than its
+// own. Only the relay can open that key, so a head whose author is the agent
+// it describes could only have come from the relay. These pin the three
+// conditions that make that argument hold, one test per hole.
+
+const PROVISIONED_EMPLOYEES = new Set([AGENT]);
+
+test("a provisioned definition the employee signed itself is trusted", () => {
+  const heads = trustedManagedAgentHeads(
+    [
+      managedHeadEvent({
+        pubkey: AGENT,
+        author: AGENT,
+        provisioned: "sales",
+        roleId: "sales",
+      }),
+    ],
+    OWNERS,
+    PROVISIONED_EMPLOYEES,
+  );
+  assert.equal(heads.length, 1);
+  assert.equal(heads[0].pubkey, AGENT);
+  assert.equal(heads[0].provisioned, "sales");
+});
+
+test("a provisioned head about an agent, signed by somebody else, is not trusted", () => {
+  // Anyone may publish a head ABOUT an agent. Only the key holder can
+  // publish one AS it, and that is the whole proof.
+  const heads = trustedManagedAgentHeads(
+    [
+      managedHeadEvent({
+        pubkey: AGENT,
+        author: OTHER_AGENT,
+        provisioned: "sales",
+      }),
+    ],
+    OWNERS,
+    PROVISIONED_EMPLOYEES,
+  );
+  assert.deepEqual(heads, []);
+});
+
+test("a self-authored head without the provisioned tag is still not trusted", () => {
+  // Unchanged from before: an ordinary self-published head names nothing.
+  const heads = trustedManagedAgentHeads(
+    [managedHeadEvent({ pubkey: AGENT, author: AGENT })],
+    OWNERS,
+    PROVISIONED_EMPLOYEES,
+  );
+  assert.deepEqual(heads, []);
+});
+
+test("a self-authored provisioned head is not trusted without a provisioned employee head", () => {
+  // The corroborating kind-30190 head must ALSO say provisioned. An employee
+  // the workspace hired must never be readable as one Colony provides.
+  const heads = trustedManagedAgentHeads(
+    [
+      managedHeadEvent({
+        pubkey: AGENT,
+        author: AGENT,
+        provisioned: "sales",
+      }),
+    ],
+    OWNERS,
+    new Set(),
+  );
+  assert.deepEqual(heads, []);
+});
+
+test("omitting the provisioned set keeps the original owner-only behaviour", () => {
+  // A caller that has not loaded employee heads yet must trust strictly
+  // less, never more.
+  const selfAuthored = trustedManagedAgentHeads(
+    [
+      managedHeadEvent({
+        pubkey: AGENT,
+        author: AGENT,
+        provisioned: "sales",
+      }),
+    ],
+    OWNERS,
+  );
+  assert.deepEqual(selfAuthored, []);
+
+  const ownerAuthored = trustedManagedAgentHeads(
+    [managedHeadEvent({ pubkey: AGENT, author: OWNER })],
+    OWNERS,
+  );
+  assert.equal(ownerAuthored.length, 1);
+});
+
+test("an owner's newer head still wins over the employee's own", () => {
+  // The newest-first scan is unchanged: whichever trustworthy head is newest
+  // is the one that counts, and both shapes are trustworthy.
+  const heads = trustedManagedAgentHeads(
+    [
+      managedHeadEvent({
+        pubkey: AGENT,
+        author: AGENT,
+        provisioned: "sales",
+        roleId: "sales",
+        createdAt: 1_000,
+      }),
+      managedHeadEvent({
+        pubkey: AGENT,
+        author: OWNER,
+        roleId: "engineer",
+        createdAt: 2_000,
+      }),
+    ],
+    OWNERS,
+    PROVISIONED_EMPLOYEES,
+  );
+  assert.equal(heads.length, 1);
+  assert.equal(heads[0].roleId, "engineer");
 });

@@ -9,6 +9,9 @@ fn bare_agent_record(
     use crate::managed_agents::{BackendKind, RespondTo};
     use std::collections::BTreeMap;
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,
