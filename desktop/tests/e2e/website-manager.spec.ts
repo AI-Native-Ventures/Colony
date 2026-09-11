@@ -32,9 +32,16 @@ import {
 const SCREENSHOT_DIR = path.resolve("test-results/website-manager");
 const CHANNEL = "general";
 const RELAY_URL = "ws://localhost:3000";
-const REVIEWER_PUBKEY = TEST_IDENTITIES.outsider.pubkey;
-const RESEARCHER_PUBKEY = TEST_IDENTITIES.alice.pubkey;
-const BUILDER_PUBKEY = TEST_IDENTITIES.bob.pubkey;
+// Synthetic team pubkeys on purpose: the mock bridge gives managed agents
+// whose pubkey is a TEST_IDENTITY a special runtime surface (alice, bob and
+// outsider each map to one), which is not the plain deployed-agent shape
+// these captures need. Nothing here signs as these agents.
+const RESEARCHER_PUBKEY =
+  "77eb51fe0000000000000000000000000000000000000000000000000000ae01";
+const BUILDER_PUBKEY =
+  "77eb51fe0000000000000000000000000000000000000000000000000000ae02";
+const REVIEWER_PUBKEY =
+  "77eb51fe0000000000000000000000000000000000000000000000000000ae03";
 const HEX64 = (seed: string) => sha256Text(seed);
 const MANIFEST_1 = HEX64("website-manifest-1");
 const MANIFEST_2 = HEX64("website-manifest-2");
