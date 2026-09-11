@@ -96,6 +96,11 @@ export function BlockRenderer({
     manifest.validation.requires_attention,
     latestAttentionStatus,
   );
+  // A processor that named its own outcome says it once, in both places.
+  const resolvedStatusSentence =
+    attentionResolution && latestAttentionStatusLabel
+      ? `${latestAttentionStatusLabel.charAt(0).toUpperCase()}${latestAttentionStatusLabel.slice(1)}.`
+      : undefined;
   const shellTier = blockShellTier(manifest.tree);
   return (
     <BlockRenderProvider
@@ -135,9 +140,9 @@ export function BlockRenderer({
             {latestStatus === "pending"
               ? "Action submitted. Waiting for the responsible agent."
               : latestStatus === "succeeded"
-                ? "Completed."
+                ? (resolvedStatusSentence ?? "Completed.")
                 : latestStatus === "denied"
-                  ? "Declined."
+                  ? (resolvedStatusSentence ?? "Declined.")
                   : latestStatus === "timed-out"
                     ? "The action timed out. You can try again."
                     : "The action failed. You can try again."}
