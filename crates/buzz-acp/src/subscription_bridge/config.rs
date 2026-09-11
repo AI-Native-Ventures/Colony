@@ -47,6 +47,12 @@ pub(crate) struct HostLogin {
     /// for validation and diagnostics; it is deliberately never exported as
     /// `CLAUDE_CONFIG_DIR`, because exporting it is what breaks the login.
     pub config_dir: PathBuf,
+    /// The owner's account name, supplied by desktop rather than read here.
+    /// The coordinator is spawned with a cleared environment, so this process
+    /// has no `USER` of its own to forward, and Claude's keychain item is keyed
+    /// on the owner's name: without it the CLI reports a signed-out account and
+    /// the subscription check refuses the teammate.
+    pub user: String,
 }
 
 impl Config {
@@ -92,6 +98,14 @@ impl Config {
             }
             if host_login.config_dir != self.profile {
                 bail!("A host provider login must name the configured provider directory");
+            }
+            if host_login.user.is_empty()
+                || host_login.user.len() > 256
+                || host_login
+                    .user
+                    .contains(|character: char| character.is_control())
+            {
+                bail!("A host provider login requires the owner's account name");
             }
             let home = host_login
                 .home
@@ -145,9 +159,7 @@ impl Config {
             // agent's shell, file and browser tools stay in the Seatbelt policy
             // captured in `mcp_servers`, unchanged by this mode.
             command.env("HOME", &host_login.home);
-            if let Some(user) = std::env::var_os("USER") {
-                command.env("USER", user);
-            }
+            command.env("USER", &host_login.user);
             return command;
         }
         command.env(
@@ -204,6 +216,7 @@ mod tests {
         config.host_login = Some(HostLogin {
             home: home.clone(),
             config_dir,
+            user: "owner".into(),
         });
         home
     }
@@ -323,7 +336,7 @@ mod tests {
             "runtime":"claude","vendor_binary":"/synthetic/vendor","profile":config.profile.clone(),
             "workspace":config.workspace.clone(),"model":"synthetic-model",
             "mcp_servers":config.mcp_servers.clone(),
-            "host_login":{"home":"/synthetic/owner","config_dir":"/synthetic/owner/.claude"}
+            "host_login":{"home":"/synthetic/owner","config_dir":"/synthetic/owner/.claude","user":"owner"}
         }))
         .unwrap();
         assert_eq!(
@@ -331,8 +344,40 @@ mod tests {
             Some(HostLogin {
                 home: PathBuf::from("/synthetic/owner"),
                 config_dir: PathBuf::from("/synthetic/owner/.claude"),
+                user: "owner".into(),
             })
         );
+    }
+
+    #[test]
+    fn a_host_login_without_the_owner_name_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = fixture(root.path());
+        with_host_login(&mut config, root.path());
+        let mut blank = config.clone();
+        blank.host_login.as_mut().unwrap().user = String::new();
+        assert!(blank.validate().is_err());
+        let mut control = config.clone();
+        control.host_login.as_mut().unwrap().user = "owner\u{7}".into();
+        assert!(control.validate().is_err());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn a_host_login_exports_the_owner_name_from_the_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = fixture(root.path());
+        with_host_login(&mut config, root.path());
+        // Read from the configuration, never from this process: the coordinator
+        // is spawned with a cleared environment and has no USER to forward.
+        let restore = std::env::var("USER").ok();
+        std::env::remove_var("USER");
+        let environment = environment(&config.vendor_command());
+        if let Some(user) = restore {
+            std::env::set_var("USER", user);
+        }
+        assert_eq!(environment.get("USER").map(String::as_str), Some("owner"));
+        assert!(!environment.contains_key("CLAUDE_CONFIG_DIR"));
     }
 
     #[test]
