@@ -2,11 +2,13 @@
  * Canonical stage progress derived from the relay-signed head record.
  *
  * The relay validated every `stageEvidence` reference before the head was
- * signed, so a `taskReport`/`jobOutcome` entry can complete a stage, while a
- * `workEvent`/`jobCheckpoint` entry only ever means "in progress". Record
- * facts cover the rest: the current revision completes design/build (until a
- * change request reopens it), its QA completes independent review, the pinned
- * active approval completes owner review, and `handedOver` completes handover.
+ * signed, so a `taskReport`/`jobOutcome` entry completes its stage and stays
+ * definitive even when an earlier `workEvent` was also recorded; a
+ * `workEvent`/`jobCheckpoint` entry on its own only ever means "in progress".
+ * Record facts cover the rest: the current revision completes design/build
+ * (until a change request reopens it), its QA completes independent review, the
+ * pinned active approval completes owner review, and `handedOver` completes
+ * handover.
  *
  * Stage agents come from the same record: brief from the pinned coordinator,
  * design/build from the current revision's builder, review from the current
@@ -65,7 +67,10 @@ export function deriveWebsiteProgress(
   if (hasDoneEvidence("brief") && !hasActiveEvidence("brief")) {
     completed.add("brief");
   }
-  if (hasDoneEvidence("research") && !hasActiveEvidence("research")) {
+  // A completion report is definitive: an earlier work entry for the same
+  // stage never reopens it. A change request reopens design and build, never
+  // research.
+  if (hasDoneEvidence("research")) {
     completed.add("research");
   }
   if (

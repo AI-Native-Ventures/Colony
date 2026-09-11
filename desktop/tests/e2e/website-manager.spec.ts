@@ -120,22 +120,22 @@ const WEBSITE_TEAM_PERSONAS = [
   {
     id: "website-researcher",
     displayName: "Ren",
-    roleId: "website-research",
-    roleTitle: "Website research",
+    roleId: "website-researcher",
+    roleTitle: "Website researcher",
     systemPrompt: "Research the existing site.",
   },
   {
     id: "website-builder",
     displayName: "Jules",
-    roleId: "designer-builder",
-    roleTitle: "Designer-builder",
+    roleId: "website-designer-builder",
+    roleTitle: "Website designer",
     systemPrompt: "Design and build the site.",
   },
   {
     id: "website-reviewer",
     displayName: "Vera",
-    roleId: "independent-reviewer",
-    roleTitle: "Independent reviewer",
+    roleId: "website-reviewer",
+    roleTitle: "Website reviewer",
     systemPrompt: "Independently review the revision.",
   },
 ];
@@ -195,6 +195,87 @@ type JobDescriptor = {
   card: RelayEvent;
   head: RelayEvent;
 };
+
+type ThreadReply = {
+  pubkey: string;
+  content: string;
+};
+
+const REVIEW_BULLETS =
+  "- Branding, website and social read as one service.\n- Stronger typography and more space around the work.\n- A clearer path from first impression to enquiry.";
+
+/**
+ * The agent conversation each moment carries in the approved reference
+ * (docs/design/website-manager-approved.html lines 59-78). These are ordinary
+ * thread replies in production; the mock seeds them so captures read like the
+ * reference.
+ */
+const STATE_THREAD_REPLIES: Record<JobState, readonly ThreadReply[]> = {
+  brief: [
+    {
+      pubkey: AGENT_PUBKEY,
+      content:
+        "I’ll coordinate the redesign around your monthly branding service. We’ll keep the useful material and create a stronger direction for the site.\n\nRen will review the existing site. Jules will design and build it, and Vera will independently review the result.\n\n**You’ll receive**\n\n- A redesigned website to explore\n- Desktop and mobile previews\n- A short explanation of what improved\n\nYou can send feedback here throughout the job.",
+    },
+  ],
+  working: [
+    {
+      pubkey: AGENT_PUBKEY,
+      content:
+        "Ren’s review is ready. Jules has the original material and the business brief. I’ll bring you the new site after Vera’s review.",
+    },
+    {
+      pubkey: RESEARCHER_PUBKEY,
+      content:
+        "The existing copy leads with one-off website projects. The monthly branding service needs a clearer place in the site.\n\n- Content and page inventory gathered\n- Original brand assets collected\n- Forms and existing journeys documented",
+    },
+    {
+      pubkey: BUILDER_PUBKEY,
+      content:
+        "I’m giving the site a warmer editorial direction and bringing identity, website and social together as one service. The original business information stays intact.",
+    },
+  ],
+  review: [
+    {
+      pubkey: REVIEWER_PUBKEY,
+      content:
+        "The example review is complete. The redesign gives the offer a clearer hierarchy and reads comfortably on mobile.\n\n- Content and page coverage\n- Desktop and mobile layouts\n- Readability and visual consistency\n- Navigation and form behaviour",
+    },
+    {
+      pubkey: AGENT_PUBKEY,
+      content: `Your new website is ready to explore. Jules has given it a more distinctive identity and brought the monthly offer forward.\n\n${REVIEW_BULLETS}`,
+    },
+  ],
+  revision: [
+    {
+      pubkey: AGENT_PUBKEY,
+      content: `The revised direction is ready. Jules has softened the opening headline; the monthly offer and layout are retained.\n\n${REVIEW_BULLETS}`,
+    },
+  ],
+  handover: [
+    {
+      pubkey: AGENT_PUBKEY,
+      content:
+        "The design is approved. The next step is connecting the address where it should go live.\n\n**Keep your existing domain**\n\nIf someone else manages it, I can prepare a short request explaining the access we need.\n\nWe’ll confirm the destination and launch details with you before publishing.",
+    },
+    {
+      pubkey: BUILDER_PUBKEY,
+      content:
+        "The approved version and its assets are saved with this job. Future changes can start from this version, with a new preview to review.",
+    },
+  ],
+};
+
+async function seedThreadReplies(page: Page, rootId: string, state: JobState) {
+  for (const reply of STATE_THREAD_REPLIES[state]) {
+    await emitMessage(page, {
+      channelName: CHANNEL,
+      content: reply.content,
+      parentEventId: rootId,
+      pubkey: reply.pubkey,
+    });
+  }
+}
 
 function svgCapture(label: string, color: string) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900"><rect width="1440" height="900" fill="${color}"/><text x="60" y="140" font-family="sans-serif" font-size="64" fill="#ffffff">${label}</text></svg>`;
@@ -429,6 +510,20 @@ function recordFixture(input: {
           actor: OWNER_PUBKEY,
           note: REQUEST_NOTE,
         }),
+      ],
+      // Research started and its completion report landed before the change
+      // request; the request reopens design and build, never research.
+      stageEvidence: [
+        {
+          stage: "research",
+          kind: "workEvent",
+          eventId: HEX64("research-work-event"),
+        },
+        {
+          stage: "research",
+          kind: "taskReport",
+          eventId: HEX64("research-task-report"),
+        },
       ],
     };
   }
@@ -667,6 +762,7 @@ async function seedJob(
   });
   await replaceBlockEvents(page, [manifestEvent, head]);
   await emitSignedEvent(page, CHANNEL, head);
+  await seedThreadReplies(page, root.id, state);
   await settleTimelineAtLatest(page);
   return {
     job: { state, jobId, taskId, root, card, head },
@@ -790,6 +886,8 @@ test("mocked Brief state renders the brief and start action", async ({
   await expect(rootAttachment).toBeVisible();
   await openThreadForRoot(page, job.root.id);
   await expectCompositeThread(page);
+  const threadPanel = page.getByTestId("message-thread-panel");
+  await expect(threadPanel.getByText(/monthly branding service/)).toBeVisible();
   await expect(
     rootAttachment.getByText("Keep the business facts and useful content."),
   ).toBeVisible();
@@ -813,7 +911,9 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   const { job } = await seedJob(page, "working");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(rootAttachment).toBeVisible();
-  await expect(rootAttachment.getByText("In progress")).toBeVisible();
+  await expect(
+    rootAttachment.getByText("Jules is shaping the new site"),
+  ).toBeVisible();
   // Stage rows live in the first <ol>; the evidence disclosure below uses its
   // own <ul> and repeats the stage label, so scope rows to the stage list.
   const stageList = rootAttachment.locator("ol").first();
@@ -821,9 +921,26 @@ test("mocked Working state shows stages and earlier-version inspection", async (
     stageList.locator("li").filter({ hasText: label });
   await expect(stageRow("Understand the existing site")).toBeVisible();
   await expect(stageRow("Understand the existing site")).toContainText("Done");
+  await expect(stageRow("Understand the existing site")).toContainText(
+    "Ren · Website researcher",
+  );
   await expect(stageRow("Design and build")).toContainText("Working");
+  await expect(stageRow("Design and build")).toContainText(
+    "Jules · Website designer",
+  );
+  // No QA on the current revision yet: the installed reviewer fills the row.
+  await expect(stageRow("Independent review")).toContainText(
+    "Vera · Website reviewer",
+  );
+  await expect(stageRow("Your review")).toContainText("Basheer Phiri · Owner");
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = await expectCompositeThread(page);
+  const threadPanel = page.getByTestId("message-thread-panel");
+  await expect(threadPanel.getByText(/review is ready/)).toBeVisible();
+  await expect(threadPanel.getByText(/one-off website projects/)).toBeVisible();
+  await expect(
+    threadPanel.getByText(/warmer editorial direction/),
+  ).toBeVisible();
   const versionHistory = threadAttachment.getByRole("region", {
     name: "Version history",
   });
@@ -858,7 +975,9 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "review");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
-  await expect(rootAttachment.getByText("Ready for your review")).toBeVisible();
+  await expect(
+    rootAttachment.getByText("Revised design ready for review"),
+  ).toBeVisible();
   const mobileButton = rootAttachment.getByRole("button", {
     name: "Mobile preview",
   });
@@ -881,6 +1000,11 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
 
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = await expectCompositeThread(page);
+  const threadPanel = page.getByTestId("message-thread-panel");
+  await expect(
+    threadPanel.getByText(/reads comfortably on mobile/),
+  ).toBeVisible();
+  await expect(threadPanel.getByText(/distinctive identity/)).toBeVisible();
   await expect(
     threadAttachment.getByText("Desktop and mobile layouts reviewed"),
   ).toBeVisible();
@@ -919,6 +1043,20 @@ test("mocked Revision state shows the exact change request", async ({
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = await expectCompositeThread(page);
   await expect(rootAttachment.getByText("Changes requested")).toBeVisible();
+  // A change request reopens design and build; completed research stays done
+  // and the rows keep canonical order.
+  const stageList = rootAttachment.locator("ol").first();
+  const stageRow = (label: string) =>
+    stageList.locator("li").filter({ hasText: label });
+  await expect(stageRow("Understand the existing site")).toContainText("Done");
+  await expect(stageRow("Understand the existing site")).toContainText(
+    "Ren · Website researcher",
+  );
+  await expect(stageRow("Design and build")).toContainText("Next");
+  const threadPanel = page.getByTestId("message-thread-panel");
+  await expect(
+    threadPanel.getByText(/revised direction is ready/),
+  ).toBeVisible();
   const changeRequest = threadAttachment.getByRole("region", {
     name: "Change request",
   });
@@ -939,9 +1077,44 @@ test("mocked Handover state shows confirmed resources and the draft request", as
   });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "handover");
+  const rootAttachment = page.getByTestId("website-root-attachment").first();
+  const threadPanel = page.getByTestId("message-thread-panel");
+  await expect(
+    rootAttachment.getByText("Design approved · awaiting launch"),
+  ).toBeVisible();
+  await expect(
+    rootAttachment.getByText("Design approved", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    rootAttachment.getByText("Ready for handover"),
+  ).toBeVisible();
+  await expect(
+    rootAttachment.getByText("Website source and assets"),
+  ).toBeVisible();
+  await expect(
+    rootAttachment.getByText("Reviewed desktop and mobile layouts"),
+  ).toBeVisible();
+  await expect(
+    rootAttachment.getByText("A record of your approved version"),
+  ).toBeVisible();
+  const viewApproved = rootAttachment.getByRole("button", {
+    name: "View approved design",
+  });
+  await expect(viewApproved).toBeVisible();
+  await viewApproved.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Back to review" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to review" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
   await openThreadForRoot(page, job.root.id);
   const threadAttachment = await expectCompositeThread(page);
   await expect(threadAttachment.getByText("Handover prepared")).toBeVisible();
+  await expect(
+    threadPanel.getByText(/next step is connecting the address/),
+  ).toBeVisible();
   await expect(
     threadAttachment.getByText(
       /Please share who manages the horizon-labs.example domain/,
@@ -984,7 +1157,9 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
 
   await threadAttachment.getByRole("button", { name: "Try again" }).click();
   await expect(
-    threadAttachment.getByText("Saving your decision."),
+    threadAttachment.getByText(
+      /Saving your decision\.|Confirming your decision\./,
+    ),
   ).toBeVisible();
   const confirmed = signHead({
     jobId: job.jobId,
@@ -1064,7 +1239,9 @@ test("mocked community switch clears pending website state", async ({
     .getByRole("button", { name: "Request changes" })
     .click();
   await expect(
-    threadAttachment.getByText("Saving your decision."),
+    threadAttachment.getByText(
+      /Saving your decision\.|Confirming your decision\./,
+    ),
   ).toBeVisible();
 
   await page.getByTestId("community-rail-button-website-b").click();

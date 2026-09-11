@@ -23,6 +23,10 @@ export type WebsiteWorkStagesProps = {
   agents: WebsiteAgentDirectory;
   /** stage id to pubkey, from canonical assignment state. */
   stageAgents?: Readonly<Record<string, string>>;
+  /** Display-only fallback for stages the record does not name yet. */
+  stageFallbacks?: Readonly<Record<string, string>>;
+  /** True when the viewer is the job owner. */
+  viewerIsOwner?: boolean;
   /** Canonical completion facts and active work; never inferred. */
   progress?: WebsiteProgressInput | null;
   className?: string;
@@ -151,12 +155,21 @@ export function WebsiteWorkStages({
   record,
   agents,
   stageAgents,
+  stageFallbacks,
+  viewerIsOwner,
   progress,
   className,
   defaultCollapsed = true,
 }: WebsiteWorkStagesProps) {
   const [showAll, setShowAll] = React.useState(!defaultCollapsed);
-  const rows = deriveStageRows({ record, agents, stageAgents, progress });
+  const rows = deriveStageRows({
+    record,
+    agents,
+    stageAgents,
+    stageFallbacks,
+    viewerIsOwner,
+    progress,
+  });
   const allDone = rows.every((row) => row.state === "done");
 
   if (allDone && !showAll) {

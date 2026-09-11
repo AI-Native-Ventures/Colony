@@ -10,7 +10,6 @@ import {
 import type {
   WebsiteAgentDirectory,
   WebsiteBriefView,
-  WebsiteJobStatus,
   WebsiteReviewRecord,
 } from "./types";
 
@@ -31,19 +30,41 @@ type StatusPresentation = {
   className: string;
 };
 
-function statusPresentation(status: WebsiteJobStatus): StatusPresentation {
-  switch (status) {
-    case "working":
+/** The current revision's builder first name, when the directory knows it. */
+function builderFirstName(
+  record: WebsiteReviewRecord,
+  agents: WebsiteAgentDirectory,
+): string | undefined {
+  const revision = record.revisions.find(
+    (entry) => entry.revision === record.currentRevision,
+  );
+  if (!revision) return undefined;
+  const name = agents.get(revision.builtBy)?.name?.trim();
+  if (!name) return undefined;
+  return name.split(/\s+/)[0];
+}
+
+function statusPresentation(
+  record: WebsiteReviewRecord,
+  agents: WebsiteAgentDirectory,
+): StatusPresentation {
+  switch (record.status) {
+    case "working": {
+      const builder = builderFirstName(record, agents);
       return {
-        label: "In progress",
+        label: builder ? `${builder} is shaping the new site` : "In progress",
         icon: (
           <Loader2 aria-hidden="true" className="size-[13px] animate-spin" />
         ),
         className: "text-primary",
       };
+    }
     case "readyForReview":
       return {
-        label: "Ready for your review",
+        label:
+          record.currentRevision > 1
+            ? "Revised design ready for review"
+            : "Ready for your review",
         icon: <CircleDot aria-hidden="true" className="size-[13px]" />,
         className: "text-primary",
       };
@@ -61,7 +82,7 @@ function statusPresentation(status: WebsiteJobStatus): StatusPresentation {
       };
     case "handedOver":
       return {
-        label: "Handover prepared",
+        label: "Design approved · awaiting launch",
         icon: <CircleCheck aria-hidden="true" className="size-[13px]" />,
         className: "text-primary",
       };
@@ -89,7 +110,7 @@ export function WebsiteJobCard({
   onOpenThread,
   className,
 }: WebsiteJobCardProps) {
-  const status = statusPresentation(record.status);
+  const status = statusPresentation(record, agents);
   const coordinator = record.coordinator
     ? agents.get(record.coordinator)
     : undefined;

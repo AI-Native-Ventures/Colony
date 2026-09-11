@@ -16,10 +16,14 @@ import { useAgentRoleTitles } from "@/features/agents/useKnownAgentPubkeys";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { WebsiteBrief } from "@/features/website/WebsiteBrief";
+import { WebsiteHandoverSummary } from "@/features/website/WebsiteHandoverSummary";
 import { WebsiteJobCard } from "@/features/website/JobCard";
 import { WebsiteReview } from "@/features/website/WebsiteReview";
 import { WebsiteWorking } from "@/features/website/WebsiteWorking";
+import { useIdentityQuery } from "@/shared/api/hooks";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import type {
   WebsiteBriefView,
   WebsitePreviewHostAdapter,
@@ -40,12 +44,16 @@ import {
   subscribeWebsiteCompositeRegistry,
 } from "./websiteCompositeRegistry";
 import { useWebsiteHeads } from "./useWebsiteHeads";
-import { buildWebsiteAgentDirectory } from "./websiteAgentDirectory";
+import {
+  buildWebsiteAgentDirectory,
+  collectWebsiteAgentPubkeys,
+} from "./websiteAgentDirectory";
 import { WebsiteAttachmentBoundary } from "./WebsiteAttachmentBoundary";
 import {
   deriveWebsiteProgress,
   deriveWebsiteStageAgents,
 } from "./websiteProgress";
+import { useWebsiteStageTeam } from "./websiteStageTeam";
 import type { WebsiteHead } from "./websiteHeads";
 import { submitWebsiteBeginWork } from "./websiteTransport";
 import { WebsiteThreadBody } from "./WebsiteThreadBody";
@@ -81,11 +89,13 @@ function useWebsiteAttachmentContext(input: {
 function WebsiteRootAttachment({
   communityId,
   head,
-  profiles,
+  profiles: profilesProp,
+  currentPubkey,
 }: {
   communityId: string;
   head: WebsiteHead;
   profiles: UserProfileLookup | undefined;
+  currentPubkey?: string;
 }) {
   const record = head.record;
   const rootRef = React.useRef<HTMLDivElement | null>(null);
@@ -95,10 +105,49 @@ function WebsiteRootAttachment({
     () => deriveWebsiteStageAgents(head),
     [head],
   );
+  const stageTeam = useWebsiteStageTeam();
   const roleTitles = useAgentRoleTitles();
+  const identityQuery = useIdentityQuery();
+  const viewer = (currentPubkey ?? identityQuery.data?.pubkey ?? "")
+    .trim()
+    .toLowerCase();
+  const viewerIsOwner =
+    viewer.length > 0 &&
+    normalizePubkey(viewer) === normalizePubkey(record.owner);
+  const extraPubkeys = React.useMemo(
+    () => [...new Set(Object.values(stageTeam.stageAgents))],
+    [stageTeam],
+  );
+  const directoryPubkeys = React.useMemo(
+    () => [...new Set([...collectWebsiteAgentPubkeys(head), ...extraPubkeys])],
+    [head, extraPubkeys],
+  );
+  const neededPubkeys = React.useMemo(
+    () =>
+      directoryPubkeys.filter(
+        (pubkey) => !profilesProp?.[normalizePubkey(pubkey)],
+      ),
+    [directoryPubkeys, profilesProp],
+  );
+  const profilesQuery = useUsersBatchQuery(neededPubkeys, {
+    enabled: neededPubkeys.length > 0,
+  });
+  const profiles = React.useMemo(() => {
+    const fetched = profilesQuery.data?.profiles;
+    if (!profilesProp) return fetched;
+    if (!fetched) return profilesProp;
+    return { ...fetched, ...profilesProp };
+  }, [profilesProp, profilesQuery.data?.profiles]);
   const agents = React.useMemo(
-    () => buildWebsiteAgentDirectory({ profiles, head, roleTitles }),
-    [head, profiles, roleTitles],
+    () =>
+      buildWebsiteAgentDirectory({
+        profiles,
+        head,
+        roleTitles,
+        extraPubkeys,
+        namesByPubkey: stageTeam.namesByPubkey,
+      }),
+    [profiles, head, roleTitles, extraPubkeys, stageTeam],
   );
   const instanceState = useWebsiteInstanceData({
     communityId,
@@ -130,10 +179,8 @@ function WebsiteRootAttachment({
     },
     [communityId, head],
   );
-  const isReviewState =
-    record.status === "readyForReview" ||
-    record.status === "approved" ||
-    record.status === "handedOver";
+  const showApprovalSummary =
+    record.status === "approved" || record.status === "handedOver";
 
   return (
     <div className="mt-2" data-testid="website-root-attachment" ref={rootRef}>
@@ -147,9 +194,20 @@ function WebsiteRootAttachment({
             progress={progress}
             record={record}
             stageAgents={stageAgents}
+            stageFallbacks={stageTeam.stageAgents}
+            viewerIsOwner={viewerIsOwner}
           />
         ) : null}
-        {isReviewState ? (
+        {showApprovalSummary ? (
+          <WebsiteHandoverSummary
+            artifactLoader={artifactLoader}
+            communityId={communityId}
+            getClipBounds={getClipBounds}
+            hostAdapter={hostAdapter}
+            record={record}
+          />
+        ) : null}
+        {record.status === "readyForReview" ? (
           <WebsiteReview
             actor=""
             agents={agents}
@@ -171,8 +229,9 @@ function WebsiteRootAttachment({
 type WebsiteMessageAttachmentProps = {
   channelId?: string | null;
   /**
-   * Accepted for the message-row call site; the shared body resolves the
-   * viewer identity itself so both placement paths use one actor source.
+   * Viewer pubkey from the message-row call site. The thread body uses it as
+   * the decision actor, and the channel card uses it to resolve the owner row
+   * (falling back to the shared identity query) so both placement paths agree.
    */
   currentPubkey?: string;
   layoutVariant?: "default" | "thread-reply";
@@ -216,6 +275,7 @@ function WebsiteAttachmentInner({
     return (
       <WebsiteRootAttachment
         communityId={communityId}
+        currentPubkey={currentPubkey}
         head={head}
         profiles={profiles}
       />

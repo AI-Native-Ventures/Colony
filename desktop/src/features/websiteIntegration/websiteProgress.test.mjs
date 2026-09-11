@@ -143,6 +143,42 @@ test("a change request reopens design, build, and review", () => {
   assert.ok(!progress.completedStages?.includes("review"));
 });
 
+test("a change request keeps completed research done and never reopens it", () => {
+  const progress = deriveWebsiteProgress(
+    record({
+      status: "changesRequested",
+      currentRevision: 2,
+      revisions: [revision(1), revision(2, { qa: { reviewer: REVIEWER } })],
+      stageEvidence: [evidence("research", "taskReport")],
+    }),
+  );
+  assert.ok(progress.completedStages?.includes("research"));
+  assert.ok(!progress.completedStages?.includes("designBuild"));
+  assert.ok(!progress.completedStages?.includes("review"));
+  assert.equal(progress.activity, undefined);
+});
+
+test("a research completion report survives earlier in-progress evidence", () => {
+  const progress = deriveWebsiteProgress(
+    record({
+      status: "changesRequested",
+      currentRevision: 2,
+      revisions: [revision(1), revision(2, { qa: { reviewer: REVIEWER } })],
+      stageEvidence: [
+        evidence("research", "workEvent"),
+        evidence("research", "taskReport"),
+      ],
+    }),
+  );
+  assert.ok(progress.completedStages?.includes("research"));
+  assert.ok(!progress.completedStages?.includes("designBuild"));
+  assert.equal(
+    progress.activity,
+    undefined,
+    "a completed stage never holds the single activity slot",
+  );
+});
+
 test("an approval completes owner review only when it pins the current revision", () => {
   const pinned = deriveWebsiteProgress(
     record({

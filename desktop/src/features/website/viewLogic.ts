@@ -620,8 +620,22 @@ export function deriveStageRows(input: {
   definitions?: readonly WebsiteStageDefinition[];
   /** Canonical completion facts and active work supplied by the adapter. */
   progress?: WebsiteProgressInput | null;
+  /**
+   * Display-only fallback when the record names no agent for a stage yet.
+   * Canonical assignment always wins, and this never enters the record.
+   */
+  stageFallbacks?: Readonly<Record<string, string>>;
+  /** True when the viewer is the job owner (renames the owner review row). */
+  viewerIsOwner?: boolean;
 }): WebsiteStageRow[] {
-  const { record, agents, stageAgents, progress } = input;
+  const {
+    record,
+    agents,
+    stageAgents,
+    progress,
+    stageFallbacks,
+    viewerIsOwner,
+  } = input;
   const activity = progress?.activity ?? null;
   const completed = new Set(progress?.completedStages ?? []);
   const definitions = input.definitions ?? WEBSITE_STAGE_DEFINITIONS;
@@ -645,7 +659,7 @@ export function deriveStageRows(input: {
   });
 
   return definitions.map((entry, index) => {
-    const pubkey =
+    const canonical =
       stageAgents?.[entry.id] ??
       (entry.stage === "designBuild"
         ? head?.builtBy
@@ -654,6 +668,7 @@ export function deriveStageRows(input: {
           : entry.stage === "approval"
             ? record.owner
             : undefined);
+    const pubkey = canonical ?? stageFallbacks?.[entry.id];
     const agent = pubkey ? agents.get(pubkey) : undefined;
     const fact = facts[entry.stage];
     const working = states[index] === "working";
@@ -661,7 +676,10 @@ export function deriveStageRows(input: {
     return {
       id: entry.id,
       stage: entry.stage,
-      label: entry.label,
+      label:
+        entry.id === "owner-review" && viewerIsOwner
+          ? "Your review"
+          : entry.label,
       state: states[index],
       agent,
       agentFallback: agent

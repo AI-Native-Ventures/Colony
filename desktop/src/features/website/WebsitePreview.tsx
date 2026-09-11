@@ -34,6 +34,14 @@ export type WebsitePreviewProps = {
   getClipBounds?: WebsiteHostBoundsProvider;
   className?: string;
   title?: string;
+  /** Controlled expanded dialog state; omit to let the preview own it. */
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  /**
+   * Render the inline toolbar and preview surface. Set false when a summary
+   * owns the card and only the expanded dialog should exist.
+   */
+  showInline?: boolean;
 };
 
 function sourceHostname(url: string): string {
@@ -239,12 +247,20 @@ export function WebsitePreview({
   getClipBounds,
   className,
   title = "Website preview",
+  expanded: expandedProp,
+  onExpandedChange,
+  showInline = true,
 }: WebsitePreviewProps) {
   const [comparison, setComparison] =
     React.useState<WebsitePreviewComparison>("redesign");
   const [viewport, setViewport] =
     React.useState<WebsitePreviewViewport>("desktop");
-  const [expanded, setExpanded] = React.useState(false);
+  const [internalExpanded, setInternalExpanded] = React.useState(false);
+  const expanded = expandedProp ?? internalExpanded;
+  const setExpanded = (next: boolean) => {
+    if (expandedProp === undefined) setInternalExpanded(next);
+    onExpandedChange?.(next);
+  };
   const expandedContentRef = React.useRef<HTMLDivElement | null>(null);
   const expandedPaneRef = React.useRef<HTMLDivElement | null>(null);
   const expandedSize = useElementSize(expandedPaneRef);
@@ -272,42 +288,46 @@ export function WebsitePreview({
 
   return (
     <section aria-label={title} className={cn("flex flex-col", className)}>
-      <div className="border-y border-border bg-muted/20 px-3.5 py-2">
-        {toolbar(true)}
-      </div>
-      {viewingEarlier ? (
-        <p
-          aria-live="polite"
-          className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-3.5 py-2 text-xs text-muted-foreground"
-        >
-          <span>
-            You are viewing Version {selectedRevision}, an earlier version.
-            Version {record.currentRevision} is current.
-          </span>
-          <button
-            className="underline underline-offset-2 hover:text-foreground"
-            onClick={() => selectRevision(record.currentRevision)}
-            type="button"
-          >
-            View current version
-          </button>
-        </p>
+      {showInline ? (
+        <>
+          <div className="border-y border-border bg-muted/20 px-3.5 py-2">
+            {toolbar(true)}
+          </div>
+          {viewingEarlier ? (
+            <p
+              aria-live="polite"
+              className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-3.5 py-2 text-xs text-muted-foreground"
+            >
+              <span>
+                You are viewing Version {selectedRevision}, an earlier version.
+                Version {record.currentRevision} is current.
+              </span>
+              <button
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => selectRevision(record.currentRevision)}
+                type="button"
+              >
+                View current version
+              </button>
+            </p>
+          ) : null}
+          <WebsitePreviewSurface
+            artifactLoader={artifactLoader}
+            communityId={communityId}
+            comparison={comparison}
+            getClipBounds={getClipBounds}
+            hostAdapter={hostAdapter}
+            jobId={record.jobId}
+            occluded={occluded || expanded}
+            revision={revision}
+            threadRoot={record.threadRoot}
+            viewport={viewport}
+          />
+          <div className="border-b border-border px-3.5 py-2">
+            <SourceCaption record={record} selectedRevision={selectedRevision} />
+          </div>
+        </>
       ) : null}
-      <WebsitePreviewSurface
-        artifactLoader={artifactLoader}
-        communityId={communityId}
-        comparison={comparison}
-        getClipBounds={getClipBounds}
-        hostAdapter={hostAdapter}
-        jobId={record.jobId}
-        occluded={occluded || expanded}
-        revision={revision}
-        threadRoot={record.threadRoot}
-        viewport={viewport}
-      />
-      <div className="border-b border-border px-3.5 py-2">
-        <SourceCaption record={record} selectedRevision={selectedRevision} />
-      </div>
 
       <Dialog onOpenChange={setExpanded} open={expanded}>
         <DialogContent

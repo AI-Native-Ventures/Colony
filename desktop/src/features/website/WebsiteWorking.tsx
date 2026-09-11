@@ -18,6 +18,10 @@ export type WebsiteWorkingProps = {
   agents: WebsiteAgentDirectory;
   /** stage definition id to pubkey, from canonical assignment state. */
   stageAgents?: Readonly<Record<string, string>>;
+  /** Display-only fallback for stages the record does not name yet. */
+  stageFallbacks?: Readonly<Record<string, string>>;
+  /** True when the viewer is the job owner. */
+  viewerIsOwner?: boolean;
   /** Canonical completion facts and active work; no inference happens here. */
   progress?: WebsiteProgressInput | null;
   className?: string;
@@ -66,6 +70,8 @@ export function WebsiteWorking({
   record,
   agents,
   stageAgents,
+  stageFallbacks,
+  viewerIsOwner,
   progress,
   className,
 }: WebsiteWorkingProps) {
@@ -80,6 +86,8 @@ export function WebsiteWorking({
         progress={progress}
         record={record}
         stageAgents={stageAgents}
+        stageFallbacks={stageFallbacks}
+        viewerIsOwner={viewerIsOwner}
       />
       {head ? (
         <div className="mt-3 flex flex-col gap-1 border-t border-border/60 pt-3 text-2xs text-muted-foreground">
