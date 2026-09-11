@@ -332,6 +332,7 @@ mod tests {
             format: FORMAT_DISCRIMINATOR.to_string(),
             version: FORMAT_VERSION,
             definition: AgentSnapshotDefinition {
+                session_policy: Default::default(),
                 name: "Locked Test".to_string(),
                 system_prompt: Some("You are a locked test agent.".to_string()),
                 runtime: None,
@@ -375,6 +376,7 @@ mod tests {
             creation_request_id: None,
             role_id: None,
             role_title: None,
+            session_policy: Default::default(),
             pubkey,
             name: "Locked Test".to_string(),
             persona_id: None,

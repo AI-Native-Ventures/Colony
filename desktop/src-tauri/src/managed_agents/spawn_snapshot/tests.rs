@@ -2,9 +2,6 @@ use super::*;
 use crate::managed_agents::types::RespondTo;
 use std::collections::BTreeMap;
 
-/// Canonical projection of a prospective snapshot — the exact value the drift
-/// comparison reads, so these tests assert on drift itself rather than on a
-/// proxy for it.
 fn snapshot(
     record: &ManagedAgentRecord,
     personas: &[AgentDefinition],
@@ -29,6 +26,7 @@ fn record() -> ManagedAgentRecord {
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "p".repeat(64),
         name: "agent".into(),
         role_id: None,
@@ -93,6 +91,7 @@ fn record() -> ManagedAgentRecord {
 
 fn persona(id: &str, runtime: Option<&str>, prompt: &str) -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: id.into(),
         role_id: None,
         role_title: None,

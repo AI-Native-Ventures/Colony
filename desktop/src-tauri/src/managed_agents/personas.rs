@@ -217,6 +217,7 @@ fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
             respond_to: None,
             respond_to_allowlist: Vec::new(),
             parallelism: None,
+            session_policy: super::AcpSessionPolicy::Channel,
             created_at: now.to_string(),
             updated_at: now.to_string(),
         })
@@ -579,6 +580,7 @@ mod chief_of_staff_prompt_tests {
             SUPERSEDED_FIZZ_CHIEF_OF_STAFF_PROMPT,
         ] {
             let stored = vec![AgentDefinition {
+                session_policy: Default::default(),
                 id: "builtin:fizz".to_string(),
                 role_id: Some("chief-of-staff".to_string()),
                 role_title: Some("Chief of Staff".to_string()),
@@ -622,6 +624,7 @@ mod chief_of_staff_prompt_tests {
     #[test]
     fn a_prompt_the_owner_wrote_is_left_alone() {
         let stored = vec![AgentDefinition {
+            session_policy: Default::default(),
             id: "builtin:fizz".to_string(),
             role_id: Some("chief-of-staff".to_string()),
             role_title: Some("Chief of Staff".to_string()),

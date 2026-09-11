@@ -99,7 +99,11 @@ export function duplicatePersonaDialogState(
 function behaviorEntry(
   persona: AgentPersona,
 ): { behavior: PersonaBehaviorInput } | Record<string, never> {
-  if (persona.respondTo == null && persona.parallelism == null) {
+  if (
+    persona.respondTo == null &&
+    persona.parallelism == null &&
+    (persona.sessionPolicy ?? "channel") === "channel"
+  ) {
     return {};
   }
   return {
@@ -110,6 +114,7 @@ function behaviorEntry(
           ? persona.respondToAllowlist
           : undefined,
       parallelism: persona.parallelism ?? undefined,
+      sessionPolicy: persona.sessionPolicy ?? "channel",
     },
   };
 }

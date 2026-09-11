@@ -90,6 +90,7 @@ fn raw_blueprint() -> CompanyBlueprint {
 
 fn fizz() -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: "builtin:fizz".to_string(),
         role_id: Some("chief-of-staff".to_string()),
         role_title: Some("Chief of Staff".to_string()),

@@ -659,6 +659,9 @@ fn spawn_agent_child_inner(
     // as well would bypass the lease and re-introduce the second model
     // authority this commit exists to remove.
     super::env_vars::apply_user_env(&mut command, spawn_env);
+    // Resolve once and stamp the same value onto the environment and snapshot.
+    let acp_session_policy = super::effective_acp_session_policy(record, &personas);
+    super::apply_acp_session_policy_env(&mut command, acp_session_policy);
 
     // B5: carry persisted effort; harness resolves thought_level configId at first session.
     // Written AFTER descriptor.env so the canonical persisted value wins over any
@@ -706,6 +709,7 @@ fn spawn_agent_child_inner(
     // onto a child running the OLD one, silently suppressing the badge.
     let spawn_config = super::spawn_snapshot::SpawnConfigSnapshot::from_inputs(
         super::spawn_snapshot::SpawnConfigInputs {
+            session_policy: Default::default(),
             record,
             descriptor: &descriptor,
             relay_url: &effective_relay_url,

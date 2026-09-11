@@ -1,5 +1,6 @@
 import { relayClient } from "@/shared/api/relayClient";
 import type {
+  AcpSessionPolicy,
   AgentPersona,
   CatalogSourceCoordinate,
   RelayEvent,
@@ -22,6 +23,7 @@ type CatalogAgentProjection = {
   namePool: string[];
   respondTo: RespondToMode | null;
   parallelism: number | null;
+  sessionPolicy: AcpSessionPolicy;
 };
 
 export type PersonaCatalogPublication = {
@@ -298,6 +300,10 @@ function parsePersonaContent(event: RelayEvent): CatalogAgentProjection | null {
     parsed.parallelism <= 32
       ? parsed.parallelism
       : null;
+  // Unknown or absent degrades to the channel default rather than dropping the
+  // whole catalog record, so forward-version data still projects.
+  const sessionPolicy: AcpSessionPolicy =
+    parsed.session_policy === "thread" ? "thread" : "channel";
   const roleId = optionalString(parsed.role_id);
   const roleTitle = optionalString(parsed.role_title);
   if (
@@ -319,6 +325,7 @@ function parsePersonaContent(event: RelayEvent): CatalogAgentProjection | null {
     namePool,
     respondTo,
     parallelism,
+    sessionPolicy,
   };
 }
 
@@ -459,6 +466,7 @@ function publicationToPersona(
     respondTo: publication.agent.respondTo,
     respondToAllowlist: [],
     parallelism: publication.agent.parallelism,
+    sessionPolicy: publication.agent.sessionPolicy,
     createdAt: timestamp,
     updatedAt: timestamp,
   };

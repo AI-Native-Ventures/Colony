@@ -260,6 +260,7 @@ mod tests {
             working_dir: None,
             tier: None,
             manager: None,
+            session_policy: Default::default(),
             pubkey: format!("{name}-pubkey"),
             name: name.to_string(),
             role_id: None,

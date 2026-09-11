@@ -252,6 +252,7 @@ mod tests {
             working_dir: None,
             tier: None,
             manager: None,
+            session_policy: Default::default(),
             pubkey: "agentpubkeyhex".to_string(),
             name: "Test Agent".to_string(),
             role_id: None,

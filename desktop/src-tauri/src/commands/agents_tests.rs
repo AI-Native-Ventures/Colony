@@ -15,6 +15,7 @@ fn bare_agent_record(
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "agent".to_string(),
         name: "Agent".to_string(),
         role_id: None,
@@ -79,6 +80,7 @@ fn bare_agent_record(
 fn persona_record(id: &str, model: Option<&str>, provider: Option<&str>) -> AgentDefinition {
     use std::collections::BTreeMap;
     AgentDefinition {
+        session_policy: Default::default(),
         id: id.to_string(),
         role_id: None,
         role_title: None,
@@ -534,6 +536,7 @@ fn deploy_payload_matches_the_shared_full_launch_fixture() {
         None,
         Some("gpt-5"),
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        Default::default(),
     );
     let agent = deploy_payload_json(
         &record,

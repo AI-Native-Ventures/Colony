@@ -250,6 +250,7 @@ test("edit and duplicate seed the behavior group from a quad-bearing persona", (
     respondTo: "allowlist",
     respondToAllowlist: ["a".repeat(64)],
     parallelism: 4,
+    sessionPolicy: "thread",
     createdAt: "2025-01-01T00:00:00Z",
     updatedAt: "2025-01-02T00:00:00Z",
   };
@@ -258,6 +259,7 @@ test("edit and duplicate seed the behavior group from a quad-bearing persona", (
     respondTo: "allowlist",
     respondToAllowlist: ["a".repeat(64)],
     parallelism: 4,
+    sessionPolicy: "thread",
   };
   assert.deepEqual(
     editPersonaDialogState(persona).initialValues.behavior,
@@ -283,6 +285,7 @@ test("a linked instance overrides stale definition access in the edit dialog", (
     respondTo: "owner-only",
     respondToAllowlist: [],
     parallelism: 2,
+    sessionPolicy: "channel",
     createdAt: "2025-01-01T00:00:00Z",
     updatedAt: "2025-01-02T00:00:00Z",
   };
@@ -296,6 +299,7 @@ test("a linked instance overrides stale definition access in the edit dialog", (
     respondTo: "allowlist",
     respondToAllowlist: ["c".repeat(64)],
     parallelism: 2,
+    sessionPolicy: "channel",
   });
 });
 

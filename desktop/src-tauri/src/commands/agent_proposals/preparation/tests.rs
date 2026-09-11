@@ -21,6 +21,7 @@ fn action() -> AgentProposalSafeAction {
 fn definition(action: &AgentProposalSafeAction) -> AgentDefinition {
     let p = action.preparation.as_ref().expect("preparation");
     AgentDefinition {
+        session_policy: Default::default(),
         id: action.request_id.clone(),
         role_id: Some(p.role_id.clone()),
         role_title: Some(p.role_title.clone()),

@@ -37,6 +37,7 @@ use super::{
     persona_events::preview_prospective_persona_snapshot,
     readiness::EffectiveHarnessDescriptor,
     runtime::{resolve_session_title, SESSION_TITLE_ENV_VAR},
+    session_policy::AcpSessionPolicy,
     types::{AgentDefinition, ManagedAgentRecord, TeamRecord},
     CredentialMode, GlobalAgentConfig,
 };
@@ -75,6 +76,11 @@ pub(crate) struct SpawnConfigInputs<'a> {
     pub provider: Option<&'a str>,
     /// Global credential source — decides how spawn pays for the runtime.
     pub credential_mode: CredentialMode,
+    /// The effective ACP session policy (`channel`/`thread`) the launch applies.
+    /// Resolved from the current linked definition at the shared launch
+    /// boundary; captured here so editing the definition while an agent runs
+    /// drives the existing restart-required path.
+    pub session_policy: AcpSessionPolicy,
 }
 
 /// The effective spawn configuration of one managed-agent process.
@@ -139,6 +145,12 @@ pub(crate) struct SpawnConfigSnapshot {
     /// user env `low`, or the reverse) produces no spurious drift entry, and an
     /// env-only edit still surfaces as exactly one `effort_level` entry.
     pub effort_level: Option<String>,
+    /// The ACP conversation boundary this spawn applied. Written directly onto
+    /// the spawn `Command` rather than through layered env, so it is captured
+    /// explicitly here; editing the definition while an agent runs then raises
+    /// the restart-required badge instead of silently leaving the running
+    /// process on the old policy.
+    pub session_policy: String,
 }
 
 /// The startup effort a spawn would actually apply, mirroring `apply_effort_env`
@@ -169,6 +181,7 @@ impl SpawnConfigSnapshot {
             model,
             provider,
             credential_mode,
+            session_policy,
         } = inputs;
         Self {
             acp_command: record.acp_command.clone(),
@@ -223,6 +236,7 @@ impl SpawnConfigSnapshot {
             // raw descriptor env (before the strip), so a user-seeded env value
             // is preserved as the effective effort when no canonical is set.
             effort_level: effective_effort(record, &descriptor.env),
+            session_policy: session_policy.as_str().to_string(),
         }
     }
 
@@ -312,6 +326,7 @@ pub(crate) fn prospective_spawn_config_snapshot(
         model: model.as_deref(),
         provider: provider.as_deref(),
         credential_mode: global.credential_mode,
+        session_policy: record.session_policy,
     })
 }
 

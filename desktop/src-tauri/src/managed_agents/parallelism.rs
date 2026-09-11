@@ -73,6 +73,7 @@ mod tests {
             creation_request_id: None,
             role_id: None,
             role_title: None,
+            session_policy: Default::default(),
             pubkey: String::new(),
             name: "r".to_string(),
             persona_id: None,
@@ -140,6 +141,7 @@ mod tests {
         AgentDefinition {
             role_id: None,
             role_title: None,
+            session_policy: Default::default(),
             id: id.to_string(),
             display_name: String::new(),
             avatar_url: None,

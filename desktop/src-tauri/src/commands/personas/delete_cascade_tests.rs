@@ -23,6 +23,7 @@ fn make_agent(
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: pubkey.to_string(),
         name: "Test Agent".to_string(),
         role_id: None,

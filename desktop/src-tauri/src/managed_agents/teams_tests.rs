@@ -15,9 +15,9 @@ use crate::managed_agents::{ManagedAgentRecord, TeamRecord, UpdateTeamRequest};
 
 pub(crate) fn team(id: &str, name: &str) -> TeamRecord {
     TeamRecord {
+        description: None,
         id: id.to_string(),
         name: name.to_string(),
-        description: None,
         instructions: None,
         persona_ids: Vec::new(),
         lead_persona_id: None,
@@ -79,9 +79,9 @@ fn merge_teams_adds_missing_built_ins() {
 #[test]
 fn merge_teams_preserves_user_customizations_to_builtin() {
     let synthetic = BuiltInTeam {
+        description: None,
         id: "builtin-team:test",
         name: "Test Team",
-        description: None,
         persona_ids: &["builtin:test-persona"],
         lead_persona_id: None,
     };
@@ -104,9 +104,9 @@ fn merge_teams_preserves_user_customizations_to_builtin() {
 #[test]
 fn merge_teams_preserves_unrelated_user_teams() {
     let synthetic = BuiltInTeam {
+        description: None,
         id: "builtin-team:test",
         name: "Test Team",
-        description: None,
         persona_ids: &[],
         lead_persona_id: None,
     };
@@ -140,9 +140,9 @@ fn merge_teams_repromotes_existing_builtin_marked_as_custom() {
     // If someone hand-edits the store and flips is_builtin to false on a
     // canonical built-in id, merge_teams_impl should restore the flag.
     let synthetic = BuiltInTeam {
+        description: None,
         id: "builtin-team:test",
         name: "Test Team",
-        description: None,
         persona_ids: &[],
         lead_persona_id: None,
     };
@@ -241,6 +241,7 @@ fn persona_reference_check_includes_defensive_lead_only_records() {
 
 pub(crate) fn managed_agent(name: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        session_policy: Default::default(),
         provisioned: None,
         provisioned_version: None,
         provisioned_requires_commands: Vec::new(),

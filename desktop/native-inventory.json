@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 538,
+    "rust_total": 539,
     "tauri_coupled": 212,
-    "portable": 326,
+    "portable": 327,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -476,6 +476,7 @@
       "src-tauri/src/managed_agents/runtime_commands/start_scope.rs",
       "src-tauri/src/managed_agents/runtime_commands/tests.rs",
       "src-tauri/src/managed_agents/runtime_types.rs",
+      "src-tauri/src/managed_agents/session_policy.rs",
       "src-tauri/src/managed_agents/snapshot_avatar.rs",
       "src-tauri/src/managed_agents/spawn_snapshot.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff/tests.rs",
@@ -975,7 +976,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriPersonas.ts:296"
+        "src/shared/api/tauriPersonas.ts:298"
       ]
     },
     "card_mint_save_openai_key": {
@@ -984,7 +985,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriPersonas.ts:308"
+        "src/shared/api/tauriPersonas.ts:310"
       ]
     },
     "change_channel_member_role": {
@@ -1123,8 +1124,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:942",
-        "src/shared/api/tauriPersonas.ts:404",
-        "src/shared/api/tauriPersonas.ts:449"
+        "src/shared/api/tauriPersonas.ts:406",
+        "src/shared/api/tauriPersonas.ts:451"
       ]
     },
     "confirm_huddle_active": {
@@ -1284,7 +1285,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:901",
-        "src/shared/api/tauriPersonas.ts:79"
+        "src/shared/api/tauriPersonas.ts:81"
       ]
     },
     "create_project_remote_branch": {
@@ -1408,7 +1409,7 @@
       "example_sites": [
         "src/parity/session/script.ts:936",
         "src/parity/session/script.ts:1620",
-        "src/shared/api/tauriPersonas.ts:170"
+        "src/shared/api/tauriPersonas.ts:172"
       ]
     },
     "delete_pocket_voice": {
@@ -1690,8 +1691,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:933",
-        "src/shared/api/tauriPersonas.ts:219",
-        "src/shared/api/tauriPersonas.ts:242"
+        "src/shared/api/tauriPersonas.ts:221",
+        "src/shared/api/tauriPersonas.ts:244"
       ]
     },
     "encode_team_snapshot_for_send": {
@@ -1758,7 +1759,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriPersonas.ts:210"
+        "src/shared/api/tauriPersonas.ts:212"
       ]
     },
     "export_team_snapshot": {
@@ -2458,7 +2459,7 @@
       "example_sites": [
         "src/parity/session/script.ts:565",
         "src/shared/api/tauri.ts:443",
-        "src/shared/api/types.ts:917"
+        "src/shared/api/types.ts:921"
       ]
     },
     "get_tts_settings": {
@@ -2724,8 +2725,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/lib/agentCardGalleryState.ts:5",
-        "src/shared/api/tauriPersonas.ts:346",
-        "src/shared/api/tauriPersonas.ts:366"
+        "src/shared/api/tauriPersonas.ts:348",
+        "src/shared/api/tauriPersonas.ts:368"
       ]
     },
     "list_archived_identities": {
@@ -2787,7 +2788,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:894",
-        "src/shared/api/tauriPersonas.ts:72"
+        "src/shared/api/tauriPersonas.ts:74"
       ]
     },
     "list_project_local_repositories": {
@@ -2857,7 +2858,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriPersonas.ts:371"
+        "src/shared/api/tauriPersonas.ts:373"
       ]
     },
     "load_pending_signup": {
@@ -2966,8 +2967,8 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriPersonas.ts:253",
-        "src/shared/api/tauriPersonas.ts:330"
+        "src/shared/api/tauriPersonas.ts:255",
+        "src/shared/api/tauriPersonas.ts:332"
       ]
     },
     "nip44_decrypt_from_self": {
@@ -3166,8 +3167,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:939",
-        "src/shared/api/tauriPersonas.ts:376",
-        "src/shared/api/tauriPersonas.ts:435"
+        "src/shared/api/tauriPersonas.ts:378",
+        "src/shared/api/tauriPersonas.ts:437"
       ]
     },
     "preview_pocket_voice": {
@@ -3337,7 +3338,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:945",
-        "src/shared/api/tauriPersonas.ts:463"
+        "src/shared/api/tauriPersonas.ts:465"
       ]
     },
     "reconcile_managed_agent_runtimes": {
@@ -3536,7 +3537,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/ui/AgentCardViewerDialog.tsx:71",
-        "src/shared/api/tauriPersonas.ts:343"
+        "src/shared/api/tauriPersonas.ts:345"
       ]
     },
     "save_custom_harness": {
@@ -3817,7 +3818,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:927",
-        "src/shared/api/tauriPersonas.ts:178"
+        "src/shared/api/tauriPersonas.ts:180"
       ]
     },
     "set_persona_shared": {
@@ -3827,7 +3828,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:930",
-        "src/shared/api/tauriPersonas.ts:187"
+        "src/shared/api/tauriPersonas.ts:189"
       ]
     },
     "set_pocket_voice": {
@@ -4268,7 +4269,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:917",
-        "src/shared/api/tauriPersonas.ts:123"
+        "src/shared/api/tauriPersonas.ts:125"
       ]
     },
     "update_persona_and_publish": {
@@ -4277,7 +4278,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriPersonas.ts:147"
+        "src/shared/api/tauriPersonas.ts:149"
       ]
     },
     "update_profile": {

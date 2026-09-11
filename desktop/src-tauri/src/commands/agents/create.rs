@@ -373,6 +373,10 @@ pub(crate) async fn create_managed_agent_with_preparation(
             runtime_pid: None,
             backend: input.backend.clone(),
             backend_agent_id: None,
+            session_policy: linked_persona
+                .as_ref()
+                .map(|persona| persona.session_policy)
+                .unwrap_or_default(),
             provider_policy_pending: false,
             provider_binary_path,
             persona_team_dir: None,

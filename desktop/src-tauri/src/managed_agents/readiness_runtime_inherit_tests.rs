@@ -20,6 +20,7 @@ mod tests {
     /// Minimal unpinned record: no runtime, no persona link, no override.
     fn bare_record() -> ManagedAgentRecord {
         crate::managed_agents::types::ManagedAgentRecord {
+            session_policy: Default::default(),
             provider_policy_pending: false,
             provisioned: None,
             provisioned_version: None,
@@ -129,6 +130,7 @@ mod tests {
         let mut record = bare_record();
         record.persona_id = Some("d1".to_string());
         let definition = AgentDefinition {
+            session_policy: Default::default(),
             id: "d1".to_string(),
             role_id: None,
             role_title: None,

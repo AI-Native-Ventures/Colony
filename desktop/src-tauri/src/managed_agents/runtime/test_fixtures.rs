@@ -45,6 +45,7 @@ pub(super) fn fixture(
         creation_request_id: None,
         role_id: None,
         role_title: None,
+        session_policy: Default::default(),
         pubkey: "p".into(),
         name: "n".into(),
         persona_id: None,

@@ -287,7 +287,8 @@ fn reconcile_inbound_persona_event_blocking(
             let managed_agent = inbound_managed_agent.ok_or_else(|| {
                 "managed-agent content was not parsed before retention".to_string()
             })?;
-            let access_changed = apply_inbound_managed_agent(&mut agents, &d_tag, managed_agent, inbound_manager);
+            let access_changed =
+                apply_inbound_managed_agent(&mut agents, &d_tag, managed_agent, inbound_manager);
             if access_changed {
                 let record = agents
                     .iter_mut()
@@ -553,6 +554,7 @@ fn apply_inbound_persona(personas: &mut Vec<AgentDefinition>, inbound: AgentDefi
             local.respond_to = inbound.respond_to;
             local.respond_to_allowlist = inbound.respond_to_allowlist;
             local.parallelism = inbound.parallelism;
+            local.session_policy = inbound.session_policy;
             local.shared = inbound.shared;
             local.updated_at = inbound.updated_at;
         }

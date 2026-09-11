@@ -735,3 +735,44 @@ test("test_full_page_of_tied_timestamps_terminates_the_walk", async (t) => {
   );
   assert.equal(publications.length, 500);
 });
+
+test("catalog projection preserves a thread session policy", () => {
+  const publications = catalogPublicationsFromEvents([
+    personaEvent({
+      createdAt: 1,
+      id: "thread-scoped",
+      contentOverride: JSON.stringify({
+        display_name: "Thread Scoped",
+        system_prompt: "You review threads.",
+        session_policy: "thread",
+      }),
+    }),
+  ]);
+
+  const personas = catalogPersonasFromPublications(publications, [], BOB);
+
+  assert.equal(personas[0].sessionPolicy, "thread");
+});
+
+test("catalog projection degrades an unknown session policy to channel", () => {
+  const publications = catalogPublicationsFromEvents([
+    personaEvent({
+      createdAt: 1,
+      id: "future-policy",
+      contentOverride: JSON.stringify({
+        display_name: "Future Policy",
+        system_prompt: "You come from a later version.",
+        session_policy: "per-message",
+      }),
+    }),
+  ]);
+
+  const personas = catalogPersonasFromPublications(publications, [], BOB);
+
+  assert.equal(
+    personas.length,
+    1,
+    "an unknown policy must not drop the record",
+  );
+  assert.equal(personas[0].sessionPolicy, "channel");
+});

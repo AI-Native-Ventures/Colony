@@ -364,6 +364,7 @@ fn bare_record() -> ManagedAgentRecord {
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "agent".to_string(),
         name: "Agent".to_string(),
         role_id: None,
@@ -428,6 +429,7 @@ fn bare_record() -> ManagedAgentRecord {
 
 fn persona(id: &str, model: Option<&str>, provider: Option<&str>) -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: id.to_string(),
         role_id: None,
         role_title: None,
@@ -693,6 +695,7 @@ fn record_runtime_wins_over_persona_runtime_for_command_resolution() {
     record.persona_id = Some("p1".to_string());
 
     let persona = AgentDefinition {
+        session_policy: Default::default(),
         id: "p1".to_string(),
         role_id: None,
         role_title: None,

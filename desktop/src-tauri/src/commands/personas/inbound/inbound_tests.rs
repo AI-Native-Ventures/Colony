@@ -13,6 +13,7 @@ const UUID: &str = "11111111-2222-3333-4444-555555555555"; // sadscan:disable sq
 /// IS its UUID id. Carries env_vars + source_team that must survive a patch.
 fn local_in_app() -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: UUID.to_string(),
         role_id: None,
         role_title: None,
@@ -42,6 +43,7 @@ fn local_in_app() -> AgentDefinition {
 /// slug = Some(d-tag), empty env_vars, source_team None.
 fn inbound_for(d_tag: &str, display_name: &str) -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: d_tag.to_string(),
         role_id: None,
         role_title: None,
@@ -95,12 +97,14 @@ fn inbound_quad_edit_applies_to_existing_matched_record() {
     let mut local = local_in_app();
     local.respond_to = Some("owner-only".to_string());
     local.parallelism = Some(2);
+    local.session_policy = crate::managed_agents::AcpSessionPolicy::Channel;
     let mut personas = vec![local];
 
     let mut inbound = inbound_for(UUID, "Remote");
     inbound.respond_to = Some("allowlist".to_string());
     inbound.respond_to_allowlist = vec!["a".repeat(64)];
     inbound.parallelism = Some(8);
+    inbound.session_policy = crate::managed_agents::AcpSessionPolicy::Thread;
     apply_inbound_persona(&mut personas, inbound);
 
     assert_eq!(personas.len(), 1, "no duplicate row");
@@ -108,10 +112,20 @@ fn inbound_quad_edit_applies_to_existing_matched_record() {
     assert_eq!(p.respond_to, Some("allowlist".to_string()));
     assert_eq!(p.respond_to_allowlist, vec!["a".repeat(64)]);
     assert_eq!(p.parallelism, Some(8));
+    assert_eq!(
+        p.session_policy,
+        crate::managed_agents::AcpSessionPolicy::Thread
+    );
     // A quad-absent inbound also applies (clears), same as prompt/model.
     apply_inbound_persona(&mut personas, inbound_for(UUID, "Remote"));
     assert_eq!(personas[0].respond_to, None);
     assert_eq!(personas[0].parallelism, None);
+    // The default channel policy also represents an inbound event that omitted
+    // session_policy, so it must clear a previously stored thread policy.
+    assert_eq!(
+        personas[0].session_policy,
+        crate::managed_agents::AcpSessionPolicy::Channel
+    );
 }
 
 #[test]
@@ -172,6 +186,7 @@ fn local_agent() -> ManagedAgentRecord {
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: AGENT_PUBKEY.to_string(),
         name: "Local Agent".to_string(),
         role_id: None,
