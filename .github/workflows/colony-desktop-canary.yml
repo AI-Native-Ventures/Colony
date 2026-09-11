@@ -199,7 +199,10 @@ jobs:
   relay-parity:
     name: Relay parity with production
     needs: decide
-    if: needs.decide.outputs.should_build == 'true'
+    # A dry run publishes nothing, so there is nothing for this gate to
+    # protect: no canary install ever sees the build. It stays mandatory for
+    # every real run, which is the only way an app reaches a person.
+    if: needs.decide.outputs.should_build == 'true' && !inputs.dry_run
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -296,7 +299,12 @@ jobs:
   publish-canary-macos:
     name: Publish canary macOS (Apple Silicon)
     needs: [decide, relay-parity]
-    if: needs.decide.outputs.should_build == 'true'
+    # `always()` is what lets a dry run proceed while relay-parity is skipped.
+    # A real run still demands relay-parity success: with dry_run false the
+    # second half of this expression is the only way through.
+    if: |
+      always() && needs.decide.outputs.should_build == 'true' &&
+      (inputs.dry_run || needs.relay-parity.result == 'success')
     # GitHub-hosted Apple Silicon, not the owner's Mac. This used to run on the
     # self-hosted `colony-builder` runner for its warm cargo cache, but that
     # machine is also somebody's development machine: under local load it drops
@@ -472,6 +480,9 @@ jobs:
             echo
             echo "Nothing was published. The app, its signed update archive and the"
             echo "manifest this run would have uploaded are in the run artifact."
+            echo
+            echo "Dry run, relay parity skipped: this build is NOT publishable."
+            echo "A real canary run requires the relay-parity gate to pass."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the dry run artifacts
