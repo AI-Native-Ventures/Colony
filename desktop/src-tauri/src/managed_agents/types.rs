@@ -37,6 +37,18 @@ pub struct AgentDefinition {
     pub name_pool: Vec<String>,
     #[serde(default)]
     pub is_builtin: bool,
+    /// Recipe id that provisioned this record on the owner's behalf, or
+    /// `None` for a record the user created. A `Some` value marks the record
+    /// as provided by Colony: the owner cannot delete it, and its owned
+    /// content is upgraded when the recipe version changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_by: Option<String>,
+    /// Recipe version that last wrote the content Colony owns. Compared
+    /// against the recipe's current version to decide whether an upgrade is
+    /// due; a `None` version on a provisioned record reads as "unknown, not
+    /// yet upgraded".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_version: Option<String>,
     #[serde(default = "default_record_active")]
     pub is_active: bool,
     /// Whether this persona is discoverable in the currently active community.
@@ -152,6 +164,8 @@ impl AgentDefinition {
             runtime: self.runtime,
             name_pool: self.name_pool,
             is_builtin: self.is_builtin,
+            provisioned_by: self.provisioned_by,
+            provisioned_version: self.provisioned_version,
             is_active: self.is_active,
             // Catalog visibility is relay+owner scoped, not definition-global.
             shared: false,
@@ -188,6 +202,8 @@ impl ManagedAgentRecord {
             provider: self.provider.clone(),
             name_pool: self.name_pool.clone(),
             is_builtin: self.is_builtin,
+            provisioned_by: self.provisioned_by.clone(),
+            provisioned_version: self.provisioned_version.clone(),
             is_active: self.is_active,
             // Projected by `list_personas` from the active retention scope.
             shared: false,
@@ -482,6 +498,15 @@ pub struct ManagedAgentRecord {
     /// Absorbed from `AgentDefinition.is_builtin`.
     #[serde(default)]
     pub is_builtin: bool,
+    /// Absorbed from `AgentDefinition.provisioned_by` — the recipe that
+    /// provisioned this record. `Some` marks the agent as provided by
+    /// Colony, so the user cannot delete it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_by: Option<String>,
+    /// Absorbed from `AgentDefinition.provisioned_version` — the recipe
+    /// version that last wrote the owned content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_version: Option<String>,
     /// Absorbed from `AgentDefinition.is_active` — `false` means an archived
     /// definition hidden from pickers. Defaults `true` for existing records.
     #[serde(default = "default_record_active")]
@@ -863,6 +888,15 @@ pub struct TeamRecord {
     pub lead_persona_id: Option<String>,
     #[serde(default)]
     pub is_builtin: bool,
+    /// Recipe id that provisioned this team on the owner's behalf, or `None`
+    /// for a team the user created. A `Some` value marks the team as provided
+    /// by Colony: the owner cannot delete it, and its owned content is
+    /// upgraded when the recipe version changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_by: Option<String>,
+    /// Recipe version that last wrote the content Colony owns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_version: Option<String>,
     /// Absolute path to the team's backing directory (if directory-backed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_dir: Option<PathBuf>,

@@ -169,6 +169,12 @@ fn team_pinned_to_relay(team: &TeamRecord, canonical_relay: &str) -> bool {
 /// Events already published under its id stay on each relay regardless, so
 /// Tasks minted against it keep resolving.
 pub(crate) fn team_publishes_to_relay(team: &TeamRecord, relay_url: &str) -> bool {
+    // Provisioned teams are ours to publish wherever they apply: the relay
+    // authorizes tasks against the owner's published team heads, so a
+    // provided team that stayed local could not own any work.
+    if team.provisioned_by.is_some() {
+        return team_applies_to_relay(team, relay_url);
+    }
     if !team.is_builtin {
         return team_applies_to_relay(team, relay_url);
     }

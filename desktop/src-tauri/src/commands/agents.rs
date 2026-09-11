@@ -601,6 +601,36 @@ pub async fn stop_managed_agent(
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
+/// Refuse deletion of an agent record the owner cannot remove.
+///
+/// Provisioned agents are provided by Colony: the owner cannot delete them,
+/// and the refusal names the agent and the product. Deployed remote agents
+/// additionally need an explicit force so a caller cannot silently orphan
+/// remote infrastructure. Pure so both refusals are unit-testable without an
+/// `AppHandle`; the delete command calls this before it stops or removes
+/// anything.
+fn validate_managed_agent_deletion(
+    record: &crate::managed_agents::ManagedAgentRecord,
+    force_remote_delete: bool,
+) -> Result<(), String> {
+    if record.provisioned_by.is_some() {
+        return Err(crate::managed_agents::provisioned_deletion_error(
+            &record.name,
+        ));
+    }
+
+    if record.backend != BackendKind::Local
+        && record.backend_agent_id.is_some()
+        && !force_remote_delete
+    {
+        return Err(
+            "cannot delete a deployed remote agent without force_remote_delete: true".to_string(),
+        );
+    }
+
+    Ok(())
+}
+
 // Async so the blocking body (disk reads/writes, process termination, keyring
 // delete, nest regeneration) runs off the main UI thread via spawn_blocking.
 #[tauri::command]
@@ -635,21 +665,15 @@ pub async fn delete_managed_agent(
                 state.clear_agent_session_caches(pubkey);
             }
 
-            // Guard: reject deletion of deployed remote agents unless explicitly forced.
-            // This turns "don't orphan remote infra" from a UI convention into a backend
-            // invariant — a buggy or compromised IPC caller cannot silently orphan a live
-            // remote deployment. The frontend sends force_remote_delete: true only after
-            // the user confirms the orphan warning.
+            // Guard: reject deletion of record the owner does not own. This
+            // turns "provided by Colony" and "don't orphan remote infra" from
+            // UI conventions into backend invariants — a buggy or compromised
+            // IPC caller cannot bypass either. Provisioned check first so its
+            // refusal names the product, then the deployed-remote check, which
+            // the frontend clears only after the user confirms the orphan
+            // warning. Both run before anything is stopped or removed.
             if let Some(record) = records.iter().find(|r| r.pubkey == pubkey) {
-                if record.backend != BackendKind::Local
-                    && record.backend_agent_id.is_some()
-                    && !force_remote_delete.unwrap_or(false)
-                {
-                    return Err(
-                        "cannot delete a deployed remote agent without force_remote_delete: true"
-                            .to_string(),
-                    );
-                }
+                validate_managed_agent_deletion(record, force_remote_delete.unwrap_or(false))?;
             }
 
             if let Some(record) = records.iter_mut().find(|record| record.pubkey == pubkey) {

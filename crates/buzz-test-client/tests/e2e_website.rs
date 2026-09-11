@@ -651,7 +651,15 @@ async fn owner_create_commits_a_head_receipt_and_job_row() {
     assert_eq!(review.status, buzz_core::website::WebsiteStatus::Draft);
     assert_eq!(review.owner, owner.public_key().to_hex());
 
-    // Exact retry: same signed action returns the recorded result.
+    // Exact retry: the same action, re-signed, returns the recorded result.
+    //
+    // Nostr stamps `created_at` in whole seconds, so re-signing inside the same
+    // second produces a byte-identical event and the relay answers its trivial
+    // "duplicate: identical action already applied" without ever reaching the
+    // website claim-replay path this block exists to prove. Crossing a second
+    // boundary makes the retry a genuinely distinct event that still carries
+    // the same request id, which is the real retry contract.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
     let event = build_website_action(&action)
         .expect("action builds")
         .sign_with_keys(&owner)

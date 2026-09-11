@@ -577,7 +577,7 @@ function recordFixture(input: {
 function requestedReviewRecord(job: {
   jobId: string;
   taskId: string;
-  threadRoot: string;
+  root: { id: string };
 }) {
   const request = decision({
     decisionId: fixtureUuid(803),
@@ -590,7 +590,11 @@ function requestedReviewRecord(job: {
     note: REQUEST_NOTE,
   });
   return {
-    ...baseRecord(job),
+    ...baseRecord({
+      jobId: job.jobId,
+      taskId: job.taskId,
+      threadRoot: job.root.id,
+    }),
     status: "changesRequested",
     currentRevision: 2,
     revisions: [
@@ -1183,8 +1187,12 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   await expect(threadAttachment.getByText("Saving your decision.")).toHaveCount(
     0,
   );
+  const confirmedChangeRequest = threadAttachment.getByRole("region", {
+    name: "Change request",
+  });
   await expect(
-    threadAttachment.getByRole("region", { name: "Change request" }),
+    confirmedChangeRequest,
+    "confirmed canonical head renders the change request (pre-reload)",
   ).toBeVisible();
 
   await page.reload();
@@ -1200,8 +1208,12 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   const reloadedThread = page
     .getByTestId("message-thread-panel")
     .getByTestId("website-job-composite");
+  const reloadedChangeRequest = reloadedThread.getByRole("region", {
+    name: "Change request",
+  });
   await expect(
-    reloadedThread.getByRole("region", { name: "Change request" }),
+    reloadedChangeRequest,
+    "restored canonical head renders the change request after reload",
   ).toBeVisible();
   await expect(reloadedThread.getByText("Saving your decision.")).toHaveCount(
     0,

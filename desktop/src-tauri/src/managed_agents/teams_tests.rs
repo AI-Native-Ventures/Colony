@@ -22,6 +22,8 @@ pub(crate) fn team(id: &str, name: &str) -> TeamRecord {
         persona_ids: Vec::new(),
         lead_persona_id: None,
         is_builtin: false,
+        provisioned_by: None,
+        provisioned_version: None,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,
@@ -167,6 +169,19 @@ fn validate_team_deletion_rejects_built_ins() {
 
     let err = validate_team_deletion(&built_in).unwrap_err();
     assert_eq!(err, "Built-in teams cannot be deleted.");
+}
+
+#[test]
+fn validate_team_deletion_rejects_provisioned_teams() {
+    let mut provided = team("website-team:00000000:website-manager", "Website Manager");
+    provided.provisioned_by = Some("website-manager".to_string());
+    provided.provisioned_version = Some("0.1.0".to_string());
+
+    let err = validate_team_deletion(&provided).unwrap_err();
+    assert_eq!(
+        err,
+        "Website Manager is provided by Colony and cannot be deleted."
+    );
 }
 
 #[test]

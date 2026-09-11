@@ -59,6 +59,8 @@ fn bare_agent_record(
         runtime: None,
         name_pool: vec![],
         is_builtin: false,
+        provisioned_by: None,
+        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,
@@ -85,6 +87,8 @@ fn persona_record(id: &str, model: Option<&str>, provider: Option<&str>) -> Agen
         provider: provider.map(str::to_string),
         name_pool: vec![],
         is_builtin: false,
+        provisioned_by: None,
+        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,
@@ -822,4 +826,35 @@ fn profile_in_sync_when_role_matches() {
         None,
         Some("chief-of-staff")
     ));
+}
+
+#[test]
+fn validate_managed_agent_deletion_rejects_provisioned_agents() {
+    let mut record = bare_agent_record(None, None, None);
+    record.name = "Avery".to_string();
+    record.provisioned_by = Some("website-manager".to_string());
+    record.provisioned_version = Some("0.1.0".to_string());
+
+    // The provisioned refusal wins even when a remote deletion is forced:
+    // force only unlocks user-created remote deployments.
+    let err = validate_managed_agent_deletion(&record, true).unwrap_err();
+
+    assert_eq!(err, "Avery is provided by Colony and cannot be deleted.");
+}
+
+#[test]
+fn validate_managed_agent_deletion_rejects_unforced_remote_agents() {
+    let mut record = bare_agent_record(None, None, None);
+    record.backend = BackendKind::Provider {
+        id: "test-provider".to_string(),
+        config: serde_json::json!({}),
+    };
+    record.backend_agent_id = Some("remote-agent-1".to_string());
+
+    let err = validate_managed_agent_deletion(&record, false).unwrap_err();
+    assert_eq!(
+        err,
+        "cannot delete a deployed remote agent without force_remote_delete: true"
+    );
+    assert!(validate_managed_agent_deletion(&record, true).is_ok());
 }
