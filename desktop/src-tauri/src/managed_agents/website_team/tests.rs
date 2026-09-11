@@ -235,7 +235,7 @@ fn definition_upgrade_refreshes_owned_content_and_preserves_user_settings() {
     assert!(upgrade.upgraded);
     assert_eq!(upgrade.from.as_deref(), Some("0.0.1"));
     assert_eq!(definition.display_name, "Avery");
-    assert_eq!(definition.role_title, "Website Manager");
+    assert_eq!(definition.role_title.as_deref(), Some("Website Manager"));
     assert!(definition.system_prompt.contains("You are Avery"));
     assert!(definition.is_builtin);
     assert_eq!(

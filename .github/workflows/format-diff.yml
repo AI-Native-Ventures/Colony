@@ -46,6 +46,14 @@ jobs:
         run: |
           (cd desktop && pnpm exec biome check --write . || true)
           (cd web && pnpm exec biome check --write . || true)
+      - name: Biome fixes it will only apply unsafely
+        # `--write` alone skips every fix biome marks unsafe, so a rule like
+        # `style/useTemplate` fails the build with a fix nobody can apply
+        # through this job. These land in the same patch, which a human reads
+        # before committing, so the unsafe rewrite is still reviewed.
+        run: |
+          (cd desktop && pnpm exec biome check --write --unsafe . || true)
+          (cd web && pnpm exec biome check --write --unsafe . || true)
       - name: Regenerate generated desktop files
         # native-inventory.json is generated from desktop/src-tauri and CI
         # refuses a stale copy; regenerating it here puts the exact generator
