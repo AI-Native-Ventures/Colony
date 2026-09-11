@@ -204,7 +204,16 @@ async fn seeding_creates_the_sales_employee_once_and_settles_on_a_re_run() {
     assert_eq!(row.display_name, "Sales");
     assert_eq!(row.role_id, "sales");
     assert_eq!(row.rank, "leader");
-    assert_eq!(row.provisioned_version, Some(1));
+    // Read from the manifest rather than pinned here: a bundled version bump
+    // is an ordinary event, and a test that hardcodes today's number turns
+    // every future bump into a failure that says nothing.
+    let bundled = core_employee_manifests().expect("bundled employees are valid");
+    let sales_version = bundled
+        .iter()
+        .find(|entry| entry.handle == "sales")
+        .expect("sales is bundled")
+        .version;
+    assert_eq!(row.provisioned_version, Some(sales_version));
     assert_eq!(row.status, "active");
     // No owner hired it and no request authorised it.
     assert!(row.hired_by.is_none());
