@@ -125,10 +125,21 @@ real provider token accounting lands via the Colony ledger later.
 ## `mail_send` journey
 
 The `mail_send` MCP tool drives Gmail's compose form deterministically.
-It navigates to the compose URL (default `https://mail.google.com/mail/u/0/#inbox?compose=new`),
+It starts from the Gmail tab the owner already shared: it clicks the page's own
+Compose button (a button whose accessible name starts with `Compose`),
 finds the four controls by accessible-name prefix (`To`, `Subject`, `Message Body`, `Send`),
 fills them, clicks Send, waits (bounded, 30 s) for the `"Message sent"` toast,
-and returns structured JSON.
+and returns structured JSON. Navigating to the compose URL (default
+`https://mail.google.com/mail/u/0/#inbox?compose=new`) is only the fallback for
+a page that exposes no Compose button at all.
+
+Both desktop shells expose this tool with the same contract. The Tauri shell
+serves it from this daemon; the Electron shell serves it from its own browser
+MCP server `colony-electron-browser`
+(`desktop/src-electron/browser/mail-journey.mjs`), which takes `tabId` instead
+of a compose URL and never navigates at all: it acts only inside the tab the
+owner shared, starting from that tab's Compose button. The Electron tool needs
+an interaction grant, the same one `browser_click` and `browser_type` need.
 
 ### Inputs
 
