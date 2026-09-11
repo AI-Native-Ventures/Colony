@@ -1,6 +1,15 @@
 export const STABLE_UPDATER_ENDPOINT =
   "https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-desktop-latest/latest.json";
 
+export const CANARY_UPDATER_ENDPOINT =
+  "https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-canary-latest/latest.json";
+
+/** One endpoint per release channel. A build never carries another channel's. */
+export const UPDATER_ENDPOINTS = Object.freeze({
+  stable: STABLE_UPDATER_ENDPOINT,
+  canary: CANARY_UPDATER_ENDPOINT,
+});
+
 /** Developer ID mode has no ad-hoc fallback. Never log credentials. */
 export function productionSigning(env) {
   const required = [
@@ -40,23 +49,32 @@ export function productionSigning(env) {
   };
 }
 
-/** Baked updater configuration uses the same trust key and URL as existing installations. */
-export function stableUpdaterConfig(env) {
+/**
+ * Baked updater configuration uses the same trust key and URL as existing
+ * installations of that channel. Stable and canary share one updater keypair
+ * on purpose: they are separate channels, not separate trust roots.
+ */
+export function channelUpdaterConfig(channel, env) {
+  const endpoint = UPDATER_ENDPOINTS[channel];
+  if (!endpoint)
+    throw new Error(`No updater endpoint is defined for channel ${channel}`);
   if (!env.BUZZ_UPDATER_PUBLIC_KEY?.trim())
     throw new Error(
       "BUZZ_UPDATER_PUBLIC_KEY is required for the production updater",
     );
-  if (
-    env.BUZZ_UPDATER_ENDPOINT &&
-    env.BUZZ_UPDATER_ENDPOINT !== STABLE_UPDATER_ENDPOINT
-  )
-    throw new Error("The stable updater endpoint cannot change");
+  if (env.BUZZ_UPDATER_ENDPOINT && env.BUZZ_UPDATER_ENDPOINT !== endpoint)
+    throw new Error(`The ${channel} updater endpoint cannot change`);
   return {
     plugins: {
       updater: {
         pubkey: env.BUZZ_UPDATER_PUBLIC_KEY,
-        endpoints: [STABLE_UPDATER_ENDPOINT],
+        endpoints: [endpoint],
       },
     },
   };
+}
+
+/** Kept for callers that only ever package the stable channel. */
+export function stableUpdaterConfig(env) {
+  return channelUpdaterConfig("stable", env);
 }
