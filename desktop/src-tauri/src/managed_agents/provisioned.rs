@@ -451,6 +451,39 @@ mod tests {
         assert!(trusted_provisioned_definitions(&events).is_empty());
     }
 
+    /// The two records a REAL relay served for the seeded sales employee,
+    /// captured from an isolated harness on 2026-09-11 (relay 0.11.11, sales
+    /// manifest v2) with `POST /query` for kinds 30177 and 30190.
+    ///
+    /// Hand-built fixtures prove the rule; this proves the rule against what
+    /// the relay actually emits. The two drift apart silently otherwise: a
+    /// tag renamed on the relay side would leave every test above green while
+    /// no desktop could recognise an employee again.
+    #[test]
+    fn the_records_a_real_relay_serves_are_trusted_and_parse() {
+        let raw = include_str!("../../tests/fixtures/provisioned-sales-heads.json");
+        let events: Vec<Event> =
+            serde_json::from_str(raw).expect("the captured relay payload parses as events");
+        assert_eq!(events.len(), 2, "one definition and one employee head");
+
+        let found = trusted_provisioned_definitions(&events);
+        assert_eq!(found.len(), 1, "the real records satisfy the trust rule");
+        let sales = &found[0];
+        assert_eq!(sales.handle, "sales");
+        assert_eq!(sales.name, "Sales");
+        assert_eq!(sales.role_id, "sales");
+        assert_eq!(sales.harness, "claude");
+        assert_eq!(sales.version, 2);
+        assert_eq!(
+            sales.requires_commands,
+            vec!["discovery", "messages", "outreach"]
+        );
+        assert!(
+            sales.system_prompt.contains("outreach"),
+            "the brief travels on the definition"
+        );
+    }
+
     #[test]
     fn missing_commands_names_only_what_is_absent() {
         let required = vec![
