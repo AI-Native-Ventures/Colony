@@ -13,6 +13,7 @@ pub mod operator;
 pub mod operator_analytics;
 pub mod operator_auth;
 pub mod payments;
+pub mod provisioned_employees;
 pub mod self_provisioning;
 
 // Re-export imeta helpers used by ingest pipeline.
