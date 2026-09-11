@@ -152,6 +152,39 @@ export class BrowserViews {
     return tab;
   }
 
+  /**
+   * The active business's tabs, as the owner-side outreach send sees them.
+   *
+   * The live URL is read from the page rather than the opening request, so a
+   * tab the owner navigated to Gmail after opening it counts.
+   */
+  ownerTabs() {
+    const controlled = new Set(
+      [...this.authority.grants.values()].map((grant) => grant.tabId),
+    );
+    return [...this.tabs.values()]
+      .filter((tab) => tab.workspace === this.business)
+      .map((tab) => ({
+        id: tab.id,
+        url: tab.view.webContents.getURL() || tab.url,
+        controlled: controlled.has(tab.id),
+      }));
+  }
+
+  /**
+   * Run the Gmail journey on the owner's own tab, with no worker grant.
+   *
+   * The owner pressing Approve is the authority here, so the journey's guard
+   * is a no-op. The work still joins the tab's queue, so it cannot interleave
+   * with a tool call a teammate already had in flight.
+   */
+  ownerMailSend(id, args) {
+    const tab = this.get(id);
+    const result = tab.queue.then(() => mailSend(tab, args, () => {}));
+    tab.queue = result.catch(() => {});
+    return result;
+  }
+
   bounds({ id, business, bounds, visible }) {
     if (business !== this.business) return;
     const tab = this.get(id);
