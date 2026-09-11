@@ -1281,6 +1281,15 @@ jobs:
           # sealing ephemeral rows in a throwaway database, same standing as the
           # hardcoded BUZZ_TEST_POSTGRES_PASSWORD in this workflow.
           BUZZ_EMPLOYEE_KEK: "0000000000000000000000000000000000000000000000000000000000000001"
+          # Every suite in this job publishes as the same deterministic owner and
+          # agent keys, and e2e_website adds enough fixture events per test that
+          # the per-pubkey write quota ran out mid-fixture ("rate-limited: quota
+          # exceeded; retry in 45s"). Same lift the Desktop E2E Relay job applies.
+          BUZZ_RATE_LIMIT_AGENT_STANDARD_API_CALLS_PER_MIN: "100000"
+          BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN: "100000"
+          BUZZ_RATE_LIMIT_HUMAN_API_CALLS_PER_MIN: "100000"
+          BUZZ_RATE_LIMIT_HUMAN_MESSAGES_PER_MIN: "100000"
+          BUZZ_RATE_LIMIT_HUMAN_WS_EVENTS_PER_SEC: "10000"
       - name: Relay E2E tests
         run: |
           # e2e_ask_chain must run first. Its absorption gate asserts on the deadline sweep, and interrupt_runtime::find_unique_executive refuses to promote when the community holds more than one executive. Every suite in this job shares one host-bound community and one database, so any suite that seeds a ladder before this one silently disables the sweep's promotion hop and the gate's positive control times out.
