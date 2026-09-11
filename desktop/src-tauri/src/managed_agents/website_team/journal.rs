@@ -180,12 +180,17 @@ mod tests {
 
     #[test]
     fn round_trips_through_disk() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("create journal round-trip temp dir");
         let path = dir.path().join(JOURNAL_FILE_NAME);
-        record_entry(&path, entry("a::wss://one", "2026-01-01T00:00:00Z")).unwrap();
-        let found = entry_for_scope(&path, &"a".repeat(64), "wss://one").unwrap();
+        let owner = "a".repeat(64);
+        let mut stored = entry("a::wss://one", "2026-01-01T00:00:00Z");
+        // `entry_for_scope` derives `owner::canonical-relay`, as the production
+        // writer does; a hand-picked key would only test the fixture.
+        stored.scope_key = scope_key(&owner, "wss://one");
+        record_entry(&path, stored).expect("write the journal entry to disk");
+        let found = entry_for_scope(&path, &owner, "wss://one").expect("read the journal entry");
         assert_eq!(
-            found.unwrap().team_id,
+            found.expect("entry exists for the stored scope").team_id,
             "website-team:00000000:website-manager"
         );
     }
