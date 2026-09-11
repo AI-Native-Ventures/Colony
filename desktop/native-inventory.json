@@ -3569,6 +3569,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/factory/lib/delegation.ts:10",
         "src/parity/session/script.ts:550",
         "src/shared/api/sendChannelMessage.ts:70"
       ]
