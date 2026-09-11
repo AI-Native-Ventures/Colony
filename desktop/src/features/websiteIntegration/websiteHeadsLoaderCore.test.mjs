@@ -12,7 +12,7 @@ const INPUT = {
   relaySelfPubkey: "a".repeat(64),
 };
 
-function flush(): Promise<void> {
+function flush() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 

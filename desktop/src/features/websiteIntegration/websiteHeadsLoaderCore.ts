@@ -73,7 +73,7 @@ export function createWebsiteHeadsLoader(
 ) {
   const entries = new Map<string, LoaderEntry>();
 
-  function scheduleRetry(entryKey: string, entry: LoaderEntry): void {
+  function scheduleRetry(entry: LoaderEntry): void {
     if (entry.retryTimer !== null) return;
     const delay = Math.max(entry.cooldownUntil - environment.now(), 0);
     entry.retryTimer = environment.setTimer(() => {
@@ -106,7 +106,7 @@ export function createWebsiteHeadsLoader(
 
     const now = environment.now();
     if (entry.cooldownUntil > now) {
-      scheduleRetry(entryKey, entry);
+      scheduleRetry(entry);
       return Promise.resolve();
     }
     if (entry.inFlight) return entry.inFlight;
@@ -130,7 +130,7 @@ export function createWebsiteHeadsLoader(
           (isWebsiteRateLimitError(error)
             ? WEBSITE_HEADS_RATE_LIMIT_COOLDOWN_MS
             : WEBSITE_HEADS_ERROR_COOLDOWN_MS);
-        scheduleRetry(entryKey, entry);
+        scheduleRetry(entry);
       } finally {
         entry.inFlight = null;
       }
