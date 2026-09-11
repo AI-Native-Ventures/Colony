@@ -13,8 +13,10 @@
 </style>
 </head>
 <body>
-  <div class="compose-box">
-    <h2>Compose message (no send button)</h2>
+  <button id="compose" aria-label="Compose">Compose</button>
+
+  <div class="compose-box" id="compose-box" hidden>
+    <h2>New message (no send button)</h2>
     <label for="to">To recipients</label>
     <input id="to" class="field" type="text" aria-label="To recipients" placeholder="Recipients">
 
@@ -24,5 +26,11 @@
     <label for="body">Message Body</label>
     <div id="body" class="field" contenteditable="true" aria-label="Message Body" role="textbox"></div>
   </div>
+
+  <script>
+    document.getElementById('compose').addEventListener('click', function () {
+      document.getElementById('compose-box').hidden = false;
+    });
+  </script>
 </body>
 </html>
