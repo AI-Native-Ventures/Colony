@@ -844,8 +844,7 @@ async fn a_mismatched_request_payload_is_refused() {
         ok.message
     );
     assert!(
-        ok
-            .message
+        ok.message
             .contains("website request replay carries a different payload"),
         "the conflict refusal must be the replay-digest check, not a broken fixture: {}",
         ok.message

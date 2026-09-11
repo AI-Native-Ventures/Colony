@@ -324,7 +324,10 @@ export function WebsitePreview({
             viewport={viewport}
           />
           <div className="border-b border-border px-3.5 py-2">
-            <SourceCaption record={record} selectedRevision={selectedRevision} />
+            <SourceCaption
+              record={record}
+              selectedRevision={selectedRevision}
+            />
           </div>
         </>
       ) : null}

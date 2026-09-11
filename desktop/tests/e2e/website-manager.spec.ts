@@ -1085,9 +1085,7 @@ test("mocked Handover state shows confirmed resources and the draft request", as
   await expect(
     rootAttachment.getByText("Design approved", { exact: true }),
   ).toBeVisible();
-  await expect(
-    rootAttachment.getByText("Ready for handover"),
-  ).toBeVisible();
+  await expect(rootAttachment.getByText("Ready for handover")).toBeVisible();
   await expect(
     rootAttachment.getByText("Website source and assets"),
   ).toBeVisible();
