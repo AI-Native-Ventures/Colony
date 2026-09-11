@@ -14481,6 +14481,7 @@ export function maybeInstallE2eTauriMocks() {
           path: `${root}/.colony-worktrees/${args.request.projectDtag}/${slug}`,
           branch: args.request.branch,
           created: true,
+          createdCheckout: false,
         };
       }
       case "send_channel_message":

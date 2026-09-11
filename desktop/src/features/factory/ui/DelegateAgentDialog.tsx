@@ -4,6 +4,7 @@ import {
   buildDelegationContent,
   delegationClientTags,
 } from "@/features/factory/lib/delegation";
+import { nativeErrorMessage } from "@/features/factory/lib/nativeErrorMessage";
 import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
@@ -96,9 +97,7 @@ export function DelegateAgentDialog({
       onSent({ threadRootId, eventId: posted.eventId });
       onOpenChange(false);
     } catch (caught) {
-      setProblem(
-        caught instanceof Error ? caught.message : "Could not delegate.",
-      );
+      setProblem(nativeErrorMessage(caught, "Could not delegate."));
     } finally {
       setSending(false);
     }

@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 509,
-    "rust_lines": 186258,
+    "rust_lines": 186400,
     "tauri_coupled": 202,
     "portable": 307,
     "portable_lines": 105193,
@@ -544,7 +544,7 @@
   },
   "params": {
     "AppHandle": 410,
-    "State": 268,
+    "State": 269,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
@@ -552,7 +552,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 407,
-      "State": 268,
+      "State": 269,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -1725,7 +1725,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/nativeBridge.ts:397"
+        "src/shared/api/nativeBridge.ts:399"
       ]
     },
     "fetch_block_data": {

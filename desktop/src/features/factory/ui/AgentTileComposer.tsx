@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowUp, MessagesSquare } from "lucide-react";
 
 import { useChannelPanelHistoryState } from "@/features/channels/ui/useChannelPanelHistoryState";
+import { nativeErrorMessage } from "@/features/factory/lib/nativeErrorMessage";
 import { setChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMode";
 import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import { cn } from "@/shared/lib/cn";
@@ -51,7 +52,7 @@ export function AgentTileComposer({
         onThreadRooted(result.rootEventId ?? result.eventId);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(nativeErrorMessage(caught, "Could not send the message."));
     } finally {
       setSending(false);
     }
