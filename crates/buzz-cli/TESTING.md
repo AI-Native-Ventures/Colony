@@ -599,7 +599,7 @@ buzz outreach draft \
   --subject "Winter boiler special" \
   --body - \
   --expires-in 72h \
-  --processor "$OWN_PUBKEY" < /tmp/outreach-body.txt | jq .
+  < /tmp/outreach-body.txt | jq .
 
 # The card is an ordinary kind:9 message: it must carry the outreach-email
 # block tag, the owner `p` tag, and the attention marker.

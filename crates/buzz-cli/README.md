@@ -210,8 +210,8 @@ buzz --format compact outreach list --channel <channel-uuid>
 Lead's name becomes the card's business name, its campaign becomes the campaign
 id, and its email becomes the recipient unless `--to` names another mailbox. A
 Lead with no email is a usage error naming that Lead. `--expires-in` accepts
-`90s`, `30m`, `72h` or `3d` and defaults to `72h`. `--processor` names the
-pubkey that answers the card's buttons and defaults to your own key. The data is
+`90s`, `30m`, `72h` or `3d` and defaults to `72h`. Leave `--processor` out: the relay
+then names the owner as the one who answers the card's buttons, and the owner's desktop sends on Approve. The data is
 validated against the active `outreach-email` manifest before anything reaches
 the relay, so a bad field fails loudly and posts nothing.
 

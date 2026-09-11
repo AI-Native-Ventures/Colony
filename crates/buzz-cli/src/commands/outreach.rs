@@ -89,10 +89,14 @@ struct DraftRequest<'a> {
 async fn draft(client: &BuzzClient, request: DraftRequest<'_>) -> Result<(), CliError> {
     let channel_id = parse_uuid(request.channel)?;
     let reply_to = request.reply_to.map(parse_event_id).transpose()?;
+    // No explicit processor: the relay defaults it to the attention audience,
+    // the owner who decides, so the owner's desktop answers the card's buttons.
     let processor = match request.processor {
-        Some(value) => PublicKey::parse(value)
-            .map_err(|error| CliError::Usage(format!("invalid processor pubkey: {error}")))?,
-        None => client.keys().public_key(),
+        Some(raw) => Some(
+            PublicKey::parse(raw)
+                .map_err(|error| CliError::Usage(format!("invalid processor pubkey: {error}")))?,
+        ),
+        None => None,
     };
     let expires_in = parse_duration_seconds(request.expires_in)?;
     let body = read_or_stdin(request.body)?;
@@ -124,7 +128,7 @@ async fn draft(client: &BuzzClient, request: DraftRequest<'_>) -> Result<(), Cli
             manifest: &resolved,
             data,
             fallback: None,
-            processor: Some(processor),
+            processor,
             reply_to,
         },
     )
