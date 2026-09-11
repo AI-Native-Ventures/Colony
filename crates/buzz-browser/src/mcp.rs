@@ -456,7 +456,7 @@ impl BuzzBrowserMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut state = self.state.lock().await;
-        mail_send_gate(&*state)?;
+        mail_send_gate(&state)?;
         let client = state.client.as_mut().ok_or_else(|| {
             ErrorData::invalid_request("no browser connected; call browser_connect first", None)
         })?;
