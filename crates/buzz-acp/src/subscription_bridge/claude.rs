@@ -225,6 +225,7 @@ mod tests {
             workspace: "/private/worker".into(),
             model: "synthetic-model".into(),
             mcp_servers: json!({"colony_work":{"command":"/usr/bin/sandbox-exec","args":["synthetic"],"env":{}}}),
+            host_login: None,
         }
     }
 

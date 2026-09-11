@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.17.3
+
+- fix(desktop): start Claude Code and Codex teammates from the provider login already on this Mac, so an existing business no longer hits a Power setup screen it cannot open. Codex seeds a private per-business profile from the existing login. Claude Code runs against the existing login directly, because its credential lives in the macOS login keychain, which a remapped HOME cannot reach.
+
 ## v0.17.2
 
 - fix(desktop): launching an agent from a project channel's Factory tab now clones the project's repository when the machine has no checkout of it yet, instead of failing. Native failures also reach the dialog with the host's own message rather than a generic line.

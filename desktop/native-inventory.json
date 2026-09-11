@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 509,
-    "rust_lines": 186397,
+    "rust_total": 510,
+    "rust_lines": 187003,
     "tauri_coupled": 202,
-    "portable": 307,
-    "portable_lines": 105193,
+    "portable": 308,
+    "portable_lines": 105780,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -407,6 +407,7 @@
       "src-tauri/src/managed_agents/global_config/tests.rs",
       "src-tauri/src/managed_agents/isolation.rs",
       "src-tauri/src/managed_agents/isolation/agent_tests.rs",
+      "src-tauri/src/managed_agents/isolation/host_login.rs",
       "src-tauri/src/managed_agents/isolation/network_tests.rs",
       "src-tauri/src/managed_agents/isolation/runtime_tests.rs",
       "src-tauri/src/managed_agents/isolation/subscription_runtime_tests.rs",

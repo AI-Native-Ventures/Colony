@@ -13,6 +13,7 @@ fn config() -> Config {
             "args":["-f","/synthetic/native.sb","/synthetic/tool"],
             "required":false,"enabled":false,"cwd":"/synthetic/untrusted-cwd"
         }}),
+        host_login: None,
     }
 }
 

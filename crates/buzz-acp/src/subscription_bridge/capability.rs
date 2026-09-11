@@ -18,6 +18,8 @@ pub(super) fn run() -> Result<()> {
         profile,
         model: String::new(),
         mcp_servers: json!({}),
+        // A credential-free probe never runs against the owner's own login.
+        host_login: None,
     };
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
