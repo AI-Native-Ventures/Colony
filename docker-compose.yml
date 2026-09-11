@@ -1,3 +1,4 @@
+# Probe: a comment-only change, to show which CI jobs a compose edit selects.
 name: buzz
 
 services:
