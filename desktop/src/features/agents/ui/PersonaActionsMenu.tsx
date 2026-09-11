@@ -6,6 +6,10 @@ import {
   Trash2,
 } from "lucide-react";
 
+import {
+  isProvisionedAgent,
+  PROVISIONED_DELETE_LABEL,
+} from "@/features/agents/provisionedLock";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import {
   DropdownMenu,
@@ -41,7 +45,11 @@ export function PersonaActionsMenu({
   onDelete: (persona: AgentPersona) => void;
 }) {
   const disabled = isActionPending || isPending;
-  const canEdit = !persona.sourceTeam;
+  // An employee Colony provides is not the workspace's to edit or delete.
+  // Both commands refuse it anyway, so offering the control would only produce
+  // an error the user did nothing to deserve.
+  const isProvisioned = isProvisionedAgent(linkedAgent);
+  const canEdit = !persona.sourceTeam && !isProvisioned;
 
   return (
     <DropdownMenu modal={false}>
@@ -79,7 +87,15 @@ export function PersonaActionsMenu({
           Share
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {persona.sourceTeam ? (
+        {isProvisioned ? (
+          // Visible and disabled, like the team row below: a control that
+          // vanishes reads as a bug, one that explains itself reads as a
+          // decision.
+          <DropdownMenuItem disabled>
+            <Trash2 className="h-4 w-4" />
+            {PROVISIONED_DELETE_LABEL}
+          </DropdownMenuItem>
+        ) : persona.sourceTeam ? (
           <DropdownMenuItem disabled>
             <Trash2 className="h-4 w-4" />
             Managed by team

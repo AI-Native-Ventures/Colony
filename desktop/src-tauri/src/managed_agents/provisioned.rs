@@ -246,6 +246,64 @@ pub fn missing_commands_message(name: &str, missing: &[String]) -> String {
     )
 }
 
+/// Why an employee Colony provides cannot be deleted here.
+///
+/// Names the employee and says who provides it, because the person reading it
+/// did nothing wrong: removing an agent is an ordinary thing to try, and this
+/// one simply is not theirs to remove. It also says what would happen anyway,
+/// since "you cannot" invites "why not" and the honest answer is that the
+/// delete could not stick.
+pub fn provisioned_delete_refusal(name: &str, handle: &str) -> String {
+    let subject = display_subject(name, handle);
+    format!(
+        "{subject} is provided by Colony and cannot be deleted.          Removing it here would only drop this machine's copy; the employee          stays on the relay and would be set up again automatically."
+    )
+}
+
+/// Why an employee Colony provides cannot be edited here.
+pub fn provisioned_edit_refusal(name: &str, handle: &str) -> String {
+    let subject = display_subject(name, handle);
+    format!(
+        "{subject} is provided by Colony and cannot be changed.          Colony maintains it, and it updates itself when a newer version ships."
+    )
+}
+
+/// Refuse an edit when `record` is an employee Colony provides.
+///
+/// One helper rather than the check written out at each call site, because
+/// the two commands that need it live in different modules and a guard that
+/// is copied is a guard that drifts.
+pub fn refuse_edit_if_provisioned(record: &super::ManagedAgentRecord) -> Result<(), String> {
+    match record.provisioned.as_deref() {
+        Some(handle) => Err(provisioned_edit_refusal(&record.name, handle)),
+        None => Ok(()),
+    }
+}
+
+/// Refuse a delete when `record` is an employee Colony provides.
+pub fn refuse_delete_if_provisioned(record: &super::ManagedAgentRecord) -> Result<(), String> {
+    match record.provisioned.as_deref() {
+        Some(handle) => Err(provisioned_delete_refusal(&record.name, handle)),
+        None => Ok(()),
+    }
+}
+
+/// The employee's name, falling back to its handle, then to a generic phrase.
+///
+/// A record with an empty name is not worth a message reading "` ` is provided
+/// by Colony".
+fn display_subject(name: &str, handle: &str) -> String {
+    let name = name.trim();
+    if !name.is_empty() {
+        return name.to_owned();
+    }
+    let handle = handle.trim();
+    if !handle.is_empty() {
+        return handle.to_owned();
+    }
+    "This employee".to_owned()
+}
+
 /// The top-level subcommands `buzz --help` advertises.
 ///
 /// Parsed from the help text rather than probed one command at a time: one
@@ -482,6 +540,46 @@ mod tests {
             sales.system_prompt.contains("outreach"),
             "the brief travels on the definition"
         );
+    }
+
+    #[test]
+    fn the_refusals_name_the_employee_and_say_what_would_happen() {
+        let deleted = provisioned_delete_refusal("Sales", "sales");
+        assert!(deleted.contains("Sales"));
+        assert!(deleted.contains("provided by Colony"));
+        assert!(deleted.contains("cannot be deleted"));
+        // The honest part: it explains why the delete would not stick.
+        assert!(deleted.contains("stays on the relay"));
+
+        let edited = provisioned_edit_refusal("Sales", "sales");
+        assert!(edited.contains("Sales"));
+        assert!(edited.contains("cannot be changed"));
+        assert!(edited.contains("updates itself"));
+    }
+
+    #[test]
+    fn the_guards_refuse_a_provisioned_record_and_pass_an_ordinary_one() {
+        let mut record = crate::managed_agents::ManagedAgentRecord {
+            name: "Sales".to_owned(),
+            ..Default::default()
+        };
+        // A workspace's own agent is edited and deleted exactly as before.
+        assert!(refuse_edit_if_provisioned(&record).is_ok());
+        assert!(refuse_delete_if_provisioned(&record).is_ok());
+
+        record.provisioned = Some("sales".to_owned());
+        let edit = refuse_edit_if_provisioned(&record).expect_err("an edit must be refused");
+        assert!(edit.contains("Sales") && edit.contains("cannot be changed"));
+        let delete = refuse_delete_if_provisioned(&record).expect_err("a delete must be refused");
+        assert!(delete.contains("Sales") && delete.contains("cannot be deleted"));
+    }
+
+    #[test]
+    fn a_nameless_record_falls_back_to_its_handle_then_to_a_phrase() {
+        // A record with an empty name must not produce " is provided by
+        // Colony and cannot be deleted."
+        assert!(provisioned_delete_refusal("", "sales").starts_with("sales is"));
+        assert!(provisioned_delete_refusal("  ", "  ").starts_with("This employee is"));
     }
 
     #[test]
