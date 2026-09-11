@@ -50,7 +50,10 @@ jobs:
           PROOF: ${{ runner.temp }}/colony-website-preview-proof/proof.json
         run: |
           test -f "$PROOF"
-          jq '{complete, clip: .clip.status, geometry, failures: [.checks[] | select(.ok != true) | .name]}' "$PROOF"
+          # Print the raw record first so a partial or malformed file is
+          # visible in the log before any assertion can fail.
+          jq . "$PROOF" || true
+          jq '{complete, phase, clip: .clip.status, geometry, failures: [.checks[] | select(.ok != true) | .name]}' "$PROOF"
           jq -e '.complete == true' "$PROOF" > /dev/null
           jq -e '[.checks[] | select(.ok != true)] | length == 0' "$PROOF" > /dev/null
           # `unavailable` clip capture is recorded as unproven, not a pass;

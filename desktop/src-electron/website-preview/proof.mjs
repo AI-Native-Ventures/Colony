@@ -22,7 +22,6 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -36,6 +35,7 @@ import {
 } from "electron";
 
 import { createWebsitePreviewHost } from "./host.mjs";
+import { createProofReport } from "./proof-report.mjs";
 import { PREVIEW_SCHEME_DESCRIPTOR } from "./scheme.mjs";
 
 // Same pre-ready registration as the real app: the proof origin must be a
@@ -46,7 +46,6 @@ protocol.registerSchemesAsPrivileged([PREVIEW_SCHEME_DESCRIPTOR]);
 const PROOF_DIR =
   process.env.COLONY_PREVIEW_PROOF_DIR ??
   path.join(process.cwd(), "test-results/website-preview-proof");
-const REQUIRED_TIMEOUT_MS = 180_000;
 // Integer fitting can move the CSS height by a fraction of a pixel; width
 // must be exact. A larger gap means the fitted zoom factor is not in effect.
 const MAX_ROUNDING_TOLERANCE_CSS_PX = 2;
@@ -72,6 +71,27 @@ const results = {
   clip: { status: "unavailable", detail: null },
   notes: [],
 };
+
+// Crash-safe reporting: the file exists before any Electron work and keeps the
+// last completed phase on disk. The watchdog turns a hang into a written
+// timeout error instead of a job that dies with nothing to read.
+const report = createProofReport({
+  directory: PROOF_DIR,
+  exit: (code) => app.exit(code),
+});
+report.attachProcessHandlers();
+report.attachAppHandlers(app);
+
+const snapshot = () => ({
+  checks: results.checks,
+  geometry: results.geometry,
+  clip: results.clip,
+  notes: results.notes,
+});
+
+function phase(name) {
+  report.phase(name, snapshot());
+}
 
 function hashOf(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -173,6 +193,7 @@ async function proveGeometry(host, window, fixture) {
       bounds: { x: 0, y: 64, width: 900, height: 636 },
     }),
   );
+  phase("mount");
   const wc = host.byHandle.get(desktop.handle).webContents;
   const metrics = await evaluate(
     wc,
@@ -207,6 +228,7 @@ async function proveGeometry(host, window, fixture) {
     metrics.narrow === false,
     "matchMedia('(max-width: 1439px)')",
   );
+  phase("geometry desktop");
   check(
     "interaction.inlineScript",
     metrics.ready === true,
@@ -248,6 +270,7 @@ async function proveGeometry(host, window, fixture) {
     secondClicked === true,
     "second page inline handler ran",
   );
+  phase("interactions");
   await evaluate(wc, "history.back(); 'set'");
   await delay(400);
 
@@ -293,6 +316,7 @@ async function proveGeometry(host, window, fixture) {
     mobileMetrics.narrow === true,
     "matchMedia('(max-width: 500px)')",
   );
+  phase("geometry mobile");
   return { desktop, mobile };
 }
 
@@ -325,6 +349,7 @@ async function proveDenials(host, fixture, handles) {
     "fetch('https://example.com/').then(() => 'reached').catch(() => 'blocked')",
   );
   check("denial.network", network === "blocked", `fetch=${network}`);
+  phase("denials");
 
   const other = host.byHandle.get(handles.mobile.handle);
   const otherUrl = other.webContents.getURL();
@@ -341,6 +366,7 @@ async function proveDenials(host, fixture, handles) {
     urls[0] !== urls[1],
     `tokens ${urls[0]} vs ${urls[1]}`,
   );
+  phase("isolation");
 }
 
 async function proveLifecycle(window, fixture) {
@@ -369,6 +395,7 @@ async function proveLifecycle(window, fixture) {
     host.activeCount === 0 && (wc.isDestroyed() === true || usable === false),
     `destroyed=${wc.isDestroyed()}`,
   );
+  phase("teardown");
 }
 
 function pixelAt(bitmap, width, x, y) {
@@ -454,6 +481,7 @@ async function proveClipPixels(window) {
 async function main() {
   await app.whenReady();
   const fixture = createFixture();
+  phase("loader");
   const window = new BrowserWindow({
     width: 1000,
     height: 800,
@@ -504,40 +532,27 @@ async function main() {
   });
   await delay(300);
   await proveClipPixels(window);
+  phase("capture");
 
   await host.closeAll();
   window.destroy();
 
   const failed = results.checks.filter((entry) => entry.ok !== true);
-  const payload = {
-    schema: "colony.website-preview-host-proof/1",
-    complete: failed.length === 0,
-    checks: results.checks,
-    geometry: results.geometry,
-    clip: results.clip,
-    notes: results.notes,
-  };
-  await mkdir(PROOF_DIR, { recursive: true });
-  await writeFile(
-    path.join(PROOF_DIR, "proof.json"),
-    `${JSON.stringify(payload, null, 2)}\n`,
-    "utf8",
-  );
+  if (failed.length > 0) {
+    report.fail("checks", new Error(`${failed.length} proof check(s) failed`));
+    app.exit(1);
+    return;
+  }
+  const payload = report.complete();
   console.log(JSON.stringify(payload, null, 2));
-  app.exit(failed.length === 0 ? 0 : 1);
+  app.exit(0);
 }
 
-const timeout = setTimeout(() => {
-  console.error("website preview proof timed out");
+void main().catch((error) => {
+  console.error(
+    "website preview proof failed to run:",
+    error instanceof Error ? error.stack : error,
+  );
+  report.fail("main", error);
   app.exit(1);
-}, REQUIRED_TIMEOUT_MS);
-
-void main()
-  .catch((error) => {
-    console.error(
-      "website preview proof failed to run:",
-      error instanceof Error ? error.stack : error,
-    );
-    app.exit(1);
-  })
-  .finally(() => clearTimeout(timeout));
+});

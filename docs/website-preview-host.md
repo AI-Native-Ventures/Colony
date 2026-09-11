@@ -428,10 +428,20 @@ as production, mounts an in-process fixture artifact (no network) through real
   withholds screen capture. The workflow rejects `failed` and does not treat
   `unavailable` as proof.
 
+The proof is crash-safe: it writes `{ schema, complete: false, phase:
+"starting" }` to `proof.json` before any Electron work, flushes the record
+after every phase (`loader`, `mount`, `geometry desktop`, `interactions`,
+`geometry mobile`, `denials`, `isolation`, `capture`, `teardown`), logs
+`[proof] phase ...` to stdout, and writes a structured error record for
+uncaught exceptions, unhandled rejections, renderer/child-process loss, and a
+120-second watchdog. A hung or crashed run therefore leaves the last completed
+phase and an error record on disk instead of an empty file.
+
 The workflow now fails the job whenever `proof.json` reports
 `complete: false` or any check with `ok: true` missing, in addition to
 rejecting a `failed` clip result; an `unavailable` clip result is reported but
-is not treated as proof.
+is not treated as proof. The report step prints the raw JSON before its
+assertions.
 
 This is host-fixture proof. It does not prove packaged Colony adoption, the
 production artifact loader against a real CDN, relay review integration, or
