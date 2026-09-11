@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { answerAsk, type AskAnswerInput } from "@/features/asks/answerAsk";
 import type { OpenAsk } from "@/features/asks/lib/askEvent";
 import { AskDetailCard } from "@/features/asks/ui/AskDetailCard";
+import { nativeErrorMessage } from "@/features/factory/lib/nativeErrorMessage";
 import { relayClient } from "@/shared/api/relayClient";
 import { signRelayEvent } from "@/shared/api/tauri";
 
@@ -68,9 +69,7 @@ function AgentTileAskCard({
         });
         toast.success("Ask answered");
       } catch (cause) {
-        toast.error(
-          cause instanceof Error ? cause.message : "Failed to answer the ask.",
-        );
+        toast.error(nativeErrorMessage(cause, "Failed to answer the ask."));
       } finally {
         setIsSubmitting(false);
       }

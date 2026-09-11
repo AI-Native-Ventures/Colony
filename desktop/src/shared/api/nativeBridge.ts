@@ -133,6 +133,8 @@ export interface NativeFactoryWorktreeResult {
   path: string;
   branch: string;
   created: boolean;
+  /** `true` when the project's repository was cloned to get a checkout. */
+  createdCheckout: boolean;
 }
 
 /**
