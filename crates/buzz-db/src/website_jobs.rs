@@ -679,4 +679,67 @@ mod tests {
         assert_eq!(by_event.job_id, job_id);
         assert_eq!(by_event.receipt_event_id, receipt_event);
     }
+
+    // Requires BUZZ_TEST_DATABASE_URL (or DATABASE_URL) with migrations applied.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn action_claim_requires_its_job_row_first() {
+        let (pool, community, channel) = setup().await;
+        let job_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let actor = [0xaa_u8; 32];
+        let digest = [0x33_u8; 32];
+        let action_event = [0x61_u8; 32];
+        let head_event = [0x62_u8; 32];
+        let receipt_event = [0x63_u8; 32];
+
+        // The composite foreign key makes an orphan claim impossible; this is
+        // exactly the ordering the website broker's create path must respect.
+        let mut tx = pool.begin().await.expect("begin orphan claim");
+        let orphan = insert_website_action_claim_tx(
+            &mut tx,
+            community,
+            NewWebsiteActionClaim {
+                actor: &actor,
+                request_id,
+                job_id,
+                action_event_id: &action_event,
+                op: "create",
+                payload_digest: &digest,
+                head_event_id: &head_event,
+                receipt_event_id: &receipt_event,
+                generation: 1,
+            },
+        )
+        .await;
+        assert!(
+            orphan.is_err(),
+            "a claim for a job with no row must violate the foreign key"
+        );
+        tx.rollback().await.expect("rollback orphan claim");
+
+        insert_job(&pool, community, channel, job_id, "task-d")
+            .await
+            .expect("job row first");
+        let mut tx = pool.begin().await.expect("begin valid claim");
+        let won = insert_website_action_claim_tx(
+            &mut tx,
+            community,
+            NewWebsiteActionClaim {
+                actor: &actor,
+                request_id,
+                job_id,
+                action_event_id: &action_event,
+                op: "create",
+                payload_digest: &digest,
+                head_event_id: &head_event,
+                receipt_event_id: &receipt_event,
+                generation: 1,
+            },
+        )
+        .await
+        .expect("claim after job insert");
+        assert!(won, "the claim must insert once its job row exists");
+        tx.commit().await.expect("commit valid claim");
+    }
 }

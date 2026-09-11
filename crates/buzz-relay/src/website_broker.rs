@@ -701,6 +701,38 @@ async fn apply_create(
         action_event,
     )?;
 
+    // The job row must exist before its action claim: `website_actions` has a
+    // composite foreign key onto `website_jobs (community_id, job_id)`, so a
+    // claim for a brand-new job is rejected by Postgres unless the row is
+    // inserted first. Both statements share this transaction, so if the claim
+    // then loses (duplicate request id) the whole transaction rolls back and
+    // no job row survives. Do not reorder these back.
+    let job = insert_website_job_tx(
+        &mut *tx,
+        tenant.community(),
+        NewWebsiteJob {
+            job_id,
+            task_id: &action.task_id,
+            channel_id: action.channel_id,
+            thread_root: &action.thread_root,
+            instance_event_id: &authority.instance_event_id,
+            manifest_event_id: &authority.manifest_event_id,
+            owner: &authority.owner,
+            coordinator: &authority.coordinator,
+            source_url: &authority.source_url,
+            review: &review_bytes,
+            research_personas: &authority.research_personas,
+            build_personas: &authority.build_personas,
+            review_personas: &authority.review_personas,
+            head_event_id: head.id.as_bytes(),
+            head_at: now,
+            now,
+        },
+    )
+    .await
+    .map_err(|error| format!("website transaction failed: {error}"))?
+    .ok_or_else(|| WEBSITE_JOB_TAKEN.to_owned())?;
+
     if !claim_action(
         &mut *tx,
         tenant.community(),
@@ -727,32 +759,6 @@ async fn apply_create(
         .await?;
         return Ok(ApplyResult::Duplicate(claim));
     }
-
-    let job = insert_website_job_tx(
-        &mut *tx,
-        tenant.community(),
-        NewWebsiteJob {
-            job_id,
-            task_id: &action.task_id,
-            channel_id: action.channel_id,
-            thread_root: &action.thread_root,
-            instance_event_id: &authority.instance_event_id,
-            manifest_event_id: &authority.manifest_event_id,
-            owner: &authority.owner,
-            coordinator: &authority.coordinator,
-            source_url: &authority.source_url,
-            review: &review_bytes,
-            research_personas: &authority.research_personas,
-            build_personas: &authority.build_personas,
-            review_personas: &authority.review_personas,
-            head_event_id: head.id.as_bytes(),
-            head_at: now,
-            now,
-        },
-    )
-    .await
-    .map_err(|error| format!("website transaction failed: {error}"))?
-    .ok_or_else(|| WEBSITE_JOB_TAKEN.to_owned())?;
 
     let stored_action = insert_event_tx(
         &mut *tx,
