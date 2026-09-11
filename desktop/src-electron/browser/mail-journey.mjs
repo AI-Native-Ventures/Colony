@@ -36,6 +36,18 @@ export function mailSendEnabledFromEnv(env = process.env) {
   return env[MAIL_SEND_ENV] === MAIL_SEND_ENV_ENABLED;
 }
 
+/**
+ * Refuse the agent-facing journey unless the gate is open.
+ *
+ * Both callers go through here so the refusal cannot drift: the MCP adapter
+ * refuses early in the worker's own process, and the main process refuses
+ * again where the tool actually runs, because a worker holds the broker socket
+ * path and its grant token and can speak to the broker without the adapter.
+ */
+export function assertMailSendEnabled(env = process.env) {
+  if (!mailSendEnabledFromEnv(env)) throw new Error(MAIL_SEND_DISABLED);
+}
+
 const seconds = () => Math.floor(Date.now() / 1000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

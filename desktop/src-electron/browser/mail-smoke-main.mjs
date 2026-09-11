@@ -3,6 +3,13 @@
 // from a spawned `mcp.mjs` over the unix-socket broker into a live page. The
 // page is the same Gmail compose fixture the Rust journey is proven against,
 // served over local HTTP because tab authority accepts only HTTP(S) URLs.
+//
+// The runner launches this file twice, because the agent-facing tool is gated
+// on the main process environment. With BUZZ_BROWSER_MAIL_SEND=enabled it
+// proves the worker path; without the variable it proves that a worker holding
+// a valid write grant still cannot send by talking to the broker directly, and
+// that the owner-side path works anyway, since the owner never goes through
+// that gate.
 import { BrowserWindow, app } from "electron";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -12,7 +19,8 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { startBroker } from "./broker.mjs";
+import { requestBroker, startBroker } from "./broker.mjs";
+import { mailSendEnabledFromEnv } from "./mail-journey.mjs";
 import { executeOutreachSend } from "./outreach-send.mjs";
 import { BrowserViews } from "./views.mjs";
 
@@ -74,6 +82,109 @@ function mcpClient(grantPath, mailSend = "enabled") {
   return { call, stop: () => child.kill() };
 }
 
+/**
+ * The second launch: no gate value in the environment.
+ *
+ * It proves the gate is the main process's, not the adapter's, and that the
+ * owner-side send does not depend on the gate at all.
+ */
+async function proveOwnerSide({ views, tab, share, socketPath, pageUrl }) {
+  // A worker with a real write grant, skipping `mcp.mjs` and speaking to the
+  // broker socket itself, which is all a worker with a shell needs.
+  await share("interact");
+  const token = [...views.authority.grants.keys()][0];
+  const refusal = await requestBroker(socketPath, {
+    token,
+    method: "mail_send",
+    args: { tabId: "mail-tab", ...message },
+  }).then(
+    (result) => {
+      throw new Error(
+        `the broker ran mail_send for an ungated worker: ${JSON.stringify(result)}`,
+      );
+    },
+    (error) => error.message,
+  );
+  assert.match(
+    refusal,
+    /^mail_send is disabled: /,
+    "the main process must refuse mail_send, not only the adapter",
+  );
+  assert.equal(
+    await tab.view.webContents.executeJavaScript(
+      "document.getElementById('compose-box').hidden",
+    ),
+    true,
+    "a refused journey must not have opened the compose form",
+  );
+
+  // The same grant still reads the page, so only mail_send is gated.
+  const observed = await requestBroker(socketPath, {
+    token,
+    method: "browser_snapshot",
+    args: { tabId: "mail-tab" },
+  });
+  assert.match(observed.outline, /button Compose/);
+
+  // The owner-side path: no grant, no MCP, the same function main.mjs calls
+  // when the renderer invokes `execute_outreach_send` on an approved card.
+  const deps = {
+    attempted: new Set(),
+    allowedHosts: [new URL(pageUrl).host],
+    tabs: () => views.ownerTabs(),
+    send: ({ tabId, ...fields }) => views.ownerMailSend(tabId, fields),
+  };
+  const approval = {
+    instanceEventId: "e".repeat(64),
+    actionEventId: APPROVAL_ID,
+    data: {
+      destination: approved.to,
+      content: { subject: approved.subject, body: approved.body },
+    },
+  };
+
+  // The write grant above still stands, so the tab is a teammate's.
+  const held = await executeOutreachSend(approval, deps);
+  assert.equal(held.status, "failed");
+  assert.match(held.failure_reason, /^A teammate is using your Gmail tab\./);
+
+  // The owner takes the tab back, exactly as a click in the tab would.
+  views.takeover("mail-tab");
+  const owned = await executeOutreachSend(approval, deps);
+  assert.equal(
+    owned.status,
+    "sent",
+    `owner-side failure_reason: ${owned.failure_reason}`,
+  );
+  assert.equal(owned.to, approved.to);
+  assert.equal(owned.subject, approved.subject);
+  assert.equal(
+    owned.screenshot_png_base64,
+    undefined,
+    "the owner-side shape is the Tauri command's, which carries no screenshot",
+  );
+  const ownerRecorded = JSON.parse(
+    await tab.view.webContents.executeJavaScript(
+      "document.getElementById('sent').textContent",
+    ),
+  );
+  assert.deepEqual(
+    ownerRecorded,
+    approved,
+    "the page must have recorded exactly what the owner approved",
+  );
+
+  // A replayed approval never fills the form again.
+  const replay = await executeOutreachSend(approval, deps);
+  assert.equal(replay.status, "failed");
+  assert.match(replay.failure_reason, /already sent from this desktop/);
+
+  console.log("Worker through the broker refused:", refusal);
+  console.log("Owner-side page recorded:", JSON.stringify(ownerRecorded));
+  console.log("Owner-side replay refused:", replay.failure_reason);
+  console.log("Electron owner-side execute_outreach_send: PASS");
+}
+
 async function prove() {
   const fixture = await readFile(
     path.join(
@@ -132,6 +243,11 @@ async function prove() {
         },
       );
     };
+    if (!mailSendEnabledFromEnv()) {
+      await proveOwnerSide({ views, tab, share, socketPath, pageUrl });
+      return;
+    }
+
     await share("interact");
     client = mcpClient(grantPath);
     assert.equal(
@@ -194,64 +310,6 @@ async function prove() {
     assert.equal(gated.result.isError, true);
     assert.match(gated.result.content[0].text, /^mail_send is disabled: /);
 
-    // The owner-side path: no grant, no MCP, the same function main.mjs calls
-    // when the renderer invokes `execute_outreach_send` on an approved card.
-    tab.view.webContents.reload();
-    await new Promise((resolve) =>
-      tab.view.webContents.once("did-finish-load", resolve),
-    );
-    const attempted = new Set();
-    const deps = {
-      attempted,
-      allowedHosts: [new URL(pageUrl).host],
-      tabs: () => views.ownerTabs(),
-      send: ({ tabId, ...fields }) => views.ownerMailSend(tabId, fields),
-    };
-    const approval = {
-      instanceEventId: "e".repeat(64),
-      actionEventId: APPROVAL_ID,
-      data: {
-        destination: approved.to,
-        content: { subject: approved.subject, body: approved.body },
-      },
-    };
-
-    // The read-only grant from above still stands, so the tab is a teammate's.
-    const held = await executeOutreachSend(approval, deps);
-    assert.equal(held.status, "failed");
-    assert.match(held.failure_reason, /^A teammate is using your Gmail tab\./);
-
-    // The owner takes the tab back, exactly as a click in the tab would.
-    views.takeover("mail-tab");
-    const owned = await executeOutreachSend(approval, deps);
-    assert.equal(
-      owned.status,
-      "sent",
-      `owner-side failure_reason: ${owned.failure_reason}`,
-    );
-    assert.equal(owned.to, approved.to);
-    assert.equal(owned.subject, approved.subject);
-    assert.equal(
-      owned.screenshot_png_base64,
-      undefined,
-      "the owner-side shape is the Tauri command's, which carries no screenshot",
-    );
-    const ownerRecorded = JSON.parse(
-      await tab.view.webContents.executeJavaScript(
-        "document.getElementById('sent').textContent",
-      ),
-    );
-    assert.deepEqual(
-      ownerRecorded,
-      approved,
-      "the page must have recorded exactly what the owner approved",
-    );
-
-    // A replayed approval never fills the form again.
-    const replay = await executeOutreachSend(approval, deps);
-    assert.equal(replay.status, "failed");
-    assert.match(replay.failure_reason, /already sent from this desktop/);
-
     console.log("Page recorded:", JSON.stringify(recorded));
     console.log("Screenshot bytes:", png.length);
     console.log("sent_at:", result.sent_at);
@@ -259,13 +317,10 @@ async function prove() {
       "Read-only grant refused mail_send:",
       denied.result.content[0].text,
     );
-    console.log("Ungated worker refused:", gated.result.content[0].text);
-    console.log("Owner-side page recorded:", JSON.stringify(ownerRecorded));
-    console.log("Owner-side replay refused:", replay.failure_reason);
+    console.log("Ungated adapter refused:", gated.result.content[0].text);
     console.log(
       "Electron mail_send from the shared tab's Compose button: PASS",
     );
-    console.log("Electron owner-side execute_outreach_send: PASS");
   } finally {
     client?.stop();
     await stopBroker?.();

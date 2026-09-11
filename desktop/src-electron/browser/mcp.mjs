@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import readline from "node:readline";
 import { requestBroker } from "./broker.mjs";
-import { MAIL_SEND_DISABLED, mailSendEnabledFromEnv } from "./mail-journey.mjs";
+import { assertMailSendEnabled } from "./mail-journey.mjs";
 
 const grantPath = process.argv[2];
 if (!grantPath)
@@ -72,9 +72,9 @@ async function dispatch(message) {
       throw new Error("Unknown browser tool");
     try {
       // Listed but refused, the way the Rust daemon gates it: an agent reading
-      // the tool list learns the tool exists and what unlocks it.
-      if (name === "mail_send" && !mailSendEnabledFromEnv())
-        throw new Error(MAIL_SEND_DISABLED);
+      // the tool list learns the tool exists and what unlocks it. The main
+      // process refuses it again, so skipping this adapter gains nothing.
+      if (name === "mail_send") assertMailSendEnabled();
       let grant;
       try {
         grant = JSON.parse(await readFile(grantPath, "utf8"));
