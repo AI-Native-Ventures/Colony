@@ -568,7 +568,7 @@ test("viewport is part of identity and mismatched sizes are refused", async () =
 });
 
 test("a stale handle from a closed mount is harmless after reopen", async () => {
-  const { host, world } = createHost();
+  const { host } = createHost();
   const window = createWindow();
   const first = await host.open(requestFor(window));
   await host.close({ window, handle: first.handle });

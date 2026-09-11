@@ -37,7 +37,9 @@ export async function completeFixtureWork({
   relay,
   provider,
   directory,
-  bundle,
+  // Callers pass the built bundle for symmetry with the other fixtures; this
+  // one reads the package through `directory` instead.
+  bundle: _bundle,
   proofDirectory,
   repositoryModuleUrls = [],
   onProgress = () => {},

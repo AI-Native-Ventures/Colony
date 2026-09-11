@@ -1475,7 +1475,7 @@ mod tests {
         // request boundary. Both are community-scoped and separately fenced.
         let website_jobs = migrations
             .iter()
-            .find(|migration| migration.version == 71)
+            .find(|migration| migration.version == 72)
             .expect("website jobs migration")
             .sql
             .as_str();

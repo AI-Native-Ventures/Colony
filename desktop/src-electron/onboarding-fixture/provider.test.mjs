@@ -1,3 +1,6 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: this file counts and
+// rewrites "${...}" occurrences in the provider source it reads, so the literals
+// below are the text under test rather than interpolations of our own.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
