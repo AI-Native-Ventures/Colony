@@ -98,6 +98,10 @@ impl AgentDefinition {
     /// event coordinate (`d_tag = slug`) across the fold.
     pub fn into_agent_record(self) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            // An agent created here is the workspace's own, never provisioned.
+            provisioned: None,
+            provisioned_version: None,
+            provisioned_requires_commands: Vec::new(),
             working_dir: None,
             tier: None,
             manager: None,
@@ -247,6 +251,30 @@ pub struct RelayAgentInfo {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ManagedAgentRecord {
+    /// The bundled entry this agent was provisioned from, e.g. `sales`, or
+    /// `None` for an agent the workspace created itself.
+    ///
+    /// This is the field every locking decision keys on. An employee Colony
+    /// provides is not the workspace's to edit or delete: the relay refuses
+    /// every such write at ingest, and the desktop must not offer an action
+    /// it knows the relay will reject. `#[serde(default)]` so a store written
+    /// before this field existed loads as an ordinary agent, which is what
+    /// those records are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned: Option<String>,
+    /// The bundled version last adopted, so a newer definition can be
+    /// recognised as newer without re-reading the relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_version: Option<i64>,
+    /// The `buzz` subcommands this employee's brief depends on, copied from
+    /// the definition at adoption.
+    ///
+    /// Checked again at every launch, not only at adoption, because the app
+    /// can be downgraded under a record that was adopted by a newer build.
+    /// That skew is the whole reason the gate exists: an employee whose
+    /// binary lost a command it was briefed to use starts and improvises.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provisioned_requires_commands: Vec<String>,
     pub pubkey: String,
     pub name: String,
     #[serde(default)]

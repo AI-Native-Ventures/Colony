@@ -71,6 +71,7 @@ test("a well-formed head parses to its identity and rank", () => {
     name: "Sift",
     rank: "worker",
     manager: null,
+    provisioned: null,
   });
 });
 

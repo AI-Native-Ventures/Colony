@@ -24,6 +24,9 @@ fn chat_team_id() -> String {
 
 pub(super) fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,

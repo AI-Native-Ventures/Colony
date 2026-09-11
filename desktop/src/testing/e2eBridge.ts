@@ -14054,6 +14054,11 @@ export function maybeInstallE2eTauriMocks() {
       }
       case "list_managed_agents":
         return handleListManagedAgents(activeConfig);
+      // Mock mode has no relay to adopt from, so adoption is a no-op rather
+      // than an unhandled command. Returning an empty list is the honest
+      // answer: this bridge proves nothing about provisioned employees.
+      case "adopt_provisioned_employees":
+        return [];
       case "get_agent_memory":
         return handleGetAgentMemory(
           (payload as Parameters<typeof handleGetAgentMemory>[0]) ?? {},

@@ -597,6 +597,10 @@ pub async fn confirm_agent_snapshot_import(
         // Build the managed agent record — no machine-local commands, no
         // secrets, no lineage from the snapshot.
         let record = ManagedAgentRecord {
+            // An agent created here is the workspace's own, never provisioned.
+            provisioned: None,
+            provisioned_version: None,
+            provisioned_requires_commands: Vec::new(),
             working_dir: None,
             tier: None,
             manager: None,

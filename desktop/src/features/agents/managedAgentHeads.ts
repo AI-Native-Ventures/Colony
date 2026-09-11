@@ -37,6 +37,12 @@ export type ManagedAgentHead = {
   tierRank: AgentRank | null;
   /** The manager tag (lowercase hex), or null when absent, duplicated, or malformed. */
   manager: string | null;
+  /**
+   * The bundled entry this definition was provisioned from, or null for an
+   * ordinary owner-authored agent. See `trustedManagedAgentHeads` for why a
+   * head carrying this can be trusted without an owner signature.
+   */
+  provisioned: string | null;
 };
 
 function singleTagValue(event: RelayEvent, name: string): string | null {
@@ -86,23 +92,78 @@ export function parseManagedAgentHead(
       ? rawManager
       : null;
 
-  return { pubkey, name, roleId, tierRank, manager };
+  return {
+    pubkey,
+    name,
+    roleId,
+    tierRank,
+    manager,
+    provisioned: singleTagValue(event, "provisioned")?.trim() || null,
+  };
+}
+
+/**
+ * Whether one candidate head may be trusted, under either of the two shapes
+ * a trustworthy definition can take.
+ *
+ * **An owner signed it.** The original rule, unchanged: kind 30177 is
+ * client-writable, so an owner's signature is what separates a real
+ * definition from anyone's claim about an agent.
+ *
+ * **The employee itself signed it, and the relay says it is provisioned.**
+ * An employee Colony provides has no owner signature and never will: the
+ * relay mints these, and it signs them with the employee's own key rather
+ * than its own. That signature is the proof. Only the relay can open an
+ * employee's sealed key, so a head whose author IS the agent it describes
+ * could only have been minted by the relay.
+ *
+ * Three things must line up for that second shape, and each closes a
+ * different hole:
+ *
+ * 1. The head's author equals its own `d` tag. Anyone can publish a head
+ *    ABOUT an agent; only the key holder can publish one AS it.
+ * 2. The head carries a `provisioned` tag, so an ordinary self-published
+ *    head still names nothing, exactly as before.
+ * 3. A kind-30190 employee head at the same pubkey ALSO carries a
+ *    `provisioned` tag. Ingest refuses an employee head from anyone who is
+ *    not an employee of the community, so this is a second independent
+ *    record only the relay could have minted. Requiring the tag on both,
+ *    rather than merely that some employee head exists, means an employee
+ *    the workspace hired can never be read as one Colony provides.
+ */
+function isTrustedCandidate(
+  candidate: RelayEvent,
+  ownerPubkeys: ReadonlySet<string>,
+  provisionedEmployees: ReadonlySet<string>,
+): boolean {
+  const author = normalizePubkey(candidate.pubkey);
+  if (ownerPubkeys.has(author)) return true;
+
+  const parsed = parseManagedAgentHead(candidate);
+  if (!parsed?.provisioned) return false;
+  return author === parsed.pubkey && provisionedEmployees.has(parsed.pubkey);
 }
 
 /**
  * The trusted heads: per agent, walk EVERY candidate head newest-first and
- * take the first one authored by a CURRENT community owner, exactly as the
- * relay does before it reads anything off a head. The scan cannot shortcut
- * through the newest event per pubkey: an impostor may sit above the
+ * take the first one that may be trusted (see `isTrustedCandidate`), exactly
+ * as the relay does before it reads anything off a head. The scan cannot
+ * shortcut through the newest event per pubkey: an impostor may sit above the
  * owner's real head at the same `d` tag, and skipping the scan would trust
  * the impostor's silence over the owner's statement underneath it.
  *
- * Agents with no owner-authored candidate are omitted entirely -- a
+ * Agents with no trustworthy candidate are omitted entirely -- an ordinary
  * self-published head names nothing.
+ *
+ * `provisionedEmployees` is the set of pubkeys whose kind-30190 employee head
+ * carries a `provisioned` tag. Omitting it (the default) keeps the original
+ * owner-only behaviour, so a caller that has not loaded employee heads yet
+ * trusts strictly less rather than more.
  */
 export function trustedManagedAgentHeads(
   events: RelayEvent[],
   ownerPubkeys: ReadonlySet<string>,
+  provisionedEmployees: ReadonlySet<string> = new Set<string>(),
 ): ManagedAgentHead[] {
   const candidatesByPubkey = new Map<string, RelayEvent[]>();
   for (const event of events) {
@@ -120,7 +181,9 @@ export function trustedManagedAgentHeads(
   for (const [, candidates] of candidatesByPubkey) {
     const trusted = [...candidates]
       .sort((a, b) => b.created_at - a.created_at)
-      .find((candidate) => ownerPubkeys.has(normalizePubkey(candidate.pubkey)));
+      .find((candidate) =>
+        isTrustedCandidate(candidate, ownerPubkeys, provisionedEmployees),
+      );
     if (!trusted) continue;
     const parsed = parseManagedAgentHead(trusted);
     if (parsed) heads.push(parsed);

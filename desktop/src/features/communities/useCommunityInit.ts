@@ -5,6 +5,7 @@ import { useSeedCommunitiesFromRelay } from "./seedCommunitiesFromRelay";
 import { relayClient } from "@/shared/api/relayClient";
 import { resetRateLimitGate } from "@/shared/api/relayRateLimitGate";
 import {
+  adoptProvisionedEmployees,
   applyCommunity,
   autoConnectDefaultRelayEnabled,
   getDefaultRelayUrl,
@@ -337,6 +338,29 @@ export function useCommunityInit(
             err,
           );
         }
+        // Take custody of the employees Colony provides in this community, so
+        // this machine can run them. Deliberately not awaited into the init
+        // gate: it makes a relay round trip and asks for a key, and a slow or
+        // refusing relay must not hold the app on the loading screen. An
+        // employee that does not adopt is simply absent until the next init,
+        // which is the same shape as an employee this build cannot serve.
+        void adoptProvisionedEmployees()
+          .then((outcomes) => {
+            for (const outcome of outcomes) {
+              if (
+                outcome.outcome === "refused" ||
+                outcome.outcome === "failed"
+              ) {
+                console.warn(
+                  `[provisioned] ${outcome.handle}: ${outcome.reason}`,
+                );
+              }
+            }
+          })
+          .catch((error) => {
+            console.error("[provisioned] adoption failed:", error);
+          });
+
         // Restore any turn state saved for this community (a prior A→B round-
         // trip). This runs after applyCommunity succeeds and before the app
         // renders so components see the restored timers on first render.
