@@ -86,17 +86,40 @@ struct DraftRequest<'a> {
     processor: Option<&'a str>,
 }
 
+/// Who answers this card's buttons when the drafter did not name anyone.
+///
+/// An agent runs with an owner-issued auth tag, so its cards belong to that
+/// owner: only the owner's desktop holds the mailbox the send goes through.
+/// A human drafting for themselves has no auth tag, and pinning nobody lets
+/// the instance builder pin the signer, which is that same human.
+fn outreach_processor_default(client: &BuzzClient) -> Result<Option<PublicKey>, CliError> {
+    processor_default_from_owner(client.auth_tag_owner_hex())
+}
+
+/// The pure half of [`outreach_processor_default`], so the rule is testable
+/// without a relay connection.
+fn processor_default_from_owner(owner: Option<String>) -> Result<Option<PublicKey>, CliError> {
+    let Some(owner) = owner else {
+        return Ok(None);
+    };
+    let owner = PublicKey::parse(&owner)
+        .map_err(|error| CliError::Usage(format!("invalid auth-tag owner: {error}")))?;
+    Ok(Some(owner))
+}
+
 async fn draft(client: &BuzzClient, request: DraftRequest<'_>) -> Result<(), CliError> {
     let channel_id = parse_uuid(request.channel)?;
     let reply_to = request.reply_to.map(parse_event_id).transpose()?;
-    // No explicit processor: the relay defaults it to the attention audience,
-    // the owner who decides, so the owner's desktop answers the card's buttons.
+    // The processor answers the card's buttons, and only the owner's desktop
+    // can send from the owner's mailbox. An agent drafting on the owner's
+    // behalf must therefore pin the owner, never itself: a card an agent
+    // processes has nobody who can carry out the send.
     let processor = match request.processor {
         Some(raw) => Some(
             PublicKey::parse(raw)
                 .map_err(|error| CliError::Usage(format!("invalid processor pubkey: {error}")))?,
         ),
-        None => None,
+        None => outreach_processor_default(client)?,
     };
     let expires_in = parse_duration_seconds(request.expires_in)?;
     let body = read_or_stdin(request.body)?;
@@ -447,8 +470,9 @@ fn text<'a>(data: &'a Value, field: &str) -> Option<&'a str> {
 mod tests {
     use super::{
         build_instance_data, collect_rows, derive_status, parse_duration_seconds,
-        resolve_destination, InstanceFacts, OUTREACH_ACTION,
+        processor_default_from_owner, resolve_destination, InstanceFacts, OUTREACH_ACTION,
     };
+    use crate::error::CliError;
     use buzz_core::discovery_workspace::DiscoveryLeadDetail;
     use serde_json::{json, Value};
     use uuid::Uuid;
@@ -728,5 +752,33 @@ mod tests {
         );
         assert_eq!(status, "pending");
         assert_eq!(updated_at, 10);
+    }
+
+    #[test]
+    fn an_agent_draft_pins_its_owner_as_the_processor() {
+        // Only the owner's desktop can send from the owner's mailbox, so a card
+        // an agent drafts must be answered by the owner, never by the agent.
+        let owner = "8bb22f166ef1afa540434470bdafed7185b36c755189d7775246caa97c76baca";
+        let resolved = processor_default_from_owner(Some(owner.to_owned()))
+            .expect("a valid owner resolves")
+            .expect("an owner-issued auth tag pins that owner");
+        assert_eq!(resolved.to_hex(), owner);
+    }
+
+    #[test]
+    fn a_human_draft_pins_nobody_and_lets_the_signer_stand() {
+        assert!(processor_default_from_owner(None)
+            .expect("no auth tag is not an error")
+            .is_none());
+    }
+
+    #[test]
+    fn a_malformed_auth_tag_owner_is_a_usage_error() {
+        let error = processor_default_from_owner(Some("not-a-pubkey".to_owned()))
+            .expect_err("a malformed owner cannot be pinned");
+        assert!(
+            matches!(error, CliError::Usage(message) if message.contains("auth-tag owner")),
+            "the error names the auth-tag owner"
+        );
     }
 }
