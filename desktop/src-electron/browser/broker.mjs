@@ -3,6 +3,11 @@ import { chmod, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
 const MAX_REQUEST = 64 * 1024;
+const IDLE_TIMEOUT = 15000;
+// A journey tool (mail_send) holds one accepted request through two bounded
+// 30 s waits, so an accepted request gets a longer ceiling than an idle socket.
+const RUNNING_TIMEOUT = 95000;
+const CLIENT_TIMEOUT = 12000;
 
 export async function startBroker(socketPath, handle) {
   await mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
@@ -11,7 +16,7 @@ export async function startBroker(socketPath, handle) {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
     socket.on("error", () => {});
-    socket.setTimeout(15000, () => socket.destroy());
+    socket.setTimeout(IDLE_TIMEOUT, () => socket.destroy());
     let buffer = "";
     let accepted = false;
     socket.on("data", async (chunk) => {
@@ -21,6 +26,7 @@ export async function startBroker(socketPath, handle) {
       const end = buffer.indexOf("\n");
       if (end < 0) return;
       accepted = true;
+      socket.setTimeout(RUNNING_TIMEOUT);
       try {
         const request = JSON.parse(buffer.slice(0, end));
         const result = await handle(request);
@@ -43,11 +49,11 @@ export async function startBroker(socketPath, handle) {
   };
 }
 
-export function requestBroker(socketPath, request) {
+export function requestBroker(socketPath, request, timeout = CLIENT_TIMEOUT) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let buffer = "";
-    socket.setTimeout(12000, () =>
+    socket.setTimeout(Math.min(timeout, RUNNING_TIMEOUT), () =>
       socket.destroy(new Error("Browser request timed out")),
     );
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));

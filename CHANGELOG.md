@@ -6,6 +6,10 @@
 
 - fix(browser): keep the packaged mail_send tool disabled unless the daemon is started with BUZZ_BROWSER_MAIL_SEND=enabled, so managed agents cannot send email before the owner's outreach approval flow exists.
 
+## relay-v0.11.11
+
+- fix(relay): accept kind:30621 project announcements at ingest again (repo-write scope, global-only routing, NIP-MP envelope validation), as upstream did in #3171. The Rust port had dropped it, so production rejected every project with `restricted: unknown event kind`; the desktop then silently created repo-only projects that could not be linked to a channel, which kept project channels and the Factory tab from ever activating.
+
 ## v0.17.0
 
 - feat(desktop): the Software Factory. A `Factory` workspace tab for project channels lays the channel's tabs out as a tile tree (split, drag between panes, resize, layout presets, persisted per channel). Agent tiles show one managed agent with harness, model and effort chips, its live transcript and a composer that posts into the agent's thread; `+ Agent` launches an employee with a brief into its own git worktree. Delegate from a tile to another agent (reply expected), answer an agent's open asks where the work is, see who talks to whom in the communication graph, and track the project's tasks on the board tile.

@@ -1,10 +1,17 @@
 import { randomBytes } from "node:crypto";
 
-async function cdp(tab, method, params = {}) {
+export async function cdp(tab, method, params = {}) {
   if (!tab.view.webContents.debugger.isAttached())
     tab.view.webContents.debugger.attach("1.3");
   return tab.view.webContents.debugger.sendCommand(method, params);
 }
+
+// No agent-supplied JavaScript. Both declarations are fixed, and CDP resolves
+// only backend node ids that came from one of our own AX snapshots.
+export const CLICK_FUNCTION =
+  'function(){ if (!this.isConnected) throw new Error("Element detached"); this.scrollIntoView({block:"center"}); this.click(); }';
+export const FOCUS_FUNCTION =
+  'function(){ if (!this.isConnected || this.type === "password" || this.disabled || this.readOnly || !(this.tagName === "INPUT" || this.tagName === "TEXTAREA" || this.isContentEditable)) throw new Error("Not an editable non-password field"); this.scrollIntoView({block:"center"}); this.focus(); }';
 
 export async function snapshot(tab, check) {
   const before = check().revision;
@@ -58,9 +65,7 @@ export async function actOnRef(tab, args, method, check) {
   try {
     // No agent-supplied JavaScript. CDP resolves only refs from our last AX snapshot.
     const functionDeclaration =
-      method === "browser_click"
-        ? 'function(){ if (!this.isConnected) throw new Error("Element detached"); this.scrollIntoView({block:"center"}); this.click(); }'
-        : 'function(){ if (!this.isConnected || this.type === "password" || this.disabled || this.readOnly || !(this.tagName === "INPUT" || this.tagName === "TEXTAREA" || this.isContentEditable)) throw new Error("Not an editable non-password field"); this.scrollIntoView({block:"center"}); this.focus(); }';
+      method === "browser_click" ? CLICK_FUNCTION : FOCUS_FUNCTION;
     const result = await cdp(tab, "Runtime.callFunctionOn", {
       objectId,
       functionDeclaration,

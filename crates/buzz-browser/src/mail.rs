@@ -143,10 +143,25 @@ async fn click_by_backend(client: &mut CdpClient, backend_id: i64) -> Result<(),
     Ok(())
 }
 
+/// Find a button whose accessible name starts with `Compose`.
+fn find_compose(ax_tree: &Value) -> Option<i64> {
+    collect_nodes_flat(ax_tree).into_iter().find_map(|n| {
+        let name = n["name"]["value"].as_str().unwrap_or_default();
+        let role = n["role"]["value"].as_str().unwrap_or_default();
+        if name.starts_with("Compose") && (role == "button" || role == "link") {
+            n["backendDOMNodeId"].as_i64()
+        } else {
+            None
+        }
+    })
+}
+
 /// The fixed Gmail compose journey.
 ///
-/// 1. Navigate to `compose_url`.
-/// 2. Wait (bounded, 30 s) for the AX tree to expose the four controls.
+/// 1. Start from the page already open: if it exposes a Compose button, click
+///    it. Only when it does not, and a `compose_url` was given, navigate there.
+/// 2. Wait (bounded, 30 s) for the AX tree to expose the four controls,
+///    clicking a Compose button once if one appears first.
 /// 3. Click recipient, type `to`; click subject, type `subject`; click body,
 ///    type `body`; click Send.
 /// 4. Wait (bounded, 30 s) for the text "Message sent".
@@ -161,19 +176,41 @@ pub async fn run_mail_send_journey(
     body: &str,
     compose_url: &str,
 ) -> MailSendResult {
-    // Step 1: navigate.
-    if let Err(e) = client.navigate(compose_url).await {
-        return failed_result(to, subject, format!("navigation failed: {e}"), None);
+    // Step 1: prefer the Compose button on the page the owner already opened.
+    // Navigation is the fallback for a page that has no Compose button at all.
+    let has_compose = match client.get_ax_tree().await {
+        Ok(ax) => find_compose(&ax).is_some(),
+        Err(_) => false,
+    };
+    if !has_compose && !compose_url.is_empty() {
+        if let Err(e) = client.navigate(compose_url).await {
+            return failed_result(to, subject, format!("navigation failed: {e}"), None);
+        }
     }
 
-    // Step 2: bounded wait for controls (up to 30 s, bounded snapshot count).
+    // Step 2: bounded wait for controls (up to 30 s, bounded snapshot count),
+    // clicking a Compose button once if the form is not open yet.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut found: Option<(i64, i64, i64, i64)> = None;
     let mut attempts = 0usize;
+    let mut compose_clicked = false;
     while tokio::time::Instant::now() < deadline && attempts < 30 {
         attempts += 1;
         if let Ok(ax) = client.get_ax_tree().await {
             found = find_controls(&ax, "To", "Subject", "Message Body", "Send");
+            if found.is_none() && !compose_clicked {
+                if let Some(compose_id) = find_compose(&ax) {
+                    if let Err(e) = click_by_backend(client, compose_id).await {
+                        return failed_result(
+                            to,
+                            subject,
+                            format!("compose click failed: {e}"),
+                            None,
+                        );
+                    }
+                    compose_clicked = true;
+                }
+            }
         }
         if found.is_some() {
             break;
