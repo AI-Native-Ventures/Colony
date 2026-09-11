@@ -850,6 +850,39 @@ export async function buildInventory(projectRoot) {
   };
 }
 
+// Fields that describe SIZE rather than STRUCTURE, and therefore change on
+// almost every commit to `desktop/src-tauri` without saying anything about the
+// native surface this inventory exists to pin.
+//
+// A global line count inside a committed artefact taxes every open branch: one
+// unrelated commit on develop makes every other branch's committed inventory
+// stale, and the drift check then accuses a PR whose own diff did nothing.
+// Three of four red runs on PR #726 were exactly that, and the error names the
+// innocent file.
+//
+// The `commit` field was removed from this artefact for the same reason, which
+// is the precedent: informational-only fields that churn do not belong in the
+// committed copy. They are still computed and still printed by
+// `formatSummary`; they are simply not persisted, so there is nothing to go
+// stale and nothing to conflict over.
+const VOLATILE_COUNT_FIELDS = ["rust_lines", "portable_lines"];
+
+/**
+ * A copy of `inventory` with the churning size fields removed.
+ *
+ * Tolerant of an inventory that never had them, so it can be applied to both
+ * sides of the drift comparison and to a file committed before this change.
+ */
+export function withoutVolatileCounts(inventory) {
+  const copy = { ...inventory };
+  delete copy.commit;
+  if (copy.files) {
+    copy.files = { ...copy.files };
+    for (const field of VOLATILE_COUNT_FIELDS) delete copy.files[field];
+  }
+  return copy;
+}
+
 export function formatSummary(data) {
   const { files, commands, params, events } = data;
   const lines = [];
@@ -936,10 +969,8 @@ export async function runNativeInventory({ projectRoot, jsonPath, checkPath }) {
       process.exitCode = 1;
       return;
     }
-    const current = { ...data };
-    delete current.commit;
-    const baseline = { ...committed };
-    delete baseline.commit;
+    const current = withoutVolatileCounts(data);
+    const baseline = withoutVolatileCounts(committed);
     if (!isDeepStrictEqual(current, baseline)) {
       console.error(
         "native inventory is stale: desktop/src-tauri code no longer matches desktop/native-inventory.json.",
@@ -956,7 +987,13 @@ export async function runNativeInventory({ projectRoot, jsonPath, checkPath }) {
     return;
   }
   if (jsonPath) {
-    await fs.writeFile(jsonPath, `${JSON.stringify(data, null, 2)}\n`);
+    // Written WITHOUT the churning size fields; `formatSummary` below still
+    // prints them from the in-memory data, so the human output is unchanged
+    // and only the committed copy gets quieter.
+    await fs.writeFile(
+      jsonPath,
+      `${JSON.stringify(withoutVolatileCounts(data), null, 2)}\n`,
+    );
   }
   console.log(formatSummary(data));
 }
