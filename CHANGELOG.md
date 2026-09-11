@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fix(desktop): start Codex teammates from the ChatGPT login already on this Mac, so an existing business no longer hits a Power setup screen it cannot open. Claude Code still needs Power setup: its login lives in the macOS keychain rather than in a config directory, so there is nothing on disk to adopt.
+
 ## v0.17.1
 
 - fix(browser): keep the packaged mail_send tool disabled unless the daemon is started with BUZZ_BROWSER_MAIL_SEND=enabled, so managed agents cannot send email before the owner's outreach approval flow exists.

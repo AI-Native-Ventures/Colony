@@ -1,6 +1,6 @@
 //! Trusted subscription coordinator; all work tools retain the worker sandbox.
 
-use super::{launch, network::WorkerNetwork};
+use super::{host_login, launch, network::WorkerNetwork};
 use crate::managed_agents::{find_command, known_acp_runtime, ManagedAgentRuntimeKey};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, ffi::OsString, path::Path, process::Command, sync::Arc};
@@ -47,7 +47,7 @@ pub(crate) fn preflight(
         relay_url: relay.to_owned(),
     };
     let profile = scope.profile(app, runtime)?;
-    if !profile.is_dir() {
+    if !profile.is_dir() && !host_login::adopt(&profile, runtime) {
         return Err(
             "Connect a subscription for this business in Power setup before starting the agent."
                 .into(),
@@ -98,7 +98,7 @@ pub(super) fn prepare(
         relay_url: key.relay_url.clone(),
     };
     let profile = scope.profile(app, runtime)?;
-    if !profile.is_dir() {
+    if !profile.is_dir() && !host_login::adopt(&profile, runtime) {
         return Err(
             "Connect a subscription for this business in Power setup before starting the agent."
                 .into(),
