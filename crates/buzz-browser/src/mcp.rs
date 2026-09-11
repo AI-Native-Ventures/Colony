@@ -37,7 +37,7 @@ pub const MAIL_SEND_ENV_ENABLED: &str = "enabled";
 
 /// Returns true only when `BUZZ_BROWSER_MAIL_SEND` equals exactly `"enabled"`.
 pub fn mail_send_enabled_from_env() -> bool {
-    std::env::var(MAIL_SEND_ENV).as_deref() == Some(MAIL_SEND_ENV_ENABLED)
+    std::env::var(MAIL_SEND_ENV).as_deref() == Ok(MAIL_SEND_ENV_ENABLED)
 }
 
 /// Pure gate used by the `mail_send` handler and by tests.
