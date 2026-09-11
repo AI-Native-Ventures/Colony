@@ -779,6 +779,7 @@ test("mocked Brief state renders the brief and start action", async ({
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
     relaySelf: OWNER_PUBKEY,
     ...mockWebsiteTeam(),
   });
@@ -804,6 +805,7 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
     relaySelf: OWNER_PUBKEY,
     ...mockWebsiteTeam(),
   });
@@ -849,6 +851,7 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
     relaySelf: OWNER_PUBKEY,
     ...mockWebsiteTeam(),
   });
@@ -906,6 +909,7 @@ test("mocked Revision state shows the exact change request", async ({
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
     relaySelf: OWNER_PUBKEY,
     ...mockWebsiteTeam(),
   });
@@ -929,6 +933,7 @@ test("mocked Handover state shows confirmed resources and the draft request", as
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
     relaySelf: OWNER_PUBKEY,
     ...mockWebsiteTeam(),
   });
@@ -954,6 +959,7 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
     relaySelf: OWNER_PUBKEY,
     blockActionPublishErrors: ["network unreachable"],
     ...mockWebsiteTeam(),
@@ -1074,6 +1080,7 @@ test("mocked browser build reports the native preview as unavailable", async ({
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
   await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
     relaySelf: OWNER_PUBKEY,
     ...mockWebsiteTeam(),
   });
