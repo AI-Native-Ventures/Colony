@@ -92,11 +92,11 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     test(`approved ${manifest.handle}: actual channel and thread in ${theme}`, async ({
       page,
     }, info) => {
-      expect(approvedCoreManifests).toHaveLength(24);
+      expect(approvedCoreManifests).toHaveLength(25);
       expect(
         new Set(approvedCoreManifests.map(({ manifest }) => manifest.handle))
           .size,
-      ).toBe(24);
+      ).toBe(25);
       assertApprovedFixture(manifest);
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -247,7 +247,7 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     await expect(page.getByTestId("rich-preview-gallery")).toHaveCount(0);
     const catalog = page.getByTestId("blocks-workspace-catalog");
     const tiles = catalog.locator('[data-testid^="select-block-preview-"]');
-    await expect(tiles).toHaveCount(24);
+    await expect(tiles).toHaveCount(25);
     expect(
       (
         await tiles.evaluateAll((nodes) =>
