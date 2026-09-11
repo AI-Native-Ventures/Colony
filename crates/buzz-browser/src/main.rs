@@ -7,6 +7,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
+    let enabled = buzz_browser::mcp::mail_send_enabled_from_env();
+    tracing::info!("mail_send enabled={enabled}");
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("journey") {
         let rt = tokio::runtime::Builder::new_current_thread()

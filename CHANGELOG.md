@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.17.1
+
+- fix(browser): keep the packaged mail_send tool disabled unless the daemon is started with BUZZ_BROWSER_MAIL_SEND=enabled, so managed agents cannot send email before the owner's outreach approval flow exists.
+
 ## relay-v0.11.11
 
 - fix(relay): accept kind:30621 project announcements at ingest again (repo-write scope, global-only routing, NIP-MP envelope validation), as upstream did in #3171. The Rust port had dropped it, so production rejected every project with `restricted: unknown event kind`; the desktop then silently created repo-only projects that could not be linked to a channel, which kept project channels and the Factory tab from ever activating.

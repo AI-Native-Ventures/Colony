@@ -153,6 +153,10 @@ an interaction grant, the same one `browser_click` and `browser_type` need.
 Requires a prior `browser_connect`. The journey uses only AX-tree accessible-name
 prefixes (no CSS selectors), so it survives Gmail's dynamic markup changes.
 
+### Enabling
+
+Disabled by default. The daemon must be started with `BUZZ_BROWSER_MAIL_SEND=enabled`. The desktop does not set it for managed agents; the outreach approval flow (sales employee steps 4 and 5) will enable it only for an owner-approved send job.
+
 ### Outputs
 
 ```json
