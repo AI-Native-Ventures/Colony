@@ -152,6 +152,15 @@ try {
   assert.equal(migrated.ownerComplete, "true");
   assert.ok(migrated.draft.includes("Unsent migration proof"));
   assert.equal(migrated.theme, "github-dark");
+  // CommunityThemeController re-applies the scoped appearance once identity and
+  // the active community resolve, and that apply rewrites buzz-theme even when
+  // nothing changed. An edit made before it lands is clobbered with the
+  // imported github-dark and then reads as a lost Electron edit on relaunch.
+  // The fixture never seeds buzz-accent-color and only that apply writes it,
+  // so its presence proves the controller's startup write has already landed.
+  await page.waitForFunction(
+    () => localStorage.getItem("buzz-accent-color") !== null,
+  );
   await page.evaluate(() => {
     localStorage.setItem("buzz-theme", "github-light");
     localStorage.setItem(
