@@ -39,9 +39,7 @@ export function markWebsiteCompositeRendered(
   };
 }
 
-export function isWebsiteCompositeRendered(
-  instanceEventId: string,
-): boolean {
+export function isWebsiteCompositeRendered(instanceEventId: string): boolean {
   return rendered.has(instanceEventId);
 }
 
