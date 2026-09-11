@@ -289,6 +289,7 @@ pub fn build_managed_agent_summary(
         working_dir: record.working_dir.clone(),
         pubkey: record.pubkey.clone(),
         owner_identified: super::owner_scope::effective_owner_pubkey(record).is_some(),
+        provisioned: record.provisioned.clone(),
         isolated: pair_runtime.is_some_and(|runtime| runtime.isolation_network.is_some()),
         browser_generation: pair_runtime
             .filter(|runtime| runtime.isolation_network.is_some())

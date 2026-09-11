@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 513,
-    "rust_lines": 188119,
+    "rust_lines": 188244,
     "tauri_coupled": 204,
     "portable": 309,
-    "portable_lines": 106488,
+    "portable_lines": 106594,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -1358,6 +1358,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/agents/provisionedLock.ts:8",
         "src/shared/api/tauri.ts:708"
       ]
     },
@@ -2411,7 +2412,7 @@
       "example_sites": [
         "src/parity/session/script.ts:565",
         "src/shared/api/tauri.ts:441",
-        "src/shared/api/types.ts:907"
+        "src/shared/api/types.ts:917"
       ]
     },
     "get_tts_settings": {
@@ -4155,6 +4156,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/agents/provisionedLock.ts:8",
         "src/parity/session/script.ts:1393",
         "src/shared/api/tauri.ts:910"
       ]

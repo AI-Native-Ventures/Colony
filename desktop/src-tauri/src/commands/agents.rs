@@ -657,6 +657,17 @@ pub async fn delete_managed_agent(
                 state.clear_agent_session_caches(pubkey);
             }
 
+            // Guard: an employee Colony provides is not the workspace's to
+            // delete. Ingest refuses every destructive path anyway, so a
+            // delete here could only drop this machine's copy and leave the
+            // employee standing, and the next community init would adopt it
+            // straight back: a confusing no-op rather than an outcome.
+            // `validate_persona_deletion` has said the same about built-in
+            // personas for as long as those have existed.
+            if let Some(record) = records.iter().find(|r| r.pubkey == pubkey) {
+                crate::managed_agents::provisioned::refuse_delete_if_provisioned(record)?;
+            }
+
             // Guard: reject deletion of deployed remote agents unless explicitly forced.
             // This turns "don't orphan remote infra" from a UI convention into a backend
             // invariant — a buggy or compromised IPC caller cannot silently orphan a live

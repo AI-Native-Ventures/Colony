@@ -614,6 +614,13 @@ pub struct ManagedAgentSummary {
     /// Whether the saved record identifies its hiring owner. Browser sharing
     /// rejects legacy records whose display-only ownership fallback is unknown.
     pub owner_identified: bool,
+    /// The bundled entry this agent was provisioned from, or `None` for one
+    /// the workspace created itself.
+    ///
+    /// Surfaced to the UI so it can present a provisioned employee as locked.
+    /// The refusals live in the commands, not here: hiding a control is a
+    /// courtesy, and a courtesy is not a guarantee.
+    pub provisioned: Option<String>,
     pub name: String,
     pub persona_id: Option<String>,
     /// The record's harness/runtime id (mirror of `ManagedAgentRecord.runtime`).
