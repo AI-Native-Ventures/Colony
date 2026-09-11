@@ -41,7 +41,20 @@ const tools = [
     description: "View the shared tab as an image.",
     inputSchema: schema({ tabId: string }),
   },
+  {
+    name: "mail_send",
+    description:
+      "Send an approved email from the shared Gmail tab: click its Compose button, fill the form by accessible-name prefix, click Send, and confirm the 'Message sent' notice. Requires an interaction grant. Returns structured JSON with status, failure reason, sent_at, inputs, and a base64 PNG screenshot.",
+    inputSchema: schema({
+      tabId: string,
+      to: string,
+      subject: string,
+      body: string,
+    }),
+  },
 ];
+// The journey holds the connection through two bounded 30 s waits.
+const MAIL_SEND_TIMEOUT_MS = 90000;
 
 async function dispatch(message) {
   if (message.method === "initialize")
@@ -65,11 +78,11 @@ async function dispatch(message) {
           "No browser tab is shared. Ask the owner to choose a teammate and share a tab in Colony.",
         );
       }
-      const result = await requestBroker(grant.socketPath, {
-        token: grant.token,
-        method: name,
-        args,
-      });
+      const result = await requestBroker(
+        grant.socketPath,
+        { token: grant.token, method: name, args },
+        name === "mail_send" ? MAIL_SEND_TIMEOUT_MS : undefined,
+      );
       if (name === "browser_screenshot")
         return {
           content: [
