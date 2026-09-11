@@ -81,6 +81,7 @@ export function BlockPrimitive({
       return (
         <BlockStatus
           attentionResolution={context.attentionResolution}
+          attentionStatusLabel={context.attentionStatusLabel}
           data={context.data}
           node={node}
           rootData={rootData}

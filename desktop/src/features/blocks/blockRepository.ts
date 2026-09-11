@@ -64,6 +64,8 @@ export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
   "30422971240c5644ba5677410f12671bc581610bf8428e1496ef40ead1d0fb6e",
   // report 1.1.0; retain historical digests below.
   "86f1ca1ddb874158926dce81aa308dde42fdcc81abf1ee3b55777215257b5834",
+  // outreach-email 1.0.0; retain historical digests below.
+  "1c728cad458df614ddc8036dbcef502484b363ddc791df5a8a0454d5ae3e84c0",
   // media 1.1.0; retain the prior digest for pinned conversation history.
   "dc672b9514f8a31ae871d2935899e96aeb10d929a9e6c5a2546a9b8fb07335da",
   "d9a3804173fb77c5c3a084889b528519188f48a5520bc3fcea3a39fffb3c78fb",

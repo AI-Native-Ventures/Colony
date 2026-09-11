@@ -17,6 +17,7 @@ import {
 } from "@/features/agents/lib/instanceInputForDefinition";
 import { getProviderEffortConfig } from "@/features/agents/ui/buzzAgentConfig";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { nativeErrorMessage } from "@/features/factory/lib/nativeErrorMessage";
 import { findProjectForChannel } from "@/features/factory/lib/projectChannel";
 import {
   launchSelectionId,
@@ -296,10 +297,12 @@ export function LaunchAgentDialog({
       });
       onOpenChange(false);
     } catch (caught) {
-      const message =
-        caught instanceof Error
-          ? caught.message
-          : "Could not launch the agent.";
+      // The shells reject a native failure as a plain string, so the host's
+      // own message only reaches the user through nativeErrorMessage.
+      const native = nativeErrorMessage(caught, "Could not launch the agent.");
+      const message = native.includes("no local checkout")
+        ? `${native} Add a clone URL to this project's repository, then try again.`
+        : native;
       setProblem(message);
       toast.error(message);
     } finally {

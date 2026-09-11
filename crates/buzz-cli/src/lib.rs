@@ -210,6 +210,9 @@ enum Cmd {
     /// Start, inspect, and cancel entitled business Discovery runs
     #[command(subcommand)]
     Discovery(DiscoveryCmd),
+    /// Draft and track owner-approved outreach email cards
+    #[command(subcommand)]
+    Outreach(OutreachCmd),
     /// Read and request changes to cross-team Initiatives
     #[command(subcommand)]
     Initiatives(InitiativesCmd),
@@ -1526,6 +1529,9 @@ pub enum TasksCmd {
 
 mod block_cli;
 pub use block_cli::BlocksCmd;
+
+mod outreach_cli;
+pub use outreach_cli::{OutreachCmd, OutreachStatusArg};
 
 #[derive(Subcommand)]
 pub enum MessagesCmd {
@@ -3639,6 +3645,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Parties(sub) => commands::parties::dispatch_parties(sub, &client).await,
         Cmd::Ledger(sub) => commands::ledger::dispatch_ledger(sub, &client).await,
         Cmd::Discovery(sub) => commands::discovery::dispatch(sub, &client).await,
+        Cmd::Outreach(sub) => commands::outreach::dispatch(sub, &client, &cli.format).await,
         Cmd::Initiatives(sub) => commands::company::dispatch_initiatives(sub, &client).await,
         Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
@@ -3685,6 +3692,90 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn outreach_command_surface_parses() {
+        let channel = "7f2b1d0e-3c4a-4f6b-9a81-2d5e7c9b0a14";
+        let lead = "3f2a91c4-6d18-4a7b-9e02-5c81b7d4a610";
+        let event = "a".repeat(64);
+        let draft = vec![
+            "buzz",
+            "outreach",
+            "draft",
+            "--channel",
+            channel,
+            "--lead",
+            lead,
+            "--subject",
+            "Winter boiler special",
+            "--body",
+            "-",
+            "--from",
+            "basheer@horizonlabs.co.za",
+        ];
+        assert!(Cli::try_parse_from(&draft).is_ok());
+
+        let mut threaded = draft.clone();
+        threaded.extend(["--to", "info@atlanticplumb.co.za", "--expires-in", "24h"]);
+        threaded.extend(["--reply-to", &event]);
+        assert!(Cli::try_parse_from(&threaded).is_ok());
+
+        for required in ["--channel", "--lead", "--subject", "--body", "--from"] {
+            let position = draft
+                .iter()
+                .position(|argument| *argument == required)
+                .expect("flag is present in the full command");
+            let mut missing = draft.clone();
+            missing.drain(position..position + 2);
+            assert!(
+                Cli::try_parse_from(&missing).is_err(),
+                "{required} must be required"
+            );
+        }
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "outreach",
+            "draft",
+            "--channel",
+            channel,
+            "--lead",
+            "not-a-uuid",
+            "--subject",
+            "s",
+            "--body",
+            "b",
+            "--from",
+            "a@b.co",
+        ])
+        .is_err());
+
+        assert!(Cli::try_parse_from(["buzz", "outreach", "list", "--channel", channel]).is_ok());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "--format",
+            "compact",
+            "outreach",
+            "list",
+            "--channel",
+            channel,
+            "--status",
+            "pending",
+            "--limit",
+            "10",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "outreach",
+            "list",
+            "--channel",
+            channel,
+            "--status",
+            "unknown",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["buzz", "outreach", "list"]).is_err());
     }
 
     #[test]
@@ -4244,6 +4335,7 @@ mod tests {
             "messages",
             "moderation",
             "notes",
+            "outreach",
             "pack",
             "parties",
             "patches",

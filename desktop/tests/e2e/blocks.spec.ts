@@ -96,7 +96,7 @@ test.describe.configure({ mode: "serial", timeout: 120_000 });
 test.beforeAll(createProofDirectory);
 test.afterAll(() => assertDistinctScreenshots(SCREENSHOTS));
 
-test("all 11 native primitives and the 10 bundled composites render through MessageRow", async ({
+test("all 11 native primitives and the 11 bundled composites render through MessageRow", async ({
   page,
 }) => {
   const errors = trackPageErrors(page);

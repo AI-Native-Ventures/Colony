@@ -475,6 +475,26 @@ async fn relay_self(client: &BuzzClient) -> Result<PublicKey, CliError> {
         .map_err(|error| CliError::Other(format!("relay self pubkey is invalid: {error}")))
 }
 
+/// Read one retained Lead through the same entitled `get_lead` path
+/// `buzz discovery lead-get` uses, and return its full detail.
+pub(crate) async fn fetch_lead(
+    client: &BuzzClient,
+    lead_id: Uuid,
+) -> Result<buzz_core::discovery_workspace::DiscoveryLeadDetail, CliError> {
+    let receipt = request_workspace_payload(
+        client,
+        DiscoveryWorkspaceActionPayload::GetLead { lead_id },
+        None,
+    )
+    .await?;
+    match receipt.receipt.result {
+        DiscoveryWorkspaceResult::Lead { lead } => Ok(*lead),
+        _ => Err(CliError::Other(
+            "Discovery Lead lookup returned another result".to_owned(),
+        )),
+    }
+}
+
 async fn publish_workspace_payload(
     client: &BuzzClient,
     payload: DiscoveryWorkspaceActionPayload,

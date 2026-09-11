@@ -179,6 +179,48 @@ stored rules in `validation_error` so an owner can remove and repair them.
 | | `set` | Write a memory value (use `-` for stdin) |
 | | `patch` | Apply unified diff to memory value |
 | | `rm` | Publish a tombstone to delete memory |
+| `outreach` | `draft` | Draft one outreach email card for one Discovery Lead |
+| | `list` | List outreach email cards and their current status |
+
+## Outreach
+
+`buzz outreach` writes the sales employee's one-email-per-lead cards. Each card
+is the bundled `@outreach-email` Block: the owner sees the exact subject, body,
+recipient and sending mailbox, and presses Approve or Skip. Silence never
+sends, because every card carries an expiry.
+
+```bash
+# Draft one card from a Discovery Lead, body read from stdin, threaded into
+# the conversation that asked for it.
+buzz outreach draft \
+  --channel <channel-uuid> \
+  --lead <lead-uuid> \
+  --from you@yourcompany.com \
+  --subject "Winter boiler special for Sea Point homes" \
+  --body - \
+  --reply-to <event-id> < email.txt
+
+# Track what the owner has decided.
+buzz outreach list --channel <channel-uuid>
+buzz outreach list --channel <channel-uuid> --status pending --limit 20
+buzz --format compact outreach list --channel <channel-uuid>
+```
+
+`draft` reads the Lead through the entitled Discovery `get_lead` path: the
+Lead's name becomes the card's business name, its campaign becomes the campaign
+id, and its email becomes the recipient unless `--to` names another mailbox. A
+Lead with no email is a usage error naming that Lead. `--expires-in` accepts
+`90s`, `30m`, `72h` or `3d` and defaults to `72h`. Leave `--processor` out: the relay
+then names the owner as the one who answers the card's buttons, and the owner's desktop sends on Approve. The data is
+validated against the active `outreach-email` manifest before anything reaches
+the relay, so a bad field fails loudly and posts nothing.
+
+`list` reports `event_id`, `lead_id`, `destination`, `subject`, `status` and
+`updated_at` per card. The status starts at the drafted `pending` and advances
+through the accepted actions and receipts the channel already holds: an approve
+makes it `approved`, a receipt reporting the approved send succeeded makes it
+`sent`, a failed or timed-out receipt makes it `failed`, and a skip or a denied
+receipt makes it `skipped`.
 
 ## Architecture
 

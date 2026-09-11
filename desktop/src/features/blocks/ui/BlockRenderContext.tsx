@@ -13,6 +13,7 @@ import {
 } from "@/features/blocks/agentProposal";
 import { validateBlockActionData } from "@/features/blocks/blockValidation";
 import {
+  declaresApprovalPermission,
   resolveApprovalActionInputForSubmission,
   resolveApprovalActionInputs,
   submitBlockAction,
@@ -45,6 +46,7 @@ type BlockRenderContextValue = {
   actionError: string | null;
   actionNotice: string | null;
   attentionResolution?: "succeeded" | "denied";
+  attentionStatusLabel?: string;
 };
 
 const BlockRenderContext = React.createContext<BlockRenderContextValue | null>(
@@ -60,6 +62,7 @@ function exactChannelId(tags: string[][] | undefined): string | null {
 export function BlockRenderProvider({
   children,
   attentionResolution,
+  attentionStatusLabel,
   completedActionIds,
   data,
   instance,
@@ -72,6 +75,7 @@ export function BlockRenderProvider({
 }: {
   children: React.ReactNode;
   attentionResolution?: "succeeded" | "denied";
+  attentionStatusLabel?: string;
   completedActionIds: ReadonlySet<string>;
   data: unknown;
   instance: BlockInstanceRef;
@@ -93,14 +97,14 @@ export function BlockRenderProvider({
   );
   const approvalInputs = React.useMemo(
     () =>
-      manifest.handle === "approval"
-        ? resolveApprovalActionInputs(data, nowSeconds)
+      declaresApprovalPermission(manifest)
+        ? resolveApprovalActionInputs(manifest, data, nowSeconds)
         : null,
-    [data, manifest.handle, nowSeconds],
+    [data, manifest, nowSeconds],
   );
   React.useEffect(() => {
     if (
-      manifest.handle !== "approval" ||
+      !declaresApprovalPermission(manifest) ||
       typeof data !== "object" ||
       data === null ||
       Array.isArray(data)
@@ -123,7 +127,7 @@ export function BlockRenderProvider({
       delay,
     );
     return () => window.clearTimeout(timeout);
-  }, [data, manifest.handle, nowSeconds]);
+  }, [data, manifest, nowSeconds]);
   const blueprintInputs = React.useMemo(
     () =>
       manifest.handle === "company-blueprint"
@@ -238,8 +242,9 @@ export function BlockRenderProvider({
       if (derivedInitiativeInput) {
         currentInput = derivedInitiativeInput;
       }
-      if (manifest.handle === "approval") {
+      if (declaresApprovalPermission(manifest)) {
         const currentApprovalInput = resolveApprovalActionInputForSubmission(
+          manifest,
           data,
           interaction.action_id,
           Math.floor(Date.now() / 1000),
@@ -433,6 +438,7 @@ export function BlockRenderProvider({
       actionError,
       actionNotice,
       attentionResolution,
+      attentionStatusLabel,
       actionEnvironment: {
         origin: trust,
         trusted,
@@ -461,6 +467,7 @@ export function BlockRenderProvider({
       actionError,
       actionNotice,
       attentionResolution,
+      attentionStatusLabel,
       actionUnavailableReasons,
       completedActionIds,
       declaredActionIds,
