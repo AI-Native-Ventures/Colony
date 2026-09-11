@@ -217,11 +217,11 @@ async fn publish_team(client: &mut BuzzTestClient, keys: &Keys, team: &CompanyTe
     .tags(vec![Tag::parse(["d", team.id.as_str()]).expect("d tag")])
     .sign_with_keys(keys)
     .expect("team signs");
+    let ok = send_past_transport_stall(client, event, "team head").await;
     assert!(
-        send_past_transport_stall(client, event, "team accepted")
-            .await
-            .accepted,
-        "the relay must accept the team head this suite validates against"
+        ok.accepted,
+        "the relay must accept the team head: {}",
+        ok.message
     );
 }
 
@@ -243,11 +243,11 @@ async fn publish_managed_agent(
     .expect("d tag")])
     .sign_with_keys(owner)
     .expect("managed agent signs");
+    let ok = send_past_transport_stall(client, event, "managed agent head").await;
     assert!(
-        send_past_transport_stall(client, event, "managed agent accepted")
-            .await
-            .accepted,
-        "the relay must accept the managed-agent head personas resolve through"
+        ok.accepted,
+        "the relay must accept the managed-agent head personas resolve through: {}",
+        ok.message
     );
 }
 
@@ -366,8 +366,11 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         review: format!("persona-review-{}", &suffix[..12]),
     };
     let coordinator_persona = format!("persona-coordinator-{}", &suffix[..12]);
+    // Keep the id ending in the coordination slug as well as naming the
+    // coordinator persona in the attach: either path must settle this team
+    // without depending on another suite's coordination team.
     let team = CompanyTeamRef {
-        id: format!("team-website-{}", &suffix[..12]),
+        id: format!("team-{}-company-coordination", &suffix[..12]),
         lead_persona_id: coordinator_persona.clone(),
         persona_ids: vec![
             coordinator_persona.clone(),
@@ -397,7 +400,7 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         send_id: &send_id,
         mode: ThreadAttachMode::Open,
         title: "Improve our website",
-        agent_persona_id: None,
+        agent_persona_id: Some(coordinator_persona.as_str()),
         client_organization_id: None,
         parent_task_id: None,
         owner_pubkey: &owner.public_key().to_hex(),
@@ -410,11 +413,11 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         .sign_with_keys(owner)
         .expect("attach signs");
     let attach_id = attach_event.id.to_hex();
+    let attach_ok = send_past_transport_stall(client, attach_event, "thread attach").await;
     assert!(
-        send_past_transport_stall(client, attach_event, "thread attach")
-            .await
-            .accepted,
-        "the thread attach must be accepted"
+        attach_ok.accepted,
+        "the thread attach must be accepted: {}",
+        attach_ok.message
     );
     let task_id = await_receipt_task(client, &relay, &attach_id).await;
 
@@ -429,11 +432,11 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
     .sign_with_keys(owner)
     .expect("root signs");
     let thread_root = root_event.id.to_hex();
+    let root_ok = send_past_transport_stall(client, root_event, "thread root").await;
     assert!(
-        send_past_transport_stall(client, root_event, "thread root")
-            .await
-            .accepted,
-        "the owner's root message is stored"
+        root_ok.accepted,
+        "the owner's root message is stored: {}",
+        root_ok.message
     );
     await_task_root(client, &task_id, &thread_root).await;
 
@@ -465,6 +468,9 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
                 instance_id.to_string().as_str(),
             ])
             .expect("block tag"),
+            // The instance must reference the exact manifest event under the
+            // `block` marker; a bare `block` tag is not enough.
+            Tag::parse(["e", manifest_event_id.as_str(), "", "block"]).expect("manifest tag"),
             Tag::parse(["block-data", canonical.as_str()]).expect("data tag"),
             Tag::parse([
                 "block-processor",
@@ -478,11 +484,12 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         .sign_with_keys(&coordinator)
         .expect("instance signs");
     let instance_event_id = instance_event.id.to_hex();
+    let instance_ok =
+        send_past_transport_stall(client, instance_event, "review instance").await;
     assert!(
-        send_past_transport_stall(client, instance_event, "review instance")
-            .await
-            .accepted,
-        "the review card instance must be accepted by generic Block validation"
+        instance_ok.accepted,
+        "the review card instance must be accepted by generic Block validation: {}",
+        instance_ok.message
     );
 
     Fixture {
