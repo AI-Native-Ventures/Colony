@@ -505,6 +505,9 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
                 coordinator.public_key().to_hex().as_str(),
             ])
             .expect("processor tag"),
+            // Attention must be declared for the `p` tag to become the
+            // decision maker the website authority pins against.
+            Tag::parse(["block-attention", "1", "required"]).expect("attention declaration"),
             Tag::parse(["p", owner.public_key().to_hex().as_str()]).expect("attention tag"),
             Tag::parse(["e", thread_root.as_str(), "", "reply"]).expect("reply tag"),
         ])
@@ -711,7 +714,14 @@ async fn an_unassigned_agent_cannot_create() {
     let ok = send_action(&mut outsider_client, &outsider, &action).await;
     assert!(
         !ok.accepted,
-        "an agent without the installed team's persona cannot create"
+        "an agent without the installed team's persona cannot create: {}",
+        ok.message
+    );
+    assert!(
+        ok.message
+            .contains("may only create the website job it coordinates"),
+        "the refusal must be about coordinator ownership, not a broken fixture: {}",
+        ok.message
     );
     assert!(job_row_generation(&fixture.task_id).await.is_none());
 }
@@ -741,7 +751,16 @@ async fn begin_work_requires_the_current_generation() {
     };
 
     let stale = send_action(&mut client, &owner, &build_action(99)).await;
-    assert!(!stale.accepted, "a stale generation must be refused");
+    assert!(
+        !stale.accepted,
+        "a stale generation must be refused: {}",
+        stale.message
+    );
+    assert!(
+        stale.message.contains("website job generation conflict"),
+        "the stale refusal must be the generation CAS, not a broken fixture: {}",
+        stale.message
+    );
     assert_eq!(job_row_generation(&fixture.task_id).await, Some(1));
 
     let fresh = send_action(&mut client, &owner, &build_action(1)).await;
@@ -784,7 +803,16 @@ async fn a_stranger_cannot_read_or_advance_the_job() {
         .await
         .expect("connect as stranger");
     let ok = send_action(&mut stranger_client, &stranger, &begin).await;
-    assert!(!ok.accepted, "a stranger cannot advance someone else's job");
+    assert!(
+        !ok.accepted,
+        "a stranger cannot advance someone else's job: {}",
+        ok.message
+    );
+    assert!(
+        ok.message.contains("website job unavailable"),
+        "the stranger refusal must be the non-revealing job refusal, not a broken fixture: {}",
+        ok.message
+    );
     assert_eq!(job_row_generation(&fixture.task_id).await, Some(1));
 }
 
@@ -812,7 +840,15 @@ async fn a_mismatched_request_payload_is_refused() {
     let ok = send_action(&mut client, &owner, &conflicting).await;
     assert!(
         !ok.accepted,
-        "the same request UUID with a different payload is a conflict"
+        "the same request UUID with a different payload is a conflict: {}",
+        ok.message
+    );
+    assert!(
+        ok
+            .message
+            .contains("website request replay carries a different payload"),
+        "the conflict refusal must be the replay-digest check, not a broken fixture: {}",
+        ok.message
     );
 }
 
@@ -838,7 +874,14 @@ async fn builder_and_reviewer_cannot_be_the_same_agent() {
     let ok = send_action(&mut client, &owner, &action).await;
     assert!(
         !ok.accepted,
-        "an overlapping build/review persona is refused"
+        "an overlapping build/review persona is refused: {}",
+        ok.message
+    );
+    assert!(
+        ok.message
+            .contains("invalid persona list for reviewPersonas"),
+        "the overlap refusal must be the persona-list parser, not a broken fixture: {}",
+        ok.message
     );
     assert!(job_row_generation(&fixture.task_id).await.is_none());
 }
