@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { WebContentsView, session } from "electron";
 import { Authority, normalizeUrl } from "./authority.mjs";
-import { snapshot, screenshot, actOnRef } from "./page-tools.mjs";
 import { mailSend } from "./mail-journey.mjs";
+import { runBrowserTool } from "./tool-dispatch.mjs";
 
 /** Real embedded tabs owned by one active Colony business at a time. */
 export class BrowserViews {
@@ -152,6 +152,39 @@ export class BrowserViews {
     return tab;
   }
 
+  /**
+   * The active business's tabs, as the owner-side outreach send sees them.
+   *
+   * The live URL is read from the page rather than the opening request, so a
+   * tab the owner navigated to Gmail after opening it counts.
+   */
+  ownerTabs() {
+    const controlled = new Set(
+      [...this.authority.grants.values()].map((grant) => grant.tabId),
+    );
+    return [...this.tabs.values()]
+      .filter((tab) => tab.workspace === this.business)
+      .map((tab) => ({
+        id: tab.id,
+        url: tab.view.webContents.getURL() || tab.url,
+        controlled: controlled.has(tab.id),
+      }));
+  }
+
+  /**
+   * Run the Gmail journey on the owner's own tab, with no worker grant.
+   *
+   * The owner pressing Approve is the authority here, so the journey's guard
+   * is a no-op. The work still joins the tab's queue, so it cannot interleave
+   * with a tool call a teammate already had in flight.
+   */
+  ownerMailSend(id, args) {
+    const tab = this.get(id);
+    const result = tab.queue.then(() => mailSend(tab, args, () => {}));
+    tab.queue = result.catch(() => {});
+    return result;
+  }
+
   bounds({ id, business, bounds, visible }) {
     if (business !== this.business) return;
     const tab = this.get(id);
@@ -226,12 +259,7 @@ export class BrowserViews {
       const check = (options) =>
         this.authority.check(token, args.tabId, options);
       check();
-      if (method === "browser_snapshot") return snapshot(tab, check);
-      if (method === "browser_screenshot") return screenshot(tab, check);
-      if (["browser_type", "browser_click"].includes(method))
-        return actOnRef(tab, args, method, check);
-      if (method === "mail_send") return mailSend(tab, args, check);
-      throw new Error("Unknown browser tool");
+      return runBrowserTool(tab, method, args, check);
     };
     const result = tab.queue.then(run);
     tab.queue = result.catch(() => {});
