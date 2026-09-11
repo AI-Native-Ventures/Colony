@@ -433,7 +433,7 @@ mod tests {
         (
             "outreach-email",
             1789084800,
-            "98bbde9424dc25e0c44ed76064e9be38650f4af347cd9b68f2bfc80802354939",
+            "1c728cad458df614ddc8036dbcef502484b363ddc791df5a8a0454d5ae3e84c0",
         ),
         (
             "report",

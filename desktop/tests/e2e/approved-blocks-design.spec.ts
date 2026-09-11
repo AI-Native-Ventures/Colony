@@ -263,7 +263,7 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     );
     await expect(catalog.locator("[data-block-catalog-handle]")).toHaveCount(1);
     await catalog.getByRole("button", { name: /^Composed\b/ }).click();
-    await expect(tiles).toHaveCount(13);
+    await expect(tiles).toHaveCount(14);
     await catalog.getByRole("button", { name: /^Foundation\b/ }).click();
     await expect(tiles).toHaveCount(11);
     await catalog.getByRole("button", { name: /^Custom\b/ }).click();

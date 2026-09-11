@@ -108,7 +108,7 @@
           },
           {
             "label": "From",
-            "value": "{{from}}"
+            "value": "{{from}}, your Gmail"
           },
           {
             "label": "Subject",
