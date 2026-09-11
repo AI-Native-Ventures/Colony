@@ -564,7 +564,7 @@ test("rejects invalid asset paths", async () => {
     ["dir/\u0000file.html", "control character"],
     ["a".repeat(1025), "over 1024 bytes"],
   ];
-  for (const [path, reason] of cases) {
+  for (const [path, _reason] of cases) {
     await expectCode(
       () => parsePreviewManifest(manifestBytes([fileEntry(path, "x")])),
       "path_invalid",

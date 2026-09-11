@@ -13,7 +13,6 @@ import {
   selectWelcomeKickoffIntroTeammates,
   waitForWelcomeKickoffBeat,
   waitForWelcomeTeammatesOnline,
-  WELCOME_KICKOFF_PROVIDER_MARKER,
   welcomeTeammateNeedsRestart,
 } from "./welcomeKickoff.ts";
 

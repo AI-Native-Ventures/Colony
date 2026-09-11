@@ -29,7 +29,7 @@ export type WebsiteReviewProps = {
   onSelectRevision?: (revision: number) => void;
   onDecision?: (
     request: WebsiteDecisionRequest,
-  ) => Promise<WebsiteDecisionReceipt | void>;
+  ) => Promise<WebsiteDecisionReceipt | undefined>;
   artifactLoader?: WebsiteArtifactLoader;
   hostAdapter?: WebsitePreviewHostAdapter;
   getClipBounds?: WebsiteHostBoundsProvider;

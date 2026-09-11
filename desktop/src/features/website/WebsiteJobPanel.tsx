@@ -45,7 +45,7 @@ export type WebsiteJobPanelProps = {
   onStart?: (request: WebsiteStartRequest) => Promise<void> | void;
   onDecision?: (
     request: WebsiteDecisionRequest,
-  ) => Promise<WebsiteDecisionReceipt | void>;
+  ) => Promise<WebsiteDecisionReceipt | undefined>;
   artifactLoader?: WebsiteArtifactLoader;
   hostAdapter?: WebsitePreviewHostAdapter;
   downloadAdapter?: WebsiteArtifactDownloadAdapter;

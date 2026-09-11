@@ -71,7 +71,7 @@ test("runtime filenames use the native canonical relay identity", () => {
   );
   assert.notEqual(
     runtimeId(pubkey, relay),
-    runtimeId(pubkey, relay + "/other"),
+    runtimeId(pubkey, `${relay}/other`),
   );
   assert.throws(() => runtimeId("../bad", relay));
   assert.throws(() => runtimeId(pubkey, "https://relay.example"));

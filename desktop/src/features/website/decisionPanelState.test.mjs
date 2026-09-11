@@ -160,7 +160,7 @@ test("two simultaneous cards on different jobs stay independent", () => {
   assert.equal(cardB.pending, null);
   const switchedAway = withDecisionScope(
     cardA,
-    "chan-1\u0000job-3\u0000task-1\u0000" + OWNER,
+    `chan-1\u0000job-3\u0000task-1\u0000${OWNER}`,
   );
   assert.equal(switchedAway.pending, null);
   assert.equal(cardA.pending.request.jobId, "job-1");

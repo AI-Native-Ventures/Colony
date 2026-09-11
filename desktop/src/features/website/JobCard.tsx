@@ -86,7 +86,6 @@ function statusPresentation(
         icon: <CircleCheck aria-hidden="true" className="size-[13px]" />,
         className: "text-primary",
       };
-    case "draft":
     default:
       return {
         label: "Ready to start",

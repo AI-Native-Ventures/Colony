@@ -248,11 +248,7 @@ export function NewOnboardingFlow({
     setPending({ ...result, email, phase: "registered" });
   }
   async function acknowledgeRecovery() {
-    if (
-      !pending ||
-      pending.phase !== "registered" ||
-      !pending.recoveryCode.trim()
-    )
+    if (pending?.phase !== "registered" || !pending.recoveryCode.trim())
       throw new Error("Recovery code unavailable");
     const updated = { ...answersRef.current, recoveryAcknowledged: true };
     // Persist the successful backup acknowledgement before clearing its

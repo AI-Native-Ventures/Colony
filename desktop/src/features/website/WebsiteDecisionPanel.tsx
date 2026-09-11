@@ -47,7 +47,7 @@ export type WebsiteDecisionPanelProps = {
    */
   onDecision?: (
     request: WebsiteDecisionRequest,
-  ) => Promise<WebsiteDecisionReceipt | void>;
+  ) => Promise<WebsiteDecisionReceipt | undefined>;
   className?: string;
 };
 

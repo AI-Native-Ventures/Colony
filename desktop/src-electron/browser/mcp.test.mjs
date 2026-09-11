@@ -39,7 +39,7 @@ test("persistent MCP process starts without access and reads late grants on ever
         resolve(m);
       });
       child.stdin.write(
-        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+        `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`,
       );
     });
   try {

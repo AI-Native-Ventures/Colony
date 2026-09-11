@@ -153,13 +153,11 @@ function formatDetailsValue(
         : value,
     );
     if (!Number.isNaN(date.valueOf()))
-      return (
-        date.toLocaleString(undefined, {
-          dateStyle: "medium",
-          timeStyle: "short",
-          timeZone: "UTC",
-        }) + " UTC"
-      );
+      return `${date.toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: "UTC",
+      })} UTC`;
   }
   return value;
 }

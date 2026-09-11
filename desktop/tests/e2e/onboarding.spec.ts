@@ -4,7 +4,6 @@ import { nsecEncode } from "nostr-tools/nip19";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { GUIDE_NAME, STARTER_PERSONA_IDS } from "../helpers/starterTeam";
-import { installFakeCamera } from "../helpers/fakeCamera";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
   seedActiveIdentity,

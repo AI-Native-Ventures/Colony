@@ -417,7 +417,7 @@ try {
   const victimToken = JSON.parse(await readFile(victimGrant, "utf8")).token;
   const profile = path.join(data, "synthetic-browser-profile-secret");
   await writeFile(profile, "SYNTHETIC_BROWSER_PROFILE_SECRET");
-  const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
   const unassigned = await runTurn(workers[1], [
     call("browser_snapshot", { tabId }),
     call("shell", {

@@ -358,8 +358,7 @@ export function resolveHandoverView(
     });
   }
   if (
-    !activeApproval ||
-    activeApproval.kind !== "approve" ||
+    activeApproval?.kind !== "approve" ||
     activeApproval.revision !== record.currentRevision ||
     !head ||
     activeApproval.manifestSha256 !== head.preview.sha256
@@ -494,8 +493,7 @@ export function activeApprovalForCurrentRevision(
       )
     : undefined;
   if (
-    !approval ||
-    approval.kind !== "approve" ||
+    approval?.kind !== "approve" ||
     approval.revision !== record.currentRevision
   ) {
     return undefined;

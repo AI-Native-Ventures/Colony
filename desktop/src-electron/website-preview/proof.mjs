@@ -320,7 +320,7 @@ async function proveGeometry(host, window, fixture) {
   return { desktop, mobile };
 }
 
-async function proveDenials(host, fixture, handles) {
+async function proveDenials(host, _fixture, handles) {
   const entry = host.byHandle.get(handles.desktop.handle);
   const wc = entry.webContents;
   const before = wc.getURL();

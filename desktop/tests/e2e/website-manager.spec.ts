@@ -24,7 +24,6 @@ import {
   sha256Text,
   signBlockInstance,
   signManifest,
-  trackPageErrors,
   type BlocksE2eWindow,
   type ManifestFixture,
 } from "./blocks-test-helpers";
