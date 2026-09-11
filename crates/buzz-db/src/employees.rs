@@ -39,17 +39,27 @@ pub struct EmployeeRow {
     pub display_name: String,
     /// One of `worker`, `leader`, `executive`.
     pub rank: String,
-    /// The community owner who hired this employee.
-    pub hired_by: Vec<u8>,
+    /// The community owner who hired this employee. `None` on a provisioned
+    /// employee, which no owner hired.
+    pub hired_by: Option<Vec<u8>>,
     /// The owner-signed hire request this employee answers, so authority can
-    /// be re-derived from events without trusting this table.
-    pub hire_event: Vec<u8>,
+    /// be re-derived from events without trusting this table. `None` on a
+    /// provisioned employee, whose authority comes from the relay binary
+    /// rather than from any event.
+    pub hire_event: Option<Vec<u8>>,
     /// The agent this employee reports to (32 raw bytes), one rung up the
     /// interrupt ladder. `None` means no manager: the root marker for
     /// executives and the Unassigned-tray state for everyone else. Read by
     /// the relay's `agent_manager` before any event is consulted, so kind
     /// 9046 updates this column and the 30190 head together.
     pub manager: Option<Vec<u8>>,
+    /// The bundled entry this row was seeded from, or `None` for a user's own
+    /// employee. Seeding is idempotent on this handle, and every refusal path
+    /// keys on it to know the row is not a user's to change.
+    pub provisioned_handle: Option<String>,
+    /// The bundled version that last wrote this row. Always `Some` exactly
+    /// when `provisioned_handle` is.
+    pub provisioned_version: Option<i32>,
     /// `active` or `retired`.
     pub status: String,
     /// Unix seconds when the employee was hired.
@@ -91,6 +101,8 @@ fn row_to_employee(row: sqlx::postgres::PgRow) -> Result<EmployeeRow> {
         hired_by: row.try_get("hired_by")?,
         hire_event: row.try_get("hire_event")?,
         manager: row.try_get("manager")?,
+        provisioned_handle: row.try_get("provisioned_handle")?,
+        provisioned_version: row.try_get("provisioned_version")?,
         status: row.try_get("status")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -102,8 +114,8 @@ fn row_to_employee(row: sqlx::postgres::PgRow) -> Result<EmployeeRow> {
 /// added to some SELECTs and not others -- the exact drift a second copy of
 /// this list per query would invite.
 const EMPLOYEE_COLUMNS: &str =
-    "pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, manager, status, \
-     created_at, updated_at";
+    "pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, manager, \
+     provisioned_handle, provisioned_version, status, created_at, updated_at";
 
 /// Record a newly hired employee.
 ///
@@ -122,7 +134,8 @@ pub async fn insert_employee(
                                 rank, hired_by, hire_event, manager, status, created_at, updated_at) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'active',$10,$10) \
          ON CONFLICT DO NOTHING \
-         RETURNING pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, manager, status, created_at, updated_at",
+         RETURNING pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, manager, \
+                   provisioned_handle, provisioned_version, status, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(employee.pubkey)
@@ -281,4 +294,133 @@ pub async fn retire_employee(pool: &PgPool, community: CommunityId, pubkey: &[u8
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+// ── provisioned employees ──────────────────────────────────────────────────
+
+/// Borrowed input for [`insert_provisioned_employee`].
+///
+/// Deliberately separate from [`NewEmployee`] rather than a variant of it.
+/// An ordinary hire cannot exist without the owner-signed request that
+/// authorises it, so that path keeps both hire columns mandatory; a seeded
+/// employee has no request at all, and its authority is the relay binary.
+/// One struct with four optional fields would let either path write the
+/// other's shape.
+#[derive(Debug, Clone, Copy)]
+pub struct NewProvisionedEmployee<'a> {
+    /// The employee's identity pubkey (32 raw bytes).
+    pub pubkey: &'a [u8],
+    /// `nonce || ciphertext` of the employee's secret key.
+    pub sealed_key: &'a [u8],
+    /// Stable role slug this employee fills.
+    pub role_id: &'a str,
+    /// The name this employee goes by.
+    pub display_name: &'a str,
+    /// One of `worker`, `leader`, `executive`.
+    pub rank: &'a str,
+    /// The bundled entry being seeded.
+    pub provisioned_handle: &'a str,
+    /// The bundled version doing the seeding.
+    pub provisioned_version: i32,
+}
+
+/// Seed one provisioned employee.
+///
+/// Returns `Ok(None)` when the row was not written, which is the ordinary
+/// outcome rather than a fault: the handle is already seeded for this
+/// community, or a user's own employee already holds the role. Seeding runs
+/// on every relay start and on every community provisioning, so settling
+/// quietly is the point. `ON CONFLICT DO NOTHING` covers both the
+/// provisioned-handle index and the active-role index, so a user's employee
+/// is never displaced by a seed.
+pub async fn insert_provisioned_employee(
+    pool: &PgPool,
+    community: CommunityId,
+    employee: NewProvisionedEmployee<'_>,
+) -> Result<Option<EmployeeRow>> {
+    let now = Utc::now().timestamp();
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO employees (community_id, pubkey, sealed_key, role_id, display_name, \
+                                rank, provisioned_handle, provisioned_version, status, \
+                                created_at, updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$9) \
+         ON CONFLICT DO NOTHING \
+         RETURNING {EMPLOYEE_COLUMNS}"
+    )))
+    .bind(community.as_uuid())
+    .bind(employee.pubkey)
+    .bind(employee.sealed_key)
+    .bind(employee.role_id)
+    .bind(employee.display_name)
+    .bind(employee.rank)
+    .bind(employee.provisioned_handle)
+    .bind(employee.provisioned_version)
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_employee).transpose()
+}
+
+/// The employee seeded from `handle` in this community, if any.
+///
+/// Reads retired rows too, unlike [`find_active_employee_by_role`]. A
+/// provisioned employee cannot be retired through any user path, but reading
+/// only active rows would let a row that somehow reached `retired` be seeded
+/// a second time under a second identity.
+pub async fn find_provisioned_employee(
+    pool: &PgPool,
+    community: CommunityId,
+    handle: &str,
+) -> Result<Option<EmployeeRow>> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {EMPLOYEE_COLUMNS} FROM employees \
+         WHERE community_id = $1 AND provisioned_handle = $2"
+    )))
+    .bind(community.as_uuid())
+    .bind(handle)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_employee).transpose()
+}
+
+/// Apply a newer bundled version to an already-seeded employee: its display
+/// name, role, rank and version, never its identity.
+///
+/// The key is deliberately untouched. A bumped version is the same colleague
+/// with an updated brief, so rewriting its pubkey would orphan every message
+/// it has ever sent and every job it has ever done.
+pub async fn update_provisioned_employee(
+    pool: &PgPool,
+    community: CommunityId,
+    handle: &str,
+    display_name: &str,
+    role_id: &str,
+    rank: &str,
+    version: i32,
+) -> Result<Option<EmployeeRow>> {
+    let now = Utc::now().timestamp();
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE employees SET \
+            display_name = $3, \
+            role_id = $4, \
+            rank = $5, \
+            provisioned_version = $6, \
+            status = 'active', \
+            updated_at = $7 \
+         WHERE community_id = $1 AND provisioned_handle = $2 \
+         RETURNING {EMPLOYEE_COLUMNS}"
+    )))
+    .bind(community.as_uuid())
+    .bind(handle)
+    .bind(display_name)
+    .bind(role_id)
+    .bind(rank)
+    .bind(version)
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_employee).transpose()
 }
