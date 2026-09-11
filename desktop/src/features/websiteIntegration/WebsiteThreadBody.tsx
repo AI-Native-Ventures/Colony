@@ -72,10 +72,7 @@ export function WebsiteThreadBody({
   className,
 }: WebsiteThreadBodyProps) {
   const record = head.record;
-  const pubkeys = React.useMemo(
-    () => collectWebsiteAgentPubkeys(head),
-    [head],
-  );
+  const pubkeys = React.useMemo(() => collectWebsiteAgentPubkeys(head), [head]);
   const profilesQuery = useUsersBatchQuery(pubkeys, {
     enabled: profilesProp === undefined && pubkeys.length > 0,
   });
@@ -86,11 +83,7 @@ export function WebsiteThreadBody({
     [head, profiles, roleTitles],
   );
   const identityQuery = useIdentityQuery();
-  const actor = (
-    actorPubkey ??
-    identityQuery.data?.pubkey ??
-    ""
-  )
+  const actor = (actorPubkey ?? identityQuery.data?.pubkey ?? "")
     .trim()
     .toLowerCase();
   const threadRef = React.useRef<HTMLElement | null>(null);

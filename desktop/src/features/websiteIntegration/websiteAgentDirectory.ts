@@ -63,8 +63,7 @@ export function buildWebsiteAgentDirectory(input: {
   const { profiles, head, roleTitles } = input;
   const directory = new Map<string, WebsiteAgentIdentity>();
   for (const pubkey of collectWebsiteAgentPubkeys(head)) {
-    const profile =
-      profiles?.[pubkey] ?? profiles?.[normalizePubkey(pubkey)];
+    const profile = profiles?.[pubkey] ?? profiles?.[normalizePubkey(pubkey)];
     const name =
       profile?.displayName?.trim() || profile?.name?.trim() || undefined;
     if (!name) continue;

@@ -484,8 +484,7 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         .sign_with_keys(&coordinator)
         .expect("instance signs");
     let instance_event_id = instance_event.id.to_hex();
-    let instance_ok =
-        send_past_transport_stall(client, instance_event, "review instance").await;
+    let instance_ok = send_past_transport_stall(client, instance_event, "review instance").await;
     assert!(
         instance_ok.accepted,
         "the review card instance must be accepted by generic Block validation: {}",
