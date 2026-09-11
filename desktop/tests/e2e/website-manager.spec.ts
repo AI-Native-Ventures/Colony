@@ -524,7 +524,8 @@ async function seedJob(
   const taskId = `website-task-${state}`;
   const root = await emitMessage(page, {
     channelName: CHANNEL,
-    content: `Please redesign our website. Job: ${state}.`,
+    content:
+      "@Avery please redesign our website around the monthly branding offer. Keep what is useful and make the offer much clearer.",
     pubkey: OWNER_PUBKEY,
   });
   const card = await emitSignedEvent(
@@ -659,10 +660,12 @@ test("mocked Brief state renders the brief and start action", async ({
   await installFixtureLoader(page);
   await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
   await openChannel(page, CHANNEL);
-  await seedJob(page, "brief");
+  const { job } = await seedJob(page, "brief");
   await page.getByTestId("message-timeline").waitFor();
   const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(rootAttachment).toBeVisible();
+  await openThreadForRoot(page, job.root.id);
+  await expectCompositeThread(page);
   await expect(
     rootAttachment.getByText("Keep the business facts and useful content."),
   ).toBeVisible();
