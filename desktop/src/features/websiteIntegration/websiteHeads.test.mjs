@@ -151,7 +151,10 @@ test("channel snapshots are referentially stable", () => {
     store.channelHeads("community", CHANNEL),
   );
   const event = headEvent(draftRecord());
-  assert.equal(store.applyEvent("community", CHANNEL, RELAY_PUBKEY, event), true);
+  assert.equal(
+    store.applyEvent("community", CHANNEL, RELAY_PUBKEY, event),
+    true,
+  );
   const loaded = store.channelHeads("community", CHANNEL);
   assert.equal(loaded, store.channelHeads("community", CHANNEL));
   assert.equal(loaded.length, 1);

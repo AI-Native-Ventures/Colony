@@ -184,9 +184,7 @@ type WebsiteMessageAttachmentProps = {
  * belongs to. The boundary keeps a projection defect from taking down the
  * whole timeline.
  */
-export function WebsiteMessageAttachment(
-  props: WebsiteMessageAttachmentProps,
-) {
+export function WebsiteMessageAttachment(props: WebsiteMessageAttachmentProps) {
   return (
     <WebsiteAttachmentBoundary>
       <WebsiteAttachmentInner {...props} />

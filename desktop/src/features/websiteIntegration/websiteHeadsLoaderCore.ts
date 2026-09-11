@@ -31,13 +31,18 @@ export type WebsiteHeadsLoaderInput = {
 };
 
 export type WebsiteHeadsLoaderEnvironment = {
-  fetchEvents: (filter: RelaySubscriptionFilter) => Promise<readonly RelayEvent[]>;
+  fetchEvents: (
+    filter: RelaySubscriptionFilter,
+  ) => Promise<readonly RelayEvent[]>;
   applyEvents: (
     input: WebsiteHeadsLoaderInput,
     events: readonly RelayEvent[],
   ) => void;
   now: () => number;
-  setTimer: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+  setTimer: (
+    callback: () => void,
+    delayMs: number,
+  ) => ReturnType<typeof setTimeout>;
   clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
 };
 

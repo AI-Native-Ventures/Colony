@@ -96,9 +96,7 @@ function acquireWebsiteChannelSubscription(
     dispose: () => {
       disposed = true;
       for (const promise of pending) {
-        void promise
-          .then((unsubscribe) => unsubscribe())
-          .catch(() => {});
+        void promise.then((unsubscribe) => unsubscribe()).catch(() => {});
       }
     },
   });
