@@ -4335,6 +4335,7 @@ mod tests {
             "messages",
             "moderation",
             "notes",
+            "outreach",
             "pack",
             "parties",
             "patches",
