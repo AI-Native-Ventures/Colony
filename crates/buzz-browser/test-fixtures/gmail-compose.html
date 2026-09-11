@@ -18,8 +18,10 @@
 </style>
 </head>
 <body>
-  <div class="compose-box">
-    <h2>Compose message</h2>
+  <button id="compose" class="btn" aria-label="Compose">Compose</button>
+
+  <div class="compose-box" id="compose-box" hidden>
+    <h2>New message</h2>
     <label for="to">To recipients</label>
     <input id="to" class="field" type="text" aria-label="To recipients" placeholder="Recipients">
 
@@ -39,6 +41,12 @@
   </div>
 
   <script>
+    // The compose form does not exist for the accessibility tree until the
+    // page's own Compose button is clicked, so the journey has to start there.
+    document.getElementById('compose').addEventListener('click', function () {
+      document.getElementById('compose-box').hidden = false;
+    });
+
     document.getElementById('send').addEventListener('click', function () {
       var to = document.getElementById('to').value;
       var subject = document.getElementById('subject').value;
