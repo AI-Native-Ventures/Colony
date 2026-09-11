@@ -4493,6 +4493,7 @@ mod tests {
             "tasks",
             "upload",
             "users",
+            "website",
             "workflows",
             "workspace",
         ];
@@ -4722,6 +4723,22 @@ mod tests {
                 "style-set"
             ]
         );
+        assert_eq!(
+            names(&cmd, "website"),
+            vec![
+                "begin-work",
+                "bundle",
+                "create",
+                "evidence",
+                "get",
+                "handover",
+                "list",
+                "qa",
+                "ready",
+                "request-changes",
+                "revision"
+            ]
+        );
         assert_eq!(names(&cmd, "workspace"), vec!["tabs"]);
     }
 
@@ -4746,6 +4763,7 @@ mod tests {
             ("social", 7),
             ("upload", 1),
             ("users", 5),
+            ("website", 11),
             ("workflows", 8),
             ("workspace", 1),
         ];
