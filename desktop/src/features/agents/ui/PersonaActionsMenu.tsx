@@ -3,6 +3,7 @@ import {
   EllipsisVertical,
   Pencil,
   Share2,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 
@@ -83,6 +84,11 @@ export function PersonaActionsMenu({
           <DropdownMenuItem disabled>
             <Trash2 className="h-4 w-4" />
             Managed by team
+          </DropdownMenuItem>
+        ) : persona.provisionedBy ? (
+          <DropdownMenuItem disabled>
+            <ShieldCheck className="h-4 w-4" />
+            Provided by Colony
           </DropdownMenuItem>
         ) : (
           <DropdownMenuItem

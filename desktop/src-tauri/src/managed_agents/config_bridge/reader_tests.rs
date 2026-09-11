@@ -112,7 +112,7 @@ fn test_record() -> ManagedAgentRecord {
         slug: None,
         runtime: None,
         name_pool: Vec::new(),
-        is_builtin: false,
+        is_builtin: false, provisioned_by: None, provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

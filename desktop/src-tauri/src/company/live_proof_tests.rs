@@ -256,7 +256,7 @@ fn existing_chief_of_staff() -> Vec<crate::managed_agents::AgentDefinition> {
         model: None,
         provider: None,
         name_pool: Vec::new(),
-        is_builtin: true,
+        is_builtin: true, provisioned_by: None, provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

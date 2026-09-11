@@ -35,7 +35,7 @@ fn refresh_builtin_agent_avatars_updates_seeded_values_and_preserves_customizati
         model: Some("test-model".to_string()),
         provider: Some("test-provider".to_string()),
         name_pool: vec!["Fizzy".to_string()],
-        is_builtin: true,
+        is_builtin: true, provisioned_by: None, provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

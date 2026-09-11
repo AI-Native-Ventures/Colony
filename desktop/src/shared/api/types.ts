@@ -326,6 +326,13 @@ export type ManagedAgent = {
    */
   runtime: string | null;
   teamId?: string | null;
+  /**
+   * Recipe id when this agent is provided by Colony, else null. Provisioned
+   * agents cannot be deleted by the owner; the recipe upgrades them.
+   */
+  provisionedBy?: string | null;
+  /** Recipe version that last wrote the provisioned content. */
+  provisionedVersion?: string | null;
   relayUrl: string;
   acpCommand: string;
   /** Resolved/effective harness command (persona-wins, override-honored). */
@@ -748,6 +755,13 @@ export type AgentTeam = {
   personaIds: string[];
   leadPersonaId: string | null;
   isBuiltin: boolean;
+  /**
+   * Recipe id when this team is provided by Colony, else null/absent.
+   * Provisioned teams cannot be deleted; the recipe upgrades their content.
+   */
+  provisionedBy?: string | null;
+  /** Recipe version that last wrote the provisioned content. */
+  provisionedVersion?: string | null;
   /** Absolute path to the team's backing directory (if directory-backed). */
   sourceDir: string | null;
   /** Whether sourceDir is a symlink to an external directory. */

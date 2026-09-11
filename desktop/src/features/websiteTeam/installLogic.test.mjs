@@ -81,6 +81,9 @@ function installResult(overrides = {}) {
     },
     createdAgents: 4,
     reconciled: false,
+    upgraded: false,
+    upgradedFrom: null,
+    upgradedTo: null,
     notes: [],
     ...overrides,
   };
@@ -158,6 +161,27 @@ test("a re-run reports the existing install instead of a new one", () => {
   const assessment = assessInstall(installResult({ reconciled: true }));
   assert.equal(assessment.state, "complete");
   assert.match(assessment.headline, /already installed/);
+});
+
+test("an upgraded install reports the new version, not 'already installed'", () => {
+  const assessment = assessInstall(
+    installResult({ reconciled: true, upgraded: true, upgradedFrom: "0.0.9" }),
+  );
+  assert.equal(assessment.state, "complete");
+  assert.equal(assessment.upgraded, true);
+  assert.equal(assessment.upgradedFrom, "0.0.9");
+  assert.match(assessment.headline, /Updated to 0\.1\.0/);
+  assert.match(assessment.detail ?? "", /from 0\.0\.9 to 0\.1\.0/);
+  assert.doesNotMatch(assessment.headline, /already installed/);
+});
+
+test("an upgrade to an unknown previous version still says updated", () => {
+  const assessment = assessInstall(
+    installResult({ upgraded: true, upgradedFrom: null }),
+  );
+  assert.equal(assessment.state, "complete");
+  assert.match(assessment.headline, /Updated to 0\.1\.0/);
+  assert.match(assessment.detail ?? "", /updated to 0\.1\.0/);
 });
 
 test("describePublication names every real state", () => {

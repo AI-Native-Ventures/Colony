@@ -122,7 +122,7 @@ mod tests {
             instructions: Some("Coordinate carefully.".to_string()),
             persona_ids: vec!["p1".to_string(), "p2".to_string()],
             lead_persona_id: Some("p1".to_string()),
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             source_dir: Some(PathBuf::from("/local/only/path")),
             is_symlink: true,
             symlink_target: Some("/somewhere".to_string()),

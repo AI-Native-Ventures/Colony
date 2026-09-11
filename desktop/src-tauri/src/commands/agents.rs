@@ -667,7 +667,7 @@ pub async fn delete_managed_agent(
 
             // Guard: reject deletion of record the owner does not own. This
             // turns "provided by Colony" and "don't orphan remote infra" from
-            // UI conventions into backend invariants — a buggy or compromised
+            // UI conventions into backend invariants: a buggy or compromised
             // IPC caller cannot bypass either. Provisioned check first so its
             // refusal names the product, then the deployed-remote check, which
             // the frontend clears only after the user confirms the orphan

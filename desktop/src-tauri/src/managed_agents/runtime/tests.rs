@@ -285,6 +285,8 @@ fn persona_with_provider(
         provider: provider.map(str::to_string),
         name_pool: Vec::new(),
         is_builtin: false,
+        provisioned_by: None,
+        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,
@@ -300,13 +302,11 @@ fn persona_with_provider(
 }
 
 // ── persona env refresh acceptance ──────────────────────────────────────
-//
 // The refresh lifecycle Wes decided: `record.env_vars` holds agent-level
 // overrides only, the live persona env is merged underneath at read time
 // (spawn / readiness / deploy), so persona env edits — like prompt/model/
 // provider — reach the agent on the next spawn without delete+recreate.
-// The merge assertions are load-bearing: they witness the credential refresh
-// that the old create-time env baking silently blocked.
+// The merge assertions are load-bearing: they witness the credential refresh that the old create-time env baking silently blocked.
 
 use crate::managed_agents::env_vars::{live_persona_env, merged_user_env};
 use std::collections::BTreeMap;

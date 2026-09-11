@@ -396,7 +396,7 @@ fn model_discovery_ignores_stale_record_for_linked_agent() {
         model: Some("persona-model".to_string()),
         provider: Some("anthropic".to_string()),
         name_pool: Vec::new(),
-        is_builtin: false,
+        is_builtin: false, provisioned_by: None, provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

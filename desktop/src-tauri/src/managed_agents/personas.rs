@@ -194,7 +194,7 @@ fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
             model: persona.model.map(|s| s.to_string()),
             provider: None,
             name_pool: persona.name_pool.iter().map(|s| s.to_string()).collect(),
-            is_builtin: true,
+            is_builtin: true, provisioned_by: None, provisioned_version: None,
             is_active: persona.default_active,
             shared: false,
             source_team: None,
@@ -334,7 +334,9 @@ fn merge_personas(mut stored: Vec<AgentDefinition>, now: &str) -> (Vec<AgentDefi
     // as ours, but their id is the recipe's, not a code-shipped built-in,
     // and demoting them here would silently undo that on the next load.
     for record in stored.iter_mut() {
-        if record.is_builtin && record.provisioned_by.is_none() && built_in_order(&record.id).is_none()
+        if record.is_builtin
+            && record.provisioned_by.is_none()
+            && built_in_order(&record.id).is_none()
         {
             record.is_builtin = false;
             record.updated_at = now.to_string();
@@ -586,7 +588,7 @@ mod chief_of_staff_prompt_tests {
                 model: None,
                 provider: None,
                 name_pool: Vec::new(),
-                is_builtin: true,
+                is_builtin: true, provisioned_by: None, provisioned_version: None,
                 is_active: true,
                 shared: false,
                 source_team: None,
@@ -629,7 +631,7 @@ mod chief_of_staff_prompt_tests {
             model: None,
             provider: None,
             name_pool: Vec::new(),
-            is_builtin: true,
+            is_builtin: true, provisioned_by: None, provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

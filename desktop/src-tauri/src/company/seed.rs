@@ -112,7 +112,7 @@ pub fn seed_personas(
             model: None,
             provider: None,
             name_pool: Vec::new(),
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             is_active: true,
             // Sharing a company's employees into a public catalog is the
             // owner's decision to make later, not a side effect of approval.
@@ -205,7 +205,7 @@ pub fn seed_teams(
             instructions: None,
             persona_ids,
             lead_persona_id: Some(lead_persona_id),
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             source_dir: None,
             is_symlink: false,
             symlink_target: None,

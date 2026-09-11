@@ -618,6 +618,13 @@ pub struct ManagedAgentSummary {
     /// delete-confirmation flow). `None` = inherit from the linked persona.
     pub runtime: Option<String>,
     pub team_id: Option<String>,
+    /// Recipe id when this agent is provided by Colony. The UI marks its
+    /// provenance and withholds the delete action for a `Some` value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provisioned_by: Option<String>,
+    /// Recipe version that last wrote the provisioned content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provisioned_version: Option<String>,
     pub relay_url: String,
     pub acp_command: String,
     pub agent_command: String,

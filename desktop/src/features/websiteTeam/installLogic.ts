@@ -36,6 +36,8 @@ export type InstallAssessment = {
   failedSkills: InstalledWebsiteSkill[];
   preservedSkills: InstalledWebsiteSkill[];
   reconciled: boolean;
+  upgraded: boolean;
+  upgradedFrom: string | null;
 };
 
 /** Relay comparison mirroring the native canonicalization well enough for the
@@ -130,6 +132,8 @@ export function assessInstall(
       failedSkills,
       preservedSkills,
       reconciled: result.reconciled,
+      upgraded: result.upgraded,
+      upgradedFrom: result.upgradedFrom,
     };
   }
 
@@ -145,21 +149,30 @@ export function assessInstall(
       failedSkills,
       preservedSkills,
       reconciled: result.reconciled,
+      upgraded: result.upgraded,
+      upgradedFrom: result.upgradedFrom,
     };
   }
 
   return {
     state: "complete",
-    headline: result.reconciled
-      ? "Website Manager team is already installed"
-      : "Website Manager team is installed",
-    detail:
-      "Editable in Agents. Avery leads; Ren, Jules, and Vera report to her.",
+    headline: result.upgraded
+      ? `Updated to ${result.recipeVersion}`
+      : result.reconciled
+        ? "Website Manager team is already installed"
+        : "Website Manager team is installed",
+    detail: result.upgraded
+      ? result.upgradedFrom
+        ? `Provided content updated from ${result.upgradedFrom} to ${result.recipeVersion}. Your model, provider, runtime, channels, and worktrees are unchanged.`
+        : `Provided content updated to ${result.recipeVersion}. Your model, provider, runtime, channels, and worktrees are unchanged.`
+      : "Editable in Agents. Avery leads; Ren, Jules, and Vera report to her.",
     personas,
     pendingPublications: 0,
     failedSkills,
     preservedSkills,
     reconciled: result.reconciled,
+    upgraded: result.upgraded,
+    upgradedFrom: result.upgradedFrom,
   };
 }
 

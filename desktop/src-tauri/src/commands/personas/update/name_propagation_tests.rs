@@ -55,7 +55,7 @@ fn agent(persona_id: &str, name: &str, display_name: Option<&str>) -> ManagedAge
         slug: None,
         runtime: None,
         name_pool: vec![],
-        is_builtin: false,
+        is_builtin: false, provisioned_by: None, provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

@@ -30,7 +30,7 @@ mod tests {
             instructions: None,
             persona_ids: Vec::new(),
             lead_persona_id: None,
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             source_dir: None,
             is_symlink: false,
             symlink_target: None,

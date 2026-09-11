@@ -3,8 +3,8 @@
 //! The installer turns the bundled `persona-packs/website-manager` recipe into
 //! a real, editable, community-scoped team:
 //!
-//! 1. persona definitions (editable in Agents, seeded once and never
-//!    overwritten),
+//! 1. persona definitions (provided by Colony, upgraded by recipe version,
+//!    never deletable by the user),
 //! 2. a team pinned to the community that lists all four personas with Avery
 //!    as the lead, carrying the pack method as team instructions,
 //! 3. one managed agent per persona, owned by the installing owner and pinned
@@ -22,12 +22,19 @@
 //! partial install, a restart, or a community switch therefore reconcile
 //! instead of duplicating, and nothing is shared across communities.
 //!
-//! Editable-agent contract: existing definitions, team edits, agent names, and
-//! skill files are preserved. The installer seeds missing records and missing
-//! tier/manager values only; it never rewrites a record the user has.
+//! Provisioning contract: the records this installer writes are provided by
+//! Colony. They are stamped `is_builtin` + `provisioned_by` +
+//! `provisioned_version`, cannot be deleted by the user, and are upgraded in
+//! place when `RECIPE_VERSION` moves: only recipe-owned content is refreshed
+//! (persona name/role/prompt, team name/description/instructions, agent tier
+//! and skills). Settings the user owns (model, provider, runtime, channel
+//! membership, working directory, agent names) and anything about a
+//! user-created record are never rewritten by a retry or an upgrade at the
+//! same version.
 
 mod install;
 mod journal;
+mod provisioning;
 mod recipe;
 mod skills;
 
@@ -189,6 +196,13 @@ pub struct InstallWebsiteTeamResult {
     pub publication: WebsiteTeamPublication,
     pub created_agents: u32,
     pub reconciled: bool,
+    /// True when this run refreshed provisioned content from an older recipe
+    /// version to the current one.
+    pub upgraded: bool,
+    /// Recipe version the upgrade moved from, when it is known.
+    pub upgraded_from: Option<String>,
+    /// Recipe version the upgrade moved to, when an upgrade happened.
+    pub upgraded_to: Option<String>,
     pub notes: Vec<String>,
 }
 

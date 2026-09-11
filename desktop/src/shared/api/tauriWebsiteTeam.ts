@@ -96,6 +96,12 @@ export type InstallWebsiteTeamResult = {
   publication: WebsiteTeamPublication;
   createdAgents: number;
   reconciled: boolean;
+  /** True when this run refreshed provisioned content to the current recipe version. */
+  upgraded: boolean;
+  /** Recipe version the upgrade moved from, when it is known. */
+  upgradedFrom: string | null;
+  /** Recipe version the upgrade moved to, when an upgrade happened. */
+  upgradedTo: string | null;
   notes: string[];
 };
 
@@ -116,6 +122,8 @@ export type WebsiteTeamInstallStatus = {
   request_ids: string[];
   recipe_version: string;
   channel_id: string | null;
+  upgraded_from?: string | null;
+  upgraded_to?: string | null;
   updated_at: string;
 };
 

@@ -25,6 +25,9 @@ use crate::relay::agent_boundary::canonical;
 use crate::util::now_iso;
 
 use super::journal::{self, scope_key, WebsiteTeamJournalEntry};
+use super::provisioning::{
+    apply_recipe_to_agent, apply_recipe_to_definition, apply_recipe_to_team, UpgradeSummary,
+};
 use super::recipe::{
     persona_system_prompt, RecipePersona, AVERY_PERSONA_ID, PERSONAS, RECIPE_ID, RECIPE_VERSION,
     TEAM_DESCRIPTION, TEAM_INSTRUCTIONS, TEAM_NAME,
@@ -104,8 +107,10 @@ async fn install_inner(
     let mut notes: Vec<String> = Vec::new();
 
     // Phase A: seed definitions and the community team, retaining their heads
-    // into the captured scope.
+    // into the captured scope. Existing provisioned records are upgraded when
+    // their recorded version is behind this recipe.
     let seeded = seed_records(&ctx, &mut notes)?;
+    let mut upgrade = seeded.upgrade.clone();
 
     // Phase A2: write the skills into the agent workspace.
     let skills = install_skills(&mut notes);
@@ -130,10 +135,12 @@ async fn install_inner(
         } else {
             avery_pubkey.as_deref()
         };
-        let (record, created) =
+        let (record, created, agent_upgrade) =
             ensure_agent(&ctx, persona, &request_id, manager_pubkey, &mut notes).await?;
         if created {
             created_agents += 1;
+        } else {
+            upgrade.merge(agent_upgrade);
         }
         if persona.persona_id == AVERY_PERSONA_ID {
             avery_pubkey = Some(record.pubkey.clone());
@@ -198,6 +205,16 @@ async fn install_inner(
         request_ids,
         recipe_version: RECIPE_VERSION.to_string(),
         channel_id: request.channel_id.clone(),
+        upgraded_from: if upgrade.upgraded {
+            upgrade.from.clone()
+        } else {
+            None
+        },
+        upgraded_to: if upgrade.upgraded {
+            Some(RECIPE_VERSION.to_string())
+        } else {
+            None
+        },
         updated_at: now_iso(),
     };
     match journal::journal_path(app) {
@@ -227,6 +244,13 @@ async fn install_inner(
         publication,
         created_agents,
         reconciled,
+        upgraded: upgrade.upgraded,
+        upgraded_from: upgrade.from.clone(),
+        upgraded_to: if upgrade.upgraded {
+            Some(RECIPE_VERSION.to_string())
+        } else {
+            None
+        },
         notes,
     })
 }
@@ -235,14 +259,17 @@ struct SeededRecords {
     team: TeamRecord,
     team_existed: bool,
     definitions: Vec<AgentDefinition>,
+    upgrade: UpgradeSummary,
 }
 
 /// Seed the persona definitions, the community team, and their retained heads.
 ///
-/// Definitions and team membership are seeded once and never rewritten: an
-/// existing record is the user's. Missing team members are added (the relay
-/// must see all four personas) and an absent/invalid lead is repaired, both
-/// without disturbing an existing name, description, instructions, or lead.
+/// New records are written at the current recipe version. An existing record
+/// with this recipe's deterministic identity is provisioned content: when its
+/// recorded version is behind, only the content the recipe owns is refreshed
+/// (see [`super::provisioning`]). User-owned settings and user-created records
+/// are untouched. Membership only gains a missing recipe persona and repairs
+/// an absent or invalid lead.
 fn seed_records(
     ctx: &InstallContext<'_>,
     notes: &mut Vec<String>,
@@ -257,12 +284,17 @@ fn seed_records(
     // 1. Persona definitions.
     let mut personas = load_personas(ctx.app)?;
     let mut personas_changed = false;
+    let mut upgrade = UpgradeSummary::default();
     for recipe_persona in PERSONAS {
-        if personas
-            .iter()
-            .any(|definition| definition.id == recipe_persona.persona_id)
+        if let Some(existing) = personas
+            .iter_mut()
+            .find(|definition| definition.id == recipe_persona.persona_id)
         {
-            continue; // Existing definition: preserve every field.
+            let (changed, persona_upgrade) =
+                apply_recipe_to_definition(existing, recipe_persona, &now);
+            personas_changed |= changed;
+            upgrade.merge(persona_upgrade);
+            continue;
         }
         personas.push(AgentDefinition {
             id: recipe_persona.persona_id.to_string(),
@@ -275,7 +307,9 @@ fn seed_records(
             model: None,
             provider: None,
             name_pool: Vec::new(),
-            is_builtin: false,
+            is_builtin: true,
+            provisioned_by: Some(RECIPE_ID.to_string()),
+            provisioned_version: Some(RECIPE_VERSION.to_string()),
             is_active: true,
             shared: false,
             source_team: None,
@@ -312,14 +346,15 @@ fn seed_records(
     let team_existed = existing_index.is_some();
     let team = match existing_index {
         Some(index) => {
-            let (updated, changed) = {
+            let (updated, changed, team_upgrade) = {
                 let team = &mut teams[index];
-                let changed = ensure_team_members(team, &now);
-                (team.clone(), changed)
+                let (changed, team_upgrade) = apply_recipe_to_team(team, &now);
+                (team.clone(), changed, team_upgrade)
             };
             if changed {
                 save_teams(ctx.app, &teams)?;
             }
+            upgrade.merge(team_upgrade);
             updated
         }
         None => {
@@ -333,7 +368,9 @@ fn seed_records(
                     .map(|persona| persona.persona_id.to_string())
                     .collect(),
                 lead_persona_id: Some(AVERY_PERSONA_ID.to_string()),
-                is_builtin: false,
+                is_builtin: true,
+                provisioned_by: Some(RECIPE_ID.to_string()),
+                provisioned_version: Some(RECIPE_VERSION.to_string()),
                 source_dir: None,
                 is_symlink: false,
                 symlink_target: None,
@@ -370,6 +407,7 @@ fn seed_records(
         team,
         team_existed,
         definitions,
+        upgrade,
     })
 }
 
@@ -446,13 +484,14 @@ async fn ensure_agent(
     request_id: &str,
     manager_pubkey: Option<&str>,
     notes: &mut Vec<String>,
-) -> Result<(ManagedAgentRecord, bool), String> {
+) -> Result<(ManagedAgentRecord, bool, UpgradeSummary), String> {
     let existing = find_request_record(ctx.app, request_id)?;
     match existing {
         Some(record) => {
             reconcile_expected(&record, persona, ctx)?;
-            let record = patch_placement(ctx, &record.pubkey, persona, manager_pubkey, notes)?;
-            Ok((record, false))
+            let (record, upgrade) =
+                patch_placement(ctx, &record.pubkey, persona, manager_pubkey, notes)?;
+            Ok((record, false, upgrade))
         }
         None => {
             let input = CreateManagedAgentRequest {
@@ -509,18 +548,18 @@ async fn ensure_agent(
                         ));
                     }
                     let record = load_record(ctx.app, &agent.pubkey)?;
-                    let record =
+                    let (record, _upgrade) =
                         patch_placement(ctx, &record.pubkey, persona, manager_pubkey, notes)?;
-                    Ok((record, true))
+                    Ok((record, true, UpgradeSummary::default()))
                 }
                 Err(error) => {
                     // The retry race: another run applied this exact request id
                     // between the read and the create. Reconcile it.
                     if let Some(record) = find_request_record(ctx.app, request_id)? {
                         reconcile_expected(&record, persona, ctx)?;
-                        let record =
+                        let (record, upgrade) =
                             patch_placement(ctx, &record.pubkey, persona, manager_pubkey, notes)?;
-                        Ok((record, false))
+                        Ok((record, false, upgrade))
                     } else {
                         Err(error)
                     }
@@ -598,20 +637,25 @@ pub(super) fn record_matches_install(
     Ok(())
 }
 
-/// Fill in the hierarchy fields the relay needs when they are absent, then
-/// retain the (possibly updated) head into the captured scope.
+/// Stamp one managed agent with this recipe's provenance, refresh the owned
+/// hierarchy fields, then retain the (possibly updated) head into the captured
+/// scope.
 ///
-/// Absent-only: a tier, manager, or name the user changed is theirs and is
-/// never overwritten. This mirrors `commands::org_placement::record_org_placement`'s
-/// write, so the local record and the published head agree.
+/// `apply_recipe_to_agent` owns the field policy: provenance and `is_builtin`
+/// are always stamped, `tier` is seeded when absent and refreshed on a recipe
+/// version change, and the manager line is seeded only when absent. A user
+/// rename, harness pin, model/provider, channel membership, and working
+/// directory are never touched. This mirrors
+/// `commands::org_placement::record_org_placement`'s write for the manager
+/// line, so the local record and the published head agree.
 fn patch_placement(
     ctx: &InstallContext<'_>,
     pubkey: &str,
     persona: &RecipePersona,
     manager_pubkey: Option<&str>,
     notes: &mut Vec<String>,
-) -> Result<ManagedAgentRecord, String> {
-    let record = {
+) -> Result<(ManagedAgentRecord, UpgradeSummary), String> {
+    let (record, upgrade) = {
         let _guard = ctx
             .state
             .managed_agents_store_lock
@@ -622,25 +666,16 @@ fn patch_placement(
             .iter_mut()
             .find(|record| record.pubkey == pubkey)
             .ok_or_else(|| format!("agent {pubkey} is missing from this store"))?;
-        let mut changed = false;
-        if record.tier.is_none() {
-            record.tier = Some(persona.tier.to_string());
-            changed = true;
-        }
-        if record.manager.is_none() {
-            if let Some(manager) = manager_pubkey {
-                record.manager = Some(manager.trim().to_lowercase());
-                changed = true;
-            }
-        }
+        let (changed, upgrade) =
+            apply_recipe_to_agent(record, persona, manager_pubkey, &now_iso());
         if changed {
-            record.updated_at = now_iso();
             save_managed_agents(ctx.app, &records)?;
         }
-        records
+        let record = records
             .into_iter()
             .find(|record| record.pubkey == pubkey)
-            .ok_or_else(|| format!("agent {pubkey} disappeared unexpectedly"))?
+            .ok_or_else(|| format!("agent {pubkey} disappeared unexpectedly"))?;
+        (record, upgrade)
     };
 
     // Reuse the boot reconcile engine so the published projection and the
@@ -663,7 +698,7 @@ fn patch_placement(
             record.name
         )),
     }
-    Ok(record)
+    Ok((record, upgrade))
 }
 
 fn scope_matches(state: &AppState, relay_url: &str, owner: &str) -> bool {

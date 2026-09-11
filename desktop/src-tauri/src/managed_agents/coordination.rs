@@ -262,7 +262,7 @@ pub(crate) fn ensure_coordination_team_for_relay(
         instructions: None,
         persona_ids: vec![COORDINATION_TEAM_LEAD.to_string()],
         lead_persona_id: Some(COORDINATION_TEAM_LEAD.to_string()),
-        is_builtin: true,
+        is_builtin: true, provisioned_by: None, provisioned_version: None,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,

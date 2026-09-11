@@ -163,12 +163,25 @@ export function WebsiteTeamInstallDialog({
 
             {installStatusQuery.data ? (
               <p className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
-                Already installed in this community on{" "}
-                {new Date(
-                  installStatusQuery.data.updated_at,
-                ).toLocaleDateString()}
-                . Installing again reconciles the same team, agents, and skills
-                instead of creating duplicates.
+                {installStatusQuery.data.upgraded_to ? (
+                  <>
+                    Provided content updated to{" "}
+                    {installStatusQuery.data.upgraded_to} in this community on{" "}
+                    {new Date(
+                      installStatusQuery.data.updated_at,
+                    ).toLocaleDateString()}
+                    . Installing again checks for a newer version.
+                  </>
+                ) : (
+                  <>
+                    Already installed in this community on{" "}
+                    {new Date(
+                      installStatusQuery.data.updated_at,
+                    ).toLocaleDateString()}
+                    . Installing again reconciles the same team, agents, and
+                    skills instead of creating duplicates.
+                  </>
+                )}
               </p>
             ) : null}
 

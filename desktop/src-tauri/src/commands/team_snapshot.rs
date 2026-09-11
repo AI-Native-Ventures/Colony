@@ -129,7 +129,7 @@ fn definition_from_snapshot(
         model: member.definition.model.clone(),
         provider: member.definition.provider.clone(),
         name_pool: member.definition.name_pool.clone(),
-        is_builtin: false,
+        is_builtin: false, provisioned_by: None, provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,
@@ -177,7 +177,7 @@ pub(crate) fn build_import_team(
         // position or another portable identity, never by the source ID.
         lead_persona_id: None,
         instructions: snapshot.team.instructions.clone(),
-        is_builtin: false,
+        is_builtin: false, provisioned_by: None, provisioned_version: None,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,
@@ -615,7 +615,7 @@ pub async fn confirm_team_snapshot_import(
                     .unwrap_or_default()
             },
             respond_to_allowlist: definition.respond_to_allowlist.clone(),
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

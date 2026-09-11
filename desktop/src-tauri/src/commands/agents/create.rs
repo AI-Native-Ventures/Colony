@@ -380,7 +380,7 @@ pub(crate) async fn create_managed_agent_with_preparation(
             tier: preparation.map(|_| "worker".to_string()),
             manager: preparation.map(|p| p.leader_pubkey.clone()),
             name_pool: Vec::new(),
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

@@ -321,7 +321,17 @@ function AgentPersonaCard({
         onOpenPersonaProfile(persona);
       }}
       statusBadge={
-        agent?.personaOrphaned ? (
+        persona.provisionedBy || agent?.provisionedBy ? (
+          <div className="flex flex-col items-start gap-1">
+            <Badge variant="secondary">Provided by Colony</Badge>
+            {agent?.personaOrphaned ? (
+              <Badge className="gap-1" variant="warning">
+                <AlertTriangle className="h-3 w-3" />
+                Configuration missing
+              </Badge>
+            ) : null}
+          </div>
+        ) : agent?.personaOrphaned ? (
           <Badge className="gap-1" variant="warning">
             <AlertTriangle className="h-3 w-3" />
             Configuration missing
@@ -401,11 +411,18 @@ function StandaloneAgentCard({
         );
       }}
       statusBadge={
-        agent.personaOrphaned ? (
-          <Badge className="gap-1" variant="warning">
-            <AlertTriangle className="h-3 w-3" />
-            Configuration missing
-          </Badge>
+        agent.provisionedBy || agent.personaOrphaned ? (
+          <div className="flex flex-col items-start gap-1">
+            {agent.provisionedBy ? (
+              <Badge variant="secondary">Provided by Colony</Badge>
+            ) : null}
+            {agent.personaOrphaned ? (
+              <Badge className="gap-1" variant="warning">
+                <AlertTriangle className="h-3 w-3" />
+                Configuration missing
+              </Badge>
+            ) : null}
+          </div>
         ) : null
       }
     />

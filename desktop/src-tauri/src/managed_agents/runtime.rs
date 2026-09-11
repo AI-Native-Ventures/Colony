@@ -297,6 +297,8 @@ pub fn build_managed_agent_summary(
         persona_id: record.persona_id.clone(),
         runtime: record.runtime.clone(),
         team_id: record.team_id.clone(),
+        provisioned_by: record.provisioned_by.clone(),
+        provisioned_version: record.provisioned_version.clone(),
         relay_url: record.relay_url.clone(),
         acp_command: record.acp_command.clone(),
         agent_command: descriptor.command,

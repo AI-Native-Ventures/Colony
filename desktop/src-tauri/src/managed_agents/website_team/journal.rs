@@ -31,6 +31,13 @@ pub struct WebsiteTeamJournalEntry {
     pub request_ids: Vec<String>,
     pub recipe_version: String,
     pub channel_id: Option<String>,
+    /// Set when the most recent run upgraded provisioned content: the recipe
+    /// version it moved from and to. `None` for a fresh install or a re-run
+    /// at the same version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgraded_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgraded_to: Option<String>,
     pub updated_at: String,
 }
 
@@ -148,6 +155,8 @@ mod tests {
             request_ids: vec![],
             recipe_version: "0.1.0".to_string(),
             channel_id: None,
+            upgraded_from: None,
+            upgraded_to: None,
             updated_at: updated_at.to_string(),
         }
     }

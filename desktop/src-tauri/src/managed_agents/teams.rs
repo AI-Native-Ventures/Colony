@@ -82,7 +82,7 @@ fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord
             instructions: None,
             persona_ids: team.persona_ids.iter().map(|s| s.to_string()).collect(),
             lead_persona_id: team.lead_persona_id.map(str::to_string),
-            is_builtin: true,
+            is_builtin: true, provisioned_by: None, provisioned_version: None,
             source_dir: None,
             is_symlink: false,
             symlink_target: None,

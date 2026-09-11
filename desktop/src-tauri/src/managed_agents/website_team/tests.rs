@@ -5,9 +5,14 @@
 //! reconciliation, community scoping, and customization-preserving team edits.
 
 use super::install::{ensure_team_members, record_matches_install};
-use super::recipe::{persona_body, RecipePersona, PERSONAS};
+use super::provisioning::{
+    apply_recipe_to_agent, apply_recipe_to_definition, apply_recipe_to_team,
+};
+use super::recipe::{
+    persona_body, RecipePersona, PERSONAS, RECIPE_ID, RECIPE_VERSION, TEAM_DESCRIPTION,
+};
 use super::{agent_request_id, recipe_view, team_id_for_relay};
-use crate::managed_agents::{ManagedAgentRecord, TeamRecord};
+use crate::managed_agents::{AgentDefinition, ManagedAgentRecord, TeamRecord};
 
 fn team() -> TeamRecord {
     TeamRecord {
@@ -18,6 +23,8 @@ fn team() -> TeamRecord {
         persona_ids: vec![],
         lead_persona_id: None,
         is_builtin: false,
+        provisioned_by: None,
+        provisioned_version: None,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,
@@ -182,4 +189,176 @@ fn persona_bodies_carry_no_frontmatter_into_definitions() {
         assert!(!body.trim_start().starts_with("---"));
         assert!(body.trim().len() > 200, "{} body looks empty", persona.slug);
     }
+}
+
+fn provisioned_definition(persona: &RecipePersona, version: &str) -> AgentDefinition {
+    AgentDefinition {
+        id: persona.persona_id.to_string(),
+        role_id: Some("old-role".to_string()),
+        role_title: Some("Old Role".to_string()),
+        display_name: "Old Name".to_string(),
+        avatar_url: None,
+        system_prompt: "old prompt".to_string(),
+        runtime: Some("goose".to_string()),
+        model: Some("user-model".to_string()),
+        provider: Some("user-provider".to_string()),
+        name_pool: vec!["user-pool".to_string()],
+        is_builtin: false,
+        provisioned_by: Some(RECIPE_ID.to_string()),
+        provisioned_version: Some(version.to_string()),
+        is_active: true,
+        shared: false,
+        source_team: None,
+        source_team_persona_slug: None,
+        catalog_source: None,
+        env_vars: std::collections::BTreeMap::new(),
+        respond_to: Some("owner-only".to_string()),
+        respond_to_allowlist: Vec::new(),
+        parallelism: Some(1),
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        updated_at: "2026-01-01T00:00:00Z".to_string(),
+    }
+}
+
+#[test]
+fn definition_upgrade_refreshes_owned_content_and_preserves_user_settings() {
+    let avery = &PERSONAS[0];
+    let mut definition = provisioned_definition(avery, "0.0.1");
+
+    let (changed, upgrade) =
+        apply_recipe_to_definition(&mut definition, avery, "2026-02-01T00:00:00Z");
+
+    assert!(changed, "an outdated provisioned definition must be refreshed");
+    assert!(upgrade.upgraded);
+    assert_eq!(upgrade.from.as_deref(), Some("0.0.1"));
+    assert_eq!(definition.display_name, "Avery");
+    assert_eq!(definition.role_title, "Website Manager");
+    assert!(definition.system_prompt.contains("You are Avery"));
+    assert!(definition.is_builtin);
+    assert_eq!(
+        definition.provisioned_version.as_deref(),
+        Some(RECIPE_VERSION)
+    );
+    // Settings the user owns survive the upgrade untouched.
+    assert_eq!(definition.runtime.as_deref(), Some("goose"));
+    assert_eq!(definition.model.as_deref(), Some("user-model"));
+    assert_eq!(definition.provider.as_deref(), Some("user-provider"));
+    assert_eq!(definition.name_pool, vec!["user-pool".to_string()]);
+    assert_eq!(definition.respond_to.as_deref(), Some("owner-only"));
+    assert_eq!(definition.parallelism, Some(1));
+
+    // A second pass at the same version is a true no-op.
+    let updated_at = definition.updated_at.clone();
+    let (changed, upgrade) =
+        apply_recipe_to_definition(&mut definition, avery, "2026-03-01T00:00:00Z");
+    assert!(!changed);
+    assert!(!upgrade.upgraded);
+    assert_eq!(definition.updated_at, updated_at);
+}
+
+#[test]
+fn a_same_version_user_edit_is_not_rewritten() {
+    let avery = &PERSONAS[0];
+    let mut definition = provisioned_definition(avery, RECIPE_VERSION);
+    definition.display_name = "Avery Custom".to_string();
+    definition.system_prompt = "custom prompt".to_string();
+
+    let (changed, upgrade) =
+        apply_recipe_to_definition(&mut definition, avery, "2026-02-01T00:00:00Z");
+
+    assert!(changed, "the missing builtin marker is repaired");
+    assert!(!upgrade.upgraded);
+    assert_eq!(definition.display_name, "Avery Custom");
+    assert_eq!(definition.system_prompt, "custom prompt");
+}
+
+#[test]
+fn team_upgrade_refreshes_owned_content_and_keeps_membership_edits() {
+    let mut existing = team();
+    existing.provisioned_by = Some(RECIPE_ID.to_string());
+    existing.provisioned_version = Some("0.0.1".to_string());
+    existing.persona_ids = vec![PERSONAS[1].persona_id.to_string()];
+    existing.lead_persona_id = Some(PERSONAS[1].persona_id.to_string());
+
+    let (changed, upgrade) = apply_recipe_to_team(&mut existing, "2026-02-01T00:00:00Z");
+
+    assert!(changed);
+    assert!(upgrade.upgraded);
+    assert_eq!(upgrade.from.as_deref(), Some("0.0.1"));
+    assert_eq!(existing.name, "Website Manager");
+    assert_eq!(existing.description.as_deref(), Some(TEAM_DESCRIPTION));
+    assert!(existing.instructions.is_some());
+    assert!(existing.is_builtin);
+    assert_eq!(
+        existing.provisioned_version.as_deref(),
+        Some(RECIPE_VERSION)
+    );
+    for persona in PERSONAS {
+        assert!(existing
+            .persona_ids
+            .iter()
+            .any(|id| id == persona.persona_id));
+    }
+    // A valid custom lead and the relay pin stay as they were.
+    assert_eq!(
+        existing.lead_persona_id.as_deref(),
+        Some(PERSONAS[1].persona_id)
+    );
+    assert_eq!(existing.relay_url.as_deref(), Some("wss://one.example"));
+
+    let updated_at = existing.updated_at.clone();
+    let (changed, upgrade) = apply_recipe_to_team(&mut existing, "2026-03-01T00:00:00Z");
+    assert!(!changed);
+    assert!(!upgrade.upgraded);
+    assert_eq!(existing.updated_at, updated_at);
+}
+
+#[test]
+fn agent_upgrade_refreshes_tier_and_preserves_user_fields() {
+    let ren = &PERSONAS[1];
+    let mut record = ManagedAgentRecord {
+        pubkey: "ab".repeat(32),
+        name: "My Ren".to_string(),
+        persona_id: Some(ren.persona_id.to_string()),
+        team_id: Some("website-team:00000000:website-manager".to_string()),
+        owner_pubkey: Some("a".repeat(64)),
+        relay_url: "wss://one.example".to_string(),
+        model: Some("user-model".to_string()),
+        working_dir: Some("/tmp/work".to_string()),
+        tier: Some("leader".to_string()),
+        provisioned_by: Some(RECIPE_ID.to_string()),
+        provisioned_version: Some("0.0.1".to_string()),
+        ..Default::default()
+    };
+
+    let (changed, upgrade) = apply_recipe_to_agent(
+        &mut record,
+        ren,
+        Some("manager-pubkey"),
+        "2026-02-01T00:00:00Z",
+    );
+
+    assert!(changed);
+    assert!(upgrade.upgraded);
+    assert_eq!(upgrade.from.as_deref(), Some("0.0.1"));
+    assert_eq!(record.tier.as_deref(), Some("worker"));
+    assert!(record.is_builtin);
+    assert_eq!(record.provisioned_version.as_deref(), Some(RECIPE_VERSION));
+    // User-owned fields are never rewritten.
+    assert_eq!(record.name, "My Ren");
+    assert_eq!(record.model.as_deref(), Some("user-model"));
+    assert_eq!(record.working_dir.as_deref(), Some("/tmp/work"));
+    assert_eq!(record.manager.as_deref(), Some("manager-pubkey"));
+
+    // At the current version the tier is the user's to change.
+    record.tier = Some("leader".to_string());
+    let (changed, upgrade) = apply_recipe_to_agent(
+        &mut record,
+        ren,
+        Some("manager-pubkey"),
+        "2026-03-01T00:00:00Z",
+    );
+    assert!(!changed);
+    assert!(!upgrade.upgraded);
+    assert_eq!(record.tier.as_deref(), Some("leader"));
 }

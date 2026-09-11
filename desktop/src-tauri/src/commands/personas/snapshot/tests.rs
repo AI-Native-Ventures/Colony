@@ -67,7 +67,7 @@ fn make_definition(slug: &str) -> ManagedAgentRecord {
         respond_to_allowlist: vec![],
         runtime: None,
         name_pool: vec![],
-        is_builtin: false,
+        is_builtin: false, provisioned_by: None, provisioned_version: None,
         is_active: false,
         shared: false,
         source_team: None,

@@ -574,7 +574,7 @@ pub async fn confirm_agent_snapshot_import(
             model: snapshot.definition.model.clone(),
             provider: snapshot.definition.provider.clone(),
             name_pool: snapshot.definition.name_pool.clone(),
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,
@@ -653,7 +653,7 @@ pub async fn confirm_agent_snapshot_import(
             // are always consistent at mint time.
             respond_to: minted.respond_to,
             respond_to_allowlist: minted.respond_to_allowlist.clone(),
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

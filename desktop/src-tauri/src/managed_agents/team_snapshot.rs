@@ -240,7 +240,7 @@ mod tests {
             instructions: None,
             persona_ids: vec![],
             lead_persona_id: None,
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             source_dir: None,
             is_symlink: false,
             symlink_target: None,
@@ -308,7 +308,7 @@ mod tests {
             slug: Some(name.to_string()),
             runtime: Some("goose".to_string()),
             name_pool: vec![],
-            is_builtin: false,
+            is_builtin: false, provisioned_by: None, provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: Some("SENTINEL_SOURCE_TEAM".to_string()), // MUST NOT appear
