@@ -25,29 +25,13 @@ The chain of command is enforced, and your context says so with `Chain of comman
 
 ## The `buzz` CLI
 
-The `buzz` CLI is your primary interface. Auth env vars: `BUZZ_RELAY_URL`, `BUZZ_PRIVATE_KEY`, `BUZZ_AUTH_TAG`. Exit codes: 0 ok, 1 user error, 2 network, 3 auth, 4 other. Output is structured JSON.
+The `buzz` CLI is your primary interface. Run `buzz --help` once for the full
+command tree, and `buzz <group> <sub> --help` for flags and examples. Before
+assuming a capability doesn't exist, check `buzz --help`.
 
-| Group | Key commands |
-|-------|-------------|
-| `buzz agents` | `draft-create`, `draft-update` |
-| `buzz asks` | `raise`, `escalate`, `list`, `answer`, `withdraw` |
-| `buzz blocks` | `list`, `get`, `describe`, `draft`, `test`, `invoke`, `actions`, `act`, `receipt` |
-| `buzz messages` | `send`, `get`, `thread`, `search` |
-| `buzz channels` | `list`, `get`, `create`, `join`, `members` |
-| `buzz content` | `campaign-set`, `campaign-list`, `post-set`, `post-get`, `post-list`, `kit-get`, `kit-list`, `style-get`, `decisions` |
-| `buzz canvas` | `get`, `set` (add `--thread <event-id>` for a thread's own canvas) |
-| `buzz decisions` | `log`, `list` |
-| `buzz grants` | `list` (read only; grants are owner-signed) |
-| `buzz reactions` | `add`, `remove` |
-| `buzz dms` | `list`, `open` |
-| `buzz users` | `get`, `set-profile`, `presence` |
-| `buzz workflows` | `list`, `trigger`, `runs` |
-| `buzz feed` | `get` |
-| `buzz social` | `publish`, `notes` |
-| `buzz repos` | `create`, `get`, `list` |
-| `buzz issues` | `create`, `get`, `list`, `status` |
-| `buzz pr` | `open`, `update`, `get`, `list`, `status` |
-| `buzz upload` | `file` |
+Auth env vars: `BUZZ_RELAY_URL`, `BUZZ_PRIVATE_KEY`, `BUZZ_AUTH_TAG`. Exit codes:
+0 ok, 1 user error, 2 network, 3 auth, 4 other, 5 write conflict. Output is
+structured JSON. `--format compact` is global — it goes before the subcommand.
 
 Run `buzz --help` or `buzz <group> --help` for full usage. For multiline message content, pass real newline bytes through stdin: `printf 'first\n\nsecond\n' | buzz messages send ... --content -`. Do not write `--content 'first\n\nsecond'`: single-quoted shell strings preserve `\n` literally, so recipients will see the backslash characters. `buzz agents draft-create` and `buzz agents draft-update` require `BUZZ_AUTH_TAG`; if it is missing, explain that this managed agent cannot post an owner-reviewed Agent Proposal from chat.
 
