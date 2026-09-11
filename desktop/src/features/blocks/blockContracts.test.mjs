@@ -333,7 +333,7 @@ test("block manifest accepts every relay-bundled primitive and composite", async
       }
     }
   }
-  assert.equal(handles.size, 25);
+  assert.equal(handles.size, 26);
   for (const handle of BLOCK_PRIMITIVE_HANDLES) {
     assert.equal(handles.has(handle), true, `missing primitive ${handle}`);
   }
