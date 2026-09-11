@@ -1,4 +1,5 @@
 //! OS process boundary for Electron-managed local workers and descendants.
+mod host_login;
 pub(crate) mod launch;
 pub(crate) mod network;
 pub(crate) mod subscriptions;
