@@ -32,6 +32,24 @@ pub const TOOL_SCREENSHOT: &str = "browser_screenshot";
 pub const TOOL_TABS: &str = "browser_tabs_list";
 pub const TOOL_BUDGET: &str = "context_budget_report";
 pub const TOOL_MAIL_SEND: &str = "mail_send";
+pub const MAIL_SEND_ENV: &str = "BUZZ_BROWSER_MAIL_SEND";
+pub const MAIL_SEND_ENV_ENABLED: &str = "enabled";
+
+/// Returns true only when `BUZZ_BROWSER_MAIL_SEND` equals exactly `"enabled"`.
+pub fn mail_send_enabled_from_env() -> bool {
+    std::env::var(MAIL_SEND_ENV).as_deref() == Some(MAIL_SEND_ENV_ENABLED)
+}
+
+/// Pure gate used by the `mail_send` handler and by tests.
+pub fn mail_send_gate(state: &BrowserState) -> Result<(), ErrorData> {
+    if !state.mail_send_enabled {
+        return Err(ErrorData::invalid_request(
+            "mail_send is disabled: sending email requires the owner's outreach approval flow; the desktop enables it only for an approved send job",
+            None,
+        ));
+    }
+    Ok(())
+}
 
 /// Shared state for one browser daemon session.
 #[derive(Default)]
@@ -40,6 +58,7 @@ pub struct BrowserState {
     pub client: Option<CdpClient>,
     pub snapshot: Option<Snapshot>,
     pub ledger: BudgetLedger,
+    pub mail_send_enabled: bool,
 }
 
 pub struct BuzzBrowserMcp {
@@ -429,7 +448,7 @@ impl BuzzBrowserMcp {
     /// active browser tab. Requires `browser_connect` first.
     #[tool(
         name = "mail_send",
-        description = "Send a Gmail message from the owner's account by navigating to Gmail compose, filling the form by accessible-name prefix, clicking Send, and confirming the 'Message sent' toast. Returns structured JSON with status, failure reason, sent_at, inputs, and a base64 PNG screenshot."
+        description = "Send a Gmail message from the owner's account by navigating to Gmail compose, filling the form by accessible-name prefix, clicking Send, and confirming the 'Message sent' toast. Returns structured JSON with status, failure reason, sent_at, inputs, and a base64 PNG screenshot. Disabled unless the daemon was started with BUZZ_BROWSER_MAIL_SEND=enabled."
     )]
     async fn mail_send(
         &self,
@@ -437,6 +456,7 @@ impl BuzzBrowserMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut state = self.state.lock().await;
+        mail_send_gate(&*state)?;
         let client = state.client.as_mut().ok_or_else(|| {
             ErrorData::invalid_request("no browser connected; call browser_connect first", None)
         })?;
@@ -488,7 +508,12 @@ pub fn run_stdio_server() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
-    let state = Arc::new(Mutex::new(BrowserState::default()));
+    let enabled = mail_send_enabled_from_env();
+    tracing::info!("mail_send enabled={enabled}");
+    let state = Arc::new(Mutex::new(BrowserState {
+        mail_send_enabled: enabled,
+        ..BrowserState::default()
+    }));
     let service = BuzzBrowserMcp::new(state).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
@@ -553,6 +578,45 @@ mod tests {
         assert_eq!(TOOL_TYPE, "browser_type");
         assert_eq!(TOOL_BUDGET, "context_budget_report");
         assert_eq!(TOOL_MAIL_SEND, "mail_send");
+    }
+
+    #[test]
+    fn mail_send_env_gate_requires_exact_enabled_value() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(MAIL_SEND_ENV);
+        assert!(!mail_send_enabled_from_env());
+        std::env::set_var(MAIL_SEND_ENV, "1");
+        assert!(!mail_send_enabled_from_env());
+        std::env::set_var(MAIL_SEND_ENV, "true");
+        assert!(!mail_send_enabled_from_env());
+        std::env::set_var(MAIL_SEND_ENV, "Enabled");
+        assert!(!mail_send_enabled_from_env());
+        std::env::set_var(MAIL_SEND_ENV, "enabled");
+        assert!(mail_send_enabled_from_env());
+        std::env::remove_var(MAIL_SEND_ENV);
+    }
+
+    #[test]
+    fn mail_send_refuses_when_disabled() {
+        let state = BrowserState {
+            mail_send_enabled: false,
+            ..BrowserState::default()
+        };
+        let err = mail_send_gate(&state).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("mail_send is disabled"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn mail_send_gate_passes_when_enabled() {
+        let state = BrowserState {
+            mail_send_enabled: true,
+            ..BrowserState::default()
+        };
+        assert!(mail_send_gate(&state).is_ok());
     }
 
     fn target(id: &str) -> TargetInfo {
