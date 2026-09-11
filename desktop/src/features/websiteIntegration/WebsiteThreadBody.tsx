@@ -10,6 +10,7 @@ import * as React from "react";
 
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { useAgentRoleTitles } from "@/features/agents/useKnownAgentPubkeys";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { cn } from "@/shared/lib/cn";
@@ -79,9 +80,10 @@ export function WebsiteThreadBody({
     enabled: profilesProp === undefined && pubkeys.length > 0,
   });
   const profiles = profilesProp ?? profilesQuery.data?.profiles;
+  const roleTitles = useAgentRoleTitles();
   const agents = React.useMemo(
-    () => buildWebsiteAgentDirectory({ profiles, head }),
-    [head, profiles],
+    () => buildWebsiteAgentDirectory({ profiles, head, roleTitles }),
+    [head, profiles, roleTitles],
   );
   const identityQuery = useIdentityQuery();
   const actor = (
@@ -126,6 +128,27 @@ export function WebsiteThreadBody({
     [communityId, head, instance],
   );
   const selected = inspection ?? record.currentRevision;
+
+  // Before any revision exists there is nothing to review: no QA panel, no
+  // decision form for "Version 0", no empty history. The channel card owns the
+  // start action; the thread only says what will appear here.
+  if (record.currentRevision === 0) {
+    return (
+      <section
+        aria-label="Website review details"
+        className={cn(
+          "mt-2 overflow-hidden rounded-xl border border-border bg-card",
+          className,
+        )}
+        data-testid={testId}
+        ref={threadRef}
+      >
+        <p className="px-3.5 py-3 text-2xs text-muted-foreground">
+          Nothing to review yet. The first version will appear here.
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section

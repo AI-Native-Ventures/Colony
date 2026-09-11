@@ -33,6 +33,7 @@ const SCREENSHOT_DIR = path.resolve("test-results/website-manager");
 const CHANNEL = "general";
 const RELAY_URL = "ws://localhost:3000";
 const REVIEWER_PUBKEY = TEST_IDENTITIES.outsider.pubkey;
+const RESEARCHER_PUBKEY = TEST_IDENTITIES.alice.pubkey;
 const BUILDER_PUBKEY = TEST_IDENTITIES.bob.pubkey;
 const HEX64 = (seed: string) => sha256Text(seed);
 const MANIFEST_1 = HEX64("website-manifest-1");
@@ -72,6 +73,110 @@ export const WEBSITE_JOB_DIGEST = createHash("sha256")
   .digest("hex");
 export const EXPECTED_WEBSITE_JOB_DIGEST =
   "df62e00412b314d4b036d07bcf547e0f7a9dbc562e013a6d3832f0c51bb7ad6f";
+
+const WEBSITE_TEAM_PROFILES = [
+  { pubkey: OWNER_PUBKEY, displayName: "Basheer Phiri", isAgent: false },
+  {
+    pubkey: AGENT_PUBKEY,
+    displayName: "Avery",
+    isAgent: true,
+    ownerPubkey: OWNER_PUBKEY,
+  },
+  {
+    pubkey: RESEARCHER_PUBKEY,
+    displayName: "Ren",
+    isAgent: true,
+    ownerPubkey: OWNER_PUBKEY,
+  },
+  {
+    pubkey: BUILDER_PUBKEY,
+    displayName: "Jules",
+    isAgent: true,
+    ownerPubkey: OWNER_PUBKEY,
+  },
+  {
+    pubkey: REVIEWER_PUBKEY,
+    displayName: "Vera",
+    isAgent: true,
+    ownerPubkey: OWNER_PUBKEY,
+  },
+];
+
+const WEBSITE_TEAM_PERSONAS = [
+  {
+    id: "website-manager",
+    displayName: "Avery",
+    roleId: "website-manager",
+    roleTitle: "Website Manager",
+    systemPrompt: "Coordinate the website redesign.",
+  },
+  {
+    id: "website-researcher",
+    displayName: "Ren",
+    roleId: "website-research",
+    roleTitle: "Website research",
+    systemPrompt: "Research the existing site.",
+  },
+  {
+    id: "website-builder",
+    displayName: "Jules",
+    roleId: "designer-builder",
+    roleTitle: "Designer-builder",
+    systemPrompt: "Design and build the site.",
+  },
+  {
+    id: "website-reviewer",
+    displayName: "Vera",
+    roleId: "independent-reviewer",
+    roleTitle: "Independent reviewer",
+    systemPrompt: "Independently review the revision.",
+  },
+];
+
+const WEBSITE_TEAM_AGENTS = [
+  {
+    pubkey: AGENT_PUBKEY,
+    name: "Avery",
+    personaId: "website-manager",
+    status: "running" as const,
+    channelNames: [CHANNEL],
+  },
+  {
+    pubkey: RESEARCHER_PUBKEY,
+    name: "Ren",
+    personaId: "website-researcher",
+    status: "running" as const,
+    channelNames: [CHANNEL],
+  },
+  {
+    pubkey: BUILDER_PUBKEY,
+    name: "Jules",
+    personaId: "website-builder",
+    status: "running" as const,
+    channelNames: [CHANNEL],
+  },
+  {
+    pubkey: REVIEWER_PUBKEY,
+    name: "Vera",
+    personaId: "website-reviewer",
+    status: "running" as const,
+    channelNames: [CHANNEL],
+  },
+];
+
+/**
+ * Mock team data only: real kind-0 profiles (names/owners), personas (stable
+ * role titles consumed by the community role context), and deployed agents.
+ * It makes the captures show name + role + colour like the reference and
+ * resolves the agent-owner status so no "owner unavailable" badge appears.
+ */
+function mockWebsiteTeam() {
+  return {
+    managedAgents: WEBSITE_TEAM_AGENTS,
+    personas: WEBSITE_TEAM_PERSONAS,
+    searchProfiles: WEBSITE_TEAM_PROFILES,
+  };
+}
 
 type JobState = "brief" | "working" | "review" | "revision" | "handover";
 
@@ -666,7 +771,10 @@ test("mocked Brief state renders the brief and start action", async ({
 }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
-  await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
+  await installMockBridge(page, {
+    relaySelf: OWNER_PUBKEY,
+    ...mockWebsiteTeam(),
+  });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "brief");
   await page.getByTestId("message-timeline").waitFor();
@@ -688,7 +796,10 @@ test("mocked Working state shows stages and earlier-version inspection", async (
 }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
-  await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
+  await installMockBridge(page, {
+    relaySelf: OWNER_PUBKEY,
+    ...mockWebsiteTeam(),
+  });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "working");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
@@ -730,7 +841,10 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
 }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
-  await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
+  await installMockBridge(page, {
+    relaySelf: OWNER_PUBKEY,
+    ...mockWebsiteTeam(),
+  });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "review");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
@@ -784,7 +898,10 @@ test("mocked Revision state shows the exact change request", async ({
 }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
-  await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
+  await installMockBridge(page, {
+    relaySelf: OWNER_PUBKEY,
+    ...mockWebsiteTeam(),
+  });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "revision");
   const rootAttachment = page.getByTestId("website-root-attachment").first();
@@ -804,7 +921,10 @@ test("mocked Handover state shows confirmed resources and the draft request", as
 }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
-  await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
+  await installMockBridge(page, {
+    relaySelf: OWNER_PUBKEY,
+    ...mockWebsiteTeam(),
+  });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "handover");
   await openThreadForRoot(page, job.root.id);
@@ -829,6 +949,7 @@ test("mocked transport fails, retries, confirms from the head, and recovers on r
   await installMockBridge(page, {
     relaySelf: OWNER_PUBKEY,
     blockActionPublishErrors: ["network unreachable"],
+    ...mockWebsiteTeam(),
   });
   await openChannel(page, CHANNEL);
   const { job, manifestEvent } = await seedJob(page, "review");
@@ -912,7 +1033,7 @@ test("mocked community switch clears pending website state", async ({
   );
   await installMockBridge(
     page,
-    { relaySelf: OWNER_PUBKEY },
+    { relaySelf: OWNER_PUBKEY, ...mockWebsiteTeam() },
     { skipCommunitySeed: true },
   );
   await page.goto("/");
@@ -945,7 +1066,10 @@ test("mocked browser build reports the native preview as unavailable", async ({
 }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installFixtureLoader(page);
-  await installMockBridge(page, { relaySelf: OWNER_PUBKEY });
+  await installMockBridge(page, {
+    relaySelf: OWNER_PUBKEY,
+    ...mockWebsiteTeam(),
+  });
   await openChannel(page, CHANNEL);
   const { job } = await seedJob(page, "review");
   await openThreadForRoot(page, job.root.id);

@@ -1,10 +1,13 @@
 /**
  * Agent identity directory for website job surfaces.
  *
- * Names and roles come from the community profile lookup; the colour token is
- * derived with the same stable pubkey hash the avatar fallback uses, so the job
+ * Names come from the community profile lookup. Job titles prefer the
+ * community-scoped role context (`useAgentRoleTitles`: locally managed agents
+ * joined to their persona titles), which is the same source message rows use;
+ * the profile `role` field is only a fallback. The colour token is derived
+ * with the same stable pubkey hash the avatar fallback uses, so the job
  * surfaces agree with the rest of the app about which agent is which colour.
- * No name, role, or colour is ever inferred from a persona.
+ * The manager hierarchy and locale are never inferred from either source.
  */
 
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -51,22 +54,26 @@ export function collectWebsiteAgentPubkeys(head: WebsiteHead): string[] {
   ]);
   return [...pubkeys];
 }
-
 export function buildWebsiteAgentDirectory(input: {
   profiles: Readonly<Record<string, WebsiteAgentSummary>> | undefined;
   head: WebsiteHead;
+  /** Community-scoped role context (`useAgentRoleTitles`). */
+  roleTitles?: ReadonlyMap<string, string> | null;
 }): WebsiteAgentDirectory {
-  const { profiles, head } = input;
+  const { profiles, head, roleTitles } = input;
   const directory = new Map<string, WebsiteAgentIdentity>();
   for (const pubkey of collectWebsiteAgentPubkeys(head)) {
-    const profile = profiles?.[pubkey] ?? profiles?.[normalizePubkey(pubkey)];
+    const profile =
+      profiles?.[pubkey] ?? profiles?.[normalizePubkey(pubkey)];
     const name =
       profile?.displayName?.trim() || profile?.name?.trim() || undefined;
     if (!name) continue;
+    const roleTitle =
+      roleTitles?.get(normalizePubkey(pubkey)) ?? roleTitles?.get(pubkey);
     directory.set(pubkey, {
       pubkey,
       name,
-      role: profile?.role?.trim() || "Role not recorded",
+      role: roleTitle?.trim() || profile?.role?.trim() || "Role not recorded",
       color: websiteAgentColourToken(pubkey),
     });
   }

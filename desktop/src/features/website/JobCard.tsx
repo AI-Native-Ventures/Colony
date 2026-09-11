@@ -36,39 +36,41 @@ function statusPresentation(status: WebsiteJobStatus): StatusPresentation {
     case "working":
       return {
         label: "In progress",
-        icon: <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />,
+        icon: (
+          <Loader2 aria-hidden="true" className="size-[13px] animate-spin" />
+        ),
         className: "text-primary",
       };
     case "readyForReview":
       return {
         label: "Ready for your review",
-        icon: <CircleDot aria-hidden="true" className="size-3.5" />,
+        icon: <CircleDot aria-hidden="true" className="size-[13px]" />,
         className: "text-primary",
       };
     case "changesRequested":
       return {
         label: "Changes requested",
-        icon: <CircleDot aria-hidden="true" className="size-3.5" />,
+        icon: <CircleDot aria-hidden="true" className="size-[13px]" />,
         className: "text-primary",
       };
     case "approved":
       return {
         label: "Design approved",
-        icon: <CircleCheck aria-hidden="true" className="size-3.5" />,
-        className: "text-emerald-700 dark:text-emerald-400",
+        icon: <CircleCheck aria-hidden="true" className="size-[13px]" />,
+        className: "text-primary",
       };
     case "handedOver":
       return {
         label: "Handover prepared",
-        icon: <CircleCheck aria-hidden="true" className="size-3.5" />,
-        className: "text-emerald-700 dark:text-emerald-400",
+        icon: <CircleCheck aria-hidden="true" className="size-[13px]" />,
+        className: "text-primary",
       };
     case "draft":
     default:
       return {
         label: "Ready to start",
-        icon: <CircleDot aria-hidden="true" className="size-3.5" />,
-        className: "text-muted-foreground",
+        icon: <CircleDot aria-hidden="true" className="size-[13px]" />,
+        className: "text-primary",
       };
   }
 }
@@ -103,19 +105,14 @@ export function WebsiteJobCard({
       <header className="flex items-start gap-3 px-3.5 pb-3 pt-4">
         <span
           aria-hidden="true"
-          className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-muted/40 text-muted-foreground"
+          className="grid h-8 w-[34px] shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"
         >
           <PanelsTopLeft className="size-4" />
         </span>
         <div className="flex min-w-0 flex-col">
-          <span className="text-2xs uppercase tracking-wide text-muted-foreground">
-            Website redesign
-          </span>
-          {brief?.title ? (
-            <h3 className="truncate text-sm font-semibold text-foreground">
-              {brief.title}
-            </h3>
-          ) : null}
+          <h3 className="truncate text-sm font-semibold tracking-[-0.25px] text-foreground">
+            {brief?.title || "Website redesign"}
+          </h3>
         </div>
       </header>
 

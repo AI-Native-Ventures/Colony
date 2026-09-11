@@ -12,6 +12,7 @@
 import * as React from "react";
 
 import { useCommunities } from "@/features/communities/useCommunities";
+import { useAgentRoleTitles } from "@/features/agents/useKnownAgentPubkeys";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -94,9 +95,10 @@ function WebsiteRootAttachment({
     () => deriveWebsiteStageAgents(head),
     [head],
   );
+  const roleTitles = useAgentRoleTitles();
   const agents = React.useMemo(
-    () => buildWebsiteAgentDirectory({ profiles, head }),
-    [head, profiles],
+    () => buildWebsiteAgentDirectory({ profiles, head, roleTitles }),
+    [head, profiles, roleTitles],
   );
   const instanceState = useWebsiteInstanceData({
     communityId,

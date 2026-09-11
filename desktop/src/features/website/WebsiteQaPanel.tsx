@@ -241,12 +241,12 @@ export function WebsiteQaPanel({
             </li>
           ))}
         </ul>
-      ) : (
+      ) : view.present ? (
         <p className="mt-2 text-2xs text-muted-foreground">
           {view.checksUnavailableReason ??
             "The reviewer checklist is not available for this version."}
         </p>
-      )}
+      ) : null}
 
       {view.present && revision?.qa ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs">
