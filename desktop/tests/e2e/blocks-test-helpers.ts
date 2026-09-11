@@ -355,14 +355,18 @@ export function signBlockAction({
 export function signBlockReceipt({
   action,
   channelId,
+  content,
   instanceEventId,
   instanceId,
+  resolvesAttention = false,
   status,
 }: {
   action: RelayEvent;
   channelId: string;
+  content?: unknown;
   instanceEventId: string;
   instanceId: string;
+  resolvesAttention?: boolean;
   status: "succeeded" | "denied" | "failed" | "timed-out";
 }): RelayEvent {
   const parsed = action.tags.find((tag) => tag[0] === "block-action");
@@ -378,10 +382,11 @@ export function signBlockReceipt({
           idempotencyKey: parsed[4],
           instanceEventId,
           instanceId,
+          resolvesAttention,
           status,
         }),
       ],
-      content: canonicalJson({ summary: `Action ${status}.` }),
+      content: canonicalJson(content ?? { summary: `Action ${status}.` }),
     },
     hexToBytes(TEST_IDENTITIES.tyler.privateKey),
   );

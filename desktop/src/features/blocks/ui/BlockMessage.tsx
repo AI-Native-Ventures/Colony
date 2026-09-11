@@ -24,7 +24,29 @@ export type BlockActionViewState = {
   pendingActionId?: string;
   latestStatus?: "pending" | "succeeded" | "denied" | "failed" | "timed-out";
   latestAttentionStatus?: "succeeded" | "denied";
+  latestAttentionStatusLabel?: string;
 };
+
+// A receipt may name the state it produced, so a card can read "sent" rather
+// than the generic "Completed". Deliberately narrow: a short plain word from
+// the processor's own receipt, never arbitrary text rendered into the card.
+const RECEIPT_STATUS_LABEL = /^[a-z][a-z0-9 _-]{0,23}$/i;
+
+export function receiptStatusLabel(content: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const label = (parsed as Record<string, unknown>).status_label;
+  return typeof label === "string" && RECEIPT_STATUS_LABEL.test(label)
+    ? label
+    : undefined;
+}
 
 function compareRelayEvents(left: RelayEvent, right: RelayEvent): number {
   return left.created_at - right.created_at || left.id.localeCompare(right.id);
@@ -96,17 +118,24 @@ export function deriveBlockActionViewState(
   const latestReceipt = latestAction
     ? receiptsByAction.get(latestAction.event.id)
     : undefined;
-  const attentionStatuses: Array<"succeeded" | "denied"> = [];
+  const attentionStatuses: Array<{
+    status: "succeeded" | "denied";
+    label?: string;
+  }> = [];
   for (const receipt of receipts) {
     const { resolvesAttention, status } = receipt.parsed.value;
     if (resolvesAttention && (status === "succeeded" || status === "denied")) {
-      attentionStatuses.push(status);
+      const label = receiptStatusLabel(receipt.event.content);
+      attentionStatuses.push({ status, ...(label ? { label } : {}) });
     }
   }
-  const latestAttentionStatus = attentionStatuses.at(-1);
+  const latestAttention = attentionStatuses.at(-1);
+  const latestAttentionStatus = latestAttention?.status;
+  const latestAttentionStatusLabel = latestAttention?.label;
   return {
     completedActionIds,
     ...(latestAttentionStatus ? { latestAttentionStatus } : {}),
+    ...(latestAttentionStatusLabel ? { latestAttentionStatusLabel } : {}),
     ...(pending ? { pendingActionId: pending.parsed.value.actionId } : {}),
     ...(latestAction
       ? {
@@ -268,6 +297,7 @@ export function BlockMessage({ message }: { message: TimelineMessage }) {
       data={dataQuery.data.value}
       instance={instance.value}
       latestAttentionStatus={actionState.latestAttentionStatus}
+      latestAttentionStatusLabel={actionState.latestAttentionStatusLabel}
       latestStatus={actionState.latestStatus}
       manifest={manifestResult.value.manifest}
       message={message}

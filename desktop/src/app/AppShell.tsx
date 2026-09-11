@@ -53,6 +53,7 @@ import { useAgentObserverIngestion } from "@/features/agents/useAgentObserverIng
 import { AgentManagementDialogs } from "@/features/agents/ui/AgentManagementDialogs";
 import { RequestedAgentCreateDialogs } from "@/features/agents/ui/RequestedAgentCreateDialogs";
 import { useAgentProposalBrokerForCommunity } from "@/features/blocks/useAgentProposalBroker";
+import { useOutreachSendBrokerForCommunity } from "@/features/blocks/useOutreachSendBroker";
 import {
   usePresenceSession,
   usePresenceSubscription,
@@ -214,6 +215,7 @@ export function AppShell() {
   // guard here would drop managed-agent coverage during startup.
   useAgentObserverIngestion();
   useAgentProposalBrokerForCommunity(communitiesHook);
+  useOutreachSendBrokerForCommunity(communitiesHook);
   // Kind 24200 is relay-ephemeral, so reconciliation runs eagerly (not
   // deferred) and unconditionally repairs the DB subscription on internal
   // builds — otherwise frames emitted before the listener opens are lost.
