@@ -77,7 +77,10 @@ pub enum WebsiteBrokerOutcome {
     /// The canonical row, action, head, and receipt committed.
     Applied {
         /// The canonical row after the transition committed.
-        job: WebsiteJobRow,
+        ///
+        /// Boxed so the applied variant stays close in size to `Duplicate`;
+        /// the row is only read by callers after a successful transition.
+        job: Box<WebsiteJobRow>,
         /// The relay-signed head that was committed, when the transition
         /// produced one. An exact-content decision retry records only a
         /// duplicate receipt against the existing head.
@@ -245,7 +248,7 @@ pub async fn apply_website_action(
                 .map_err(|error| format!("website transaction failed: {error}"))?;
             dispatch_committed(tenant, state, &committed, KIND_WEBSITE_ACTION).await;
             Ok(WebsiteBrokerOutcome::Applied {
-                job: committed.job,
+                job: Box::new(committed.job),
                 head: committed.head,
                 receipt: committed.receipt,
             })
@@ -353,7 +356,7 @@ pub(crate) async fn apply_website_decision(
                 .map_err(|error| format!("website transaction failed: {error}"))?;
             dispatch_committed(tenant, state, &committed, KIND_BLOCK_ACTION).await;
             Ok(WebsiteBrokerOutcome::Applied {
-                job: committed.job,
+                job: Box::new(committed.job),
                 head: committed.head,
                 receipt: committed.receipt,
             })
@@ -381,7 +384,9 @@ struct Committed {
 
 /// Either a commit to dispatch or a request already claimed by another event.
 enum ApplyResult {
-    Committed(Committed),
+    /// Boxed because a `Committed` carries two stored events plus a row, while
+    /// the duplicate arm is only a few event ids.
+    Committed(Box<Committed>),
     Duplicate(DuplicateClaim),
 }
 
@@ -599,12 +604,12 @@ async fn commit_duplicate_receipt(
     .await?;
     let stored_receipt =
         insert_event_tx(&mut *tx, tenant.community(), receipt, Some(job.channel_id)).await?;
-    Ok(ApplyResult::Committed(Committed {
+    Ok(ApplyResult::Committed(Box::new(Committed {
         job: job.clone(),
         head: None,
         receipt: stored_receipt,
         action: Some(stored_action),
-    }))
+    })))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -772,12 +777,12 @@ async fn apply_create(
     )
     .await?;
 
-    Ok(ApplyResult::Committed(Committed {
+    Ok(ApplyResult::Committed(Box::new(Committed {
         job,
         head: Some(stored_head),
         receipt: stored_receipt,
         action: Some(stored_action),
-    }))
+    })))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1306,12 +1311,12 @@ async fn commit_update(
     )
     .await?;
 
-    Ok(ApplyResult::Committed(Committed {
+    Ok(ApplyResult::Committed(Box::new(Committed {
         job: updated,
         head: Some(stored_head),
         receipt: stored_receipt,
         action: Some(stored_action),
-    }))
+    })))
 }
 
 /// Look up an already-applied request by request UUID or exact event id.
