@@ -115,6 +115,8 @@ const CORE_BLOCK_ASSETS: [(&str, &str); 25] = [
     (
         "composites/website-job.json",
         include_str!("core_blocks/composites/website-job.json"),
+    ),
+    (
         "composites/outreach-email.json",
         include_str!("core_blocks/composites/outreach-email.json"),
     ),
