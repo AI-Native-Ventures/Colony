@@ -115,6 +115,8 @@ const CORE_BLOCK_ASSETS: [(&str, &str); 25] = [
     (
         "composites/website-job.json",
         include_str!("core_blocks/composites/website-job.json"),
+        "composites/outreach-email.json",
+        include_str!("core_blocks/composites/outreach-email.json"),
     ),
 ];
 
@@ -292,6 +294,7 @@ mod tests {
         "handover",
         "deliverable",
         "website-job",
+        "outreach-email",
     ];
 
     /// Every bundled manifest, pinned by content digest against the
@@ -430,6 +433,11 @@ mod tests {
             "receipt",
             1785369601,
             "30422971240c5644ba5677410f12671bc581610bf8428e1496ef40ead1d0fb6e",
+        ),
+        (
+            "outreach-email",
+            1789084800,
+            "1c728cad458df614ddc8036dbcef502484b363ddc791df5a8a0454d5ae3e84c0",
         ),
         (
             "report",
@@ -1205,13 +1213,13 @@ mod tests {
     #[test]
     fn loads_twenty_five_unique_valid_manifests_and_examples() {
         let manifests = core_block_manifests().expect("Core manifests should validate");
-        assert_eq!(manifests.len(), 25);
+        assert_eq!(manifests.len(), 26);
 
         let handles: BTreeSet<_> = manifests
             .iter()
             .map(|manifest| manifest.handle.as_str())
             .collect();
-        assert_eq!(handles.len(), 25);
+        assert_eq!(handles.len(), 26);
 
         let expected: BTreeSet<_> = PRIMITIVE_HANDLES
             .into_iter()
@@ -1581,8 +1589,8 @@ mod tests {
             })
             .await
             .expect("stored heads");
-        assert_eq!(manifests.len(), 25);
-        assert_eq!(heads.len(), 25);
+        assert_eq!(manifests.len(), 26);
+        assert_eq!(heads.len(), 26);
 
         let mut newer_manifest = core_block_manifests()
             .expect("bundled manifests")

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { WebContentsView, session } from "electron";
 import { Authority, normalizeUrl } from "./authority.mjs";
 import { snapshot, screenshot, actOnRef } from "./page-tools.mjs";
+import { mailSend } from "./mail-journey.mjs";
 
 /** Real embedded tabs owned by one active Colony business at a time. */
 export class BrowserViews {
@@ -229,6 +230,7 @@ export class BrowserViews {
       if (method === "browser_screenshot") return screenshot(tab, check);
       if (["browser_type", "browser_click"].includes(method))
         return actOnRef(tab, args, method, check);
+      if (method === "mail_send") return mailSend(tab, args, check);
       throw new Error("Unknown browser tool");
     };
     const result = tab.queue.then(run);

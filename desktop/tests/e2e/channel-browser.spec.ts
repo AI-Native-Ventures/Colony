@@ -548,8 +548,11 @@ test("sidebar only shows channels the user has joined", async ({ page }) => {
 
   const streamList = page.getByTestId("stream-list");
 
-  // Channels the mock user IS a member of
-  await expect(streamList).toContainText("general");
+  // Channels the mock user IS a member of. `general` is the mock's project
+  // channel, so it sits in the Projects section rather than this list.
+  await expect(page.getByTestId("project-channel-list")).toContainText(
+    "general",
+  );
   await expect(streamList).toContainText("random");
   await expect(streamList).toContainText("engineering");
   await expect(streamList).toContainText("agents");

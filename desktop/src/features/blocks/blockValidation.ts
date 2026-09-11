@@ -541,7 +541,13 @@ function validateTree(
 function validateApprovalSchema(
   manifest: BlockManifest,
 ): BlockParseResult<true> {
-  if (manifest.handle !== "approval") {
+  // The capability, not the handle, is what binds a manifest to the exact
+  // proposal contract, so every Block whose Approve button acts outside Colony
+  // owes the same exact fields.
+  const declaresApproval = manifest.permissions.some(
+    (permission) => permission.capability === "external-action.approve",
+  );
+  if (manifest.handle !== "approval" && !declaresApproval) {
     return { ok: true, value: true };
   }
   const schema = manifest.input_schema as {

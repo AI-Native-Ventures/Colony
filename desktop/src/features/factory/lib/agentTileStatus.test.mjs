@@ -55,11 +55,44 @@ test("anything else is stopped, even with a stale tracked turn", async () => {
   );
 });
 
+test("an open ask outranks every other state", async () => {
+  const m = await load();
+  assert.strictEqual(
+    m.deriveAgentTileStatus({ status: "running" }, true, true),
+    "needs-you",
+  );
+  assert.strictEqual(
+    m.deriveAgentTileStatus({ status: "running" }, false, true),
+    "needs-you",
+  );
+  assert.strictEqual(
+    m.deriveAgentTileStatus({ status: "stopped" }, false, true),
+    "needs-you",
+  );
+  assert.strictEqual(
+    m.deriveAgentTileStatus({ status: "not_deployed" }, false, true),
+    "needs-you",
+  );
+});
+
+test("no open ask leaves the derivation exactly as it was", async () => {
+  const m = await load();
+  assert.strictEqual(
+    m.deriveAgentTileStatus({ status: "running" }, true, false),
+    "working",
+  );
+  assert.strictEqual(
+    m.deriveAgentTileStatus({ status: "running" }, false, false),
+    "idle",
+  );
+});
+
 test("every status has a pill label", async () => {
   const m = await load();
   assert.deepStrictEqual(Object.keys(m.AGENT_TILE_STATUS_LABEL).sort(), [
     "deploying",
     "idle",
+    "needs-you",
     "stopped",
     "working",
   ]);

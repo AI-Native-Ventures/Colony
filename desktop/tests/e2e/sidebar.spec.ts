@@ -86,9 +86,13 @@ test("sidebar rows separate hover, selected, and reorder states", async ({
   page,
 }) => {
   await loadTheme(page, "github-light");
-  await page.getByTestId("channel-general").click();
+  // `engineering` and `random` are adjacent rows of the plain Channels list,
+  // which is what the row gap and the drag affordance are about. `general` is
+  // the mock's project channel and sits in its own section, so a pair taken
+  // across the two sections measures the gap between sections instead.
+  await page.getByTestId("channel-engineering").click();
 
-  const selectedRow = page.getByTestId("channel-general");
+  const selectedRow = page.getByTestId("channel-engineering");
   const hoverRow = page.getByTestId("channel-random");
 
   await page.mouse.move(600, 100);
@@ -110,7 +114,7 @@ test("sidebar rows separate hover, selected, and reorder states", async ({
 
   const rowGap = await page.evaluate(() => {
     const selected = document.querySelector<HTMLElement>(
-      '[data-testid="channel-general"]',
+      '[data-testid="channel-engineering"]',
     );
     const following = document.querySelector<HTMLElement>(
       '[data-testid="channel-random"]',

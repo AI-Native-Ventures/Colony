@@ -29,6 +29,7 @@ export const CORE_HANDLES = [
   "company-brief",
   "company-blueprint",
   "interview",
+  "outreach-email",
 ] as const;
 
 export type CoreHandle = (typeof CORE_HANDLES)[number];
@@ -485,6 +486,7 @@ export function compositeData(handle: CoreHandle, index = 1): unknown {
     case "company-brief":
     case "company-blueprint":
     case "interview":
+    case "outreach-email":
       return structuredClone(readCoreManifest(handle).examples[0]?.data ?? {});
   }
 }

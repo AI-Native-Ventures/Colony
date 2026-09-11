@@ -76,6 +76,7 @@ import {
   useChannelModerationCapabilities,
 } from "./ChannelManagementModerationActions";
 import { ChannelMemberAvatarStack } from "./ChannelMemberAvatarStack";
+import { ChannelProjectRow } from "./ChannelProjectRow";
 
 type ChannelManagementSheetProps = {
   channel: Channel | null;
@@ -747,6 +748,14 @@ function ChannelManagementPanelContent({
                 value={resolvedChannel.id}
               />
             </FieldGroup>
+
+            {resolvedChannel.channelType !== "dm" ? (
+              <ChannelProjectRow
+                canManage={canEditChannel}
+                channelId={resolvedChannel.id}
+                currentPubkey={currentPubkey}
+              />
+            ) : null}
 
             {canOpenCanvas ? (
               <IngressRow

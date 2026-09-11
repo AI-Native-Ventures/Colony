@@ -169,6 +169,25 @@ export function findPaneByTabId(
   return null;
 }
 
+/**
+ * The pane immediately to the right of `paneId`, or null when there is none.
+ *
+ * "To the right" means the next child of the same horizontal group, and only
+ * when that child is itself a pane: a group there is a nested split with no
+ * single pane the caller could target. Callers fall back to splitting.
+ */
+export function paneRightOf(
+  root: TileLayoutNode,
+  paneId: string,
+): TilePane | null {
+  const path = findPanePath(root, paneId);
+  if (path === null || path.length === 0) return null;
+  const parent = getNodeAtPath(root, path.slice(0, -1));
+  if (parent.kind !== "group" || parent.direction !== "horizontal") return null;
+  const next = parent.children[path[path.length - 1] + 1];
+  return next !== undefined && next.kind === "pane" ? next : null;
+}
+
 export function getNodeAtPath(
   root: TileLayoutNode,
   path: NodePath,

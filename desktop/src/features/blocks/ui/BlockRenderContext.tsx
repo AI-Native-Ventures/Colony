@@ -13,6 +13,7 @@ import {
 } from "@/features/blocks/agentProposal";
 import { validateBlockActionData } from "@/features/blocks/blockValidation";
 import {
+  declaresApprovalPermission,
   resolveApprovalActionInputForSubmission,
   resolveApprovalActionInputs,
   submitBlockAction,
@@ -93,14 +94,14 @@ export function BlockRenderProvider({
   );
   const approvalInputs = React.useMemo(
     () =>
-      manifest.handle === "approval"
-        ? resolveApprovalActionInputs(data, nowSeconds)
+      declaresApprovalPermission(manifest)
+        ? resolveApprovalActionInputs(manifest, data, nowSeconds)
         : null,
-    [data, manifest.handle, nowSeconds],
+    [data, manifest, nowSeconds],
   );
   React.useEffect(() => {
     if (
-      manifest.handle !== "approval" ||
+      !declaresApprovalPermission(manifest) ||
       typeof data !== "object" ||
       data === null ||
       Array.isArray(data)
@@ -123,7 +124,7 @@ export function BlockRenderProvider({
       delay,
     );
     return () => window.clearTimeout(timeout);
-  }, [data, manifest.handle, nowSeconds]);
+  }, [data, manifest, nowSeconds]);
   const blueprintInputs = React.useMemo(
     () =>
       manifest.handle === "company-blueprint"
@@ -238,8 +239,9 @@ export function BlockRenderProvider({
       if (derivedInitiativeInput) {
         currentInput = derivedInitiativeInput;
       }
-      if (manifest.handle === "approval") {
+      if (declaresApprovalPermission(manifest)) {
         const currentApprovalInput = resolveApprovalActionInputForSubmission(
+          manifest,
           data,
           interaction.action_id,
           Math.floor(Date.now() / 1000),

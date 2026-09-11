@@ -1114,7 +1114,7 @@ version = "0.1.0"
 dependencies = [
  "buzz-acp",
  "futures-util",
- "libc",
+ "nix 0.31.3",
  "reqwest 0.13.4",
  "rmcp",
  "schemars 1.2.1",
@@ -1187,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-desktop"
-version = "0.16.13"
+version = "0.17.1"
 dependencies = [
  "anyhow",
  "arboard",

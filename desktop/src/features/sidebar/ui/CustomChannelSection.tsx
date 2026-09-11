@@ -341,6 +341,7 @@ export function ChannelGroupSection({
   isCollapsed,
   isActiveChannel,
   activeWorkingByChannelId,
+  channelMetaById,
   items,
   listTestId,
   onBrowseClick,
@@ -373,6 +374,7 @@ export function ChannelGroupSection({
   onUnstarChannel,
   onDeleteChannel,
   onLeaveChannel,
+  projectChannelIds,
 }: {
   browseLabel?: string;
   createLabel?: string;
@@ -381,6 +383,8 @@ export function ChannelGroupSection({
   isCollapsed: boolean;
   isActiveChannel: boolean;
   activeWorkingByChannelId?: ReadonlyMap<string, ActiveChannelTurnSummary>;
+  /** Muted trailing meta per row (a project channel's default branch). */
+  channelMetaById?: Record<string, string>;
   items: Channel[];
   listTestId: string;
   onBrowseClick?: () => void;
@@ -423,6 +427,8 @@ export function ChannelGroupSection({
   onUnstarChannel?: (channelId: string) => void;
   onDeleteChannel?: (channel: Channel) => void;
   onLeaveChannel?: (channel: Channel) => void;
+  /** Channels a project owns — these rows render a repository icon. */
+  projectChannelIds?: ReadonlySet<string>;
 }) {
   const contentId = `sidebar-${listTestId}`;
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
@@ -442,9 +448,11 @@ export function ChannelGroupSection({
                       hasUnread={unreadChannelIds.has(channel.id)}
                       unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                       isMuted={mutedChannelIds?.has(channel.id)}
+                      isProjectChannel={projectChannelIds?.has(channel.id)}
                       isActive={
                         isActiveChannel && selectedChannelId === channel.id
                       }
+                      trailingMeta={channelMetaById?.[channel.id]}
                       onSelectChannel={onSelectChannel}
                     />
                   </DraggableChannelRow>
@@ -455,9 +463,11 @@ export function ChannelGroupSection({
                     hasUnread={unreadChannelIds.has(channel.id)}
                     unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                     isMuted={mutedChannelIds?.has(channel.id)}
+                    isProjectChannel={projectChannelIds?.has(channel.id)}
                     isActive={
                       isActiveChannel && selectedChannelId === channel.id
                     }
+                    trailingMeta={channelMetaById?.[channel.id]}
                     onSelectChannel={onSelectChannel}
                   />
                 )}

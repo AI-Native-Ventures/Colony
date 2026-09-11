@@ -30,7 +30,9 @@ type AppShellOverlaysProps = {
   isChannelManagementOpen: boolean;
   isCreatingBrowseChannel?: boolean;
   onBrowseChannelJoin: (channelId: string) => Promise<void>;
-  onBrowseChannelCreate?: (input: CreateChannelInput) => Promise<void>;
+  onBrowseChannelCreate?: (
+    input: CreateChannelInput,
+  ) => Promise<string | undefined>;
   onBrowseDialogOpenChange: (open: boolean) => void;
   onChannelManagementOpenChange: (open: boolean) => void;
   onDeleteActiveChannel: () => void;

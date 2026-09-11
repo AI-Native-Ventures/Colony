@@ -1,0 +1,234 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "outreach-email",
+  "version": "1.0.0",
+  "created_at": 1789084800,
+  "name": "Outreach email",
+  "description": "One outreach email written for one business, shown exactly as it will be sent, awaiting a single yes.",
+  "origin": "core",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "action",
+      "business_name",
+      "destination",
+      "from",
+      "content",
+      "lead_id",
+      "campaign_id",
+      "expires_at",
+      "status"
+    ],
+    "properties": {
+      "action": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "What approving this card actually does, in one sentence. Part of the approval hash, so the deed cannot change after the yes."
+      },
+      "business_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "description": "The business this email is addressed to, as the reader would name it."
+      },
+      "destination": {
+        "type": "string",
+        "format": "email",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "The exact recipient mailbox. Covered by the approval hash."
+      },
+      "from": {
+        "type": "string",
+        "format": "email",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "The owner's own mailbox the email leaves from. Colony never holds the credentials for it."
+      },
+      "content": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subject", "body"],
+        "description": "The exact subject and body. Covered by the approval hash, so what was approved is what is sent.",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          }
+        }
+      },
+      "lead_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "The Discovery lead this email was written for."
+      },
+      "campaign_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "The Discovery campaign the lead belongs to."
+      },
+      "expires_at": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Unix seconds after which the decision lapses. Silence never sends."
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "sent",
+          "skipped",
+          "failed",
+          "superseded"
+        ]
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "Email to {{business_name}}",
+    "description": "{{content.subject}}",
+    "children": [
+      {
+        "type": "details",
+        "items": [
+          {
+            "label": "To",
+            "value": "{{destination}}"
+          },
+          {
+            "label": "From",
+            "value": "{{from}}, your Gmail"
+          },
+          {
+            "label": "Subject",
+            "value": "{{content.subject}}"
+          }
+        ]
+      },
+      {
+        "type": "section",
+        "presentation": "callout",
+        "text": "{{content.body}}"
+      },
+      {
+        "type": "status",
+        "label": "Decision",
+        "state_path": "/status"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Approve",
+            "interaction": {
+              "type": "signed",
+              "action_id": "outreach.approve",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Skip",
+            "interaction": {
+              "type": "signed",
+              "action_id": "outreach.skip",
+              "resolves_attention": true
+            }
+          }
+        ]
+      }
+    ],
+    "eyebrow": "Your decision"
+  },
+  "actions": [
+    {
+      "id": "outreach.approve",
+      "label": "Approve",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["approval_hash"],
+        "properties": {
+          "approval_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "outreach.approve",
+        "resolves_attention": true
+      },
+      "permissions": ["external-action.approve"]
+    },
+    {
+      "id": "outreach.skip",
+      "label": "Skip",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "outreach.skip",
+        "resolves_attention": true
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [
+    {
+      "capability": "external-action.approve",
+      "constraints": {
+        "exact_destination": true,
+        "exact_content": true,
+        "expires": true
+      }
+    }
+  ],
+  "fallback_template": "Email to {{business_name}}\nTo: {{destination}}\nSubject: {{content.subject}}\n\n{{content.body}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "details": 1,
+    "section": 1,
+    "status": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "Winter boiler special",
+      "data": {
+        "action": "Send this email from your Gmail",
+        "business_name": "Atlantic Plumbing",
+        "destination": "info@atlanticplumb.co.za",
+        "from": "basheer@horizonlabs.co.za",
+        "content": {
+          "subject": "Winter boiler special for Sea Point homes",
+          "body": "Hi Atlantic Plumbing team,\n\nWinter callouts are about to spike in Sea Point. Horizon is running a boiler service special this month, and I would like to offer it to your customers first.\n\nTen minutes on a call this week?\n\nBasheer"
+        },
+        "lead_id": "3f2a91c4-6d18-4a7b-9e02-5c81b7d4a610",
+        "campaign_id": "c81d4e9a-2f36-4b58-8a71-0d6e3f95c247",
+        "expires_at": 1789142400,
+        "status": "pending"
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": true }
+}

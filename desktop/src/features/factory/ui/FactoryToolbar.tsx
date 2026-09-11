@@ -15,6 +15,7 @@ import {
   COMM_GRAPH_TAB_KIND,
   COMM_GRAPH_TAB_TITLE,
 } from "@/features/factory/lib/commGraphTab";
+import { openBoardTab } from "@/features/workspace/kinds/boardKind";
 import { projectChipLabel } from "../lib/projectChannel";
 import { useProjectsQuery } from "@/features/projects/hooks";
 import { findProjectForChannel } from "@/features/factory/lib/projectChannel";
@@ -23,6 +24,7 @@ import {
   LaunchAgentDialog,
   type LaunchedAgent,
 } from "@/features/factory/ui/LaunchAgentDialog";
+import { useAgentsWithOpenAsks } from "@/features/factory/ui/useAgentTileAsks";
 import {
   getActiveTurnsForAgent,
   subscribeActiveAgentTurns,
@@ -48,6 +50,13 @@ export type FactoryToolbarProps = {
   onPresetChange: (
     preset: "single" | "columns" | "grid" | "focus" | null,
   ) => void;
+  /**
+   * The launcher is opened from the toolbar and from a tile's "New agent…",
+   * so the body owns whether it is open and what the brief starts as.
+   */
+  launchOpen: boolean;
+  launchBriefPrefill: string;
+  onLaunchOpenChange: (open: boolean) => void;
 };
 
 export function FactoryToolbar({
@@ -57,11 +66,13 @@ export function FactoryToolbar({
   commit,
   preset,
   onPresetChange,
+  launchOpen,
+  launchBriefPrefill,
+  onLaunchOpenChange,
 }: FactoryToolbarProps): React.JSX.Element {
   const projects = useProjectsQuery();
   const project = findProjectForChannel(projects.data, channelId);
   const workspace = useWorkspace(channelId);
-  const [launchOpen, setLaunchOpen] = React.useState(false);
 
   // Open the graph, or focus the one that is already open. A second graph tile
   // would show the same derived view twice, so the button is idempotent.
@@ -131,6 +142,7 @@ export function FactoryToolbar({
     subscribeActiveAgentTurns,
     readWorkingCount,
   );
+  const needsYouCount = useAgentsWithOpenAsks(agentPubkeys).size;
 
   const handleLaunched = React.useCallback(
     ({ name, pubkey, threadRootId }: LaunchedAgent) => {
@@ -146,6 +158,36 @@ export function FactoryToolbar({
     },
     [channelId, commit, factoryTabId, state],
   );
+
+  // One board per canvas: a second copy of the same project's tickets is a
+  // duplicate, not a second view, so an existing one is focused instead.
+  const existingBoardTabId =
+    workspace.tabs.find(
+      (candidate) =>
+        candidate.kind === "board" && tabIdsInTree.includes(candidate.id),
+    )?.id ?? null;
+  const handleOpenBoard = React.useCallback(() => {
+    if (existingBoardTabId) {
+      const pane = collectPanes(state.root).find((candidate) =>
+        candidate.tabIds.includes(existingBoardTabId),
+      );
+      if (pane) {
+        setActiveTab(channelId, factoryTabId);
+        commit({
+          ...addTabToPane(state, pane.id, existingBoardTabId, {
+            activate: true,
+          }),
+          focusedPaneId: pane.id,
+        });
+        return;
+      }
+    }
+    const tabId = openBoardTab(channelId);
+    // `openTab` makes the new tab the workspace's active one, which would
+    // replace the canvas with the bare tile. The canvas owns it instead.
+    setActiveTab(channelId, factoryTabId);
+    commit(addTabToPane(state, state.focusedPaneId, tabId, { activate: true }));
+  }, [channelId, commit, existingBoardTabId, factoryTabId, state]);
 
   const chipText = project
     ? projectChipLabel(project)
@@ -173,6 +215,17 @@ export function FactoryToolbar({
         >
           {agentPubkeys.length} agent{agentPubkeys.length !== 1 ? "s" : ""} ·{" "}
           {workingCount} working
+          {needsYouCount > 0 ? (
+            <>
+              {" · "}
+              <b
+                className="font-medium text-warning"
+                data-testid="factory-needs-you-count"
+              >
+                {needsYouCount} need{needsYouCount === 1 ? "s" : ""} you
+              </b>
+            </>
+          ) : null}
         </span>
       ) : null}
       <div className="flex-1" />
@@ -244,16 +297,26 @@ export function FactoryToolbar({
       <Button
         size="xs"
         variant="outline"
-        onClick={() => setLaunchOpen(true)}
+        onClick={handleOpenBoard}
+        title="Open this project's tickets board"
+        data-testid="factory-open-board-btn"
+      >
+        Board
+      </Button>
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() => onLaunchOpenChange(true)}
         title="Launch an agent into this project"
         data-testid="factory-add-agent-btn"
       >
         + Agent
       </Button>
       <LaunchAgentDialog
+        briefPrefill={launchBriefPrefill}
         channelId={channelId}
         onLaunched={handleLaunched}
-        onOpenChange={setLaunchOpen}
+        onOpenChange={onLaunchOpenChange}
         open={launchOpen}
       />
     </div>

@@ -767,7 +767,7 @@ pub fn validate_manifest(manifest: &BlockManifest) -> Result<(), BlockError> {
             ));
         }
     }
-    if manifest.handle == "approval" {
+    if manifest.handle == "approval" || manifest_declares_approval_permission(manifest) {
         validate_approval_schema(&manifest.input_schema)?;
     }
     if manifest.handle == "agent-proposal" {
@@ -824,6 +824,57 @@ pub fn validate_manifest_instance(
 ) -> Result<(), BlockError> {
     validate_instance(&manifest.input_schema, data)?;
     validate_dynamic_question_options(&manifest.tree, data)
+}
+
+/// Capability a Block declares when one of its actions approves an exact
+/// external action on the signer's behalf.
+pub const EXTERNAL_ACTION_APPROVE: &str = "external-action.approve";
+
+/// Whether a manifest declares the exact-external-action approval capability.
+///
+/// This, not the handle, is what binds a manifest to the Approval contract:
+/// the exact-proposal schema shape and the approval hash that covers it.
+pub fn manifest_declares_approval_permission(manifest: &BlockManifest) -> bool {
+    manifest
+        .permissions
+        .iter()
+        .any(|permission| permission.capability == EXTERNAL_ACTION_APPROVE)
+}
+
+/// Whether one declared action must carry an approval hash over the instance.
+pub fn action_requires_approval_hash(manifest: &BlockManifest, action_id: &str) -> bool {
+    manifest_declares_approval_permission(manifest)
+        && manifest.actions.iter().any(|action| {
+            action.id == action_id
+                && action
+                    .permissions
+                    .iter()
+                    .any(|capability| capability == EXTERNAL_ACTION_APPROVE)
+        })
+}
+
+/// Read the exact proposal an approval hash must cover out of instance data.
+pub fn approval_proposal_from_instance(data: &Value) -> Result<ApprovalProposal, BlockError> {
+    let read = |field: &str| -> Result<&str, BlockError> {
+        data.get(field).and_then(Value::as_str).ok_or_else(|| {
+            BlockError::InvalidInstance(format!("approval proposal is missing exact {field}"))
+        })
+    };
+    let expires_at = data
+        .get("expires_at")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            BlockError::InvalidInstance("approval proposal is missing exact expires_at".to_owned())
+        })?;
+    let content = data.get("content").cloned().ok_or_else(|| {
+        BlockError::InvalidInstance("approval proposal is missing exact content".to_owned())
+    })?;
+    Ok(ApprovalProposal {
+        action: read("action")?.to_owned(),
+        destination: read("destination")?.to_owned(),
+        content,
+        expires_at,
+    })
 }
 
 /// Compute the stable lowercase SHA-256 hash of an exact Approval proposal.
@@ -1183,12 +1234,14 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        canonical_json, compute_approval_hash, is_manifest_activation_eligible, validate_instance,
+        action_requires_approval_hash, approval_proposal_from_instance, canonical_json,
+        compute_approval_hash, is_manifest_activation_eligible, validate_instance,
         validate_manifest, validate_manifest_instance, AgentProposalData, ApprovalProposal,
         BlockActionDeclaration, BlockError, BlockExample, BlockGap, BlockInteraction,
-        BlockManifest, BlockNode, BlockOrigin, BlockValidation, BlockValidationState,
-        CorePresentationSurface, QuestionMode, QuestionNode, QuestionOption, SectionNode,
-        BLOCK_PRIMITIVE_HANDLES, BLOCK_STARTER_COMPOSITE_HANDLES, JSON_SCHEMA_DRAFT_2020_12,
+        BlockManifest, BlockNode, BlockOrigin, BlockPermission, BlockValidation,
+        BlockValidationState, CorePresentationSurface, QuestionMode, QuestionNode, QuestionOption,
+        SectionNode, BLOCK_PRIMITIVE_HANDLES, BLOCK_STARTER_COMPOSITE_HANDLES,
+        EXTERNAL_ACTION_APPROVE, JSON_SCHEMA_DRAFT_2020_12,
     };
 
     fn empty_object_schema() -> Value {
@@ -1929,5 +1982,97 @@ mod tests {
             Err(BlockError::InvalidManifest(message))
                 if message.contains("reject unspecified fields")
         ));
+    }
+
+    /// A Block whose Approve button sends an email is exactly as consequential
+    /// as `@approval`, and the handle is not what makes it so. Declaring
+    /// `external-action.approve` is, so the exact-proposal shape is demanded of
+    /// any manifest that declares it, whatever it is called.
+    #[test]
+    fn the_approval_contract_follows_the_permission_not_the_handle() {
+        let mut incomplete = manifest("outreach-email");
+        incomplete.permissions.push(BlockPermission {
+            capability: EXTERNAL_ACTION_APPROVE.to_owned(),
+            constraints: json!({ "exact_destination": true }),
+        });
+        incomplete.examples.clear();
+        assert!(
+            matches!(
+                validate_manifest(&incomplete),
+                Err(BlockError::InvalidManifest(message))
+                    if message.contains("Approval schema must require")
+            ),
+            "a manifest claiming the capability without the exact fields is not an approval"
+        );
+
+        let mut complete = incomplete.clone();
+        complete.input_schema = json!({
+            "$schema": JSON_SCHEMA_DRAFT_2020_12,
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "destination", "content", "expires_at"],
+            "properties": {
+                "action": { "type": "string" },
+                "destination": { "type": "string" },
+                "content": {},
+                "expires_at": { "type": "integer" }
+            }
+        });
+        validate_manifest(&complete).expect("the exact fields satisfy the contract");
+    }
+
+    /// The hash is only worth anything if it names which button must carry it.
+    #[test]
+    fn only_the_capability_bearing_action_owes_an_approval_hash() {
+        let mut manifest = manifest("outreach-email");
+        manifest.permissions.push(BlockPermission {
+            capability: EXTERNAL_ACTION_APPROVE.to_owned(),
+            constraints: json!({}),
+        });
+        let mut approve = signed_action("outreach.approve", true, Some(empty_object_schema()));
+        approve.permissions = vec![EXTERNAL_ACTION_APPROVE.to_owned()];
+        manifest.actions.push(approve);
+        manifest.actions.push(signed_action(
+            "outreach.skip",
+            true,
+            Some(empty_object_schema()),
+        ));
+
+        assert!(action_requires_approval_hash(&manifest, "outreach.approve"));
+        assert!(!action_requires_approval_hash(&manifest, "outreach.skip"));
+        assert!(!action_requires_approval_hash(&manifest, "outreach.absent"));
+    }
+
+    /// The card shows a recipient, a subject and a body; the hash must cover
+    /// those exact bytes, and must refuse to be computed when one is missing.
+    #[test]
+    fn an_outreach_proposal_hashes_the_exact_recipient_subject_and_body() {
+        let data = json!({
+            "action": "Send this email from your Gmail",
+            "business_name": "Atlantic Plumbing",
+            "destination": "info@atlanticplumb.co.za",
+            "from": "basheer@horizonlabs.co.za",
+            "content": { "subject": "Winter boiler special", "body": "Hi there" },
+            "expires_at": 1_789_142_400_u64,
+            "status": "pending"
+        });
+        let proposal = approval_proposal_from_instance(&data).expect("an exact proposal");
+        let hash = compute_approval_hash(&proposal).expect("approval hash");
+        assert_eq!(hash.len(), 64);
+
+        let mut edited = data.clone();
+        edited["content"]["body"] = json!("Hi there, and one more thing");
+        let edited_hash = compute_approval_hash(
+            &approval_proposal_from_instance(&edited).expect("an exact proposal"),
+        )
+        .expect("approval hash");
+        assert_ne!(hash, edited_hash, "editing the body must break the hash");
+
+        let mut truncated = data.clone();
+        truncated
+            .as_object_mut()
+            .expect("instance object")
+            .remove("destination");
+        assert!(approval_proposal_from_instance(&truncated).is_err());
     }
 }

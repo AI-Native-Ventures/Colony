@@ -47,7 +47,12 @@ test("persistent MCP process starts without access and reads late grants on ever
       (await call("initialize")).result.serverInfo.name,
       "colony-electron-browser",
     );
-    assert.equal((await call("tools/list")).result.tools.length, 5);
+    const listed = (await call("tools/list")).result.tools;
+    assert.equal(listed.length, 6);
+    assert.deepEqual(
+      listed.find((tool) => tool.name === "mail_send")?.inputSchema.required,
+      ["tabId", "to", "subject", "body"],
+    );
     const args = { name: "browser_tabs_list", arguments: {} };
     assert.equal((await call("tools/call", args)).result.isError, true);
     await writeFile(file, JSON.stringify({ socketPath, token: "first" }), {

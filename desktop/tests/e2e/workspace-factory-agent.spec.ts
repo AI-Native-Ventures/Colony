@@ -2,21 +2,14 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import {
+  chooseOption,
+  FACTORY_PERSONAS as PERSONAS,
+  GENERAL_CHANNEL_ID,
+  openWorkspace,
+} from "../helpers/factoryAgent";
 
 const SHOTS = "test-results/workspace-factory-agent";
-
-/** #general in the mock relay — the project channel the Factory tab needs. */
-const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
-
-const PERSONAS = [
-  {
-    id: "custom:avery",
-    displayName: "Avery",
-    roleId: "engineering-lead",
-    roleTitle: "Engineering lead",
-    systemPrompt: "Lead the build.",
-  },
-];
 
 type PublishedEvent = { id: string; content: string; tags: string[][] };
 
@@ -36,40 +29,6 @@ type FactoryAgentWindow = Window & {
     }>;
   }) => void;
 };
-
-/** Open the channel workspace, whatever surface mode the channel was left in. */
-async function openWorkspace(page: Page, channelTestId: string): Promise<void> {
-  const back = page.getByTestId("workspace-back-to-conversation");
-  if ((await back.count()) > 0) {
-    await back.first().click();
-  }
-  await page.getByTestId(channelTestId).click();
-  const toggle = page.getByTestId("channel-workspace-toggle");
-  await expect(toggle).toBeVisible();
-  if ((await toggle.getAttribute("aria-pressed")) !== "true") {
-    await toggle.click();
-  }
-  await expect(page.getByTestId("channel-workspace")).toBeVisible();
-}
-
-/**
- * Pick an option out of one of the launcher's dropdowns.
- *
- * A searchable dropdown renders its options as a listbox and a plain one as a
- * radio menu, so match either rather than guessing per field.
- */
-async function chooseOption(
-  page: Page,
-  triggerId: string,
-  optionName: string | RegExp,
-): Promise<void> {
-  await page.locator(`#${triggerId}`).click();
-  const option = page
-    .getByRole("option", { name: optionName })
-    .or(page.getByRole("menuitemradio", { name: optionName }));
-  await option.first().click();
-  await expect(option).toHaveCount(0);
-}
 
 async function publishedEvents(page: Page): Promise<PublishedEvent[]> {
   return await page.evaluate(

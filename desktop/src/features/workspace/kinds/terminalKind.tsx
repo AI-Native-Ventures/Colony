@@ -19,6 +19,7 @@ import type {
   TerminalChunk,
   TerminalStartRequest,
 } from "@/features/workspace/lib/terminalSessions";
+import { openTab } from "@/features/workspace/lib/workspaceTabs";
 import { openUrl } from "@/shared/api/nativeBridge";
 import { resolveTerminalKey } from "./terminalKeys";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
@@ -80,6 +81,33 @@ export const terminalKindDefinition: TabKindDefinition = {
   canCreateFromNewTabPage: true,
   dispose: (tab) => disposeTerminalSession(tab.id),
 };
+
+/**
+ * The explicit working directory a terminal tab was opened into.
+ *
+ * The Factory opens a terminal in an agent's own worktree; a tab restored from
+ * localStorage may carry a payload this build never wrote, so anything that is
+ * not a non-empty string reads as "no explicit cwd" and the project checkout
+ * applies.
+ */
+export function readTerminalTabCwd(payload: unknown): string | null {
+  if (payload === null || typeof payload !== "object") return null;
+  const cwd = (payload as Record<string, unknown>).cwd;
+  return typeof cwd === "string" && cwd.trim() ? cwd.trim() : null;
+}
+
+/** Open a terminal tab, optionally pinned to one directory. Returns its id. */
+export function openTerminalTab(
+  channelId: string,
+  { cwd, title }: { cwd?: string | null; title?: string } = {},
+): string {
+  return openTab(channelId, {
+    kind: terminalKindDefinition.kind,
+    title: title ?? "Terminal",
+    createdBy: "local",
+    payload: { sessionKey: null, cwd: cwd ?? null },
+  });
+}
 
 function chunkLength(chunk: TerminalChunk): number {
   return typeof chunk === "string" ? chunk.length : chunk.byteLength;
@@ -153,6 +181,7 @@ export function TerminalBody({
   const project = projects.data?.find(
     (candidate) => candidate.projectChannelId === channelId,
   );
+  const explicitCwd = readTerminalTabCwd(tab.payload);
   const request = React.useMemo(
     () =>
       buildTerminalStartRequest({
@@ -160,8 +189,15 @@ export function TerminalBody({
         project,
         projectsSettled: projects.isFetched,
         reposDir: activeCommunity?.reposDir ?? null,
+        cwd: explicitCwd,
       }),
-    [activeCommunity?.reposDir, channelId, project, projects.isFetched],
+    [
+      activeCommunity?.reposDir,
+      channelId,
+      explicitCwd,
+      project,
+      projects.isFetched,
+    ],
   );
 
   React.useEffect(() => {

@@ -89,19 +89,34 @@ test("worktree label is the leaf directory, or null when unset", async () => {
   const m = await load();
   assert.strictEqual(
     m.resolveAgentWorktreeLabel({
-      COLONY_WORKTREE: "/repos/colony/feat-billing",
+      envVars: { COLONY_WORKTREE: "/repos/colony/feat-billing" },
     }),
     "feat-billing",
   );
   assert.strictEqual(
     m.resolveAgentWorktreeLabel({
-      COLONY_WORKTREE: "/repos/colony/feat-billing/",
+      envVars: { COLONY_WORKTREE: "/repos/colony/feat-billing/" },
     }),
     "feat-billing",
   );
   assert.strictEqual(
-    m.resolveAgentWorktreeLabel({ COLONY_WORKTREE: "  " }),
+    m.resolveAgentWorktreeLabel({ envVars: { COLONY_WORKTREE: "  " } }),
     null,
   );
   assert.strictEqual(m.resolveAgentWorktreeLabel(undefined), null);
+});
+
+test("the record's own working directory wins over the env mirror", async () => {
+  const m = await load();
+  assert.strictEqual(
+    m.resolveAgentWorktreeLabel({
+      workingDir: "/repos/colony/feat-export",
+      envVars: { COLONY_WORKTREE: "/repos/colony/stale" },
+    }),
+    "feat-export",
+  );
+  assert.strictEqual(
+    m.resolveAgentWorktreeLabel({ workingDir: "/repos/colony/feat-export" }),
+    "feat-export",
+  );
 });

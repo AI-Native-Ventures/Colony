@@ -964,6 +964,32 @@ fn validate_discovery_budget_approval_values(
     Ok(())
 }
 
+/// Bind an approving action to the exact proposal its instance displays.
+///
+/// The capability, not the action ID, is what makes an action consequential:
+/// any manifest declaring `external-action.approve` on an action must send a
+/// hash over that instance's exact destination, content and expiry, so the
+/// decision cannot be replayed against a proposal the signer never saw.
+fn validate_approval_hash_binding(
+    manifest: &buzz_core::block::BlockManifest,
+    data: Option<&Value>,
+    action: &ActionEnvelope,
+) -> Result<(), String> {
+    if !buzz_core::block::action_requires_approval_hash(manifest, &action.action_id) {
+        return Ok(());
+    }
+    let data = data
+        .ok_or_else(|| "Block approval actions require inline instance data to hash".to_string())?;
+    let proposal = buzz_core::block::approval_proposal_from_instance(data)
+        .map_err(|error| format!("Block approval target is not an exact proposal: {error}"))?;
+    let expected = buzz_core::block::compute_approval_hash(&proposal)
+        .map_err(|error| format!("Block approval hash failed: {error}"))?;
+    if action.content.get("approval_hash").and_then(Value::as_str) != Some(expected.as_str()) {
+        return Err("Block approval hash does not cover its pinned proposal".into());
+    }
+    Ok(())
+}
+
 pub(crate) async fn manifest_is_trusted_active(
     tenant: &TenantContext,
     state: &AppState,
@@ -1111,6 +1137,7 @@ pub(crate) async fn validate_public_envelope(
                 &action.content,
             )
             .map_err(|error| format!("Block action does not match its pinned question: {error}"))?;
+            validate_approval_hash_binding(&typed_manifest, data, action)?;
             let declaration = manifest_action(&manifest, &action.action_id)
                 .ok_or_else(|| "Block action ID is not declared by its manifest".to_string())?;
             if let Some(schema) = declaration
@@ -1642,5 +1669,71 @@ mod tests {
         )
         .expect_err("wrong hash must fail")
         .contains("hash"));
+    }
+
+    /// The Approve button on an outreach email is verified by the capability
+    /// its manifest declares, not by the string `approval.approve`. Skip
+    /// carries no capability, so it owes no hash and stays pressable.
+    #[test]
+    fn an_approving_action_is_bound_to_the_exact_proposal_its_card_displays() {
+        let manifest = crate::core_blocks::core_block_manifests()
+            .expect("Core manifests")
+            .into_iter()
+            .find(|manifest| manifest.handle == "outreach-email")
+            .expect("outreach-email is bundled");
+        let data = manifest.examples[0].data.clone();
+        let hash = buzz_core::block::compute_approval_hash(
+            &buzz_core::block::approval_proposal_from_instance(&data).expect("exact proposal"),
+        )
+        .expect("approval hash");
+
+        let approve = |content: Value| ActionEnvelope {
+            channel_id: Uuid::new_v4(),
+            instance_event_id: vec![1],
+            manifest_event_id: vec![2],
+            instance_id: Uuid::new_v4(),
+            action_id: "outreach.approve".to_owned(),
+            idempotency_key: Uuid::new_v4(),
+            processor_pubkey: vec![3],
+            content,
+        };
+
+        validate_approval_hash_binding(
+            &manifest,
+            Some(&data),
+            &approve(serde_json::json!({ "approval_hash": hash })),
+        )
+        .expect("the hash over the displayed proposal is accepted");
+
+        assert!(validate_approval_hash_binding(
+            &manifest,
+            Some(&data),
+            &approve(serde_json::json!({ "approval_hash": "a".repeat(64) })),
+        )
+        .expect_err("a hash over nothing must fail")
+        .contains("does not cover"));
+
+        let mut edited = data.clone();
+        edited["content"]["body"] = serde_json::json!("A body the signer never read.");
+        assert!(validate_approval_hash_binding(
+            &manifest,
+            Some(&edited),
+            &approve(serde_json::json!({ "approval_hash": hash })),
+        )
+        .expect_err("an edited body must break the binding")
+        .contains("does not cover"));
+
+        assert!(validate_approval_hash_binding(
+            &manifest,
+            None,
+            &approve(serde_json::json!({ "approval_hash": hash })),
+        )
+        .expect_err("a reference-only instance cannot be hashed")
+        .contains("inline instance data"));
+
+        let mut skip = approve(serde_json::json!({}));
+        skip.action_id = "outreach.skip".to_owned();
+        validate_approval_hash_binding(&manifest, Some(&data), &skip)
+            .expect("skip carries no approval capability");
     }
 }

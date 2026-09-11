@@ -13,6 +13,9 @@ export type LaunchSelection =
   | { type: "persona"; id: string }
   | { type: "agent"; pubkey: string };
 
+/** Which checkout the launched agent works in. */
+export type LaunchWorktreeMode = "new" | "shared";
+
 /** Form state, all strings: `""` always means "leave it inherited". */
 export type LaunchAgentFormState = {
   /** `persona:<id>` or `agent:<pubkey>`. */
@@ -21,6 +24,10 @@ export type LaunchAgentFormState = {
   runtimeId: string;
   model: string;
   effort: string;
+  /** `"new"` cuts a worktree, `"shared"` runs in the project checkout. */
+  worktreeMode: LaunchWorktreeMode;
+  /** Branch for a new worktree. Ignored when the mode is `"shared"`. */
+  worktreeBranch: string;
   brief: string;
 };
 
@@ -40,6 +47,8 @@ export type LaunchAgentPlan = {
     model?: string | null;
     envVars?: Record<string, string>;
   } | null;
+  /** Set when this launch has to cut a worktree before anything is minted. */
+  worktree: { branch: string } | null;
   /** The message posted into the project channel; becomes the thread root. */
   brief: string;
 };
@@ -104,6 +113,13 @@ export function planAgentLaunch(
   const model = form.model.trim();
   const effort = form.effort.trim();
 
+  const worktreeBranch = form.worktreeBranch.trim();
+  if (form.worktreeMode === "new" && !worktreeBranch) {
+    return { ok: false, problem: "Name the branch for the new worktree." };
+  }
+  const worktree =
+    form.worktreeMode === "new" ? { branch: worktreeBranch } : null;
+
   if (selection.type === "persona") {
     const persona = context.personas.find(
       (candidate) => candidate.id === selection.id,
@@ -125,6 +141,7 @@ export function planAgentLaunch(
           envVars: applyEffortToEnvVars({}, effort),
         },
         update: null,
+        worktree,
         brief,
       },
     };
@@ -154,6 +171,7 @@ export function planAgentLaunch(
               ...(envChanged ? { envVars: nextEnvVars } : {}),
             }
           : null,
+      worktree,
       brief,
     },
   };
