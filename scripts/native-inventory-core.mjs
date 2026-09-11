@@ -969,6 +969,29 @@ export async function runNativeInventory({ projectRoot, jsonPath, checkPath }) {
       process.exitCode = 1;
       return;
     }
+    // The tolerance above has a cost: because the compare strips these
+    // fields from BOTH sides, a branch that regenerated before they were
+    // dropped can carry them back in and nothing would say so, and the next
+    // person to regenerate would reintroduce them for everyone. A guard that
+    // accepts what it is meant to remove decays to nothing, so the committed
+    // copy carrying one is an error in its own right, with the one-line fix
+    // named.
+    const persisted = committed.files ?? {};
+    const strays = VOLATILE_COUNT_FIELDS.filter(
+      (field) => persisted[field] !== undefined,
+    );
+    if (strays.length > 0) {
+      console.error(
+        `native inventory carries ${strays.join(" and ")}, which must not be committed: ` +
+          "they change on every commit to desktop/src-tauri and make every other branch stale.",
+      );
+      console.error(
+        "Run `pnpm generate:native-inventory` and commit the result; it drops them.",
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     const current = withoutVolatileCounts(data);
     const baseline = withoutVolatileCounts(committed);
     if (!isDeepStrictEqual(current, baseline)) {
