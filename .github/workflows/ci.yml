@@ -1234,7 +1234,6 @@ jobs:
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           REDIS_URL: redis://localhost:6379
-          REDIS_URL: redis://localhost:6379
       - name: Workflow owner-contact routing tests
         # Regression gate for the workflow-sink owner wall: a Worker/Leader
         # workflow send_message that mentions an owner must route the mention
