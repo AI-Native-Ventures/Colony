@@ -5,7 +5,7 @@ use std::fs;
 #[path = "blocks_description.rs"]
 mod description;
 #[path = "blocks_fallback.rs"]
-mod fallback;
+pub(crate) mod fallback;
 use fallback::render_fallback;
 
 use buzz_core::{
@@ -32,9 +32,26 @@ use crate::error::CliError;
 use crate::validate::{parse_event_id, parse_uuid};
 use crate::{BlockReceiptStatusArg, BlocksCmd};
 
-struct ResolvedManifest {
-    event_id: EventId,
-    manifest: BlockManifest,
+pub(crate) struct ResolvedManifest {
+    pub(crate) event_id: EventId,
+    pub(crate) manifest: BlockManifest,
+}
+
+/// Everything one Block instance publication needs, so every command that
+/// posts a card writes the same tags as `buzz blocks invoke`.
+pub(crate) struct InstancePublication<'a> {
+    /// Channel the card is posted into.
+    pub(crate) channel_id: Uuid,
+    /// Manifest the instance data is validated and pinned against.
+    pub(crate) manifest: &'a ResolvedManifest,
+    /// Instance data, already shaped for the manifest input schema.
+    pub(crate) data: Value,
+    /// Pre-rendered fallback text, or `None` to render the manifest template.
+    pub(crate) fallback: Option<String>,
+    /// Pubkey that answers this card's signed actions.
+    pub(crate) processor: Option<PublicKey>,
+    /// Event the card replies to, threading it where the request came from.
+    pub(crate) reply_to: Option<EventId>,
 }
 
 struct InstanceCoordinates {
@@ -349,18 +366,46 @@ async fn invoke(
     }
     let data = read_json(data_path)?;
     let fallback = match fallback_path {
-        Some(path) => fs::read_to_string(path)
-            .map_err(|error| CliError::Usage(format!("could not read fallback {path}: {error}")))?,
-        None => render_fallback(&resolved.manifest.fallback_template, &data)?,
+        Some(path) => Some(fs::read_to_string(path).map_err(|error| {
+            CliError::Usage(format!("could not read fallback {path}: {error}"))
+        })?),
+        None => None,
     };
-    let thread = raw_reply_to
-        .map(parse_event_id)
-        .transpose()?
-        .map(|event_id| BlockThreadRef {
-            root_event_id: event_id,
-            parent_event_id: event_id,
-        });
     let processor = resolve_instance_processor(&resolved.manifest, raw_processor)?;
+    let reply_to = raw_reply_to.map(parse_event_id).transpose()?;
+    let output = publish_instance(
+        client,
+        InstancePublication {
+            channel_id,
+            manifest: &resolved,
+            data,
+            fallback,
+            processor,
+            reply_to,
+        },
+    )
+    .await?;
+    println!("{output}");
+    Ok(())
+}
+
+/// Publish one Block instance as an ordinary channel message, validating the
+/// data against its pinned manifest before anything reaches the relay.
+///
+/// Returns the standard write result, extended with the instance identifiers.
+pub(crate) async fn publish_instance(
+    client: &BuzzClient,
+    publication: InstancePublication<'_>,
+) -> Result<Value, CliError> {
+    let resolved = publication.manifest;
+    let fallback = match publication.fallback {
+        Some(fallback) => fallback,
+        None => render_fallback(&resolved.manifest.fallback_template, &publication.data)?,
+    };
+    let thread = publication.reply_to.map(|event_id| BlockThreadRef {
+        root_event_id: event_id,
+        parent_event_id: event_id,
+    });
     let attention = if resolved.manifest.validation.requires_attention {
         let decision_maker = match client.auth_tag_owner_hex() {
             Some(owner) => PublicKey::parse(&owner)
@@ -373,13 +418,13 @@ async fn invoke(
     };
     let instance_id = Uuid::new_v4();
     let builder = build_block_instance(&BlockInstanceInput {
-        channel_id,
+        channel_id: publication.channel_id,
         manifest_id: resolved.event_id,
         instance_id,
         manifest: &resolved.manifest,
         fallback,
-        data: BlockInstanceData::Inline(data),
-        processor,
+        data: BlockInstanceData::Inline(publication.data),
+        processor: publication.processor,
         thread,
         attention,
     })
@@ -387,19 +432,15 @@ async fn invoke(
     let event = client.sign_event(builder)?;
     let event_id = event.id.to_hex();
     let response = client.submit_event(event).await?;
-    println!(
-        "{}",
-        merge_write_response(
-            &response,
-            json!({
-                "event_id": event_id,
-                "instance_id": instance_id,
-                "handle": handle,
-                "manifest_id": resolved.event_id.to_hex()
-            })
-        )
-    );
-    Ok(())
+    Ok(merge_write_response(
+        &response,
+        json!({
+            "event_id": event_id,
+            "instance_id": instance_id,
+            "handle": resolved.manifest.handle,
+            "manifest_id": resolved.event_id.to_hex()
+        }),
+    ))
 }
 
 fn resolve_instance_processor(
@@ -428,19 +469,31 @@ async fn actions(
     since: Option<u64>,
 ) -> Result<(), CliError> {
     let channel = parse_uuid(raw_channel)?;
+    let instance = raw_instance.map(parse_event_id).transpose()?;
+    let events = fetch_actions(client, channel, instance, since).await?;
+    println!("{}", json!({ "actions": events }));
+    Ok(())
+}
+
+/// Read accepted Block action events in one channel, optionally narrowed to
+/// one instance event and to actions no older than `since`.
+pub(crate) async fn fetch_actions(
+    client: &BuzzClient,
+    channel: Uuid,
+    instance: Option<EventId>,
+    since: Option<u64>,
+) -> Result<Vec<Value>, CliError> {
     let mut filter = json!({
         "kinds": [KIND_BLOCK_ACTION],
         "#h": [channel.to_string()]
     });
-    if let Some(instance) = raw_instance {
-        filter["#e"] = json!([parse_event_id(instance)?.to_hex()]);
+    if let Some(instance) = instance {
+        filter["#e"] = json!([instance.to_hex()]);
     }
     if let Some(since) = since {
         filter["since"] = json!(since);
     }
-    let events = client.query_all(filter).await?;
-    println!("{}", json!({ "actions": events }));
-    Ok(())
+    client.query_all(filter).await
 }
 
 async fn act(
@@ -543,6 +596,15 @@ async fn receipt(
         )
     );
     Ok(())
+}
+
+/// Resolve the active catalog head for one handle into a pinned manifest.
+pub(crate) async fn resolve_active(
+    client: &BuzzClient,
+    raw_handle: &str,
+) -> Result<ResolvedManifest, CliError> {
+    let (event_id, manifest) = resolve_active_manifest(client, raw_handle).await?;
+    Ok(ResolvedManifest { event_id, manifest })
 }
 
 pub(crate) async fn resolve_active_manifest(

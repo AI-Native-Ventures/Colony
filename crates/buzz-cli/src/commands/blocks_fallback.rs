@@ -12,7 +12,7 @@ fn resolve_path<'a>(data: &'a Value, path: &str) -> Option<&'a Value> {
     Some(current)
 }
 
-pub(super) fn render_fallback(template: &str, data: &Value) -> Result<String, CliError> {
+pub(crate) fn render_fallback(template: &str, data: &Value) -> Result<String, CliError> {
     let mut result = String::new();
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
