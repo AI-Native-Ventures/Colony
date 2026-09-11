@@ -233,6 +233,33 @@ async fn publish_membership_snapshot_if_required(
     }
 }
 
+/// Seed the employees Colony provides into a freshly provisioned community.
+///
+/// Best effort by design, and deliberately not part of the provisioning
+/// warning: a workspace that exists without its provisioned employees is a
+/// workspace, and the next relay start seeds them. Turning this into a
+/// provisioning failure would make a usable community report as broken.
+async fn seed_provisioned_employees(
+    state: &Arc<AppState>,
+    community: buzz_core::CommunityId,
+    host: &str,
+) {
+    match crate::core_employees::ensure_core_employees(state, community).await {
+        Ok(count) => info!(
+            community = %community,
+            host,
+            count,
+            "provisioned employees reconciled after community provisioning"
+        ),
+        Err(error) => warn!(
+            community = %community,
+            host,
+            error = %error,
+            "community provisioned but provisioned employee seeding failed"
+        ),
+    }
+}
+
 async fn seed_core_blocks_warning(
     state: &Arc<AppState>,
     community: buzz_core::CommunityId,
@@ -334,6 +361,7 @@ pub(crate) async fn create_community_for_owner(
     publish_membership_snapshot_if_required(state, record.id, &record.host).await;
     let profile_warning = seed_company_profile_warning(state, record.id, &record.host).await;
     let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
+    seed_provisioned_employees(state, record.id, &record.host).await;
     let warning = match warning {
         // A Block-catalog failure is the more serious of the two, so it keeps
         // the response's single warning slot.
@@ -433,6 +461,7 @@ pub async fn provision_community(
 
     let profile_warning = seed_company_profile_warning(state, record.id, &record.host).await;
     let warning = seed_core_blocks_warning(state, record.id, &record.host).await;
+    seed_provisioned_employees(state, record.id, &record.host).await;
     let warning = match warning {
         // A Block-catalog failure is the more serious of the two, so it keeps
         // the response's single warning slot.

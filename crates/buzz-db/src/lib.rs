@@ -6187,6 +6187,50 @@ impl Db {
         employees::update_employee(&self.pool, community, pubkey, rank, manager, status).await
     }
 
+    /// Seed one provisioned employee. `None` when the handle is already
+    /// seeded or a user's own employee holds the role
+    /// (see [`employees::insert_provisioned_employee`]).
+    pub async fn insert_provisioned_employee(
+        &self,
+        community: CommunityId,
+        employee: employees::NewProvisionedEmployee<'_>,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::insert_provisioned_employee(&self.pool, community, employee).await
+    }
+
+    /// The employee seeded from `handle`, if any
+    /// (see [`employees::find_provisioned_employee`]).
+    pub async fn find_provisioned_employee(
+        &self,
+        community: CommunityId,
+        handle: &str,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::find_provisioned_employee(&self.pool, community, handle).await
+    }
+
+    /// Apply a newer bundled version to an already-seeded employee
+    /// (see [`employees::update_provisioned_employee`]).
+    pub async fn update_provisioned_employee(
+        &self,
+        community: CommunityId,
+        handle: &str,
+        display_name: &str,
+        role_id: &str,
+        rank: &str,
+        version: i32,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::update_provisioned_employee(
+            &self.pool,
+            community,
+            handle,
+            display_name,
+            role_id,
+            rank,
+            version,
+        )
+        .await
+    }
+
     /// File a job. `None` when this filing already produced one
     /// (see [`jobs::insert_job`]).
     pub async fn insert_job(

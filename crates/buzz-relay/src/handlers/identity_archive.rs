@@ -36,6 +36,48 @@ impl ConsentPath {
     }
 }
 
+/// Refuse an archive or unarchive request aimed at a provisioned employee.
+///
+/// The refusal names the employee and says who provides it, because the
+/// person reading it did nothing wrong: removing a colleague is an ordinary
+/// thing to try, and this one simply is not theirs to remove.
+///
+/// Fails closed. A database error refuses the request rather than letting it
+/// through, since the alternative is archiving an employee the relay could
+/// not confirm was safe to archive.
+async fn refuse_provisioned_target(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    target_hex: &str,
+    kind: u32,
+) -> Result<(), String> {
+    let Ok(target_bytes) = hex::decode(target_hex) else {
+        return Ok(());
+    };
+    let employee = state
+        .db
+        .find_employee(tenant.community(), &target_bytes)
+        .await
+        .map_err(|error| format!("database error checking the archive target: {error}"))?;
+
+    let Some(employee) = employee else {
+        return Ok(());
+    };
+    let Some(_handle) = employee.provisioned_handle.as_deref() else {
+        return Ok(());
+    };
+
+    let verb = if kind == KIND_IA_ARCHIVE_REQUEST {
+        "archived"
+    } else {
+        "unarchived"
+    };
+    Err(format!(
+        "{} is provided by Colony and cannot be {verb}.",
+        employee.display_name
+    ))
+}
+
 /// Validate and execute a NIP-IA archive/unarchive request.
 pub async fn handle_identity_archive_event(
     tenant: &TenantContext,
@@ -55,6 +97,12 @@ pub async fn handle_identity_archive_event(
     let target_hex = extract_single_p_tag_hex(event)
         .ok_or_else(|| "missing or invalid p tag".to_string())?
         .to_ascii_lowercase();
+
+    // An employee Colony provides is not the workspace's to remove, and
+    // archiving is the one path that would remove it without touching the
+    // employees table at all. Refused before consent is even resolved: no
+    // signer, owner included, has authority here.
+    refuse_provisioned_target(tenant, state, &target_hex, kind).await?;
 
     let replaced_by = extract_optional_replaced_by(event, &target_hex)?;
     if kind == KIND_IA_UNARCHIVE_REQUEST && replaced_by.is_some() {

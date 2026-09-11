@@ -534,6 +534,18 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Seed the employees Colony provides, alongside the Block catalog and for
+    // the same reason: they are product assets bundled in this binary, so a
+    // workspace gets them by running the relay rather than by asking for them.
+    // Never fatal. A workspace missing a provisioned employee is missing a
+    // colleague, not its chat, and the next start tries again.
+    match buzz_relay::core_employees::ensure_core_employees_for_all_communities(&state).await {
+        Ok(count) => info!(count, "provisioned employees reconciled on startup"),
+        Err(error) => {
+            warn!(%error, "provisioned employee startup reconciliation failed; continuing without them")
+        }
+    }
+
     // Every community gets an operating profile, whether or not anyone ever
     // described their business. A Task charges to a cost centre and cost
     // centres live on the profile, so a community without one cannot create

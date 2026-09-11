@@ -735,7 +735,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 70);
+        assert_eq!(migrations.len(), 71);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1209,6 +1209,18 @@ mod tests {
         ));
         // Community-scoped, so it must never be registered as operator-global.
         assert!(!employees.contains("_operator_global_tables"));
+
+        // Provisioned employees: the employees Colony provides, seeded from
+        // manifests bundled in the relay binary. A seeded row answers no hire
+        // request, so both hire columns have to admit NULL -- and the
+        // provenance check is what keeps that narrow, so an ordinary hire
+        // still cannot be written without the owner-signed request behind it.
+        assert_eq!(migrations[70].version, 71);
+        let provisioned = migrations[70].sql.as_str();
+        assert!(provisioned.contains("ADD COLUMN IF NOT EXISTS provisioned_handle TEXT"));
+        assert!(provisioned.contains("ALTER COLUMN hire_event DROP NOT NULL"));
+        assert!(provisioned.contains("employees_hire_provenance"));
+        assert!(provisioned.contains("ON employees (community_id, provisioned_handle)"));
 
         // The job queue. The lease columns and the status they belong to have
         // to agree, or the queue has lost track of who is working: an open job

@@ -35,13 +35,14 @@ use buzz_core::kind::{
     KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
     KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
     KIND_NIP65_RELAY_LIST_METADATA, KIND_PARTY_ACTION, KIND_PERSONA, KIND_PIN_LIST,
-    KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_PROJECT, KIND_REACTION,
-    KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TASK_REPORT,
-    KIND_TEAM, KIND_TEXT_NOTE, KIND_USAGE_RECORD, KIND_USER_STATUS, KIND_WORKFLOW_DEF,
-    KIND_WORKFLOW_TRIGGER, KIND_WORKSPACE_TAB_ACTION, RELAY_ADMIN_ADD_MEMBER,
-    RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_PRESENCE_UPDATE, KIND_PRIVATE_MANAGED_AGENT, KIND_PRODUCT_FEEDBACK, KIND_PROFILE,
+    KIND_PROJECT, KIND_REACTION, KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER, KIND_TASK_REPORT, KIND_TEAM, KIND_TEXT_NOTE, KIND_USAGE_RECORD,
+    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, KIND_WORKSPACE_TAB_ACTION,
+    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -3335,6 +3336,42 @@ async fn ingest_event_inner(
             return Err(IngestError::AuthFailed(
                 "not an employee of this community".to_string(),
             ));
+        }
+    }
+
+    // Colony provisioned employees: the agent definition of an employee
+    // Colony provides is not the workspace's to rewrite. Both definition
+    // kinds are addressed by the agent's own pubkey in the `d` tag, so one
+    // lookup covers the public projection (30177) and the owner-encrypted
+    // private aggregate (30194), which is the path a client would use to
+    // mark the agent deleted. The relay's own seeding does not pass through
+    // ingest, so refusing every client write here leaves exactly one writer.
+    //
+    // A kind 30190 head needs no equivalent check: the block above already
+    // demands that an employee head be signed by the employee itself, and
+    // only the relay can open an employee's sealed key.
+    if kind_u32 == KIND_MANAGED_AGENT || kind_u32 == KIND_PRIVATE_MANAGED_AGENT {
+        let target = event.tags.iter().find_map(|tag| {
+            if tag.kind().to_string() == "d" {
+                tag.content().and_then(|value| hex::decode(value).ok())
+            } else {
+                None
+            }
+        });
+        if let Some(target) = target {
+            let employee = state
+                .db
+                .find_employee(tenant.community(), &target)
+                .await
+                .map_err(|e| IngestError::Internal(format!("database error: {e}")))?;
+            if let Some(employee) = employee {
+                if employee.provisioned_handle.is_some() {
+                    return Err(IngestError::AuthFailed(format!(
+                        "{} is provided by Colony and cannot be edited or deleted.",
+                        employee.display_name
+                    )));
+                }
+            }
         }
     }
 
