@@ -30,6 +30,7 @@
     "harness:typecheck": "tsc -p tsconfig.harness.json --noEmit",
     "electron:dev": "node ./scripts/electron-dev.mjs",
     "electron:test": "node --test \"src-electron/**/*.test.mjs\"",
+    "electron:mail-proof": "node ./src-electron/browser/mail-smoke.mjs",
     "electron:package": "node ./scripts/electron-package.mjs"
   },
   "dependencies": {
