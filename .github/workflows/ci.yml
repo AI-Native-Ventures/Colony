@@ -655,6 +655,7 @@ jobs:
             --test e2e_event_reminder \
             --test interrupt_gate \
             --test interrupt_runtime \
+            --test provisioned_employees \
             --archive-file target/ci/backend-integration-tests.tar.zst
       # develop only. On a pull request this wrote a 131 MB entry scoped to
       # refs/pull/N/merge that no other run could read; eight such copies were
@@ -1205,6 +1206,34 @@ jobs:
             --test-threads 1
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Provisioned employee seeding and immutability
+        # The employees Colony provides: seeded per workspace from manifests
+        # bundled in the relay binary, and refused to every user path that
+        # would archive, retire, re-rank, re-prompt or delete one. An
+        # integration target in tests/, so it has to be named in the archive
+        # above as well: a suite left out of the archive cannot be reached by
+        # any filter, and a suite that never runs looks exactly like a suite
+        # that passes.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'binary(provisioned_employees)' \
+            --run-ignored ignored-only
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Provisioned employee access and key release
+        # Workspace access (membership plus the Discovery grant) and the route
+        # that hands an owner an employee's runtime key. Lib tests rather than
+        # an integration target, so this is a filter on the package; the
+        # archive already contains the buzz-relay lib.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and test(/api::provisioned_employees::tests/)' \
+            --run-ignored all
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          REDIS_URL: redis://localhost:6379
       - name: Workflow owner-contact routing tests
         # Regression gate for the workflow-sink owner wall: a Worker/Leader
         # workflow send_message that mentions an owner must route the mention

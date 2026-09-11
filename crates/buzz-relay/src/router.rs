@@ -138,6 +138,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(api::self_provisioning::provisioning_config),
         )
         .route("/api/invites", post(api::invites::mint_invite))
+        // Releasing a provisioned employee's runtime key so a workspace can
+        // run it. NIP-98 signed, human owner or admin only, one employee per
+        // call, and audited. See `api::provisioned_employees`.
+        .route(
+            "/api/provisioned-employees/{handle}/key",
+            post(api::provisioned_employees::release_employee_key),
+        )
         .route("/api/join-policy", get(api::invites::join_policy))
         // Policy documents as standalone pages — desktop opens these in the
         // system browser instead of rendering the Markdown in-app.
