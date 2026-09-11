@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.17.3
+
 - fix(desktop): start Claude Code and Codex teammates from the provider login already on this Mac, so an existing business no longer hits a Power setup screen it cannot open. Codex seeds a private per-business profile from the existing login. Claude Code runs against the existing login directly, because its credential lives in the macOS login keychain, which a remapped HOME cannot reach.
 
 ## v0.17.2
