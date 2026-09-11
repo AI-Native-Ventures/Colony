@@ -8,6 +8,7 @@ import {
   balancedSlice,
   buildInventory,
   stripComments,
+  withoutVolatileCounts,
 } from "./native-inventory-core.mjs";
 
 const LIB_RS = `use tauri::Manager;
@@ -561,6 +562,56 @@ test("real repo: every emit site resolves to a name", async () => {
     data.events.emit_sites,
     data.apphandle_usage[".emit("] + data.apphandle_usage[".emit_to("],
   );
+});
+
+test("drift check: adding a line to an unrelated file does NOT make the inventory stale", async () => {
+  // The tax this removes: a global line count inside the committed artefact
+  // means one unrelated commit on develop makes EVERY open branch's inventory
+  // stale, and the drift check then accuses a PR whose own diff did nothing.
+  // Structure is what this inventory pins; size is not.
+  const desktop = await makeFixture();
+  try {
+    const unrelated = path.join(desktop, "src-tauri", "src", "signer.rs");
+    const before = withoutVolatileCounts(await buildInventory(desktop));
+
+    const source = await fs.readFile(unrelated, "utf8");
+    await fs.writeFile(unrelated, `${source}\n// one more line, no new surface\n`);
+    const after = withoutVolatileCounts(await buildInventory(desktop));
+
+    assert.ok(
+      isDeepStrictEqual(after, before),
+      "a line that adds no command, param or event must not move the inventory",
+    );
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("the churning size fields are computed but never persisted", async () => {
+  const desktop = await makeFixture();
+  try {
+    const data = await buildInventory(desktop);
+    // Still computed, because the human-facing summary prints them.
+    assert.equal(typeof data.files.rust_lines, "number");
+    assert.equal(typeof data.files.portable_lines, "number");
+
+    // Absent from what gets written and compared.
+    const persisted = withoutVolatileCounts(data);
+    assert.equal(persisted.files.rust_lines, undefined);
+    assert.equal(persisted.files.portable_lines, undefined);
+    assert.equal(persisted.commit, undefined);
+
+    // Structure survives: the counts that mean something are untouched.
+    assert.equal(persisted.files.rust_total, data.files.rust_total);
+    assert.equal(persisted.files.portable, data.files.portable);
+    assert.equal(persisted.commands.registered, data.commands.registered);
+
+    // Tolerant of a file committed before this change, which still carries
+    // them, so the first run after the change does not report stale.
+    assert.ok(isDeepStrictEqual(withoutVolatileCounts(persisted), persisted));
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
 });
 
 test("drift check: renaming a registered command makes the inventory stale", async () => {
