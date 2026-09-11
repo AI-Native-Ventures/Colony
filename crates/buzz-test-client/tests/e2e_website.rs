@@ -191,9 +191,7 @@ async fn send_past_transport_stall(
                     if let Some(seconds) = rate_limited_retry_seconds(&ok.message) {
                         rate_limit_retries += 1;
                         let wait = seconds.min(5);
-                        eprintln!(
-                            "{what} rate-limited, retry {rate_limit_retries}/3 in {wait}s"
-                        );
+                        eprintln!("{what} rate-limited, retry {rate_limit_retries}/3 in {wait}s");
                         tokio::time::sleep(Duration::from_secs(wait)).await;
                         continue;
                     }
