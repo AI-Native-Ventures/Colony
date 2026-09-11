@@ -726,7 +726,6 @@ pub fn run() {
             put_managed_agent_runtime_lifecycle,
             create_managed_agent,
             execute_agent_proposal,
-            execute_outreach_send,
             start_managed_agent,
             stop_managed_agent,
             set_agent_managed_profiles,
