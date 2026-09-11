@@ -163,14 +163,43 @@ async fn seed_channel_member(channel: &str, keys: &Keys) {
     .await;
 }
 
+/// Seconds the relay asked the caller to wait, when this is a rate-limit
+/// rejection. `None` for any other refusal, which must be returned untouched.
+fn rate_limited_retry_seconds(message: &str) -> Option<u64> {
+    if !message.contains("rate-limited") {
+        return None;
+    }
+    let marker = "retry in ";
+    let index = message.find(marker)? + marker.len();
+    let digits: String = message[index..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse::<u64>().ok()
+}
+
 async fn send_past_transport_stall(
     client: &mut BuzzTestClient,
     event: nostr::Event,
     what: &str,
 ) -> buzz_ws_client::OkResponse {
+    let mut rate_limit_retries = 0_u8;
     for attempt in 0..8 {
         match client.send_event(event.clone()).await {
-            Ok(ok) => return ok,
+            Ok(ok) => {
+                if rate_limit_retries < 3 {
+                    if let Some(seconds) = rate_limited_retry_seconds(&ok.message) {
+                        rate_limit_retries += 1;
+                        let wait = seconds.min(5);
+                        eprintln!(
+                            "{what} rate-limited, retry {rate_limit_retries}/3 in {wait}s"
+                        );
+                        tokio::time::sleep(Duration::from_secs(wait)).await;
+                        continue;
+                    }
+                }
+                return ok;
+            }
             Err(buzz_test_client::TestClientError::Timeout) => {
                 eprintln!("{what} send attempt {attempt} timed out, retrying");
             }
@@ -484,7 +513,13 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         .sign_with_keys(&coordinator)
         .expect("instance signs");
     let instance_event_id = instance_event.id.to_hex();
-    let instance_ok = send_past_transport_stall(client, instance_event, "review instance").await;
+    // The relay refuses an event whose pubkey is not the authenticated
+    // identity, so every signer needs its own connection.
+    let mut coordinator_client = BuzzTestClient::connect(&relay_url(), &coordinator)
+        .await
+        .expect("connect as coordinator");
+    let instance_ok =
+        send_past_transport_stall(&mut coordinator_client, instance_event, "review instance").await;
     assert!(
         instance_ok.accepted,
         "the review card instance must be accepted by generic Block validation: {}",
@@ -646,7 +681,10 @@ async fn coordinator_agent_create_is_accepted_for_its_owners_job() {
     let coordinator_hex = fixture.coordinator.public_key().to_hex();
     let action = create_action(&fixture, &coordinator_hex);
 
-    let ok = send_action(&mut client, &fixture.coordinator, &action).await;
+    let mut coordinator_client = BuzzTestClient::connect(&relay_url(), &fixture.coordinator)
+        .await
+        .expect("connect as coordinator");
+    let ok = send_action(&mut coordinator_client, &fixture.coordinator, &action).await;
     assert!(
         ok.accepted,
         "the coordinator must create its owner's job: {:?}",
@@ -669,7 +707,10 @@ async fn an_unassigned_agent_cannot_create() {
 
     let mut action = create_action(&fixture, &coordinator_hex);
     action.actor = outsider.public_key();
-    let ok = send_action(&mut client, &outsider, &action).await;
+    let mut outsider_client = BuzzTestClient::connect(&relay_url(), &outsider)
+        .await
+        .expect("connect as outsider");
+    let ok = send_action(&mut outsider_client, &outsider, &action).await;
     assert!(
         !ok.accepted,
         "an agent without the installed team's persona cannot create"
@@ -741,7 +782,10 @@ async fn a_stranger_cannot_read_or_advance_the_job() {
         op: WebsiteActionOp::BeginWork,
     };
     begin.actor = stranger.public_key();
-    let ok = send_action(&mut client, &stranger, &begin).await;
+    let mut stranger_client = BuzzTestClient::connect(&relay_url(), &stranger)
+        .await
+        .expect("connect as stranger");
+    let ok = send_action(&mut stranger_client, &stranger, &begin).await;
     assert!(!ok.accepted, "a stranger cannot advance someone else's job");
     assert_eq!(job_row_generation(&fixture.task_id).await, Some(1));
 }
