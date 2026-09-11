@@ -631,7 +631,12 @@ async fn owner_create_commits_a_head_receipt_and_job_row() {
     let coordinator_hex = fixture.coordinator.public_key().to_hex();
 
     let action = create_action(&fixture, &coordinator_hex);
-    let ok = send_action(&mut client, &owner, &action).await;
+    let create_event = build_website_action(&action)
+        .expect("action builds")
+        .sign_with_keys(&owner)
+        .expect("action signs");
+    let original_action_id = create_event.id.to_hex();
+    let ok = send_past_transport_stall(&mut client, create_event, "website action").await;
     assert!(
         ok.accepted,
         "owner create must be accepted: {:?}",
@@ -643,6 +648,9 @@ async fn owner_create_commits_a_head_receipt_and_job_row() {
     let head_event_id = message["head_event_id"]
         .as_str()
         .expect("create receipt names its head");
+    let receipt_event_id = message["receipt_event_id"]
+        .as_str()
+        .expect("create receipt names its receipt");
     let head = event_by_id(&mut client, head_event_id)
         .await
         .expect("head stored");
@@ -654,23 +662,33 @@ async fn owner_create_commits_a_head_receipt_and_job_row() {
     // Exact retry: the same action, re-signed, returns the recorded result.
     //
     // Nostr stamps `created_at` in whole seconds, so re-signing inside the same
-    // second produces a byte-identical event and the relay answers its trivial
-    // "duplicate: identical action already applied" without ever reaching the
-    // website claim-replay path this block exists to prove. Crossing a second
-    // boundary makes the retry a genuinely distinct event that still carries
-    // the same request id, which is the real retry contract.
+    // second produces a byte-identical event that the relay answers from the
+    // recorded claim. Crossing a second boundary makes the retry a genuinely
+    // distinct signed event that still carries the same request id, which is
+    // the real retry contract this block exists to prove.
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     let event = build_website_action(&action)
         .expect("action builds")
         .sign_with_keys(&owner)
         .expect("action signs");
-    let action_id = event.id.to_hex();
     let retry = send_past_transport_stall(&mut client, event, "exact create retry").await;
-    assert!(retry.accepted, "an exact retry is answered, not refused");
+    assert!(
+        retry.accepted,
+        "an exact retry is answered, not refused: {:?}",
+        retry.message
+    );
     let retry_message = retry.message.as_str();
     assert!(
-        retry_message.contains(&action_id),
+        retry_message.contains(&original_action_id),
         "the retry names the original action: {retry_message}"
+    );
+    assert!(
+        retry_message.contains(head_event_id),
+        "the retry returns the recorded head: {retry_message}"
+    );
+    assert!(
+        retry_message.contains(receipt_event_id),
+        "the retry returns the recorded receipt: {retry_message}"
     );
     assert_eq!(
         job_row_generation(&fixture.task_id).await,

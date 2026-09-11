@@ -1335,6 +1335,10 @@ jobs:
           # generation CAS, once-only action claims) run against the same
           # DATABASE_URL fixture the relay suites use.
           cargo test -p buzz-db website_jobs -- --ignored --nocapture --test-threads 1
+          # Relay-side website head ordering: two transitions inside one
+          # second must both land, because NIP-33 resolves replaceable heads at
+          # one-second resolution and the second one used to be refused.
+          cargo test -p buzz-relay website_events -- --ignored --nocapture --test-threads 1
           # Discovery entity mention hydration against the live relay: strict
           # ["discovery", kind, id] message tags, permission-checked
           # resolve_entities, and the opaque cross-community refusal. This

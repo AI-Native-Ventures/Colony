@@ -19,6 +19,22 @@ pub(crate) fn head_d_tag(job_id: Uuid) -> String {
     job_id.to_string()
 }
 
+/// The `created_at` a website head must carry.
+///
+/// NIP-33 keeps the newer event at a coordinate, so a head written in the same
+/// second as the head it replaces loses the comparison and the write is
+/// refused. That is ordinary here: a job's creation and its first transition,
+/// or two quick transitions, land in one second. The relay authors these heads,
+/// so the ordering guarantee is the relay's to keep: one second past the
+/// previous head when the clock has not moved on by itself. A brand-new job has
+/// no previous head and keeps `now`.
+pub(crate) fn next_head_at(now: i64, previous_head_at: Option<i64>) -> i64 {
+    match previous_head_at {
+        Some(previous) => now.max(previous.saturating_add(1)),
+        None => now,
+    }
+}
+
 /// Build the relay-signed head event for a review snapshot.
 ///
 /// The head carries the pinned review-card instance and manifest event ids as
@@ -277,4 +293,141 @@ fn replacement_lock_key(community: CommunityId, kind: i32, pubkey: &[u8], d_tag:
         }
     }
     hash as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz"; // sadscan:disable np.postgres.1 -- local test-only credentials
+
+    fn sample_head(
+        relay: &Keys,
+        job_id: Uuid,
+        channel_id: Uuid,
+        generation: u64,
+        head_at: i64,
+    ) -> Event {
+        build_head(
+            relay,
+            job_id,
+            channel_id,
+            "task-website",
+            &"e".repeat(64),
+            &[0x11; 32],
+            &[0x22; 32],
+            &[0x33; 32],
+            &[0x44; 32],
+            generation,
+            br#"{"schema":"colony.website-review/v1"}"#,
+            head_at,
+        )
+        .expect("build website head")
+    }
+
+    /// The stamp policy in isolation: a transition in the same second as its
+    /// predecessor must still order strictly after it, while a brand-new job
+    /// keeps the clock.
+    #[test]
+    fn next_head_at_pushes_a_same_second_transition_past_its_predecessor() {
+        let now = 1_700_000_000_i64;
+        assert_eq!(next_head_at(now, None), now);
+        assert_eq!(next_head_at(now, Some(now)), now + 1);
+        assert_eq!(next_head_at(now, Some(now - 10)), now);
+    }
+
+    /// Two accepted transitions inside one second: the second head must
+    /// replace the first and resolve as the coordinate's current event, and a
+    /// genuinely older head must still lose the ordering check.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn a_second_transition_in_one_second_replaces_the_head() {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| TEST_DB_URL.to_owned());
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("connect to test Postgres");
+        buzz_db::migration::run_migrations_unless_provisioned(&pool)
+            .await
+            .expect("apply migrations");
+
+        let community_uuid = Uuid::new_v4();
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(community_uuid)
+            .bind(format!("website-heads-{}.example", community_uuid.simple()))
+            .execute(&pool)
+            .await
+            .expect("insert community");
+        let community = CommunityId::from_uuid(community_uuid);
+        let channel_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO channels \
+                (id, community_id, name, channel_type, visibility, created_by) \
+             VALUES ($1, $2, $3, 'stream'::channel_type, 'open'::channel_visibility, $4)",
+        )
+        .bind(channel_id)
+        .bind(community.as_uuid())
+        .bind(format!("website-{}", channel_id.simple()))
+        .bind([0x11_u8; 32].as_slice())
+        .execute(&pool)
+        .await
+        .expect("insert channel");
+
+        let relay = Keys::generate();
+        let job_id = Uuid::new_v4();
+        let d_tag = head_d_tag(job_id);
+        let now = Utc::now().timestamp();
+
+        // First ordinary transition: a brand-new job keeps `now`.
+        let first_at = next_head_at(now, None);
+        let first = sample_head(&relay, job_id, channel_id, 1, first_at);
+        let mut tx = pool.begin().await.expect("begin first replacement");
+        replace_head_tx(&mut tx, community, &first, &d_tag, channel_id)
+            .await
+            .expect("the first head is accepted");
+        tx.commit().await.expect("commit first replacement");
+
+        // Second ordinary transition in the same second: the broker pushes its
+        // stamp one second past the first, so NIP-33 accepts the replacement.
+        let second_at = next_head_at(now, Some(first_at));
+        let second = sample_head(&relay, job_id, channel_id, 2, second_at);
+        let mut tx = pool.begin().await.expect("begin second replacement");
+        replace_head_tx(&mut tx, community, &second, &d_tag, channel_id)
+            .await
+            .expect("a same-second transition is accepted");
+        tx.commit().await.expect("commit second replacement");
+        assert!(
+            second.created_at > first.created_at,
+            "the replacement head must order strictly after its predecessor"
+        );
+
+        // The coordinate resolves to exactly the second head.
+        let live: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT id FROM events \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 \
+               AND deleted_at IS NULL",
+        )
+        .bind(community.as_uuid())
+        .bind(KIND_WEBSITE_HEAD as i32)
+        .bind(relay.public_key().to_bytes().as_slice())
+        .bind(d_tag.as_str())
+        .fetch_all(&pool)
+        .await
+        .expect("read the live website head");
+        assert_eq!(live, vec![second.id.as_bytes().to_vec()]);
+
+        // The ordering check itself is untouched: a genuinely older head is
+        // still refused with the ordering conflict.
+        let stale = sample_head(&relay, job_id, channel_id, 3, first_at);
+        let mut tx = pool.begin().await.expect("begin stale replacement");
+        let error = replace_head_tx(&mut tx, community, &stale, &d_tag, channel_id)
+            .await
+            .expect_err("an older head must be refused");
+        assert_eq!(error, "website head ordering conflict");
+        tx.rollback().await.expect("rollback stale replacement");
+        pool.close().await;
+    }
 }

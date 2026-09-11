@@ -51,7 +51,7 @@ use crate::website_authority::{
     authorize_create, authorize_update, require_actor_persona, require_decision_instance,
 };
 use crate::website_events::{
-    build_duplicate_receipt, build_head, build_receipt, head_d_tag, insert_event_tx,
+    build_duplicate_receipt, build_head, build_receipt, head_d_tag, insert_event_tx, next_head_at,
     replace_head_tx,
 };
 use crate::website_evidence::{
@@ -671,6 +671,8 @@ async fn apply_create(
         .map_err(|error| format!("failed to serialize the website review: {error}"))?;
 
     let now = Utc::now().timestamp();
+    // A brand-new job has no predecessor head, so its first head keeps `now`.
+    let head_at = next_head_at(now, None);
     let generation = 1_u64;
     let head = build_head(
         &state.relay_keypair,
@@ -684,7 +686,7 @@ async fn apply_create(
         &authority.coordinator,
         generation,
         &review_bytes,
-        now,
+        head_at,
     )?;
     let receipt = build_receipt(
         &state.relay_keypair,
@@ -725,7 +727,7 @@ async fn apply_create(
             build_personas: &authority.build_personas,
             review_personas: &authority.review_personas,
             head_event_id: head.id.as_bytes(),
-            head_at: now,
+            head_at,
             now,
         },
     )
@@ -1216,6 +1218,11 @@ async fn commit_update(
     let review_bytes = serde_json::to_vec(review)
         .map_err(|error| format!("failed to serialize the website review: {error}"))?;
     let now = Utc::now().timestamp();
+    // The row is already locked, so `head_at` is this job's previous head
+    // stamp. A replacement must order strictly after it even when both
+    // transitions land in the same second, or the NIP-33 tie-break refuses the
+    // second head and an ordinary rapid transition is lost.
+    let head_at = next_head_at(now, Some(job.head_at));
     let generation = u64::try_from(job.generation)
         .ok()
         .and_then(|generation| generation.checked_add(1))
@@ -1232,7 +1239,7 @@ async fn commit_update(
         &job.coordinator,
         generation,
         &review_bytes,
-        now,
+        head_at,
     )?;
     let receipt = build_receipt(
         &state.relay_keypair,
@@ -1286,7 +1293,7 @@ async fn commit_update(
             current_revision: new_revision,
             review: &review_bytes,
             head_event_id: head.id.as_bytes(),
-            head_at: now,
+            head_at,
             now,
         },
     )

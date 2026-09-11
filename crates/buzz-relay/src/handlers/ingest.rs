@@ -397,6 +397,29 @@ fn broker_duplicate_result(
     IngestResult::new(submitted_event_id, outcome, &reason)
 }
 
+/// Build the accepted response for a website broker duplicate.
+///
+/// A website action's once-only identity is its per-actor `request` UUID plus
+/// the canonical payload digest, not the id of the signed event carrying it: a
+/// client whose transport died after commit retries the same request with a
+/// fresh signature. The broker recognizes that replay and returns the recorded
+/// head and receipt, so the wire answer reports that recorded result and marks
+/// the replay an idempotent duplicate rather than classifying the fresh
+/// signature as a superseded event.
+fn website_duplicate_result(
+    submitted_event_id: String,
+    original_action_event_id: &[u8],
+    head: &buzz_core::StoredEvent,
+    receipt: &buzz_core::StoredEvent,
+) -> IngestResult {
+    let payload = serde_json::json!({
+        "action_event_id": hex::encode(original_action_event_id),
+        "receipt_event_id": receipt.event.id.to_hex(),
+        "head_event_id": head.event.id.to_hex(),
+    });
+    IngestResult::already_stored(submitted_event_id, payload.to_string())
+}
+
 /// Ingestion error — the caller maps this to their transport's error format.
 #[derive(Debug)]
 pub enum IngestError {
@@ -3654,12 +3677,14 @@ async fn ingest_event_inner(
             }
             crate::website_broker::WebsiteBrokerOutcome::Duplicate {
                 original_action_event_id,
-                ..
+                head,
+                receipt,
             } => {
-                return Ok(broker_duplicate_result(
+                return Ok(website_duplicate_result(
                     event_id_hex,
-                    hex::encode(original_action_event_id),
-                    "action",
+                    &original_action_event_id,
+                    &head,
+                    &receipt,
                 ));
             }
         }
@@ -3877,11 +3902,13 @@ async fn ingest_event_inner(
                 }
                 crate::website_broker::WebsiteBrokerOutcome::Duplicate {
                     original_action_event_id,
-                    ..
-                } => Ok(broker_duplicate_result(
+                    head,
+                    receipt,
+                } => Ok(website_duplicate_result(
                     event_id_hex,
-                    hex::encode(original_action_event_id),
-                    "action",
+                    &original_action_event_id,
+                    &head,
+                    &receipt,
                 )),
             };
         }
