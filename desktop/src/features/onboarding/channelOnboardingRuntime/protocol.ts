@@ -61,7 +61,7 @@ const MAX_BUSINESS_NAME_LENGTH = 200;
 const MAX_BUSINESS_DESCRIPTION_LENGTH = 12_000;
 const MAX_WEBSITE_LENGTH = 2_048;
 
-function boundedText(value: unknown, maximum: number) {
+function boundedText(value: unknown, maximum: number): value is string {
   return (
     typeof value === "string" &&
     value.length <= maximum &&
