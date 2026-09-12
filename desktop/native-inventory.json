@@ -2420,7 +2420,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:565",
-        "src/shared/api/forumTypes.ts:51",
+        "src/shared/api/forumTypes.ts:53",
         "src/shared/api/tauri.ts:441"
       ]
     },
