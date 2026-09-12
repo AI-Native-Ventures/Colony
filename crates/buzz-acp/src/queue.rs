@@ -142,6 +142,28 @@ pub(crate) fn block_action_targets_processor(event: &Event, processor_pubkey: &s
     parse_block_action(event).is_ok_and(|action| action.processor_pubkey == processor_pubkey)
 }
 
+/// Return true only for a valid owner/coordinator `beginWork` action addressed
+/// to this processor. The relay is the authority for whether the action may be
+/// applied; this gate prevents a permissive ACP subscription from waking an
+/// unrelated session or routing a coordinator's own action back to itself.
+pub(crate) fn website_begin_work_targets_processor(
+    event: &Event,
+    processor_pubkey: &str,
+) -> bool {
+    let Ok(action) = buzz_core::website::parse_website_action(event) else {
+        return false;
+    };
+    matches!(&action.op, buzz_core::website::WebsiteActionOp::BeginWork)
+        && action
+            .target_pubkey
+            .as_deref()
+            .is_some_and(|target| target.eq_ignore_ascii_case(processor_pubkey))
+        && !event
+            .pubkey
+            .to_hex()
+            .eq_ignore_ascii_case(processor_pubkey)
+}
+
 /// Maximum events queued per channel before oldest events are dropped.
 const MAX_PENDING_PER_CHANNEL: usize = 500;
 
@@ -1058,9 +1080,33 @@ pub struct ThreadTags {
 /// positional format (no markers, `["e", id, relay_url]`) is not supported —
 /// Buzz always generates marker-based tags (see relay messages.rs:762-783).
 pub fn parse_thread_tags(event: &Event) -> ThreadTags {
+    let mut mentions = Vec::new();
+    let is_website_action =
+        event.kind.as_u16() as u32 == buzz_core::kind::KIND_WEBSITE_ACTION;
+
+    // Website actions carry their canonical thread in the strict `thread`
+    // action tag. Do not let an unrelated NIP-10 `e` tag steer the ACP session
+    // to a different conversation: the relay validates this action's thread
+    // binding before it can be applied, and the queue must use the same value.
+    if is_website_action {
+        let Ok(action) = buzz_core::website::parse_website_action(event) else {
+            return ThreadTags::default();
+        };
+        for tag in event.tags.iter() {
+            let parts = tag.as_slice();
+            if parts.first().map(String::as_str) == Some("p") && parts.len() >= 2 {
+                mentions.push(parts[1].clone());
+            }
+        }
+        return ThreadTags {
+            root_event_id: Some(action.thread_root.clone()),
+            parent_event_id: Some(action.thread_root),
+            mentioned_pubkeys: mentions,
+        };
+    }
+
     let mut root = None;
     let mut reply = None;
-    let mut mentions = Vec::new();
 
     for tag in event.tags.iter() {
         let parts = tag.as_slice();
@@ -1336,6 +1382,19 @@ pub(crate) fn format_event_block(
             "\nBlock action: instance={} action={} idempotency={}",
             action.instance_event_id, action.action_id, action.idempotency_key
         ));
+    }
+    if let Ok(action) = buzz_core::website::parse_website_action(&be.event) {
+        if matches!(
+            &action.op,
+            buzz_core::website::WebsiteActionOp::BeginWork
+        ) {
+            let target = action.target_pubkey.as_deref().unwrap_or_default();
+            let generation = action.generation.unwrap_or_default();
+            block.push_str(&format!(
+                "\nWebsite beginWork: task={} thread={} request={} generation={} target={}",
+                action.task_id, action.thread_root, action.request_id, generation, target
+            ));
+        }
     }
     let thread = parse_thread_tags(&be.event);
     let mut parsed_parts = Vec::new();
@@ -2027,6 +2086,28 @@ mod tests {
         .unwrap()
     }
 
+    fn make_website_begin_work(signer: &Keys, target: Option<&str>) -> Event {
+        let channel = Uuid::from_u128(0x1111_2222_3333_4444_5555_6666_7777_8888);
+        let thread = "e".repeat(64);
+        let mut tags = vec![
+            Tag::parse(["h", &channel.to_string()]).expect("h"),
+            Tag::parse(["task", "website-task"]).expect("task"),
+            Tag::parse(["thread", &thread]).expect("thread"),
+            Tag::parse(["request", &Uuid::new_v4().to_string()]).expect("request"),
+            Tag::parse(["generation", "1"]).expect("generation"),
+        ];
+        if let Some(target) = target {
+            tags.push(Tag::parse(["p", target]).expect("target"));
+        }
+        EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_WEBSITE_ACTION as u16),
+            r#"{"op":"beginWork","schema":"colony.website-action/v1"}"#,
+        )
+        .tags(tags)
+        .sign_with_keys(signer)
+        .expect("sign website action")
+    }
+
     #[test]
     fn valid_block_action_targets_only_its_processor_and_formats_structure() {
         let processor = Keys::generate();
@@ -2115,6 +2196,74 @@ mod tests {
             &invalid_action_id,
             &processor.public_key().to_hex()
         ));
+    }
+
+    #[test]
+    fn website_begin_work_gate_requires_the_addressed_coordinator_and_drops_self() {
+        let processor = Keys::generate();
+        let owner = Keys::generate();
+        let other = Keys::generate();
+        let processor_hex = processor.public_key().to_hex();
+
+        let addressed = make_website_begin_work(&owner, Some(&processor_hex));
+        assert!(website_begin_work_targets_processor(
+            &addressed,
+            &processor_hex
+        ));
+
+        let missing = make_website_begin_work(&owner, None);
+        assert!(!website_begin_work_targets_processor(&missing, &processor_hex));
+
+        let wrong_target = make_website_begin_work(&owner, Some(&other.public_key().to_hex()));
+        assert!(!website_begin_work_targets_processor(
+            &wrong_target,
+            &processor_hex
+        ));
+
+        let mut duplicate_target = addressed.clone();
+        duplicate_target
+            .tags
+            .push(Tag::parse(["p", &processor_hex]).expect("duplicate target"));
+        assert!(!website_begin_work_targets_processor(
+            &duplicate_target,
+            &processor_hex
+        ));
+
+        let self_authored = make_website_begin_work(&processor, Some(&processor_hex));
+        assert!(!website_begin_work_targets_processor(
+            &self_authored,
+            &processor_hex
+        ));
+    }
+
+    #[test]
+    fn website_begin_work_uses_its_thread_tag_and_exposes_work_context() {
+        let processor = Keys::generate();
+        let owner = Keys::generate();
+        let processor_hex = processor.public_key().to_hex();
+        let event = make_website_begin_work(&owner, Some(&processor_hex));
+        let mut conflicting_event = event.clone();
+        conflicting_event
+            .tags
+            .push(Tag::parse(["e", &"f".repeat(64), "", "root"]).expect("conflicting root"));
+        let tags = parse_thread_tags(&conflicting_event);
+
+        assert_eq!(tags.root_event_id, Some("e".repeat(64)));
+        assert_eq!(tags.parent_event_id, Some("e".repeat(64)));
+        assert_eq!(tags.mentioned_pubkeys, vec![processor_hex.clone()]);
+
+        let block = format_event_block(
+            Uuid::new_v4(),
+            None,
+            &BatchEvent {
+                event,
+                prompt_tag: "website-begin-work".into(),
+                received_at: Instant::now(),
+            },
+            None,
+        );
+        assert!(block.contains("Website beginWork: task=website-task"));
+        assert!(block.contains(&format!("target={processor_hex}")));
     }
 
     /// Build a QueuedEvent for the given channel.

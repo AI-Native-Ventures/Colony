@@ -320,6 +320,7 @@ export async function submitWebsiteBeginWork(
       ["generation", String(head.generation)],
       ["instance", head.instanceEventId],
       ["manifest", head.manifestEventId],
+      ["p", head.coordinatorPubkey],
     ],
   });
   try {

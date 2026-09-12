@@ -225,6 +225,15 @@ pub(crate) async fn authorize_update(
 ) -> Result<(), String> {
     let is_owner = actor_bytes == job.owner.as_slice();
     let is_coordinator = actor_bytes == job.coordinator.as_slice();
+    if matches!(&action.op, WebsiteActionOp::BeginWork) {
+        if let Some(target) = action.target_pubkey.as_deref() {
+            let target_bytes = hex::decode(target)
+                .map_err(|_| "beginWork target is not a valid coordinator pubkey".to_owned())?;
+            if target_bytes.as_slice() != job.coordinator.as_slice() {
+                return Err("beginWork must target the pinned coordinator".to_owned());
+            }
+        }
+    }
     match &action.op {
         WebsiteActionOp::Create { .. } => Err("website job already exists".to_owned()),
         WebsiteActionOp::BeginWork | WebsiteActionOp::Ready => {

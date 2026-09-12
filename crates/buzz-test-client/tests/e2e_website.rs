@@ -3,7 +3,9 @@
 //! Everything here goes through real ingest: relay members, channel members,
 //! managed-agent ownership, the owner's published team, the owner-authored
 //! thread root, the coordinator's schema-valid `website-job` Block instance,
-//! and the relay-bundled trusted manifest the instance pins.
+//! and the relay-bundled trusted manifest the instance pins. The lifecycle
+//! case at the end additionally fetches immutable public fixture manifests and
+//! QA reports through the production bounded fetcher.
 //!
 //! # Running
 //!
@@ -13,28 +15,59 @@
 //! cargo test -p buzz-test-client --test e2e_website -- --ignored --nocapture --test-threads 1
 //! ```
 //!
-//! Artifact-bytes seam: `revision`, `qa`, and `handover` need public HTTPS
-//! manifest/report bytes, which a local relay fixture cannot serve. Those
-//! paths are covered by `buzz-relay` integration tests through
-//! `website_broker::apply_website_action`, whose `manifest: Option<&[u8]>`
-//! parameter is the pre-fetched-bytes seam the ingest handler already threads
-//! through. The suite below covers the create/beginWork/authorization/retry
-//! surface that needs no network.
+//! Artifact bytes are fetched by the broker from public HTTPS URLs, and the
+//! local relay's bounded fetcher rejects localhost and private addresses. The
+//! lifecycle case uses immutable public fixture URLs so real ingest and
+//! artifact validation are exercised without weakening the production SSRF
+//! policy. The archive and capture refs in that synthetic case are structural
+//! refs only: handover validates them against the revision while the broker
+//! fetches the manifest and QA report bytes.
 
 use std::time::Duration;
 
+use buzz_core::block::BlockManifest;
 use buzz_core::company::{CompanyTeamRef, ThreadAttachMode};
 use buzz_core::kind::{
     KIND_BLOCK_MANIFEST, KIND_COMPANY_RECEIPT, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_V2, KIND_TASK, KIND_TEAM, KIND_WEBSITE_HEAD,
 };
-use buzz_core::website::{WebsiteAction, WebsiteActionOp, WEBSITE_JOB_BLOCK_HANDLE};
+use buzz_core::website::{
+    HandoverAsset, PreviewArtifactRef, WebsiteAction, WebsiteActionOp, WebsiteCaptures,
+    WEBSITE_ACTION_SCHEMA, WEBSITE_APPROVE_ACTION_ID, WEBSITE_JOB_BLOCK_HANDLE,
+    WEBSITE_REQUEST_CHANGES_ACTION_ID,
+};
+use buzz_sdk::blocks::{build_block_action, BlockActionInput};
 use buzz_sdk::company::parse_task_event;
 use buzz_sdk::thread_task::{plan_thread_attach, ThreadAttachRequest};
-use buzz_sdk::website::build_website_action;
+use buzz_sdk::website::{build_website_action, build_website_qa_task_report};
 use buzz_test_client::BuzzTestClient;
-use nostr::{EventBuilder, Filter, Keys, Kind, Tag, Timestamp};
+use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag, Timestamp};
 use uuid::Uuid;
+
+const WEBSITE_FIXTURE_COMMIT: &str = "b6cd791e7172163d2ce7b01b14a2032f89846209";
+const REVISION_1_MANIFEST_SHA256: &str =
+    "2094c69a758b315af3424d12afbefef6afb2ce1e63a9be575863ea0bf6073d0c";
+const REVISION_1_REPORT_SHA256: &str =
+    "557c75322777030a01fb4f217bede7a2c21f9b6fd671781854b4de7cc8c47fe4";
+const REVISION_2_MANIFEST_SHA256: &str =
+    "bf61203da3b662a8a23cd07ad6b9c7887f57878f5c58e66e1917b7f4fd303511";
+const REVISION_2_REPORT_SHA256: &str =
+    "81185ae0f9717b2205ea57f80026b89b2df0308a2f0e5f12038a233bcc170540";
+
+const REVISION_1_ENTRY_URL: &str =
+    "https://raw.githubusercontent.com/AI-Native-Ventures/Colony/b7e18f9a26c663a0b35d4234f9cf008430849e52/crates/buzz-browser/test-fixtures/other.html";
+const REVISION_1_ENTRY_SHA256: &str =
+    "810a3f1fded27c7bb0fc44e0a1b5f02539e40ee900b4d2a98407083419b760aa";
+const REVISION_2_ENTRY_URL: &str =
+    "https://raw.githubusercontent.com/AI-Native-Ventures/Colony/b7e18f9a26c663a0b35d4234f9cf008430849e52/crates/buzz-browser/test-fixtures/index.html";
+const REVISION_2_ENTRY_SHA256: &str =
+    "8a9653da7b251e47497e881e9603fa46ef6412147ae777aeca894e4120eba090";
+
+fn website_fixture_url(file: &str) -> String {
+    format!(
+        "https://raw.githubusercontent.com/AI-Native-Ventures/Colony/{WEBSITE_FIXTURE_COMMIT}/crates/buzz-test-client/tests/fixtures/website/{file}"
+    )
+}
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3099".to_string())
@@ -365,6 +398,7 @@ struct Fixture {
     channel: String,
     task_id: String,
     thread_root: String,
+    instance_id: Uuid,
     instance_event_id: String,
     manifest_event_id: String,
     coordinator: Keys,
@@ -537,6 +571,7 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         channel,
         task_id,
         thread_root,
+        instance_id,
         instance_event_id,
         manifest_event_id,
         coordinator,
@@ -589,6 +624,7 @@ fn create_action(fixture: &Fixture, coordinator_hex: &str) -> WebsiteAction {
         request_id: Uuid::new_v4(),
         generation: None,
         actor: fixture.coordinator.public_key(),
+        target_pubkey: None,
         op: WebsiteActionOp::Create {
             coordinator: coordinator_hex.to_owned(),
             source_url: "https://source.colony.test/sites/acme".to_owned(),
@@ -609,6 +645,223 @@ async fn send_action(
         .sign_with_keys(keys)
         .expect("action signs");
     send_past_transport_stall(client, event, "website action").await
+}
+
+fn artifact_ref(url: impl Into<String>, sha256: &str) -> PreviewArtifactRef {
+    PreviewArtifactRef {
+        url: url.into(),
+        sha256: sha256.to_owned(),
+    }
+}
+
+fn revision_manifest_ref(revision: u32) -> PreviewArtifactRef {
+    let (file, sha256) = match revision {
+        1 => ("revision-1-manifest.json", REVISION_1_MANIFEST_SHA256),
+        2 => ("revision-2-manifest.json", REVISION_2_MANIFEST_SHA256),
+        other => panic!("the lifecycle fixture has no revision {other}"),
+    };
+    artifact_ref(website_fixture_url(file), sha256)
+}
+
+fn revision_entry_ref(revision: u32) -> PreviewArtifactRef {
+    match revision {
+        1 => artifact_ref(REVISION_1_ENTRY_URL, REVISION_1_ENTRY_SHA256),
+        2 => artifact_ref(REVISION_2_ENTRY_URL, REVISION_2_ENTRY_SHA256),
+        other => panic!("the lifecycle fixture has no revision {other}"),
+    }
+}
+
+fn update_action(
+    fixture: &Fixture,
+    actor: &Keys,
+    generation: u64,
+    op: WebsiteActionOp,
+) -> WebsiteAction {
+    let target_pubkey = matches!(&op, &WebsiteActionOp::BeginWork)
+        .then(|| fixture.coordinator.public_key().to_hex());
+    WebsiteAction {
+        channel_id: Uuid::parse_str(&fixture.channel).expect("channel"),
+        task_id: fixture.task_id.clone(),
+        thread_root: fixture.thread_root.clone(),
+        instance_event_id: None,
+        manifest_event_id: None,
+        request_id: Uuid::new_v4(),
+        generation: Some(generation),
+        actor: actor.public_key(),
+        target_pubkey,
+        op,
+    }
+}
+
+fn add_revision_action(
+    fixture: &Fixture,
+    builder: &Keys,
+    generation: u64,
+    revision: u32,
+) -> WebsiteAction {
+    let manifest = revision_manifest_ref(revision);
+    let entry = revision_entry_ref(revision);
+    // The public fixture commit contains only manifest and QA JSON. The
+    // broker fetches and verifies the manifest here; archive and capture refs
+    // remain structural evidence for this synthetic lifecycle.
+    WebsiteAction {
+        channel_id: Uuid::parse_str(&fixture.channel).expect("channel"),
+        task_id: fixture.task_id.clone(),
+        thread_root: fixture.thread_root.clone(),
+        instance_event_id: None,
+        manifest_event_id: None,
+        request_id: Uuid::new_v4(),
+        generation: Some(generation),
+        actor: builder.public_key(),
+        target_pubkey: None,
+        op: WebsiteActionOp::AddRevision {
+            revision,
+            manifest: manifest.clone(),
+            source_url: "https://source.colony.test/sites/acme".to_owned(),
+            archive: manifest,
+            captures: WebsiteCaptures {
+                before: entry.clone(),
+                desktop: entry.clone(),
+                mobile: entry,
+            },
+        },
+    }
+}
+
+fn qa_fixture(revision: u32) -> (&'static str, &'static str) {
+    match revision {
+        1 => ("revision-1-qa.json", REVISION_1_REPORT_SHA256),
+        2 => ("revision-2-qa.json", REVISION_2_REPORT_SHA256),
+        other => panic!("the lifecycle fixture has no QA report for revision {other}"),
+    }
+}
+
+async fn publish_qa_report(
+    client: &mut BuzzTestClient,
+    reviewer: &Keys,
+    fixture: &Fixture,
+    revision: u32,
+    manifest_sha256: &str,
+) -> String {
+    let (file, report_sha256) = qa_fixture(revision);
+    let report_url = website_fixture_url(file);
+    let event = build_website_qa_task_report(
+        &fixture.task_id,
+        revision,
+        manifest_sha256,
+        &report_url,
+        report_sha256,
+        "independent QA inspected the immutable public fixture",
+    )
+    .expect("QA task report builds")
+    .sign_with_keys(reviewer)
+    .expect("QA task report signs");
+    let event_id = event.id.to_hex();
+    let ok = send_past_transport_stall(client, event, "QA task report").await;
+    assert!(
+        ok.accepted,
+        "the assigned reviewer task report must be accepted: {}",
+        ok.message
+    );
+    event_id
+}
+
+async fn website_head_from_response(
+    client: &mut BuzzTestClient,
+    ok: &buzz_ws_client::OkResponse,
+) -> (Event, buzz_core::website::WebsiteReview) {
+    assert!(ok.accepted, "website transition must be accepted: {}", ok.message);
+    let message: serde_json::Value = serde_json::from_str(&ok.message).expect("result JSON");
+    assert!(
+        message["receipt_event_id"].as_str().is_some(),
+        "accepted website transition names its receipt: {}",
+        ok.message
+    );
+    let head_event_id = message["head_event_id"]
+        .as_str()
+        .expect("accepted website transition names its head");
+    let head = event_by_id(client, head_event_id)
+        .await
+        .expect("website head stored");
+    assert_eq!(head.kind.as_u16() as u32, KIND_WEBSITE_HEAD);
+    let review = buzz_sdk::website::parse_website_head(&head).expect("head review parses");
+    (head, review)
+}
+
+fn assert_head_generation(head: &Event, expected: u64) {
+    let generation = head
+        .tags
+        .iter()
+        .find_map(|tag| {
+            let parts = tag.as_slice();
+            (parts.len() == 2 && parts[0] == "generation").then(|| parts[1].parse::<u64>())
+        })
+        .expect("website head carries a generation")
+        .expect("website head generation is numeric");
+    assert_eq!(generation, expected);
+}
+
+fn decision_data(
+    job_id: Uuid,
+    task_id: &str,
+    generation: u64,
+    revision: u32,
+    manifest_sha256: &str,
+    note: Option<&str>,
+) -> serde_json::Value {
+    let mut data = serde_json::json!({
+        "schema": WEBSITE_ACTION_SCHEMA,
+        "jobId": job_id.to_string(),
+        "taskId": task_id,
+        "generation": generation,
+        "revision": revision,
+        "manifestSha256": manifest_sha256,
+    });
+    if let Some(note) = note {
+        data.as_object_mut()
+            .expect("decision data is an object")
+            .insert("note".to_owned(), serde_json::Value::String(note.to_owned()));
+    }
+    data
+}
+
+fn block_decision_event(
+    fixture: &Fixture,
+    owner: &Keys,
+    manifest: &BlockManifest,
+    action_id: &str,
+    data: serde_json::Value,
+    idempotency_key: Uuid,
+) -> Event {
+    build_block_action(&BlockActionInput {
+        channel_id: Uuid::parse_str(&fixture.channel).expect("channel"),
+        processor: fixture.coordinator.public_key(),
+        instance_event_id: EventId::from_hex(&fixture.instance_event_id).expect("instance event"),
+        manifest_id: EventId::from_hex(&fixture.manifest_event_id).expect("manifest event"),
+        instance_id: fixture.instance_id,
+        manifest,
+        action_id: action_id.to_owned(),
+        data,
+        idempotency_key: Some(idempotency_key),
+    })
+    .expect("website Block decision builds against the trusted manifest")
+    .builder
+    .sign_with_keys(owner)
+    .expect("website Block decision signs");
+}
+
+async fn send_block_decision(
+    client: &mut BuzzTestClient,
+    fixture: &Fixture,
+    owner: &Keys,
+    manifest: &BlockManifest,
+    action_id: &str,
+    data: serde_json::Value,
+    idempotency_key: Uuid,
+    what: &str,
+) -> buzz_ws_client::OkResponse {
+    let event = block_decision_event(fixture, owner, manifest, action_id, data, idempotency_key);
+    send_past_transport_stall(client, event, what).await
 }
 
 async fn job_row_generation(task_id: &str) -> Option<i64> {
@@ -779,6 +1032,7 @@ async fn begin_work_requires_the_current_generation() {
         request_id: Uuid::new_v4(),
         generation: Some(generation),
         actor: owner.public_key(),
+        target_pubkey: Some(fixture.coordinator.public_key().to_hex()),
         op: WebsiteActionOp::BeginWork,
     };
 
@@ -828,6 +1082,7 @@ async fn a_stranger_cannot_read_or_advance_the_job() {
         request_id: Uuid::new_v4(),
         generation: Some(1),
         actor: stranger.public_key(),
+        target_pubkey: Some(fixture.coordinator.public_key().to_hex()),
         op: WebsiteActionOp::BeginWork,
     };
     begin.actor = stranger.public_key();
@@ -915,4 +1170,361 @@ async fn builder_and_reviewer_cannot_be_the_same_agent() {
         ok.message
     );
     assert!(job_row_generation(&fixture.task_id).await.is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres and public fixture fetches"]
+async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
+    let owner = owner_keys();
+    let mut owner_client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let fixture = setup(&mut owner_client, &owner).await;
+    let builder = agent_keys(0x53);
+    let reviewer = agent_keys(0x54);
+    let mut builder_client = BuzzTestClient::connect(&relay_url(), &builder)
+        .await
+        .expect("connect as builder");
+    let mut reviewer_client = BuzzTestClient::connect(&relay_url(), &reviewer)
+        .await
+        .expect("connect as reviewer");
+    let mut coordinator_client = BuzzTestClient::connect(&relay_url(), &fixture.coordinator)
+        .await
+        .expect("connect as coordinator");
+
+    let job_id = WebsiteAction::derive_job_id(
+        community_id().await,
+        &fixture.task_id,
+        &fixture.thread_root,
+    );
+    let manifest_event = event_by_id(&mut owner_client, &fixture.manifest_event_id)
+        .await
+        .expect("the pinned website-job manifest is stored");
+    let block_manifest = buzz_core::block::parse_manifest(&manifest_event.content)
+        .expect("the pinned website-job manifest parses");
+
+    let coordinator_hex = fixture.coordinator.public_key().to_hex();
+    let create = create_action(&fixture, &coordinator_hex);
+    let create_ok = send_action(&mut owner_client, &owner, &create).await;
+    let (head, review) = website_head_from_response(&mut owner_client, &create_ok).await;
+    assert_head_generation(&head, 1);
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Draft);
+    assert_eq!(review.current_revision, 0);
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(1));
+
+    let begin = update_action(&fixture, &owner, 1, WebsiteActionOp::BeginWork);
+    let begin_ok = send_action(&mut owner_client, &owner, &begin).await;
+    let (head, review) = website_head_from_response(&mut owner_client, &begin_ok).await;
+    assert_head_generation(&head, 2);
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Working);
+
+    let add_revision_1 = add_revision_action(&fixture, &builder, 2, 1);
+    let add_revision_1_ok = send_action(&mut builder_client, &builder, &add_revision_1).await;
+    let (head, review) = website_head_from_response(&mut builder_client, &add_revision_1_ok).await;
+    assert_head_generation(&head, 3);
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Working);
+    assert_eq!(review.current_revision, 1);
+    assert_eq!(review.revisions[0].built_by, builder.public_key().to_hex());
+    assert!(review.revisions[0].qa.is_none());
+
+    let report_1 = publish_qa_report(
+        &mut reviewer_client,
+        &reviewer,
+        &fixture,
+        1,
+        REVISION_1_MANIFEST_SHA256,
+    )
+    .await;
+    let record_qa_1 = update_action(
+        &fixture,
+        &reviewer,
+        3,
+        WebsiteActionOp::RecordQa {
+            revision: 1,
+            passed: true,
+            report_event_id: report_1,
+            report: artifact_ref(
+                website_fixture_url("revision-1-qa.json"),
+                REVISION_1_REPORT_SHA256,
+            ),
+        },
+    );
+    let record_qa_1_ok = send_action(&mut reviewer_client, &reviewer, &record_qa_1).await;
+    let (head, review) = website_head_from_response(&mut reviewer_client, &record_qa_1_ok).await;
+    assert_head_generation(&head, 4);
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Working);
+    assert_eq!(review.revisions[0].qa.as_ref().map(|qa| qa.passed), Some(true));
+    assert_eq!(
+        review.revisions[0]
+            .qa
+            .as_ref()
+            .expect("revision 1 QA")
+            .reviewer,
+        reviewer.public_key().to_hex()
+    );
+
+    let ready_1 = update_action(&fixture, &fixture.coordinator, 4, WebsiteActionOp::Ready);
+    let ready_1_ok = send_action(&mut coordinator_client, &fixture.coordinator, &ready_1).await;
+    let (head, review) = website_head_from_response(&mut coordinator_client, &ready_1_ok).await;
+    assert_head_generation(&head, 5);
+    assert_eq!(
+        review.status,
+        buzz_core::website::WebsiteStatus::ReadyForReview
+    );
+    assert_eq!(review.current_revision, 1);
+
+    let request_changes_key = Uuid::new_v4();
+    let request_changes_data = decision_data(
+        job_id,
+        &fixture.task_id,
+        5,
+        1,
+        REVISION_1_MANIFEST_SHA256,
+        Some("Keep the wordmark, but revise the mobile hero before approval."),
+    );
+    let request_changes = send_block_decision(
+        &mut owner_client,
+        &fixture,
+        &owner,
+        &block_manifest,
+        WEBSITE_REQUEST_CHANGES_ACTION_ID,
+        request_changes_data.clone(),
+        request_changes_key,
+        "owner request changes",
+    )
+    .await;
+    let (head, review) = website_head_from_response(&mut owner_client, &request_changes).await;
+    assert_head_generation(&head, 6);
+    assert_eq!(
+        review.status,
+        buzz_core::website::WebsiteStatus::ChangesRequested
+    );
+    assert_eq!(review.current_revision, 1);
+    assert_eq!(review.decisions.len(), 1);
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(6));
+    let changes_head_id = head.id.to_hex();
+
+    // Re-sign the exact decision after crossing a Nostr timestamp boundary.
+    // The relay must return the original action/head/receipt and leave the
+    // review at generation 6.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let replay = send_block_decision(
+        &mut owner_client,
+        &fixture,
+        &owner,
+        &block_manifest,
+        WEBSITE_REQUEST_CHANGES_ACTION_ID,
+        request_changes_data,
+        request_changes_key,
+        "replayed owner request changes",
+    )
+    .await;
+    assert!(replay.accepted, "exact Block replay is accepted: {}", replay.message);
+    let replay_message: serde_json::Value =
+        serde_json::from_str(&replay.message).expect("replay result JSON");
+    assert_eq!(
+        replay_message["action_event_id"].as_str(),
+        Some(request_changes.event_id.as_str()),
+        "replay identifies the original owner action"
+    );
+    assert_eq!(
+        replay_message["head_event_id"].as_str(),
+        Some(changes_head_id.as_str()),
+        "replay returns the original changes-requested head"
+    );
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(6));
+
+    let conflicting_request = decision_data(
+        job_id,
+        &fixture.task_id,
+        5,
+        1,
+        REVISION_1_MANIFEST_SHA256,
+        Some("A conflicting replay must never replace the recorded feedback."),
+    );
+    let conflict = send_block_decision(
+        &mut owner_client,
+        &fixture,
+        &owner,
+        &block_manifest,
+        WEBSITE_REQUEST_CHANGES_ACTION_ID,
+        conflicting_request,
+        request_changes_key,
+        "conflicting owner request changes",
+    )
+    .await;
+    assert!(!conflict.accepted, "a conflicting replay is refused");
+    assert!(
+        conflict
+            .message
+            .contains("website request replay carries a different payload"),
+        "the conflict is rejected by the request digest: {}",
+        conflict.message
+    );
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(6));
+
+    let add_revision_2 = add_revision_action(&fixture, &builder, 6, 2);
+    let add_revision_2_ok = send_action(&mut builder_client, &builder, &add_revision_2).await;
+    let (head, review) = website_head_from_response(&mut builder_client, &add_revision_2_ok).await;
+    assert_head_generation(&head, 7);
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Working);
+    assert_eq!(review.current_revision, 2);
+    assert_eq!(review.revisions.len(), 2);
+    assert!(review.revisions[0].qa.is_some());
+    assert!(review.revisions[1].qa.is_none());
+
+    let report_2 = publish_qa_report(
+        &mut reviewer_client,
+        &reviewer,
+        &fixture,
+        2,
+        REVISION_2_MANIFEST_SHA256,
+    )
+    .await;
+    let record_qa_2 = update_action(
+        &fixture,
+        &reviewer,
+        7,
+        WebsiteActionOp::RecordQa {
+            revision: 2,
+            passed: true,
+            report_event_id: report_2,
+            report: artifact_ref(
+                website_fixture_url("revision-2-qa.json"),
+                REVISION_2_REPORT_SHA256,
+            ),
+        },
+    );
+    let record_qa_2_ok = send_action(&mut reviewer_client, &reviewer, &record_qa_2).await;
+    let (head, review) = website_head_from_response(&mut reviewer_client, &record_qa_2_ok).await;
+    assert_head_generation(&head, 8);
+    assert_eq!(review.revisions[1].qa.as_ref().map(|qa| qa.passed), Some(true));
+
+    let ready_2 = update_action(&fixture, &fixture.coordinator, 8, WebsiteActionOp::Ready);
+    let ready_2_ok = send_action(&mut coordinator_client, &fixture.coordinator, &ready_2).await;
+    let (head, review) = website_head_from_response(&mut coordinator_client, &ready_2_ok).await;
+    assert_head_generation(&head, 9);
+    assert_eq!(
+        review.status,
+        buzz_core::website::WebsiteStatus::ReadyForReview
+    );
+    assert_eq!(review.current_revision, 2);
+
+    let stale_approval = send_block_decision(
+        &mut owner_client,
+        &fixture,
+        &owner,
+        &block_manifest,
+        WEBSITE_APPROVE_ACTION_ID,
+        decision_data(
+            job_id,
+            &fixture.task_id,
+            8,
+            2,
+            REVISION_2_MANIFEST_SHA256,
+            Some("stale approval must be refused"),
+        ),
+        Uuid::new_v4(),
+        "stale owner approval",
+    )
+    .await;
+    assert!(!stale_approval.accepted, "stale approval is refused");
+    assert!(
+        stale_approval
+            .message
+            .contains("website job generation conflict"),
+        "stale approval fails the generation CAS: {}",
+        stale_approval.message
+    );
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(9));
+
+    let same_generation_old_revision = send_block_decision(
+        &mut owner_client,
+        &fixture,
+        &owner,
+        &block_manifest,
+        WEBSITE_APPROVE_ACTION_ID,
+        decision_data(
+            job_id,
+            &fixture.task_id,
+            9,
+            1,
+            REVISION_1_MANIFEST_SHA256,
+            Some("an older revision must be refused at the current generation"),
+        ),
+        Uuid::new_v4(),
+        "same-generation old revision approval",
+    )
+    .await;
+    assert!(
+        !same_generation_old_revision.accepted,
+        "approval for an older revision is refused even at the current generation"
+    );
+    assert!(
+        same_generation_old_revision.message.contains("stale_revision"),
+        "the immutable revision gate rejects the old revision: {}",
+        same_generation_old_revision.message
+    );
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(9));
+
+    let approval = send_block_decision(
+        &mut owner_client,
+        &fixture,
+        &owner,
+        &block_manifest,
+        WEBSITE_APPROVE_ACTION_ID,
+        decision_data(
+            job_id,
+            &fixture.task_id,
+            9,
+            2,
+            REVISION_2_MANIFEST_SHA256,
+            Some("Approve the exact current revision."),
+        ),
+        Uuid::new_v4(),
+        "exact owner approval",
+    )
+    .await;
+    let (head, review) = website_head_from_response(&mut owner_client, &approval).await;
+    assert_head_generation(&head, 10);
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Approved);
+    assert_eq!(review.current_revision, 2);
+    assert!(review.active_approval_id.is_some());
+    assert_eq!(review.decisions.len(), 2);
+
+    let revision_2_manifest = revision_manifest_ref(2);
+    let revision_2_entry = revision_entry_ref(2);
+    let handover = update_action(
+        &fixture,
+        &fixture.coordinator,
+        10,
+        WebsiteActionOp::Handover {
+            approved_revision: 2,
+            approved_manifest_sha256: REVISION_2_MANIFEST_SHA256.to_owned(),
+            source_url: "https://source.colony.test/sites/acme".to_owned(),
+            source_archive: revision_2_manifest,
+            assets: vec![HandoverAsset {
+                path: "index.html".to_owned(),
+                artifact: revision_2_entry,
+            }],
+            access_request: None,
+        },
+    );
+    let handover_ok =
+        send_action(&mut coordinator_client, &fixture.coordinator, &handover).await;
+    let (head, review) = website_head_from_response(&mut coordinator_client, &handover_ok).await;
+    assert_head_generation(&head, 11);
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::HandedOver);
+    assert_eq!(review.current_revision, 2);
+    let saved_handover = review.handover.as_ref().expect("handover is persisted");
+    assert_eq!(saved_handover.approved_revision, 2);
+    assert_eq!(
+        saved_handover.approved_manifest_sha256,
+        REVISION_2_MANIFEST_SHA256
+    );
+    assert_eq!(saved_handover.assets[0].path, "index.html");
+    assert_eq!(
+        saved_handover.accepted_by,
+        fixture.coordinator.public_key().to_hex()
+    );
 }

@@ -135,6 +135,7 @@ fn build_action(
     generation: Option<u64>,
     op: WebsiteActionOp,
     actor: nostr::PublicKey,
+    target_pubkey: Option<String>,
 ) -> WebsiteAction {
     WebsiteAction {
         channel_id,
@@ -145,6 +146,7 @@ fn build_action(
         request_id: Uuid::new_v4(),
         generation,
         actor,
+        target_pubkey,
         op,
     }
 }
@@ -173,6 +175,7 @@ async fn cmd_create(
         request_id: Uuid::new_v4(),
         generation: None,
         actor: client.keys().public_key(),
+        target_pubkey: None,
         op: WebsiteActionOp::Create {
             coordinator: coordinator.to_owned(),
             source_url: source_url.to_owned(),
@@ -240,14 +243,28 @@ async fn cmd_mutation(
         _ => return Err(CliError::Usage("not a website mutation".into())),
     };
     let channel_id = parse_uuid(channel, "channel")?;
-    let generation = match generation {
-        Some(generation) => generation,
-        None => {
-            let (_, identity) = latest_head(client, channel, task)
-                .await?
-                .ok_or_else(|| CliError::Usage("no website head exists for this task".into()))?;
-            identity.generation
-        }
+    let head_identity = if matches!(&op, WebsiteActionOp::BeginWork) || generation.is_none() {
+        let (_, identity) = latest_head(client, channel, task)
+            .await?
+            .ok_or_else(|| CliError::Usage("no website head exists for this task".into()))?;
+        Some(identity)
+    } else {
+        None
+    };
+    let generation = generation
+        .or_else(|| head_identity.as_ref().map(|identity| identity.generation))
+        .ok_or_else(|| CliError::Usage("no website head exists for this task".into()))?;
+    let target_pubkey = if matches!(&op, WebsiteActionOp::BeginWork) {
+        Some(
+            head_identity
+                .as_ref()
+                .and_then(|identity| identity.participants.get(1).cloned())
+                .ok_or_else(|| {
+                    CliError::Usage("website head has no pinned coordinator participant".into())
+                })?,
+        )
+    } else {
+        None
     };
     let action = build_action(
         channel_id,
@@ -256,6 +273,7 @@ async fn cmd_mutation(
         Some(generation),
         op,
         client.keys().public_key(),
+        target_pubkey,
     );
     submit(client, action_builder(&action)?).await
 }
@@ -325,6 +343,7 @@ async fn cmd_qa(
         Some(generation),
         op,
         client.keys().public_key(),
+        None,
     );
     submit(client, action_builder(&action)?).await
 }

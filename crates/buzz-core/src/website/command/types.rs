@@ -96,6 +96,11 @@ pub struct WebsiteAction {
     pub generation: Option<u64>,
     /// Public key that signed the action.
     pub actor: PublicKey,
+    /// Coordinator pubkey targeted by an addressed `beginWork` action.
+    ///
+    /// The relay checks this against the job's pinned coordinator before the
+    /// action can be applied. Other operations must leave this absent.
+    pub target_pubkey: Option<String>,
     /// Operation requested by the actor.
     pub op: WebsiteActionOp,
 }
@@ -253,6 +258,13 @@ impl WebsiteAction {
                 .unwrap_or_default()
                 .as_bytes(),
         );
+        // Keep the legacy digest byte-for-byte stable when no addressed wake
+        // target was present. A new target is an explicit payload extension,
+        // namespaced so it cannot collide with any older component sequence.
+        if let Some(target_pubkey) = self.target_pubkey.as_deref() {
+            push_component(&mut buffer, b"wake-target");
+            push_component(&mut buffer, target_pubkey.as_bytes());
+        }
         match &self.op {
             WebsiteActionOp::Create {
                 coordinator,
@@ -461,6 +473,9 @@ impl WebsiteAction {
         }
         if let Some(manifest_event_id) = &self.manifest_event_id {
             tags.push(scalar_tag("manifest", manifest_event_id)?);
+        }
+        if let Some(target_pubkey) = &self.target_pubkey {
+            tags.push(scalar_tag("p", target_pubkey)?);
         }
         Ok(tags)
     }

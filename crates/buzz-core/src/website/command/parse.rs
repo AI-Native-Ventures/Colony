@@ -74,6 +74,14 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
                 .ok_or(WebsiteCommandError::InvalidGeneration)
         })
         .transpose()?;
+    let target_pubkey = optional_tag(event, "p")
+        .map_err(|error| map_tag_error("p", error))?;
+    if target_pubkey
+        .as_deref()
+        .is_some_and(|value| !is_lower_hex64(value) || PublicKey::parse(value).is_err())
+    {
+        return Err(WebsiteCommandError::InvalidIdentity("target"));
+    }
 
     if event.content.len() > MAX_WEBSITE_ACTION_CONTENT_BYTES {
         return Err(WebsiteCommandError::ContentTooLarge(
@@ -94,6 +102,9 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
     let op = match operation {
         "create" => {
             if generation.is_some() {
+                return Err(WebsiteCommandError::InvalidContent);
+            }
+            if target_pubkey.is_some() {
                 return Err(WebsiteCommandError::InvalidContent);
             }
             if instance_event_id.is_none() || manifest_event_id.is_none() {
@@ -125,6 +136,9 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
         }
         "addRevision" => {
             require_generation(generation)?;
+            if target_pubkey.is_some() {
+                return Err(WebsiteCommandError::InvalidContent);
+            }
             let wire: WireAddRevision =
                 serde_json::from_value(value).map_err(|_| WebsiteCommandError::InvalidContent)?;
             validate_schema(&wire.schema)?;
@@ -145,6 +159,9 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
         }
         "recordQa" => {
             require_generation(generation)?;
+            if target_pubkey.is_some() {
+                return Err(WebsiteCommandError::InvalidContent);
+            }
             let wire: WireRecordQa =
                 serde_json::from_value(value).map_err(|_| WebsiteCommandError::InvalidContent)?;
             validate_schema(&wire.schema)?;
@@ -164,6 +181,9 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
         }
         "stageEvidence" => {
             require_generation(generation)?;
+            if target_pubkey.is_some() {
+                return Err(WebsiteCommandError::InvalidContent);
+            }
             let wire: WireStageEvidence =
                 serde_json::from_value(value).map_err(|_| WebsiteCommandError::InvalidContent)?;
             validate_schema(&wire.schema)?;
@@ -184,6 +204,9 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
         }
         "ready" => {
             require_generation(generation)?;
+            if target_pubkey.is_some() {
+                return Err(WebsiteCommandError::InvalidContent);
+            }
             let wire: WireSimple =
                 serde_json::from_value(value).map_err(|_| WebsiteCommandError::InvalidContent)?;
             validate_schema(&wire.schema)?;
@@ -191,6 +214,9 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
         }
         "requestChanges" => {
             require_generation(generation)?;
+            if target_pubkey.is_some() {
+                return Err(WebsiteCommandError::InvalidContent);
+            }
             let wire: WireRequestChanges =
                 serde_json::from_value(value).map_err(|_| WebsiteCommandError::InvalidContent)?;
             validate_schema(&wire.schema)?;
@@ -213,6 +239,9 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
         }
         "handover" => {
             require_generation(generation)?;
+            if target_pubkey.is_some() {
+                return Err(WebsiteCommandError::InvalidContent);
+            }
             let wire: WireHandover =
                 serde_json::from_value(value).map_err(|_| WebsiteCommandError::InvalidContent)?;
             validate_schema(&wire.schema)?;
@@ -248,6 +277,7 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
         request_id,
         generation,
         actor: event.pubkey,
+        target_pubkey,
         op,
     })
 }

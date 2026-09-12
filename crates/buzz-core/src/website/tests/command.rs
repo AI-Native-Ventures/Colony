@@ -60,7 +60,27 @@ fn signed_action(keys: &Keys, action: &WebsiteAction) -> nostr::Event {
     )
     .tags(action.event_tags().expect("action tags"))
     .sign_with_keys(keys)
-    .expect("sign action")
+        .expect("sign action")
+}
+
+fn signed_begin_work(keys: &Keys, target: Option<&str>) -> nostr::Event {
+    let mut tags = vec![
+        Tag::parse(["h", CHANNEL]).expect("h"),
+        Tag::parse(["task", TASK]).expect("task"),
+        Tag::parse(["thread", THREAD]).expect("thread"),
+        Tag::parse(["request", &Uuid::new_v4().to_string()]).expect("request"),
+        Tag::parse(["generation", "1"]).expect("generation"),
+    ];
+    if let Some(target) = target {
+        tags.push(Tag::parse(["p", target]).expect("target"));
+    }
+    EventBuilder::new(
+        Kind::Custom(KIND_WEBSITE_ACTION as u16),
+        json!({"op": "beginWork", "schema": WEBSITE_ACTION_SCHEMA}).to_string(),
+    )
+    .tags(tags)
+    .sign_with_keys(keys)
+    .expect("sign begin work")
 }
 
 fn create_content() -> Value {
@@ -118,6 +138,28 @@ fn rejects_a_create_without_instance_or_manifest() {
     assert_eq!(
         parse_website_action(&event).unwrap_err().code(),
         "invalid_content"
+    );
+}
+
+#[test]
+fn begin_work_requires_one_valid_addressed_target() {
+    let keys = Keys::generate();
+    let target = Keys::generate().public_key().to_hex();
+    let valid = signed_begin_work(&keys, Some(&target));
+    let parsed = parse_website_action(&valid).expect("addressed beginWork parses");
+    assert_eq!(parsed.target_pubkey.as_deref(), Some(target.as_str()));
+
+    let missing = signed_begin_work(&keys, None);
+    let legacy = parse_website_action(&missing).expect("legacy unaddressed beginWork parses");
+    assert_eq!(legacy.target_pubkey, None);
+
+    let mut duplicate = valid;
+    duplicate
+        .tags
+        .push(Tag::parse(["p", &target]).expect("duplicate target"));
+    assert_eq!(
+        parse_website_action(&duplicate).unwrap_err().code(),
+        "duplicate_tag"
     );
 }
 
@@ -269,6 +311,7 @@ fn payload_digest_tracks_payload_not_request_identity() {
         request_id: Uuid::new_v4(),
         generation: Some(4),
         actor: Keys::generate().public_key(),
+        target_pubkey: Some(COORDINATOR.to_owned()),
         op: WebsiteActionOp::BeginWork,
     };
     let retry = WebsiteAction {
@@ -284,10 +327,31 @@ fn payload_digest_tracks_payload_not_request_identity() {
     assert_ne!(base.payload_digest(), changed_generation.payload_digest());
 
     let changed_op = WebsiteAction {
+        target_pubkey: None,
         op: WebsiteActionOp::Ready,
         ..base.clone()
     };
     assert_ne!(base.payload_digest(), changed_op.payload_digest());
+
+    let legacy = WebsiteAction {
+        target_pubkey: None,
+        ..base.clone()
+    };
+    let legacy_retry = WebsiteAction {
+        request_id: Uuid::new_v4(),
+        target_pubkey: None,
+        ..legacy.clone()
+    };
+    assert_eq!(
+        legacy.payload_digest(),
+        legacy_retry.payload_digest(),
+        "unaddressed legacy retries retain their original digest"
+    );
+    assert_ne!(
+        legacy.payload_digest(),
+        base.payload_digest(),
+        "an addressed wake is a namespaced payload extension"
+    );
 }
 
 #[test]
@@ -397,6 +461,7 @@ fn content_round_trips_through_parse() {
         request_id: Uuid::new_v4(),
         generation: None,
         actor: Keys::generate().public_key(),
+        target_pubkey: None,
         op: WebsiteActionOp::Create {
             coordinator: COORDINATOR.to_owned(),
             source_url: "https://source.colony.test/sites/acme".to_owned(),
@@ -427,6 +492,7 @@ fn handover_round_trips_with_access_request() {
         request_id: Uuid::new_v4(),
         generation: Some(4),
         actor: Keys::generate().public_key(),
+        target_pubkey: None,
         op: WebsiteActionOp::Handover {
             approved_revision: 2,
             approved_manifest_sha256: HASH.to_owned(),

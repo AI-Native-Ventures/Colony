@@ -653,6 +653,7 @@ pub fn default_channel_kinds() -> Vec<u32> {
         buzz_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED,
         buzz_core::kind::KIND_STREAM_REMINDER,
         buzz_core::kind::KIND_ASK,
+        buzz_core::kind::KIND_WEBSITE_ACTION,
     ]
 }
 

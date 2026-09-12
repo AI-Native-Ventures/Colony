@@ -175,6 +175,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             generation: None,
             actor: Keys::generate().public_key(),
+            target_pubkey: None,
             op: WebsiteActionOp::Create {
                 coordinator: COORDINATOR.to_owned(),
                 source_url: "https://source.colony.test/sites/acme".to_owned(),

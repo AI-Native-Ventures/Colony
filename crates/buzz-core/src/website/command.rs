@@ -2,7 +2,8 @@
 //!
 //! A website action (`KIND_WEBSITE_ACTION`, 40027) is a client-signed,
 //! channel-scoped command. The signed event carries the job coordinates in
-//! tags (`h`, `task`, `thread`, `request`, optional `generation`) and the
+//! tags (`h`, `task`, `thread`, `request`, optional `generation`, and the
+//! addressed coordinator `p` for `beginWork`) and the
 //! operation payload in a bounded JSON content object. Parsing answers only
 //! whether the event has a well-formed wire shape; every authority decision
 //! (who may run which operation against which job) belongs to the relay
