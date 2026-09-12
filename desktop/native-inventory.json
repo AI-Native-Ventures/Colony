@@ -1,7 +1,7 @@
 {
   "files": {
-    "rust_total": 513,
-    "tauri_coupled": 204,
+    "rust_total": 514,
+    "tauri_coupled": 205,
     "portable": 309,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
@@ -170,6 +170,7 @@
       "src-tauri/src/managed_agents/runtime/provisioned.rs",
       "src-tauri/src/managed_agents/runtime/record_state.rs",
       "src-tauri/src/managed_agents/runtime/stop.rs",
+      "src-tauri/src/managed_agents/runtime/summary.rs",
       "src-tauri/src/managed_agents/runtime_commands.rs",
       "src-tauri/src/managed_agents/runtime_commands/start.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
