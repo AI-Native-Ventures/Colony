@@ -10,5 +10,8 @@ test("recognizes the exact duplicate-membership response", () => {
 
 test("does not swallow unrelated membership errors", () => {
   assert.equal(isAlreadyMemberError("Membership rejected"), false);
-  assert.equal(isAlreadyMemberError("Already a member of another channel."), false);
+  assert.equal(
+    isAlreadyMemberError("Already a member of another channel."),
+    false,
+  );
 });

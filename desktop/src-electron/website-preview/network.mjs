@@ -416,7 +416,11 @@ function isCanonicalMediaPath(pathname) {
  * URL. Requiring equality keeps a redirect from receiving the media auth
  * callback, even when the redirect stays on the relay origin.
  */
-export function isCanonicalRelayMediaUrl({ initialUrl, url, relayOrigin } = {}) {
+export function isCanonicalRelayMediaUrl({
+  initialUrl,
+  url,
+  relayOrigin,
+} = {}) {
   if (typeof initialUrl !== "string" || typeof url !== "string") return false;
   let initial;
   let current;

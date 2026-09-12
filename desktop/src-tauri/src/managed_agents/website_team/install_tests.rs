@@ -154,18 +154,16 @@ fn unique_untiered_chief_is_repaired_without_touching_power_or_reporting_line() 
     holder.agent_command_override = Some("owner-selected-command".to_string());
     holder.private_key_nsec = "nsec1-preserved".to_string();
     holder.manager = Some("c".repeat(64));
-    holder.env_vars.insert("OWNER_SETTING".to_string(), "keep".to_string());
+    holder
+        .env_vars
+        .insert("OWNER_SETTING".to_string(), "keep".to_string());
     holder.updated_at = "before".to_string();
     let before = holder.clone();
     let mut records = [holder];
 
-    let candidate = find_scoped_chief_of_staff_record(
-        &records,
-        &owner,
-        "wss://relay.example",
-    )
-    .expect("unique exact-scope holder")
-    .expect("holder");
+    let candidate = find_scoped_chief_of_staff_record(&records, &owner, "wss://relay.example")
+        .expect("unique exact-scope holder")
+        .expect("holder");
     let pubkey = candidate.pubkey.clone();
     let record = records
         .iter_mut()
@@ -282,12 +280,10 @@ fn chief_repair_reconciles_newer_public_fields_without_touching_local_runtime_or
         role_id: Some("chief-of-staff".to_string()),
     };
 
-    assert!(repair_missing_chief_of_staff_tier(
-        &mut holder,
-        Some((&latest, None)),
-        "after",
-    )
-    .expect("repair"));
+    assert!(
+        repair_missing_chief_of_staff_tier(&mut holder, Some((&latest, None)), "after",)
+            .expect("repair")
+    );
     assert_eq!(holder.name, latest.name);
     assert_eq!(holder.system_prompt, latest.system_prompt);
     assert_eq!(holder.model, latest.model);
@@ -326,12 +322,10 @@ fn chief_repair_applies_clears_from_a_definitionless_head() {
         role_id: Some("chief-of-staff".to_string()),
     };
 
-    assert!(repair_missing_chief_of_staff_tier(
-        &mut holder,
-        Some((&latest, None)),
-        "after",
-    )
-    .expect("definitionless head clears optional fields"));
+    assert!(
+        repair_missing_chief_of_staff_tier(&mut holder, Some((&latest, None)), "after",)
+            .expect("definitionless head clears optional fields")
+    );
     assert_eq!(holder.persona_id, None);
     assert_eq!(holder.system_prompt, None);
     assert_eq!(holder.model, None);
@@ -368,14 +362,18 @@ fn chief_repair_preserves_slimmed_fields_for_a_linked_head() {
         role_id: Some("chief-of-staff".to_string()),
     };
 
-    assert!(repair_missing_chief_of_staff_tier(
-        &mut holder,
-        Some((&latest, None)),
-        "after",
-    )
-    .expect("slimmed linked head is compatible"));
-    assert_eq!(holder.system_prompt.as_deref(), Some("local definition snapshot"));
+    assert!(
+        repair_missing_chief_of_staff_tier(&mut holder, Some((&latest, None)), "after",)
+            .expect("slimmed linked head is compatible")
+    );
+    assert_eq!(
+        holder.system_prompt.as_deref(),
+        Some("local definition snapshot")
+    );
     assert_eq!(holder.model.as_deref(), Some("local-model"));
     assert_eq!(holder.provider.as_deref(), Some("local-provider"));
-    assert_eq!(holder.persona_source_version.as_deref(), Some("local-version"));
+    assert_eq!(
+        holder.persona_source_version.as_deref(),
+        Some("local-version")
+    );
 }

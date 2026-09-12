@@ -1,7 +1,7 @@
 {
   "files": {
-    "rust_total": 529,
-    "tauri_coupled": 215,
+    "rust_total": 531,
+    "tauri_coupled": 217,
     "portable": 314,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
@@ -65,6 +65,7 @@
       "src-tauri/src/commands/link_preview.rs",
       "src-tauri/src/commands/media.rs",
       "src-tauri/src/commands/media_download.rs",
+      "src-tauri/src/commands/media_fetch.rs",
       "src-tauri/src/commands/media_raw.rs",
       "src-tauri/src/commands/media_upload_progress.rs",
       "src-tauri/src/commands/mesh_llm.rs",
@@ -109,6 +110,7 @@
       "src-tauri/src/commands/terminal.rs",
       "src-tauri/src/commands/updater.rs",
       "src-tauri/src/commands/web.rs",
+      "src-tauri/src/commands/website_artifact.rs",
       "src-tauri/src/commands/website_team.rs",
       "src-tauri/src/commands/window_chrome.rs",
       "src-tauri/src/commands/window_vibrancy.rs",
@@ -541,11 +543,11 @@
     ]
   },
   "commands": {
-    "registered": 376,
-    "defined": 376,
+    "registered": 377,
+    "defined": 377,
     "by_reach": {
       "frontend": 365,
-      "NO CALLER FOUND": 9,
+      "NO CALLER FOUND": 10,
       "frontend-plugin-prefixed": 2
     },
     "no_caller": [
@@ -555,22 +557,23 @@
       "electron_frontend_migration_fixture",
       "electron_open_deep_link",
       "electron_read_frontend_migration",
+      "fetch_website_artifact_bytes",
       "operator_pubkey",
       "operator_sign_nip98",
       "start_stt_pipeline"
     ]
   },
   "params": {
-    "AppHandle": 422,
-    "State": 272,
+    "AppHandle": 424,
+    "State": 274,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 419,
-      "State": 272,
+      "AppHandle": 421,
+      "State": 274,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -731,6 +734,7 @@
     "src-tauri/src/commands/block_data.rs": 1,
     "src-tauri/src/commands/join_policy.rs": 1,
     "src-tauri/src/commands/link_preview.rs": 1,
+    "src-tauri/src/commands/website_artifact.rs": 1,
     "src-tauri/src/commands/engrams.rs": 1,
     "src-tauri/src/commands/channel_window.rs": 1,
     "src-tauri/src/commands/legacy_storage.rs": 1,
@@ -1817,6 +1821,13 @@
         "src/parity/session/script.ts:1056",
         "src/shared/api/tauriMedia.ts:111"
       ]
+    },
+    "fetch_website_artifact_bytes": {
+      "defining_file": "src-tauri/src/commands/website_artifact.rs",
+      "module": "website_artifact",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "fetch_workspace_icon": {
       "defining_file": "src-tauri/src/commands/workspace.rs",

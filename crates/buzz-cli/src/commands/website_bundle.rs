@@ -351,14 +351,7 @@ fn collect_source(
             )));
         }
         if metadata.is_dir() {
-            collect_source(
-                root,
-                &path,
-                entries,
-                source_files,
-                archive_bytes,
-                depth + 1,
-            )?;
+            collect_source(root, &path, entries, source_files, archive_bytes, depth + 1)?;
             continue;
         }
         if !metadata.is_file() {
@@ -417,8 +410,9 @@ fn collect_source(
                 SOURCE_ARCHIVE_MAX_BYTES
             )));
         }
-        let actual_entry = tar_entry_size(bytes.len() as u64)
-            .ok_or_else(|| CliError::Usage(format!("source file is too large to archive: {relative}")))?;
+        let actual_entry = tar_entry_size(bytes.len() as u64).ok_or_else(|| {
+            CliError::Usage(format!("source file is too large to archive: {relative}"))
+        })?;
         let actual_total = archive_bytes
             .checked_add(actual_entry)
             .and_then(|size| size.checked_add(TAR_TRAILER_BYTES))
@@ -691,8 +685,20 @@ mod tests {
         ];
         assert!(crate::Cli::try_parse_from(args).is_err());
         assert!(crate::Cli::try_parse_from([
-            args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
-            args[9], args[10], args[11], args[12], "--source-url",
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+            args[8],
+            args[9],
+            args[10],
+            args[11],
+            args[12],
+            "--source-url",
             "https://cdn.colony.test/site/index.html",
         ])
         .is_ok());

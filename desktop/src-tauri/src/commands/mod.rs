@@ -50,7 +50,6 @@ mod media_raw;
 mod media_snapshot_png;
 mod media_transcode;
 mod media_upload_progress;
-pub(crate) mod website_artifact;
 #[cfg(feature = "mesh-llm")]
 pub(crate) mod mesh_llm;
 #[cfg(feature = "mesh-llm")]
@@ -90,6 +89,7 @@ mod teams;
 mod terminal;
 mod updater;
 mod web;
+pub(crate) mod website_artifact;
 pub mod website_team;
 mod window_chrome;
 mod window_vibrancy;

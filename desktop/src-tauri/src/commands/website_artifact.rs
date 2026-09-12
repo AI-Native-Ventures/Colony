@@ -27,10 +27,7 @@ const MAX_WEBSITE_ARTIFACT_BYTES: u64 = buzz_core_pkg::website::MAX_FILE_BYTES;
 /// signed resource or cause an authenticated request to be interpreted as a
 /// different object: credentials, queries, fragments, nested paths, uppercase
 /// hashes, and non-canonical extensions.
-pub(crate) fn validate_website_artifact_url(
-    url: &str,
-    relay_base: &str,
-) -> Result<(), String> {
+pub(crate) fn validate_website_artifact_url(url: &str, relay_base: &str) -> Result<(), String> {
     validate_download_url(url, relay_base)?;
     let parsed = url::Url::parse(url).map_err(|_| "invalid URL".to_string())?;
     if !parsed.username().is_empty() || parsed.password().is_some() {
@@ -136,13 +133,9 @@ pub async fn fetch_website_artifact_bytes(
         capture_website_read_scope(&state, &expected_owner_pubkey, &expected_relay_url)?;
     validate_website_artifact_url(&url, &relay_base)?;
     let auth = sign_blossom_get_auth_header(&signer, &relay_base, MEDIA_GET_AUTH_EXPIRY_SECS)?;
-    let bytes = fetch_blob_bytes_with_cap_and_auth(
-        &url,
-        &state,
-        MAX_WEBSITE_ARTIFACT_BYTES,
-        Some(&auth),
-    )
-    .await?;
+    let bytes =
+        fetch_blob_bytes_with_cap_and_auth(&url, &state, MAX_WEBSITE_ARTIFACT_BYTES, Some(&auth))
+            .await?;
     assert_website_read_scope(&state, &expected_owner_pubkey, &expected_relay_url)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
@@ -158,7 +151,10 @@ mod tests {
     fn accepts_canonical_media_paths() {
         for suffix in ["", ".html", ".json", ".thumb.jpg"] {
             let url = format!("{RELAY_BASE}/media/{HASH}{suffix}");
-            assert!(validate_website_artifact_url(&url, RELAY_BASE).is_ok(), "{url}");
+            assert!(
+                validate_website_artifact_url(&url, RELAY_BASE).is_ok(),
+                "{url}"
+            );
         }
     }
 

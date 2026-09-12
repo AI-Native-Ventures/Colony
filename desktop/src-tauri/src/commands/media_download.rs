@@ -1,6 +1,9 @@
 use sha2::{Digest, Sha256};
 use tauri::State;
 
+use super::media_fetch::fetch_blob_bytes_with_cap;
+#[cfg(test)]
+use super::media_fetch::redirect_refusal_error;
 use crate::app_state::AppState;
 use crate::commands::clipboard::with_clipboard;
 use crate::commands::export_util::save_bytes_with_dialog;
@@ -14,9 +17,6 @@ use crate::commands::{
         decode_team_snapshot_from_bytes, MAX_TEAM_SNAPSHOT_JSON_BYTES, MAX_TEAM_SNAPSHOT_PNG_BYTES,
     },
 };
-use super::media_fetch::fetch_blob_bytes_with_cap;
-#[cfg(test)]
-use super::media_fetch::redirect_refusal_error;
 use crate::relay::relay_api_base_url_with_override;
 
 /// Maximum download size: 50 MiB. Prevents OOM from oversized responses.

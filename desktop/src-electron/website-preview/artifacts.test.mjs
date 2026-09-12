@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  createAuthorizedDependencies,
-  sha256Hex,
-} from "./artifact.mjs";
+import { createAuthorizedDependencies, sha256Hex } from "./artifact.mjs";
 import { loadVerifiedArtifact } from "./artifacts.mjs";
 
 const RELAY_ORIGIN = "https://relay.example.com";

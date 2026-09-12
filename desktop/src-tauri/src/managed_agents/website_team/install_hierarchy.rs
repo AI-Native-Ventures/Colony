@@ -233,7 +233,10 @@ fn reconcile_public_head_fields(
         (&mut record.system_prompt, &head.system_prompt),
         (&mut record.model, &head.model),
         (&mut record.provider, &head.provider),
-        (&mut record.persona_source_version, &head.persona_source_version),
+        (
+            &mut record.persona_source_version,
+            &head.persona_source_version,
+        ),
     ];
     for (local, public) in public_fields {
         let next = if head.persona_id.is_some() {
@@ -258,7 +261,12 @@ fn reconcile_public_head_fields(
         record.respond_to_allowlist = head.respond_to_allowlist.clone();
         changed = true;
     }
-    if let Some(role_id) = head.role_id.as_deref().map(str::trim).filter(|role| !role.is_empty()) {
+    if let Some(role_id) = head
+        .role_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|role| !role.is_empty())
+    {
         if record.role_id.as_deref() != Some(role_id) {
             record.role_id = Some(role_id.to_string());
             changed = true;
@@ -302,12 +310,15 @@ pub(super) fn ensure_scoped_chief_of_staff(
         .iter_mut()
         .find(|record| {
             record.pubkey.trim().eq_ignore_ascii_case(&pubkey)
-                && record.owner_pubkey.as_deref().is_some_and(|record_owner| {
-                    record_owner.trim().eq_ignore_ascii_case(owner)
-                })
+                && record
+                    .owner_pubkey
+                    .as_deref()
+                    .is_some_and(|record_owner| record_owner.trim().eq_ignore_ascii_case(owner))
                 && canonical(&record.relay_url) == canonical_relay
         })
-        .ok_or_else(|| "the Chief of Staff disappeared while installing the Website Manager team".to_string())?;
+        .ok_or_else(|| {
+            "the Chief of Staff disappeared while installing the Website Manager team".to_string()
+        })?;
     let changed = repair_missing_chief_of_staff_tier(record, latest_refs, &crate::util::now_iso())?;
     if !changed && latest.is_some() {
         return Ok(Some(pubkey));
@@ -370,9 +381,9 @@ pub(super) async fn publish_scoped_chief_of_staff(
     }
     let event = nostr::Event::from_json(&row.raw_event)
         .map_err(|error| format!("The published Chief of Staff head is invalid: {error}"))?;
-    event
-        .verify()
-        .map_err(|error| format!("The published Chief of Staff head failed verification: {error}"))?;
+    event.verify().map_err(|error| {
+        format!("The published Chief of Staff head failed verification: {error}")
+    })?;
     if !event.pubkey.to_hex().eq_ignore_ascii_case(owner) {
         return Err(
             "The published Chief of Staff head is signed by the wrong owner. Retry after the community sync completes."

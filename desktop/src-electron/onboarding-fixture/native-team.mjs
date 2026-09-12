@@ -218,17 +218,16 @@ export function nativeProofReader({
       };
     }
   };
-  const failureEvidence = async () =>
-    ({
-      ...taskFailureEvidence({
-        account,
-        relayPubkey,
-        actions: await events(40013),
-        receipts: await events(40014),
-        teams: await events(30176),
-      }),
-      taskHeads: await taskHeadEvidence(),
-    });
+  const failureEvidence = async () => ({
+    ...taskFailureEvidence({
+      account,
+      relayPubkey,
+      actions: await events(40013),
+      receipts: await events(40014),
+      teams: await events(30176),
+    }),
+    taskHeads: await taskHeadEvidence(),
+  });
   async function readTeam() {
     const approvals = await replies("colony:first-job-team-approval:v1");
     const receipts = await replies("colony:first-job-team-receipt:v1");
