@@ -1,6 +1,7 @@
 import {
   CopyPlus,
   EllipsisVertical,
+  Plus,
   Pencil,
   Rocket,
   Share2,
@@ -18,6 +19,7 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { IdentityCardSkeleton } from "@/shared/ui/identity-card-skeleton";
 import { SectionHeader } from "@/shared/ui/PageHeader";
+import { Button } from "@/shared/ui/button";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { TeamIdentityCard } from "./TeamIdentityCard";
 import { IDENTITY_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
@@ -37,6 +39,7 @@ type TeamsSectionProps = {
   onAddToChannel: (team: AgentTeam) => void;
   onShare: (team: AgentTeam) => void;
   onImport: () => void;
+  onInstallWebsiteTeam: () => void;
 };
 
 export function TeamsSection({
@@ -52,11 +55,24 @@ export function TeamsSection({
   onAddToChannel,
   onShare,
   onImport,
+  onInstallWebsiteTeam,
 }: TeamsSectionProps) {
   return (
     <section className="relative space-y-4" data-testid="agents-library-teams">
       <div className={TEAM_CARD_COLUMN_CLASS}>
         <SectionHeader
+          action={
+            <Button
+              data-testid="install-website-manager-button"
+              onClick={onInstallWebsiteTeam}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <Plus />
+              Install Website Manager
+            </Button>
+          }
           title="Agent teams"
           description="Group agents that you can add to a channel together."
         />

@@ -104,6 +104,7 @@ import type {
   RawAcpAuthMethodsResult,
   RawConnectAcpRuntimeResult,
 } from "@/shared/api/tauriAgentAuth";
+import type { WebsiteTeamRecipe } from "@/shared/api/tauriWebsiteTeam";
 import type {
   RawAcpRuntimeCatalogEntry,
   RawInstallRuntimeResult,
@@ -4817,6 +4818,94 @@ function getManagedAgentRelayMembership(pubkey: string) {
 
 function getConfig(): E2eConfig | undefined {
   return window.__BUZZ_E2E__;
+}
+
+function mockWebsiteTeamRecipe(): WebsiteTeamRecipe {
+  return {
+    id: "website-manager",
+    name: "Website Manager",
+    version: "0.1.2",
+    teamSlug: "website-manager",
+    outcome:
+      "Installs a four-person website studio that researches your site, redesigns and builds it, then checks the result independently on desktop and mobile.",
+    examplePrompt: "Improve my website",
+    integrationNote:
+      "Team setup is complete when the status shows the team, personas, and agents published. Next, open the selected channel and mention Avery with the real website brief and HTTPS URL. The composer creates or attaches the task when this community has company context; without it, the message stays ordinary until company setup is complete. Avery then publishes a validated website-job Block in that thread, creates the job from its returned event ids, and begins work.",
+    personas: [
+      {
+        slug: "avery",
+        personaId: "website-manager-avery",
+        displayName: "Avery",
+        roleId: "website-manager",
+        roleTitle: "Website Manager",
+        tier: "leader",
+        colorIndex: 0,
+        skills: ["website-team-workflow", "website-owner-review"],
+      },
+      {
+        slug: "ren",
+        personaId: "website-manager-ren",
+        displayName: "Ren",
+        roleId: "website-researcher",
+        roleTitle: "Website Researcher",
+        tier: "worker",
+        colorIndex: 1,
+        skills: ["website-research"],
+      },
+      {
+        slug: "jules",
+        personaId: "website-manager-jules",
+        displayName: "Jules",
+        roleId: "website-designer-builder",
+        roleTitle: "Website Designer-builder",
+        tier: "worker",
+        colorIndex: 2,
+        skills: ["website-direction-build", "website-handover"],
+      },
+      {
+        slug: "vera",
+        personaId: "website-manager-vera",
+        displayName: "Vera",
+        roleId: "website-reviewer",
+        roleTitle: "Website Reviewer",
+        tier: "worker",
+        colorIndex: 3,
+        skills: ["website-independent-review"],
+      },
+    ],
+    skills: [
+      {
+        name: "website-team-workflow",
+        description: "Run the six-stage website method.",
+        version: 1,
+      },
+      {
+        name: "website-owner-review",
+        description: "Gate exact-version owner decisions.",
+        version: 1,
+      },
+      {
+        name: "website-handover",
+        description: "Assemble the delivery bundle.",
+        version: 1,
+      },
+      {
+        name: "website-research",
+        description: "Build a cited research dossier.",
+        version: 1,
+      },
+      {
+        name: "website-direction-build",
+        description: "Implement an evidence-grounded direction.",
+        version: 1,
+      },
+      {
+        name: "website-independent-review",
+        description: "Review the exact revision independently.",
+        version: 1,
+      },
+    ],
+  };
 }
 
 function readStoredIdentityOverride(): TestIdentity | undefined {
@@ -13477,6 +13566,14 @@ export function maybeInstallE2eTauriMocks() {
           path: "/tmp/buzz/REPOS/buzz",
           cloned: false,
         };
+      case "website_team_recipe":
+        return mockWebsiteTeamRecipe();
+      case "website_team_install_status":
+        return null;
+      case "install_website_team":
+        throw new Error(
+          "Website Team installation requires the native desktop host.",
+        );
       case "get_relay_ws_url":
         return mockAppliedRelayWsUrl ?? getRelayWsUrl(activeConfig);
       case "get_default_relay_url":

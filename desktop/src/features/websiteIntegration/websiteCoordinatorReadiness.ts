@@ -1,5 +1,6 @@
 import {
   attachManagedAgentToChannel,
+  ManagedAgentStartError,
   type AttachManagedAgentToChannelInput,
   type AttachManagedAgentToChannelResult,
 } from "@/features/agents/channelAgents";
@@ -26,6 +27,20 @@ const READY_WAIT_MS = 15_000;
 const READY_POLL_MS = 200;
 const READY_TIMEOUT =
   "The website coordinator is still getting ready. Try again in a moment.";
+
+/** A runtime failure after the coordinator membership write completed. */
+export class WebsiteCoordinatorReadinessError extends Error {
+  readonly attachment: AttachManagedAgentToChannelResult;
+
+  constructor(
+    message: string,
+    attachment: AttachManagedAgentToChannelResult,
+  ) {
+    super(message);
+    this.name = "WebsiteCoordinatorReadinessError";
+    this.attachment = attachment;
+  }
+}
 
 type AttachWebsiteCoordinator = (
   channelId: string,
@@ -106,11 +121,12 @@ function validateRuntime(
  * (`ready`). A fresh pair discovers the attached channel during startup; an
  * already-running pair receives the membership notification and timestamped
  * replay path. The relay action must not be sent while the pair is merely a
- * spawned process.
+ * spawned process. The successful attachment result is returned so callers can
+ * report the actual membership mutation without inventing a success value.
  */
 export async function ensureWebsiteCoordinatorReady(
   input: WebsiteCoordinatorReadinessInput,
-): Promise<void> {
+): Promise<AttachManagedAgentToChannelResult> {
   const coordinatorPubkey = normalizeIdentity(
     input.coordinatorPubkey,
     "coordinator",
@@ -153,96 +169,118 @@ export async function ensureWebsiteCoordinatorReady(
   }
 
   const attach = input.attachAgent ?? attachManagedAgentToChannel;
-  const attached = await attach(input.channelId, {
-    agent: coordinator,
-    role: "bot",
-    // Provider deployment has no local lifecycle row to poll. Keep its
-    // existing deployment boundary, while local pairs use the explicit
-    // relay/owner-fenced command below.
-    ensureRunning: coordinator.backend.type === "provider",
-  });
-  assertCurrentCommunity(input);
-
-  if (coordinator.backend.type === "provider") {
-    if (
-      attached.agent.status !== "deployed" &&
-      attached.agent.status !== "running"
-    ) {
-      throw new Error(
-        "The remote website coordinator is not deployed for this community. Try again.",
+  let attached: AttachManagedAgentToChannelResult;
+  try {
+    attached = await attach(input.channelId, {
+      agent: coordinator,
+      role: "bot",
+      // Provider deployment has no local lifecycle row to poll. Keep its
+      // existing deployment boundary, while local pairs use the explicit
+      // relay/owner-fenced command below.
+      ensureRunning: coordinator.backend.type === "provider",
+    });
+  } catch (error) {
+    if (error instanceof ManagedAgentStartError) {
+      throw new WebsiteCoordinatorReadinessError(
+        error.message,
+        error.attachment,
       );
     }
-    return;
+    throw error;
   }
-
-  const startRuntime = input.startRuntime ?? startManagedAgentRuntime;
-  const started = await startRuntime(
-    coordinatorPubkey,
-    input.relayUrl,
-    ownerPubkey,
-  );
   assertCurrentCommunity(input);
-  validateRuntime(started, coordinatorPubkey, relayUrl);
-  const expectedPid = started.pid;
-
-  const now = input.now ?? Date.now;
-  const delay =
-    input.delay ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms)));
-  const listStatuses = input.listRuntimeStatuses ?? listManagedAgentRuntimes;
-  const deadline = now() + READY_WAIT_MS;
-  let cancelled = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const poll = async () => {
-    while (!cancelled) {
-      assertCurrentCommunity(input);
-      const statuses = await listStatuses();
-      assertCurrentCommunity(input);
-      if (cancelled) return;
-      const runtime = findManagedAgentRuntime(
-        statuses,
-        coordinatorPubkey,
-        input.relayUrl,
-      );
-      if (runtime) {
-        validateRuntime(runtime, coordinatorPubkey, relayUrl);
-        if (runtime.pid !== expectedPid) {
-          throw new Error(
-            "The website coordinator changed while starting. Try again.",
-          );
-        }
-        // Listening marks the ACP startup subscription boundary; it does not
-        // independently prove that this target channel was accepted. A fresh
-        // pair discovers the membership during startup, while an already
-        // running pair uses ACP's membership notification/replay path. Waiting
-        // for ready would unnecessarily wake a paid model before BeginWork.
-        if (
-          runtime.lifecycle === "listening" ||
-          runtime.lifecycle === "ready"
-        ) {
-          return;
-        }
-      }
-      if (now() >= deadline) throw new Error(READY_TIMEOUT);
-      await delay(Math.min(READY_POLL_MS, deadline - now()));
-    }
-  };
 
   try {
-    await Promise.race([
-      poll(),
-      new Promise<never>((_, reject) => {
-        timer = globalThis.setTimeout(
-          () => reject(new Error(READY_TIMEOUT)),
-          READY_WAIT_MS,
+    if (coordinator.backend.type === "provider") {
+      if (
+        attached.agent.status !== "deployed" &&
+        attached.agent.status !== "running"
+      ) {
+        throw new Error(
+          "The remote website coordinator is not deployed for this community. Try again.",
         );
-      }),
-    ]);
-  } finally {
-    cancelled = true;
-    if (timer !== undefined) globalThis.clearTimeout(timer);
+      }
+      return attached;
+    }
+
+    const startRuntime = input.startRuntime ?? startManagedAgentRuntime;
+    const started = await startRuntime(
+      coordinatorPubkey,
+      input.relayUrl,
+      ownerPubkey,
+    );
+    assertCurrentCommunity(input);
+    validateRuntime(started, coordinatorPubkey, relayUrl);
+    const expectedPid = started.pid;
+
+    const now = input.now ?? Date.now;
+    const delay =
+      input.delay ??
+      ((ms: number) =>
+        new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms)));
+    const listStatuses = input.listRuntimeStatuses ?? listManagedAgentRuntimes;
+    const deadline = now() + READY_WAIT_MS;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      while (!cancelled) {
+        assertCurrentCommunity(input);
+        const statuses = await listStatuses();
+        assertCurrentCommunity(input);
+        if (cancelled) return;
+        const runtime = findManagedAgentRuntime(
+          statuses,
+          coordinatorPubkey,
+          input.relayUrl,
+        );
+        if (runtime) {
+          validateRuntime(runtime, coordinatorPubkey, relayUrl);
+          if (runtime.pid !== expectedPid) {
+            throw new Error(
+              "The website coordinator changed while starting. Try again.",
+            );
+          }
+          // Listening marks the ACP startup subscription boundary; it does not
+          // independently prove that this target channel was accepted. A fresh
+          // pair discovers the membership during startup, while an already
+          // running pair uses ACP's membership notification/replay path. Waiting
+          // for ready would unnecessarily wake a paid model before BeginWork.
+          if (
+            runtime.lifecycle === "listening" ||
+            runtime.lifecycle === "ready"
+          ) {
+            return;
+          }
+        }
+        if (now() >= deadline) throw new Error(READY_TIMEOUT);
+        await delay(Math.min(READY_POLL_MS, deadline - now()));
+      }
+    };
+
+    try {
+      await Promise.race([
+        poll(),
+        new Promise<never>((_, reject) => {
+          timer = globalThis.setTimeout(
+            () => reject(new Error(READY_TIMEOUT)),
+            READY_WAIT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      cancelled = true;
+      if (timer !== undefined) globalThis.clearTimeout(timer);
+    }
+    assertCurrentCommunity(input);
+    return attached;
+  } catch (error) {
+    if (error instanceof WebsiteCoordinatorReadinessError) {
+      throw error;
+    }
+    throw new WebsiteCoordinatorReadinessError(
+      error instanceof Error ? error.message : READY_TIMEOUT,
+      attached,
+    );
   }
-  assertCurrentCommunity(input);
 }

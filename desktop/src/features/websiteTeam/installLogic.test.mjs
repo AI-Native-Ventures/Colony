@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   assessInstall,
+  buildWebsiteStarterDraft,
   describePublication,
   isInstallCommunityActive,
   looksLikeConfigurationError,
@@ -33,7 +34,12 @@ function persona(index, overrides = {}) {
     personaId: `website-manager-${names[index].toLowerCase()}`,
     slug: names[index].toLowerCase(),
     displayName: names[index],
-    roleId: `role-${index}`,
+    roleId: [
+      "website-manager",
+      "website-researcher",
+      "website-designer-builder",
+      "website-reviewer",
+    ][index],
     roleTitle: roles[index],
     tier: index === 0 ? "leader" : "worker",
     colorIndex: index,
@@ -129,6 +135,30 @@ test("a missing agent record is incomplete", () => {
   assert.match(assessment.detail ?? "", /missing/);
 });
 
+test("duplicate teammate identities are incomplete", () => {
+  const result = installResult();
+  result.personas[1].agentPubkey = result.personas[0].agentPubkey;
+  const assessment = assessInstall(result);
+  assert.equal(assessment.state, "incomplete");
+  assert.match(assessment.detail ?? "", /unexpected or duplicate/);
+});
+
+test("a mismatched bundled role is incomplete", () => {
+  const result = installResult();
+  result.personas[2].roleId = "website-reviewer";
+  const assessment = assessInstall(result);
+  assert.equal(assessment.state, "incomplete");
+  assert.match(assessment.detail ?? "", /unexpected or duplicate/);
+});
+
+test("a missing matching publication is incomplete", () => {
+  const result = installResult();
+  result.publication.agents.pop();
+  const assessment = assessInstall(result);
+  assert.equal(assessment.state, "incomplete");
+  assert.match(assessment.detail ?? "", /publications could not be matched/);
+});
+
 test("a failed skill write is incomplete even when everything is published", () => {
   const result = installResult();
   result.skills[3] = {
@@ -208,6 +238,9 @@ test("summarizeAgentStarts separates running from needs-configuration", () => {
       personaId: "a",
       displayName: "Avery",
       pubkey: "1",
+      joined: true,
+      newlyAdded: true,
+      ready: true,
       started: true,
       error: null,
       needsConfiguration: false,
@@ -216,12 +249,18 @@ test("summarizeAgentStarts separates running from needs-configuration", () => {
       personaId: "b",
       displayName: "Ren",
       pubkey: "2",
+      joined: false,
+      newlyAdded: false,
+      ready: false,
       started: false,
       error: "not ready: choose how to power your agents",
       needsConfiguration: true,
     },
   ]);
   assert.equal(summary.started, 1);
+  assert.equal(summary.joined, 1);
+  assert.equal(summary.newlyAdded, 1);
+  assert.equal(summary.ready, 1);
   assert.equal(summary.needsConfiguration, 1);
   assert.equal(summary.failed.length, 1);
 });
@@ -240,6 +279,17 @@ test("starterPromptFor falls back to the recipe example", () => {
       { examplePrompt: "Improve my website" },
     ),
     "Improve my website",
+  );
+});
+
+test("starter draft visibly addresses Avery and carries the website URL", () => {
+  assert.equal(
+    buildWebsiteStarterDraft("Review the current site", "https://example.com"),
+    "@Avery Review the current site\nhttps://example.com",
+  );
+  assert.equal(
+    buildWebsiteStarterDraft("@Avery Keep the pricing clear", ""),
+    "@Avery Keep the pricing clear",
   );
 });
 

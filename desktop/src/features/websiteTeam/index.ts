@@ -1,4 +1,5 @@
 export { WebsiteTeamInstallDialog } from "./WebsiteTeamInstallDialog";
+export type { WebsiteTeamOpenChannelRequest } from "./WebsiteTeamInstallDialog";
 export {
   assessInstall,
   describePublication,

@@ -1,5 +1,6 @@
 import type { UseMentionSendFlowOptions } from "./useMentionSendFlow.types";
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { validateReplyModelRecipient } from "@/features/agents/lib/replyModelSelection";
 import { toast } from "sonner";
 import {
@@ -11,12 +12,20 @@ import {
   useProvisionChannelManagedAgentMutation,
   useStartManagedAgentMutation,
 } from "@/features/agents/hooks";
+import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
+import { useEmployeeHeadsQuery } from "@/features/agents/employeeHeads";
+import {
+  fetchManagedAgentHeadEvents,
+  managedAgentHeadsQueryKey,
+} from "@/features/agents/managedAgentHeads";
 import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
 import {
   useAddChannelMembersMutation,
   useCanAddChannelMembers,
 } from "@/features/channels/hooks";
 import { PRIVATE_CHANNEL_ADD_DENIED_MESSAGE } from "@/features/channels/lib/channelMemberAdmission";
+import { loadActiveCommunityId } from "@/features/communities/communityStorage";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { dmThreadAgentMentionError } from "@/features/messages/lib/dmThreadAgentMentionError";
 import { filterEffectiveExplicitAgentPubkeys } from "@/features/messages/lib/effectiveExplicitAgentPubkeys";
 import {
@@ -27,7 +36,10 @@ import {
   buildOutgoingMessage,
   type ImetaMedia,
 } from "@/features/messages/lib/imetaMediaMarkdown";
-import { invokeTauri } from "@/shared/api/tauri";
+import {
+  adoptProvisionedEmployees,
+  invokeTauri,
+} from "@/shared/api/tauri";
 import { useComposerNewTask } from "./useComposerNewTask";
 import type { AcpRuntime, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
@@ -36,9 +48,6 @@ import {
   buildTypedMentionRouting,
   createFinishSendFailureHandler,
   getErrorMessage,
-  isManagedAgentRunning,
-  isProviderBackedAgent,
-  MENTION_REFERENCE_TAG,
   mergeOutgoingTagsWithReferenceMentions,
   nonMemberMentionPubkeys,
   type PendingNonMemberMentionSend,
@@ -47,6 +56,15 @@ import {
   type SendMessageWithMentionFlowInput,
   uniqueNormalizedPubkeys,
 } from "./useMentionSendFlow.helpers";
+import { inviteNonMemberMentions } from "./inviteNonMemberMentions";
+import {
+  ensureManagedAgentMentionsReady as ensureManagedAgentMentionsReadyForSend,
+  loadAvailableMentionRuntimes,
+  loadManagedAgentsByPubkey,
+} from "./managedMentionReadiness";
+import {
+  reconcileProvisionedMentionedAgents as reconcileProvisionedMentionedAgentsForSend,
+} from "./provisionedMentionReconciliation";
 
 export function useMentionSendFlow({
   channelId,
@@ -74,6 +92,10 @@ export function useMentionSendFlow({
   threadRootId = null,
 }: UseMentionSendFlowOptions) {
   const newTask = useComposerNewTask(channelId, channelType, threadRootId);
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
+  const communityIdRef = React.useRef(communityId);
+  communityIdRef.current = communityId;
   const [pendingNonMemberSend, setPendingNonMemberSend] =
     React.useState<PendingNonMemberMentionSend | null>(null);
   const [nonMemberPromptError, setNonMemberPromptError] = React.useState<
@@ -105,94 +127,103 @@ export function useMentionSendFlow({
     useProvisionChannelManagedAgentMutation(channelId);
   const availableRuntimesQuery = useAvailableAcpRuntimes();
   const managedAgentsQuery = useManagedAgentsQuery();
+  const communityOwnersQuery = useCommunityOwnersQuery(communityId, false);
+  const employeeHeadsQuery = useEmployeeHeadsQuery(communityId, false);
+  const managedAgentHeadsQuery = useQuery({
+    queryKey: managedAgentHeadsQueryKey(communityId),
+    queryFn: fetchManagedAgentHeadEvents,
+    enabled: false,
+    staleTime: 30_000,
+  });
   const startAgentMutation = useStartManagedAgentMutation();
-  const getManagedAgentsByPubkey = React.useCallback(async () => {
-    const agents =
-      managedAgentsQuery.data ??
-      (await managedAgentsQuery.refetch()).data ??
-      [];
-    return new Map(
-      agents.map((agent) => [normalizePubkey(agent.pubkey), agent]),
-    );
-  }, [managedAgentsQuery.data, managedAgentsQuery.refetch]);
-  const getAvailableRuntimes = React.useCallback(async (): Promise<
-    AcpRuntime[]
-  > => {
-    const cached = availableRuntimesQuery.data ?? [];
-    if (cached.length > 0 || !availableRuntimesQuery.isLoading) {
-      return cached;
-    }
-    const refetched = await availableRuntimesQuery.refetch();
-    return (refetched.data ?? []).filter(
-      (runtime): runtime is AcpRuntime =>
-        runtime.availability === "available" &&
-        runtime.command !== null &&
-        runtime.binaryPath !== null,
-    );
-  }, [
-    availableRuntimesQuery.data,
-    availableRuntimesQuery.isLoading,
-    availableRuntimesQuery.refetch,
-  ]);
+  const getManagedAgentsByPubkey = React.useCallback(
+    () =>
+      loadManagedAgentsByPubkey(
+        managedAgentsQuery.data,
+        managedAgentsQuery.refetch,
+      ),
+    [managedAgentsQuery.data, managedAgentsQuery.refetch],
+  );
+  const reconcileProvisionedMentionedAgents = React.useCallback(
+    (
+      mentionPubkeys: string[],
+      managedAgentsByPubkey: Map<string, ManagedAgent>,
+      preparedManagedAgents: ManagedAgent[],
+    ) => {
+      const capturedCommunityId = communityIdRef.current;
+      const scopeStillCurrent = () =>
+        capturedCommunityId.length > 0 &&
+        communityIdRef.current === capturedCommunityId &&
+        loadActiveCommunityId() === capturedCommunityId;
+      return reconcileProvisionedMentionedAgentsForSend({
+        mentionPubkeys,
+        managedAgentsByPubkey,
+        preparedManagedAgents,
+        getCachedMetadata: () => ({
+          employeeHeads: employeeHeadsQuery.data,
+          managedHeads: managedAgentHeadsQuery.data,
+          ownerPubkeys: communityOwnersQuery.data ?? new Set<string>(),
+        }),
+        refreshMetadata: async () => {
+          const [owners, employees, managedHeads] = await Promise.all([
+            communityOwnersQuery.refetch(),
+            employeeHeadsQuery.refetch(),
+            managedAgentHeadsQuery.refetch(),
+          ]);
+          return {
+            employeeHeads: employees.data ?? employeeHeadsQuery.data,
+            managedHeads: managedHeads.data ?? managedAgentHeadsQuery.data,
+            ownerPubkeys:
+              owners.data ?? communityOwnersQuery.data ?? new Set<string>(),
+          };
+        },
+        refreshManagedAgents: async () =>
+          (await managedAgentsQuery.refetch()).data ?? [],
+        adopt: adoptProvisionedEmployees,
+        scopeStillCurrent,
+      });
+    },
+    [
+      communityIdRef,
+      communityOwnersQuery.data,
+      communityOwnersQuery.refetch,
+      employeeHeadsQuery.data,
+      employeeHeadsQuery.refetch,
+      managedAgentHeadsQuery.data,
+      managedAgentHeadsQuery.refetch,
+      managedAgentsQuery.refetch,
+    ],
+  );
+  const getAvailableRuntimes = React.useCallback(
+    () =>
+      loadAvailableMentionRuntimes(
+        availableRuntimesQuery.data,
+        availableRuntimesQuery.isLoading,
+        availableRuntimesQuery.refetch,
+      ),
+    [
+      availableRuntimesQuery.data,
+      availableRuntimesQuery.isLoading,
+      availableRuntimesQuery.refetch,
+    ],
+  );
   const ensureManagedAgentMentionsReady = React.useCallback(
-    async (
+    (
       mentionPubkeys: string[],
       capturedChannelId: string,
       preparedParticipantPubkeys: string[] = [],
       preparedManagedAgents: ManagedAgent[] = [],
-    ) => {
-      if (!capturedChannelId || mentionPubkeys.length === 0) {
-        return {
-          errors: [] as string[],
-          pubkeys: [] as string[],
-        };
-      }
-      const managedAgentsByPubkey = await getManagedAgentsByPubkey();
-      for (const agent of preparedManagedAgents) {
-        managedAgentsByPubkey.set(normalizePubkey(agent.pubkey), agent);
-      }
-      const participantPubkeys = new Set([
-        ...mentions.memberPubkeys,
-        ...preparedParticipantPubkeys.map(normalizePubkey),
-      ]);
-      const errors: string[] = [];
-      const pubkeys: string[] = [];
-      for (const pubkey of uniqueNormalizedPubkeys(mentionPubkeys)) {
-        const agent = managedAgentsByPubkey.get(pubkey);
-        if (!agent) {
-          continue;
-        }
-        try {
-          if (participantPubkeys.has(pubkey)) {
-            if (isProviderBackedAgent(agent)) {
-              if (agent.status !== "deployed") {
-                await startAgentMutation.mutateAsync(agent.pubkey);
-              }
-            } else if (!isManagedAgentRunning(agent)) {
-              await startAgentMutation.mutateAsync(agent.pubkey);
-            }
-          } else {
-            await attachAgentMutation.mutateAsync({
-              channelId: capturedChannelId,
-              agent,
-              role: "bot",
-            });
-          }
-          pubkeys.push(pubkey);
-        } catch (error) {
-          errors.push(
-            `${agent.name}: ${getErrorMessage(
-              error,
-              "Could not prepare agent.",
-            )}`,
-          );
-        }
-      }
-      return {
-        errors,
-        pubkeys: uniqueNormalizedPubkeys(pubkeys),
-      };
-    },
+    ) =>
+      ensureManagedAgentMentionsReadyForSend({
+        mentionPubkeys,
+        capturedChannelId,
+        preparedParticipantPubkeys,
+        preparedManagedAgents,
+        memberPubkeys: mentions.memberPubkeys,
+        getManagedAgentsByPubkey,
+        attachAgentMutation,
+        startAgentMutation,
+      }),
     [
       attachAgentMutation,
       getManagedAgentsByPubkey,
@@ -200,7 +231,6 @@ export function useMentionSendFlow({
       startAgentMutation,
     ],
   );
-
   const createMentionedPersonaAgents = React.useCallback(
     async (trimmed: string, capturedChannelId: string) => {
       const personaMentions = mentions.extractMentionPersonas(trimmed);
@@ -211,7 +241,6 @@ export function useMentionSendFlow({
           pubkeys: [] as string[],
         };
       }
-
       const runtimes = await getAvailableRuntimes();
       const defaultRuntime = runtimes[0] ?? null;
       const errors: string[] = [];
@@ -226,7 +255,6 @@ export function useMentionSendFlow({
           continue;
         }
         seenPersonaIds.add(persona.id);
-
         const { runtime } = resolvePersonaRuntime(
           persona.runtime,
           runtimes,
@@ -236,7 +264,6 @@ export function useMentionSendFlow({
           errors.push(`${displayName}: No agent runtime available.`);
           continue;
         }
-
         try {
           const input: CreateChannelManagedAgentInput & {
             channelId: string;
@@ -269,7 +296,6 @@ export function useMentionSendFlow({
           );
         }
       }
-
       return {
         agents,
         errors,
@@ -377,6 +403,22 @@ export function useMentionSendFlow({
         }
         const normalizedMentionPubkeys =
           uniqueNormalizedPubkeys(mentionPubkeys);
+        const provisionedAgentError =
+          await reconcileProvisionedMentionedAgents(
+            normalizedMentionPubkeys,
+            managedAgentsByPubkey,
+            draft.preparedManagedAgents ?? [],
+          );
+        if (!isMountedRef.current) {
+          persistPreflightDraft();
+          return;
+        }
+        if (provisionedAgentError) {
+          const message = `Could not prepare mentioned teammate: ${provisionedAgentError}`;
+          setNonMemberPromptError(message);
+          toast.error(message);
+          return;
+        }
         const managedMentionPubkeys = normalizedMentionPubkeys.filter(
           (pubkey) => managedAgentsByPubkey.has(pubkey),
         );
@@ -614,6 +656,7 @@ export function useMentionSendFlow({
       newTask.isRequested,
       ensureManagedAgentMentionsReady,
       getManagedAgentsByPubkey,
+      reconcileProvisionedMentionedAgents,
       mentions.isAgentPubkey,
       onPrepareSendChannel,
       onSendRef,
@@ -850,76 +893,15 @@ export function useMentionSendFlow({
       return;
     }
 
-    const invitedPubkeys = new Set(
-      pendingNonMemberSend.nonMemberPubkeys.map(normalizePubkey),
-    );
-    const mentionPubkeys = uniqueNormalizedPubkeys([
-      ...pendingNonMemberSend.mentionPubkeys,
-      ...pendingNonMemberSend.nonMemberPubkeys,
-    ]);
-    const outgoingTags = (pendingNonMemberSend.outgoingTags ?? []).filter(
-      (tag) =>
-        tag[0] !== MENTION_REFERENCE_TAG ||
-        !invitedPubkeys.has(normalizePubkey(tag[1] ?? "")),
-    );
-
     setNonMemberPromptError(null);
-    void (async () => {
-      const managedAgentsByPubkey = await getManagedAgentsByPubkey();
-      const peoplePubkeys: string[] = [];
-      const relayAgentPubkeys: string[] = [];
-
-      for (const pubkey of uniqueNormalizedPubkeys(
-        pendingNonMemberSend.nonMemberPubkeys,
-      )) {
-        if (managedAgentsByPubkey.has(pubkey)) {
-          continue;
-        }
-
-        if (mentions.isAgentPubkey(pubkey)) {
-          relayAgentPubkeys.push(pubkey);
-        } else {
-          peoplePubkeys.push(pubkey);
-        }
-      }
-
-      const errors: string[] = [];
-      if (peoplePubkeys.length > 0) {
-        const result = await addMembersMutation.mutateAsync({
-          channelId: pendingNonMemberSend.capturedChannelId ?? undefined,
-          pubkeys: peoplePubkeys,
-          role: "member",
-        });
-        errors.push(...result.errors.map((error) => error.error));
-      }
-
-      if (relayAgentPubkeys.length > 0) {
-        const result = await addMembersMutation.mutateAsync({
-          channelId: pendingNonMemberSend.capturedChannelId ?? undefined,
-          pubkeys: relayAgentPubkeys,
-          role: "bot",
-        });
-        errors.push(...result.errors.map((error) => error.error));
-      }
-
-      if (errors.length > 0) {
-        setNonMemberPromptError(errors.join("; "));
-        return;
-      }
-
-      await completeSend(
-        {
-          ...pendingNonMemberSend,
-          mentionPubkeys,
-          outgoingTags,
-        },
-        mentionPubkeys,
-        outgoingTags,
-      );
-    })().catch((error) => {
-      setNonMemberPromptError(
-        error instanceof Error ? error.message : "Could not invite members.",
-      );
+    void inviteNonMemberMentions({
+      pending: pendingNonMemberSend,
+      getManagedAgentsByPubkey,
+      isAgentPubkey: mentions.isAgentPubkey,
+      addMembers: (input) => addMembersMutation.mutateAsync(input),
+      completeSend,
+    }).then((error) => {
+      if (error) setNonMemberPromptError(error);
     });
   }, [
     addMembersMutation,

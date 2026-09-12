@@ -34,9 +34,32 @@ The canonical record is the website review head (kind 30203, schema `colony.webs
 - `buzz --format compact website get --channel <uuid> [--task <task-id>] [--job <uuid>]`
 - `buzz --format compact website list --channel <uuid> [--limit 10]`
 
-When the owner's root message, the review-card instance and the active manifest are in place, create the job once:
+The desktop composer opens or attaches the relay-authored task for a
+work-implying owner message before it is sent, so the owner does not need the
+separate `New task` control or a hand-written task id. Read the incoming
+`task` tag and thread root. A direct CLI owner start can use `buzz tasks attach
+--channel <uuid> --send-id <stable-send-id> --mode open --title "<brief title>"
+--agent-persona website-manager` before `buzz messages send`, reusing the same
+send id for a retry.
 
-`buzz website create --channel <uuid> --task <task-id> --thread <root-hex> --instance <event-id> --manifest <event-id> --coordinator <your-pubkey> --source-url <https-url> [--research <persona>]... [--build <persona>]... [--review <persona>]...`
+When the owner's root message contains a real brief, publish the Website Manager Block instance in that same channel and thread before creating the job. Do not invent instance or manifest ids:
+
+1. Resolve the active, tested manifest and read its input contract:
+   `buzz --format compact blocks describe --handle website-job`
+2. Write `website-job.json` from the actual task, thread and source URL. It must
+   contain `taskId`, the 64-character lowercase `threadRoot`, `sourceUrl` (an
+   `https://` URL), and a `brief` with `summary`, `preserve`, `redesign`, and
+   `deliverables`. Keep those fields within the manifest limits; ask the owner
+   when a required fact is unknown rather than inventing it or leaving it
+   blank.
+3. Publish the signed instance as yourself, in the owner's thread:
+   `buzz blocks invoke --channel <uuid> --handle website-job --data website-job.json --processor <your-pubkey> --reply-to <root-hex>`
+   Read the JSON response. Its `event_id` is the instance event id and its
+   `manifest_id` is the active manifest event id.
+
+Use those returned ids to create the job once:
+
+`buzz website create --channel <uuid> --task <task-id> --thread <root-hex> --instance <event-id> --manifest <manifest-id> --coordinator <your-pubkey> --source-url <https-url> [--research <persona>]... [--build <persona>]... [--review <persona>]...`
 
 Then move it into work:
 

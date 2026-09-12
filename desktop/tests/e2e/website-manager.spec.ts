@@ -1043,6 +1043,35 @@ test("mocked website-job fixture carries the bundled core digest", () => {
   expect(WEBSITE_JOB_DIGEST).toBe(EXPECTED_WEBSITE_JOB_DIGEST);
 });
 
+test("Agents exposes the Website Manager setup entry point", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
+  await installMockBridge(page, { activeIdentityInDefaultChannels: true });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const agentsLink = page.getByTestId("open-agents-view");
+  await expect(agentsLink).toBeVisible({ timeout: 10_000 });
+  await agentsLink.click();
+
+  const installButton = page.getByTestId("install-website-manager-button");
+  await expect(installButton).toBeVisible();
+  await installButton.click();
+
+  const dialog = page.getByTestId("website-team-install-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: "Website Manager" }),
+  ).toBeVisible();
+  await expect(dialog.getByLabel("Website URL (optional)")).toBeVisible();
+  await expect(dialog.getByLabel("What should they do?")).toHaveValue(
+    "Improve my website",
+  );
+  await expect(
+    dialog.getByTestId("website-team-install-submit"),
+  ).toBeEnabled();
+});
+
 test("mocked Brief state renders the brief and start action", async ({
   page,
 }) => {
@@ -1090,8 +1119,27 @@ test("Brief Start recovers from a BeginWork rejection and retries the same job",
   const startButton = rootAttachment.getByRole("button", {
     name: "Start redesign",
   });
+  const runtimeStartCount = () =>
+    page.evaluate(
+      () =>
+        (
+          window as Window & {
+            __BUZZ_E2E_COMMANDS__?: string[];
+          }
+        ).__BUZZ_E2E_COMMANDS__?.filter(
+          (command) => command === "start_managed_agent_runtime",
+        ).length ?? 0,
+    );
+  const baselineRuntimeStartCount = await runtimeStartCount();
   await startButton.click();
 
+  await expect
+    .poll(runtimeStartCount, {
+      timeout: 20_000,
+      message:
+        "Brief Start must wait for the fenced ACP runtime before publishing BeginWork.",
+    })
+    .toBeGreaterThan(baselineRuntimeStartCount);
   await expect
     .poll(() => readSignedWebsiteStarts(page, job.taskId), {
       timeout: 20_000,

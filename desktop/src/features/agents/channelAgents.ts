@@ -36,9 +36,31 @@ export type AttachManagedAgentToChannelInput = {
 
 export type AttachManagedAgentToChannelResult = {
   agent: ManagedAgent;
+  /** The agent is confirmed in the channel, including an idempotent retry. */
+  joined: boolean;
+  /** The current attempt added the agent; false when it was already present. */
+  newlyAdded: boolean;
   membershipAdded: boolean;
   started: boolean;
 };
+
+/**
+ * A start/deploy failure after the membership write succeeded.
+ *
+ * Website setup reports the membership separately from runtime readiness, so
+ * callers can offer a safe retry without losing the fact that the agent
+ * already joined. Generic callers still receive an ordinary rejected promise
+ * with the same message when they do not inspect this subtype.
+ */
+export class ManagedAgentStartError extends Error {
+  readonly attachment: AttachManagedAgentToChannelResult;
+
+  constructor(message: string, attachment: AttachManagedAgentToChannelResult) {
+    super(message);
+    this.name = "ManagedAgentStartError";
+    this.attachment = attachment;
+  }
+}
 
 export type EnsureChannelAgentPresetInput = {
   runtime: ChannelAgentRuntime;
@@ -139,6 +161,8 @@ export async function attachManagedAgentToChannel(
   const membershipAdded = membershipResult.added.some(
     (pubkey) => normalizePubkey(pubkey) === agentPubkey,
   );
+  const joined = membershipAdded || membershipError !== undefined;
+  const newlyAdded = membershipAdded;
 
   let agent = input.agent;
   let started = false;
@@ -153,21 +177,35 @@ export async function attachManagedAgentToChannel(
     // pair — so this ensures the pair the caller is attaching to, never
     // another community's.
     const isRemote = input.agent.backend.type === "provider";
-    if (isRemote && input.agent.status !== "deployed") {
-      agent = await startManagedAgent(input.agent.pubkey);
-      started = true;
-    } else if (
-      !isRemote &&
-      input.agent.status !== "running" &&
-      input.agent.status !== "deployed"
-    ) {
-      agent = await startManagedAgent(input.agent.pubkey);
-      started = true;
+    try {
+      if (isRemote && input.agent.status !== "deployed") {
+        agent = await startManagedAgent(input.agent.pubkey);
+        started = true;
+      } else if (
+        !isRemote &&
+        input.agent.status !== "running" &&
+        input.agent.status !== "deployed"
+      ) {
+        agent = await startManagedAgent(input.agent.pubkey);
+        started = true;
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not start agent.";
+      throw new ManagedAgentStartError(message, {
+        agent,
+        joined,
+        newlyAdded,
+        membershipAdded,
+        started: false,
+      });
     }
   }
 
   return {
     agent,
+    joined,
+    newlyAdded,
     membershipAdded,
     started,
   } satisfies AttachManagedAgentToChannelResult;

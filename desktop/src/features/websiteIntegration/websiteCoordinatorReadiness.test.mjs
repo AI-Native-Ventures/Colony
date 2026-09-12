@@ -60,7 +60,7 @@ test("a stopped local coordinator waits for ACP listening before the action is s
   let listCalls = 0;
   let now = 0;
 
-  await ensureWebsiteCoordinatorReady({
+  const ready = await ensureWebsiteCoordinatorReady({
     ...baseInput({ loadManagedAgents: async () => [agent] }),
     ensureObserver: async (pubkey) => {
       assert.equal(pubkey, COORDINATOR);
@@ -89,6 +89,8 @@ test("a stopped local coordinator waits for ACP listening before the action is s
   assert.equal(attached.input.role, "bot");
   assert.equal(attached.input.ensureRunning, false);
   assert.equal(observed, true);
+  assert.equal(ready.membershipAdded, true);
+  assert.equal(ready.started, false);
   assert.deepEqual(started, {
     pubkey: COORDINATOR,
     relayUrl: RELAY,
