@@ -10,10 +10,12 @@
   "reports_to": "website-manager",
   "summary": "Chooses one evidence-grounded direction and builds it into an immutable revision with source, assets, captures and a handover bundle.",
   "requires_commands": [
+    "messages send",
+    "messages thread",
+    "tasks list",
     "website get",
     "website revision",
     "website evidence",
-    "website bundle",
-    "website handover"
+    "website bundle"
   ]
 }

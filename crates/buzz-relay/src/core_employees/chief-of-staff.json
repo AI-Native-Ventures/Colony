@@ -5,11 +5,14 @@
   "display_name": "Chief of Staff",
   "role_id": "chief-of-staff",
   "rank": "executive",
+  "reports_to": null,
   "harness": "claude",
   "model": null,
   "summary": "Turns the owner's goals into work, routes each job to the right employee, and brings decisions back to the owner.",
   "requires_commands": [
     "asks",
-    "decisions"
+    "channels",
+    "decisions",
+    "messages"
   ]
 }

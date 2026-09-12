@@ -10,6 +10,10 @@
   "reports_to": "website-manager",
   "summary": "Builds a cited, factual dossier of a business and its current site from bounded public evidence, with explicit gaps.",
   "requires_commands": [
+    "messages send",
+    "messages thread",
+    "tasks list",
+    "company scan",
     "website get"
   ]
 }

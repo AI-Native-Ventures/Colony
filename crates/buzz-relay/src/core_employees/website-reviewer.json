@@ -10,7 +10,11 @@
   "reports_to": "website-manager",
   "summary": "Reviews the exact revision, rendered and functional on desktop and mobile, and records an evidence-backed verdict.",
   "requires_commands": [
+    "messages send",
+    "messages thread",
+    "tasks list",
     "website get",
-    "website qa"
+    "website qa",
+    "website evidence"
   ]
 }

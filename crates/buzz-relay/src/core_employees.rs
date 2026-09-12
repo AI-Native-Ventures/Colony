@@ -263,6 +263,56 @@ fn validate_reporting_lines(employees: &[ProvisionedEmployee]) -> anyhow::Result
         }
     }
 
+    // The bundle writes manager columns directly, so apply the same one-rung
+    // rule that the interrupt gate applies to owner changes. A role name alone
+    // is not enough: a stale or wrongly ranked holder must leave the employee
+    // visibly unassigned rather than creating a line the gate cannot use.
+    for employee in employees {
+        let Some(tier) = employee.tier() else {
+            anyhow::bail!(
+                "bundled employee manifest for `{}` has an unparseable rank",
+                employee.handle
+            );
+        };
+        match (tier, employee.reports_to.as_deref()) {
+            (AgentTier::Executive, None) => {}
+            (AgentTier::Executive, Some(manager)) => {
+                anyhow::bail!(
+                    "bundled employee manifest for `{}` is an executive and must report to nobody, not `{manager}`",
+                    employee.handle
+                );
+            }
+            (AgentTier::Leader | AgentTier::Worker, None) => {
+                anyhow::bail!(
+                    "bundled employee manifest for `{}` is a `{}` and must name a manager",
+                    employee.handle,
+                    tier.as_str()
+                );
+            }
+            (tier, Some(manager)) => {
+                let Some(manager_entry) = employees
+                    .iter()
+                    .find(|candidate| candidate.handle == manager)
+                else {
+                    anyhow::bail!(
+                        "bundled employee manifest for `{}` reports to `{manager}`, but the manager disappeared during validation",
+                        employee.handle
+                    );
+                };
+                let manager_tier = manager_entry.tier();
+                if manager_tier != Some(tier.escalation_target()) {
+                    anyhow::bail!(
+                        "bundled employee manifest for `{}` is a `{}` and requires a `{}` manager, but `{manager}` is `{}`",
+                        employee.handle,
+                        tier.as_str(),
+                        tier.escalation_target().as_str(),
+                        manager_tier.map_or("unparseable", |value| value.as_str())
+                    );
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -736,6 +786,14 @@ impl RoleHolder {
             Self::ManagedAgent(holder) => holder.pubkey.as_slice(),
         }
     }
+
+    /// The rank the interrupt gate can resolve for this holder.
+    fn tier(&self) -> Option<AgentTier> {
+        match self {
+            Self::Employee(row) => AgentTier::parse(&row.rank),
+            Self::ManagedAgent(holder) => holder.tier,
+        }
+    }
 }
 
 /// One owner-published managed-agent head, resolved to the agent it names.
@@ -745,6 +803,9 @@ struct ManagedAgentHolder {
     pubkey: [u8; 32],
     /// The head event id, for logs.
     event_id: String,
+    /// The rank declared by the owner-authored head, if it is parseable.
+    /// Missing rank is deliberately not inferred from a display name or role.
+    tier: Option<AgentTier>,
 }
 
 /// Every candidate holder for one role, gathered from both ledgers before a
@@ -846,9 +907,11 @@ async fn resolve_role_holder(
         let Some(pubkey) = managed_agent_pubkey(&stored.event) else {
             continue;
         };
+        let tier = managed_agent_tier(&stored.event);
         candidates.managed_agents.push(ManagedAgentHolder {
             pubkey,
             event_id: stored.event.id.to_hex(),
+            tier,
         });
     }
     candidates
@@ -881,15 +944,34 @@ fn managed_agent_role(event: &Event) -> Option<String> {
     is_valid_role_slug(&role_id).then_some(role_id)
 }
 
+/// Read the owner-authored head's explicit tier. The relay cannot safely
+/// infer a rank for a desktop-owned head from its role or display name; an
+/// absent tier therefore leaves dependent provisioned employees unassigned
+/// until the owner publishes the missing rank.
+fn managed_agent_tier(event: &Event) -> Option<AgentTier> {
+    let content: serde_json::Value = serde_json::from_str(&event.content).ok()?;
+    content
+        .get("tier")
+        .and_then(serde_json::Value::as_str)
+        .and_then(AgentTier::parse)
+}
+
 /// The agent an owner-published managed-agent head describes: its `d` tag,
 /// which is the agent's pubkey. Managed-agent heads are keyed by the agent
 /// they describe, exactly as the interrupt gate reads them.
 fn managed_agent_pubkey(event: &Event) -> Option<[u8; 32]> {
-    let hex = event.tags.iter().find_map(|tag| {
+    let mut d_tag: Option<&[String]> = None;
+    for tag in event.tags.iter() {
         let parts = tag.as_slice();
-        (parts.len() >= 2 && parts[0] == "d").then(|| parts[1].clone())
-    })?;
-    nostr::PublicKey::from_hex(&hex)
+        if parts.first().is_none_or(|part| part != "d") {
+            continue;
+        }
+        if parts.len() != 2 || d_tag.replace(parts).is_some() {
+            return None;
+        }
+    }
+    let hex = d_tag?.get(1)?;
+    nostr::PublicKey::from_hex(hex)
         .ok()
         .map(|pubkey| pubkey.to_bytes())
 }
@@ -914,14 +996,36 @@ async fn resolve_manager(
         return Ok(None);
     };
 
-    let role_id = manifests
+    let Some(role_id) = manifests
         .iter()
         .find(|entry| entry.handle == manager_handle)
         .map(|entry| entry.role_id.as_str())
-        .expect("every reports_to names a bundled handle, checked at load");
+    else {
+        anyhow::bail!(
+            "bundled employee manifest for `{}` names missing manager handle `{manager_handle}`",
+            employee.handle
+        );
+    };
+    let Some(employee_tier) = employee.tier() else {
+        return Ok(None);
+    };
+    let expected_manager_tier = employee_tier.escalation_target();
 
     match resolve_role_holder(state, community, role_id, Some(manager_handle)).await? {
-        Some(holder) => Ok(Some(holder.pubkey().to_vec())),
+        Some(holder) if holder.tier() == Some(expected_manager_tier) => {
+            Ok(Some(holder.pubkey().to_vec()))
+        }
+        Some(holder) => {
+            warn!(
+                community = %community,
+                handle = %employee.handle,
+                manager = manager_handle,
+                manager_rank = holder.tier().map_or("unparseable", |tier| tier.as_str()),
+                expected = expected_manager_tier.as_str(),
+                "the employee holding this role is the wrong rank to be a manager; leaving the reporting line unset"
+            );
+            Ok(None)
+        }
         None => {
             warn!(
                 community = %community,
@@ -1218,7 +1322,12 @@ mod tests {
         assert_eq!(chief.version, 1);
         assert_eq!(
             chief.requires_commands,
-            vec!["asks".to_owned(), "decisions".to_owned()]
+            vec![
+                "asks".to_owned(),
+                "channels".to_owned(),
+                "decisions".to_owned(),
+                "messages".to_owned(),
+            ]
         );
 
         let avery = by_handle("website-manager");
@@ -1229,25 +1338,35 @@ mod tests {
         assert_eq!(
             avery.requires_commands,
             vec![
+                "messages send".to_owned(),
+                "messages thread".to_owned(),
+                "tasks list".to_owned(),
+                "blocks describe".to_owned(),
+                "blocks invoke".to_owned(),
+                "blocks actions".to_owned(),
+                "blocks act".to_owned(),
+                "blocks receipt".to_owned(),
                 "website create".to_owned(),
                 "website get".to_owned(),
                 "website list".to_owned(),
                 "website begin-work".to_owned(),
                 "website ready".to_owned(),
+                "website request-changes".to_owned(),
+                "website handover".to_owned(),
             ]
         );
 
         for (handle, display_name, role_id) in [
-            ("website-researcher", "Ren", "website-research"),
-            ("website-designer-builder", "Jules", "designer-builder"),
-            ("website-reviewer", "Vera", "independent-reviewer"),
+            ("website-researcher", "Ren", "website-researcher"),
+            ("website-designer-builder", "Jules", "website-designer-builder"),
+            ("website-reviewer", "Vera", "website-reviewer"),
         ] {
             let worker = by_handle(handle);
             assert_eq!(worker.display_name, display_name);
             assert_eq!(worker.role_id, role_id);
             assert_eq!(worker.tier(), Some(AgentTier::Worker));
             assert_eq!(worker.reports_to.as_deref(), Some("website-manager"));
-            assert_eq!(worker.version, 1);
+            assert_eq!(worker.version, 3);
         }
     }
 
@@ -1385,6 +1504,17 @@ mod tests {
     }
 
     #[test]
+    fn a_manager_of_the_wrong_rank_is_refused() {
+        let mut worker = manifest("worker", Some("executive"));
+        worker.rank = "worker".to_owned();
+        let mut executive = manifest("executive", None);
+        executive.rank = "executive".to_owned();
+        let error = validate_reporting_lines(&[worker, executive])
+            .expect_err("a worker cannot report directly to an executive");
+        assert!(error.to_string().contains("requires a `leader` manager"));
+    }
+
+    #[test]
     fn a_reporting_line_cycle_is_refused() {
         let cycle = vec![manifest("a", Some("b")), manifest("b", Some("a"))];
         let error = sort_by_reporting_line(cycle).expect_err("a cycle must be refused");
@@ -1432,6 +1562,7 @@ mod tests {
         let head = ManagedAgentHolder {
             pubkey: [3; 32],
             event_id: "cc".repeat(32),
+            tier: Some(AgentTier::Executive),
         };
 
         let head_only = RoleCandidates {
@@ -1506,6 +1637,19 @@ mod tests {
             .sign_with_keys(&owner)
             .expect("sign the head");
         assert_eq!(managed_agent_pubkey(&unnamed), None);
+
+        let duplicate = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), "{}")
+            .tags(vec![
+                Tag::parse(["d", &subject.public_key().to_hex()]).expect("d tag"),
+                Tag::parse(["d", &subject.public_key().to_hex()]).expect("duplicate d tag"),
+            ])
+            .sign_with_keys(&owner)
+            .expect("sign the head");
+        assert_eq!(
+            managed_agent_pubkey(&duplicate),
+            None,
+            "a duplicate d tag cannot identify a manager head"
+        );
     }
 
     fn tag_value(event: &Event, name: &str) -> Option<String> {

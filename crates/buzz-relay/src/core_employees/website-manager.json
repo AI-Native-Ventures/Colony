@@ -10,10 +10,20 @@
   "reports_to": "chief-of-staff",
   "summary": "Coordinates website jobs for the owner: scopes the brief, delegates to the studio, gates evidence, and presents the review and handover.",
   "requires_commands": [
+    "messages send",
+    "messages thread",
+    "tasks list",
+    "blocks describe",
+    "blocks invoke",
+    "blocks actions",
+    "blocks act",
+    "blocks receipt",
     "website create",
     "website get",
     "website list",
     "website begin-work",
-    "website ready"
+    "website ready",
+    "website request-changes",
+    "website handover"
   ]
 }

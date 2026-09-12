@@ -1,10 +1,11 @@
 {
   "schema": "ai-native-office/provisioned-employee/v1",
   "handle": "sales",
-  "version": 2,
+  "version": 3,
   "display_name": "Sales",
   "role_id": "sales",
   "rank": "leader",
+  "reports_to": "chief-of-staff",
   "harness": "claude",
   "model": null,
   "summary": "Finds businesses worth contacting, shows them in chat, and puts one outreach email at a time in front of the owner to approve.",

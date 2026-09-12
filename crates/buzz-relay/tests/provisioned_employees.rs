@@ -244,7 +244,7 @@ async fn seeding_creates_the_sales_employee_once_and_settles_on_a_re_run() {
     assert_eq!(
         first,
         bundled.len(),
-        "the first run seeds exactly the bundled employees"
+        "the first run seeds every bundled employee"
     );
 
     let row = seeded_sales(&db, community_id).await;
