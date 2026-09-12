@@ -104,6 +104,15 @@ export type CreateChannelManagedAgentsResult = {
   failures: CreateChannelManagedAgentBatchFailure[];
 };
 
+/**
+ * Returns true only for the relay's idempotent duplicate-membership response.
+ * Other per-member errors must continue to stop the attach operation.
+ */
+export function isAlreadyMemberError(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return normalized === "already a member" || normalized === "already a member.";
+}
+
 export async function attachManagedAgentToChannel(
   channelId: string,
   input: AttachManagedAgentToChannelInput,
@@ -119,7 +128,10 @@ export async function attachManagedAgentToChannel(
   const membershipError = membershipResult.errors.find(
     (error) => normalizePubkey(error.pubkey) === agentPubkey,
   );
-  if (membershipError) {
+  // The desired postcondition already holds when the member is present. The
+  // relay reports that state as a per-member error, so preserve idempotent
+  // retry behavior while keeping all other errors fatal.
+  if (membershipError && !isAlreadyMemberError(membershipError.error)) {
     throw new Error(membershipError.error);
   }
   const membershipAdded = membershipResult.added.some(
