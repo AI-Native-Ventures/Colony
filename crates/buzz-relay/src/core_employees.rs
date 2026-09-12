@@ -1287,12 +1287,9 @@ mod tests {
             .find(|entry| entry.handle == "sales")
             .expect("the sales employee is bundled");
         assert_eq!(sales.display_name, "Sales");
-        assert_eq!(sales.version, 2);
+        assert_eq!(sales.version, 3);
         assert_eq!(sales.tier(), Some(AgentTier::Leader));
-        assert!(
-            sales.reports_to.is_none(),
-            "sales sits at the top of the chart"
-        );
+        assert_eq!(sales.reports_to.as_deref(), Some("chief-of-staff"));
         assert!(sales.prompt.contains("outreach"));
         assert_eq!(
             sales.requires_commands,
@@ -1370,7 +1367,7 @@ mod tests {
             assert_eq!(worker.role_id, role_id);
             assert_eq!(worker.tier(), Some(AgentTier::Worker));
             assert_eq!(worker.reports_to.as_deref(), Some("website-manager"));
-            assert_eq!(worker.version, 3);
+            assert_eq!(worker.version, 4);
         }
     }
 
@@ -1397,7 +1394,10 @@ mod tests {
     #[test]
     fn the_records_carry_the_provisioned_tag_and_the_prompt() {
         let manifests = core_employee_manifests().expect("bundled employees must be valid");
-        let sales = &manifests[0];
+        let sales = manifests
+            .iter()
+            .find(|entry| entry.handle == "sales")
+            .expect("the sales employee is bundled");
         let keys = Keys::generate();
         let records: Vec<Event> = build_records(sales, None, &keys, nostr::Timestamp::now())
             .into_iter()

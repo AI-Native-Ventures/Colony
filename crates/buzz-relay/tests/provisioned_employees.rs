@@ -609,9 +609,9 @@ async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
     let owner = Keys::generate();
     add_owner(&pool, community_id, &owner.public_key().to_hex()).await;
 
-    // A real hire holding the `sales` role before Colony ever seeded one. It
-    // already has a manager, which the sales bundle does not specify: adoption
-    // must leave that reporting line in place on both the row and the head.
+    // A real hire holding the `sales` role before Colony ever seeded one. The
+    // current bundle explicitly places Sales under the Chief of Staff, so
+    // adoption must apply that bundled edge on both the row and the head.
     let theirs = Keys::generate();
     let their_manager = Keys::generate();
     let sealer =
@@ -668,18 +668,26 @@ async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
     assert_eq!(adopted.rank, "leader", "the bundle owns the rank");
     assert_eq!(adopted.status, "active");
     assert_eq!(adopted.provisioned_version, Some(sales_version));
+    let chief = db
+        .find_provisioned_employee(community_id, "chief-of-staff")
+        .await
+        .expect("query the chief of staff")
+        .expect("the chief of staff is seeded before Sales");
+    let chief_hex = nostr::PublicKey::from_slice(&chief.pubkey)
+        .expect("the chief pubkey is valid")
+        .to_hex();
     assert_eq!(
         adopted.manager.as_deref(),
-        Some(their_manager.public_key().to_bytes().as_slice()),
-        "a reporting line the sales bundle does not specify survives adoption"
+        Some(chief.pubkey.as_slice()),
+        "adoption applies the Sales bundle's Chief of Staff reporting line"
     );
-    // The head must agree with the row: the preserved manager is republished.
+    // The head must agree with the row: the bundled manager is republished.
     let adopted_hex = sales_keys_from(&adopted).to_hex();
     let adopted_heads = events_of_kind(&db, community_id, KIND_EMPLOYEE, &adopted_hex).await;
     assert_eq!(
         tag_value(&adopted_heads[0], "manager").as_deref(),
-        Some(their_manager.public_key().to_hex().as_str()),
-        "the republished head carries the row's manager"
+        Some(chief_hex.as_str()),
+        "the republished head carries the bundle's manager"
     );
     // The ordinary hire provenance is kept: the owner did hire this row.
     assert_eq!(
