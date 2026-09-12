@@ -3651,7 +3651,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/agents/ui/AgentConfigFields.tsx:191",
+        "src/features/agents/ui/AgentConfigFields.tsx:192",
         "src/features/agents/ui/OpenRouterConnectField.tsx:8",
         "src/features/agents/ui/OpenRouterConnectField.tsx:71"
       ]

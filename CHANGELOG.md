@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- fix(desktop): the Model you choose for a teammate is the model that runs; a stale BUZZ_ACP_MODEL saved on an older agent no longer overrides it silently.
 - chore(desktop): the menu-bar icon is Colony's ant, and the native layer calls the product Colony where you can read it.
 
 ## relay-v0.11.12

@@ -860,14 +860,13 @@ fn spawn_agent_child_inner(
     // global → live persona → per-agent, with reserved-key and malformed-key filtering
     // applied. Writing it last lets user-provided values win over every Buzz-set env
     // written above — reserved keys were already stripped from descriptor.env so they
-    // cannot clobber BUZZ_PRIVATE_KEY, NOSTR_PRIVATE_KEY, etc.
+    // cannot clobber BUZZ_PRIVATE_KEY, NOSTR_PRIVATE_KEY, etc. `apply_user_env` skips
+    // BUZZ_ACP_MODEL/BUZZ_ACP_PROVIDER so the structured model written above survives.
     let spawn_env = provisioned_lease
         .as_ref()
         .map(|(_, env)| env)
         .unwrap_or(&descriptor.env);
-    for (key, value) in spawn_env {
-        command.env(key, value);
-    }
+    super::env_vars::apply_user_env(&mut command, spawn_env);
     configure_runtime_cli(&mut command, runtime_meta);
 
     // Buzz shared compute is stored as a native provider; derive the OpenAI-compatible
