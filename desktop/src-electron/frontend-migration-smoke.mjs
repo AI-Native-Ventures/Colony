@@ -163,8 +163,14 @@ try {
   assert.equal(migrated.theme, "buzz-dark");
   // Edit after the scoped startup preference has settled, so this proves
   // later Electron edits survive relaunch without importing the legacy store again.
+  // Use Appearance so the edit updates the authoritative community preference,
+  // not just the global cache that the scoped controller restores on startup.
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("profile-popover-settings").click();
+  await page.getByTestId("settings-nav-appearance").click();
+  await page.getByTestId("appearance-mode-light").click();
+  await readState(page, "buzz");
   await page.evaluate(() => {
-    localStorage.setItem("buzz-theme", "buzz");
     localStorage.setItem(
       "buzz-drafts.v1:migration-proof",
       "newer Electron draft",
@@ -211,6 +217,9 @@ try {
           rootMounted: !!document.querySelector("#root")?.children.length,
           status: document.querySelector("#status")?.textContent ?? null,
           migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
+          theme: localStorage.getItem("buzz-theme"),
+          renderedTheme: document.documentElement.dataset.buzzTheme,
+          followSystem: localStorage.getItem("buzz-follow-system"),
         }))
         .catch(() => ({ status: "The renderer was unavailable" }))
     : {
