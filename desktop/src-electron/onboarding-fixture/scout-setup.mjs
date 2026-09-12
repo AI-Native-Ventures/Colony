@@ -55,9 +55,9 @@ function firstJobBody(payload) {
     .join("\n\n");
 }
 
-async function readEvent(invoke, eventId) {
+async function readEvent(page, invoke, eventId) {
   assert.match(eventId, HEX_64);
-  return JSON.parse(await invoke("get_event", { eventId }));
+  return JSON.parse(await invoke(page, "get_event", { eventId }));
 }
 
 function countQuery(host, expression) {
@@ -67,6 +67,90 @@ function countQuery(host, expression) {
 
 function tagQuery(marker, exactLength = 3) {
   return `EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)=${exactLength} AND tag->>0='client' AND tag->>1='${marker}')`;
+}
+
+function stableRecord(value) {
+  if (Array.isArray(value)) return value.map(stableRecord);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, stableRecord(nested)]),
+    );
+  }
+  return value;
+}
+
+function stableRecords(records, key) {
+  return records
+    .map(stableRecord)
+    .sort((left, right) =>
+      String(left[key] ?? "").localeCompare(String(right[key] ?? "")),
+    );
+}
+
+async function readRelaySetupRecords(relay, host) {
+  const where = `community_id=(SELECT id FROM communities WHERE host='${host}')`;
+  const raw = await relay.query(
+    `SELECT coalesce(json_agg(e ORDER BY e.kind,e.created_at,e.id),'[]')::text FROM (SELECT kind,encode(id,'hex') AS id,encode(pubkey,'hex') AS pubkey,extract(epoch FROM created_at)::bigint AS created_at FROM events WHERE ${where} AND deleted_at IS NULL AND kind IN (0,30175,30176,30177,30179,30190,39002,40013,40014,40100)) e;`,
+  );
+  return stableRecords(JSON.parse(raw), "id");
+}
+
+async function readSetupRecords({
+  page,
+  invoke,
+  relay,
+  communityHost,
+  channelId,
+}) {
+  const [agents, personas, teams, membership, canvas, relayEvents] =
+    await Promise.all([
+      invoke(page, "list_managed_agents"),
+      invoke(page, "list_personas"),
+      invoke(page, "list_teams"),
+      invoke(page, "get_channel_members", { channelId }),
+      invoke(page, "get_canvas", { channelId }),
+      readRelaySetupRecords(relay, communityHost),
+    ]);
+  assert.ok(Array.isArray(agents), "Managed-agent snapshot is an array");
+  assert.ok(Array.isArray(personas), "Persona snapshot is an array");
+  assert.ok(Array.isArray(teams), "Team snapshot is an array");
+  assert.ok(
+    membership && Array.isArray(membership.members),
+    "Channel-members snapshot has members",
+  );
+  return {
+    agents: stableRecords(agents, "pubkey"),
+    personas: stableRecords(personas, "id"),
+    teams: stableRecords(teams, "id"),
+    members: stableRecords(membership.members, "pubkey"),
+    canvas: stableRecord(canvas),
+    relayEvents,
+  };
+}
+
+async function assertSetupRecordsUnchanged({
+  baseline,
+  page,
+  invoke,
+  relay,
+  communityHost,
+  channelId,
+  label,
+}) {
+  const current = await readSetupRecords({
+    page,
+    invoke,
+    relay,
+    communityHost,
+    channelId,
+  });
+  assert.deepEqual(
+    current,
+    baseline,
+    `${label}: no native setup record changed before approval`,
+  );
 }
 
 async function assertNoBusinessWork(relay, host) {
@@ -91,7 +175,41 @@ async function assertNoBusinessWork(relay, host) {
   );
 }
 
+async function assertSingleScoutSetupProof({
+  relay,
+  host,
+  onboardingRootEventId,
+  acknowledgementEventId,
+  scoutPubkey,
+}) {
+  assert.equal(
+    await relay.query(
+      countQuery(host, `kind=9 AND ${tagQuery(SCOUT_ROOT_MARKER)}`),
+    ),
+    "1",
+    "Reload keeps one signed Scout onboarding root",
+  );
+  assert.equal(
+    await relay.query(
+      countQuery(host, `kind=9 AND ${tagQuery(SETUP_ACK_MARKER)}`),
+    ),
+    "1",
+    "Reload does not publish a duplicate setup acknowledgment",
+  );
+  assert.equal(
+    await relay.query(
+      countQuery(
+        host,
+        `kind=9 AND pubkey=decode('${scoutPubkey}','hex') AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)>=2 AND tag->>0='e' AND tag->>1='${acknowledgementEventId}')`,
+      ),
+    ),
+    "1",
+    `Reload keeps one Scout reply for onboarding root ${onboardingRootEventId}`,
+  );
+}
+
 async function assertSetupRecords({
+  page,
   invoke,
   provider,
   onboardingRootEventId,
@@ -104,7 +222,7 @@ async function assertSetupRecords({
   assert.match(setup.ackEventId ?? "", HEX_64);
   assert.match(setup.replyEventId ?? "", HEX_64);
   assert.notEqual(setup.ackEventId, onboardingRootEventId);
-  const agents = await invoke("list_managed_agents");
+  const agents = await invoke(page, "list_managed_agents");
   assert.equal(agents.length, 1, "Setup keeps one starter Scout");
   const scout = agents[0];
   assert.equal(scout.persona_id, "builtin:fizz");
@@ -112,7 +230,7 @@ async function assertSetupRecords({
   assert.ok(Number(scout.pid) > 0, "Scout is running after approved setup");
 
   const acknowledgement = signed(
-    await readEvent(invoke, setup.ackEventId),
+    await readEvent(page, invoke, setup.ackEventId),
     9,
     ownerPubkey,
   );
@@ -144,7 +262,7 @@ async function assertSetupRecords({
   assert.ok(ackPayload.input && typeof ackPayload.input === "object");
 
   const reply = signed(
-    await readEvent(invoke, setup.replyEventId),
+    await readEvent(page, invoke, setup.replyEventId),
     9,
     scout.pubkey,
   );
@@ -227,6 +345,22 @@ export async function completeFixtureScoutSetup({
     beforeSetupCalls,
     "No setup model call occurs before owner confirmation",
   );
+  const preApprovalSetupRecords = await readSetupRecords({
+    page,
+    invoke,
+    relay,
+    communityHost,
+    channelId,
+  });
+  await assertSetupRecordsUnchanged({
+    baseline: preApprovalSetupRecords,
+    page,
+    invoke,
+    relay,
+    communityHost,
+    channelId,
+    label: "Before route intake",
+  });
 
   await conversation.getByTestId("scout-route-existing").click();
   await conversation
@@ -244,12 +378,30 @@ export async function completeFixtureScoutSetup({
   await conversation
     .getByRole("button", { name: "This looks right", exact: true })
     .click();
+  await assertSetupRecordsUnchanged({
+    baseline: preApprovalSetupRecords,
+    page,
+    invoke,
+    relay,
+    communityHost,
+    channelId,
+    label: "After route and understanding selection",
+  });
   await conversation
     .getByLabel("Workspace context name", { exact: true })
     .fill("Horizon Labs");
   await conversation
     .getByLabel("Context Scout carries", { exact: true })
     .fill(rootPayload.seed.businessDescription);
+  await assertSetupRecordsUnchanged({
+    baseline: preApprovalSetupRecords,
+    page,
+    invoke,
+    relay,
+    communityHost,
+    channelId,
+    label: "After edited understanding",
+  });
   await assertNoBusinessWork(relay, communityHost);
   assert.equal(
     provider.receivedCallCount,
@@ -272,6 +424,7 @@ export async function completeFixtureScoutSetup({
   ).toBeVisible({ timeout: 180_000 });
   provider.assertHealthy();
   const setup = await assertSetupRecords({
+    page,
     invoke,
     provider,
     onboardingRootEventId,
@@ -293,7 +446,102 @@ export async function completeFixtureScoutSetup({
     0,
     "Scout setup does not dispatch a business job",
   );
+  const approvedRelaySetupRecords = await readRelaySetupRecords(
+    relay,
+    communityHost,
+  );
   if (screenshot) await screenshot(proofDirectory, "joined-scout-ready.png");
+
+  const callsBeforeCompletedReload = provider.receivedCallCount;
+  await page.reload({ timeout: 180_000 });
+  await page.waitForFunction(() => !!window.colonyDesktop, undefined, {
+    timeout: 60_000,
+  });
+  assert.equal(
+    (await invoke(page, "get_identity")).pubkey,
+    ownerPubkey,
+    "Completed onboarding reload keeps the owner identity",
+  );
+  assert.equal(
+    await invoke(page, "get_relay_ws_url"),
+    relayUrl,
+    "Completed onboarding reload keeps the workspace relay",
+  );
+  const reloadedConversation = page
+    .locator('section[aria-label="Scout onboarding conversation"]')
+    .last();
+  await reloadedConversation.waitFor({ state: "visible", timeout: 90_000 });
+  await expect(
+    reloadedConversation.getByRole("heading", {
+      name: "Ready for the next conversation.",
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 180_000 });
+  await expect(page.getByTestId("first-job-suggestion")).toHaveCount(0);
+  assert.equal(
+    provider.receivedCallCount,
+    callsBeforeCompletedReload,
+    "Completed onboarding reload does not replay setup model work",
+  );
+  const reloadedSetup = await assertSetupRecords({
+    page,
+    invoke,
+    provider,
+    onboardingRootEventId,
+    channelId,
+    ownerPubkey,
+    relayUrl,
+  });
+  assert.equal(
+    reloadedSetup.scout.pubkey,
+    setup.scout.pubkey,
+    "Completed onboarding reload keeps the same Scout managed identity",
+  );
+  assert.equal(
+    reloadedSetup.acknowledgementEventId,
+    setup.acknowledgementEventId,
+    "Completed onboarding reload keeps the same signed acknowledgment",
+  );
+  assert.equal(
+    reloadedSetup.replyEventId,
+    setup.replyEventId,
+    "Completed onboarding reload keeps the same Scout reply",
+  );
+  const liveRuntimes = await invoke(page, "list_managed_agent_runtimes");
+  const currentScoutRuntimes = liveRuntimes.filter(
+    (runtime) =>
+      runtime.pubkey === setup.scout.pubkey && runtime.relayUrl === relayUrl,
+  );
+  assert.equal(
+    currentScoutRuntimes.length,
+    1,
+    "Completed onboarding reload finds exactly the current Scout runtime",
+  );
+  const [currentScoutRuntime] = currentScoutRuntimes;
+  assert.ok(
+    ["starting", "listening", "waking", "ready"].includes(
+      currentScoutRuntime.lifecycle,
+    ),
+    `Current Scout runtime is live (${currentScoutRuntime.lifecycle})`,
+  );
+  assert.equal(currentScoutRuntime.error, null);
+  assert.ok(
+    Number(currentScoutRuntime.pid) > 0,
+    "Completed onboarding reload keeps a live Scout process",
+  );
+  await assertNoBusinessWork(relay, communityHost);
+  await assertSingleScoutSetupProof({
+    relay,
+    host: communityHost,
+    onboardingRootEventId,
+    acknowledgementEventId: setup.acknowledgementEventId,
+    scoutPubkey: setup.scout.pubkey,
+  });
+  assert.deepEqual(
+    await readRelaySetupRecords(relay, communityHost),
+    approvedRelaySetupRecords,
+    "Completed onboarding reload publishes no duplicate setup records",
+  );
 
   return {
     onboardingRootEventId,
@@ -321,7 +569,7 @@ export async function sendExplicitLegacyFirstJob({
     channelId,
     requestId,
   });
-  const response = await invoke("send_channel_message", {
+  const response = await invoke(page, "send_channel_message", {
     channelId,
     content: firstJobBody(suggestion),
     parentEventId: null,
@@ -348,7 +596,7 @@ export async function sendExplicitLegacyFirstJob({
     "Posting the explicit legacy root does not start a model turn",
   );
   const rootEvent = signed(
-    await readEvent(invoke, rootEventId),
+    await readEvent(page, invoke, rootEventId),
     9,
     ownerPubkey,
   );

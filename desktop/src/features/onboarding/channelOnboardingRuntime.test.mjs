@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { finalizeEvent } from "nostr-tools/pure";
+import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 
 import { createChannelOnboardingRuntime } from "./channelOnboardingRuntime.ts";
 import {
@@ -20,7 +20,11 @@ import {
   runtimeStatus,
   secondApprovalRequestId,
 } from "./channelOnboardingRuntime/testFixtures.mjs";
-import { WELCOME_TEAM_ID } from "./welcomeGuide.ts";
+import { WELCOME_GUIDE_PERSONA_ID, WELCOME_TEAM_ID } from "./welcomeGuide.ts";
+import {
+  scoutSetupAcknowledgementBody,
+  scoutSetupAcknowledgementTag,
+} from "./channelOnboardingSetup.ts";
 
 function memoryStore(initial = null) {
   let value = initial ? clone(initial) : null;
@@ -150,6 +154,19 @@ function dependenciesFor(store, options = {}) {
       if (options.startRuntime)
         return options.startRuntime(pubkey, relay, owner);
       return runtimeStatus();
+    },
+    readScoutRuntime: async (pubkey, relay, channel) => {
+      if (options.readScoutRuntime)
+        return options.readScoutRuntime(pubkey, relay, channel);
+      return {
+        agent: {
+          pubkey,
+          relayUrl: relay,
+          teamId: WELCOME_TEAM_ID,
+          personaId: WELCOME_GUIDE_PERSONA_ID,
+        },
+        status: runtimeStatus(),
+      };
     },
     deliverAcknowledgement: async (input) => {
       acknowledgements.push(input);
@@ -319,6 +336,221 @@ test("a forged saved proof cannot restore ready or run a new runtime", async () 
   );
   assert.equal(f.starts.length, starts);
   assert.equal(f.acknowledgements.length, 1);
+});
+
+test("reload stays read-only while an explicit retry restarts a stopped Scout", async () => {
+  const store = memoryStore();
+  let live = null;
+  const f = dependenciesFor(store, {
+    submitOutcome: () => ({
+      status: "applied",
+      receiptEventId: "d".repeat(64),
+      headEventId: "e".repeat(64),
+      target: `30179:${relayPubkey}:profile`,
+    }),
+    readScoutRuntime: async () => live,
+    ensureTeam: () => ({
+      agents: [{ pubkey: scoutPubkey, teamId: WELCOME_TEAM_ID }],
+    }),
+    startRuntime: async (pubkey, relay, _owner) => {
+      live = {
+        agent: {
+          pubkey,
+          relayUrl: relay,
+          teamId: WELCOME_TEAM_ID,
+          personaId: WELCOME_GUIDE_PERSONA_ID,
+        },
+        status: runtimeStatus(),
+      };
+      return runtimeStatus();
+    },
+  });
+  live = {
+    agent: {
+      pubkey: scoutPubkey,
+      relayUrl,
+      teamId: WELCOME_TEAM_ID,
+      personaId: WELCOME_GUIDE_PERSONA_ID,
+    },
+    status: runtimeStatus(),
+  };
+  const runtime = createChannelOnboardingRuntime(scope, f.deps);
+  await runtime.approve(setupInput, approvalRequestId);
+  const completed = {
+    actions: f.actions.length,
+    submissions: f.submissions.length,
+    canvases: f.canvases.length,
+    teams: f.teams.length,
+    starts: f.starts.length,
+    acknowledgements: f.acknowledgements.length,
+    writes: store.writes.length,
+  };
+  live = null;
+  await assert.rejects(
+    runtime.reconcileSavedProof(setupInput),
+    /current Welcome runtime|no longer matches/,
+  );
+  assert.deepEqual(
+    {
+      actions: f.actions.length,
+      submissions: f.submissions.length,
+      canvases: f.canvases.length,
+      teams: f.teams.length,
+      starts: f.starts.length,
+      acknowledgements: f.acknowledgements.length,
+      writes: store.writes.length,
+    },
+    completed,
+  );
+
+  const proof = await runtime.approve(setupInput, approvalRequestId);
+  assert.equal(proof.proofId, store.get().proof.proofId);
+  assert.equal(f.actions.length, completed.actions);
+  assert.equal(f.submissions.length, completed.submissions);
+  assert.equal(f.acknowledgements.length, completed.acknowledgements);
+  assert.equal(f.starts.length, completed.starts + 1);
+  assert.equal(f.teams.length, completed.teams + 1);
+  assert.equal(f.canvases.length, completed.canvases + 1);
+  assert.equal(store.get().phase, "ready");
+});
+
+test("reload stays read-only while an explicit retry replaces a removed Scout", async () => {
+  const store = memoryStore();
+  const replacementSecret = new Uint8Array(32).fill(10);
+  const replacementPubkey = getPublicKey(replacementSecret);
+  let replacement = false;
+  let live = {
+    agent: {
+      pubkey: scoutPubkey,
+      relayUrl,
+      teamId: WELCOME_TEAM_ID,
+      personaId: WELCOME_GUIDE_PERSONA_ID,
+    },
+    status: runtimeStatus(),
+  };
+  const f = dependenciesFor(store, {
+    submitOutcome: () => ({
+      status: "applied",
+      receiptEventId: "d".repeat(64),
+      headEventId: "e".repeat(64),
+      target: `30179:${relayPubkey}:profile`,
+    }),
+    readScoutRuntime: async () => live,
+    ensureTeam: () => ({
+      agents: [
+        {
+          pubkey: replacement ? replacementPubkey : scoutPubkey,
+          teamId: WELCOME_TEAM_ID,
+        },
+      ],
+    }),
+    startRuntime: async (pubkey, relay, _owner) => {
+      const status = { ...runtimeStatus(), pubkey, relayUrl: relay };
+      live = {
+        agent: {
+          pubkey,
+          relayUrl: relay,
+          teamId: WELCOME_TEAM_ID,
+          personaId: WELCOME_GUIDE_PERSONA_ID,
+        },
+        status,
+      };
+      return status;
+    },
+    deliverAcknowledgement: async (input) => {
+      const acknowledgement =
+        input.scoutPubkey === scoutPubkey
+          ? signedAcknowledgement(input.input, input.requestId)
+          : finalizeEvent(
+              {
+                kind: 9,
+                content: scoutSetupAcknowledgementBody(input.input),
+                tags: [
+                  ["h", scope.channelId],
+                  ["p", replacementPubkey],
+                  ["e", rootEvent.id, "", "reply"],
+                  scoutSetupAcknowledgementTag(input.input, input.requestId),
+                ],
+                created_at: 1_700_000_200,
+              },
+              ownerSecret,
+            );
+      return {
+        eventId: acknowledgement.id,
+        signedEvent: JSON.stringify(acknowledgement),
+        published: true,
+      };
+    },
+    verifyScoutReply: async (input) => {
+      if (input.scoutPubkey === scoutPubkey) {
+        return successfulProof(input.acknowledgement.eventId, input.requestId);
+      }
+      const reply = finalizeEvent(
+        {
+          kind: 9,
+          content: "Replacement Scout confirms the approved context is ready.",
+          tags: [
+            ["h", scope.channelId],
+            ["e", rootEvent.id, "", "root"],
+            ["e", input.acknowledgement.eventId, "", "reply"],
+          ],
+          created_at: 1_700_000_400,
+        },
+        replacementSecret,
+      );
+      return {
+        proofId: `scout-setup:${input.acknowledgement.eventId}:${reply.id}`,
+        agentPubkey: replacementPubkey,
+        channelId: scope.channelId,
+        acknowledgementEventId: input.acknowledgement.eventId,
+        requestId: input.requestId,
+        replyEventId: reply.id,
+        signedReplyEvent: JSON.stringify(reply),
+        turnId: "replacement-turn-1",
+        recordIds: [reply.id],
+        savedAt: new Date(1_700_000_500_000).toISOString(),
+      };
+    },
+  });
+  const runtime = createChannelOnboardingRuntime(scope, f.deps);
+  await runtime.approve(setupInput, approvalRequestId);
+  const completed = {
+    actions: f.actions.length,
+    submissions: f.submissions.length,
+    acknowledgements: f.acknowledgements.length,
+    starts: f.starts.length,
+    teams: f.teams.length,
+    canvases: f.canvases.length,
+    writes: store.writes.length,
+    profileActionEventId: store.get().profileActionEventId,
+  };
+  live = null;
+  await assert.rejects(runtime.reconcileSavedProof(setupInput));
+  assert.deepEqual(
+    {
+      actions: f.actions.length,
+      submissions: f.submissions.length,
+      acknowledgements: f.acknowledgements.length,
+      starts: f.starts.length,
+      teams: f.teams.length,
+      canvases: f.canvases.length,
+      writes: store.writes.length,
+      profileActionEventId: store.get().profileActionEventId,
+    },
+    completed,
+  );
+
+  replacement = true;
+  const proof = await runtime.approve(setupInput, approvalRequestId);
+  assert.equal(proof.agentPubkey, replacementPubkey);
+  assert.equal(store.get().scoutPubkey, replacementPubkey);
+  assert.equal(f.actions.length, completed.actions);
+  assert.equal(f.submissions.length, completed.submissions);
+  assert.equal(f.acknowledgements.length, completed.acknowledgements + 1);
+  assert.equal(f.starts.length, completed.starts + 1);
+  assert.equal(f.teams.length, completed.teams + 1);
+  assert.equal(f.canvases.length, completed.canvases + 1);
+  assert.equal(store.get().phase, "ready");
 });
 
 test("multiple Welcome agents stop Scout setup before runtime or acknowledgement", async () => {

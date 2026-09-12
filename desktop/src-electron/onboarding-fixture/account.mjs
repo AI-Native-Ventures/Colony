@@ -173,6 +173,16 @@ export async function completeFixtureOnboarding({
   await expect(
     page.getByRole("button", { name: "Continue", exact: true }),
   ).toHaveCount(0);
+  assert.ok(
+    proxy.requests.some(
+      (request) =>
+        request.host === proxy.businessHost &&
+        request.method === "POST" &&
+        request.path === "/gateway/openai/v1/chat/completions" &&
+        request.status === 402,
+    ),
+    "Unfunded connection reaches the scoped gateway and receives HTTP 402",
+  );
   assert.equal(
     provider.receivedCallCount,
     0,

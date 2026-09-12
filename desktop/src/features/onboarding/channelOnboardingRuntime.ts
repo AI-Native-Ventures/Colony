@@ -9,7 +9,11 @@ import {
   type CompanyActionOutcome,
 } from "@/features/company/workRepository";
 import { ensureWelcomeCanvas } from "@/features/onboarding/welcomeCanvas";
-import { ensureWelcomeTeam } from "@/features/onboarding/welcomeGuide";
+import {
+  ensureWelcomeTeam,
+  WELCOME_GUIDE_PERSONA_ID,
+  WELCOME_TEAM_ID,
+} from "@/features/onboarding/welcomeGuide";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { getRelayWsUrl, signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
@@ -56,6 +60,10 @@ import {
 import { createScoutAcknowledgementDelivery } from "./channelOnboardingRuntime/acknowledgement";
 import { createScoutReplyVerifier } from "./channelOnboardingRuntime/reply";
 import {
+  defaultReadScoutRuntime,
+  type ScoutLiveRuntime,
+} from "./channelOnboardingRuntime/liveRuntime";
+import {
   createChannelOnboardingBrowserStore,
   SCOUT_ONBOARDING_ATTEMPT_SLOT,
   snapshotChannelOnboardingScope,
@@ -101,6 +109,8 @@ export type ScoutReplyVerificationInput = {
   acknowledgementEvent?: RelayEvent;
 };
 
+export type { ScoutLiveRuntime } from "./channelOnboardingRuntime/liveRuntime";
+
 export type ChannelOnboardingRuntimeDependencies = {
   /** Load the exact root from the active relay, including its signature. */
   loadOriginalRoot?: (
@@ -134,6 +144,12 @@ export type ChannelOnboardingRuntimeDependencies = {
     relayUrl: string,
     expectedOwnerPubkey: string,
   ) => Promise<ManagedAgentRuntimeStatus>;
+  /** Read the current managed Scout identity and runtime without starting it. */
+  readScoutRuntime?: (
+    scoutPubkey: string,
+    relayUrl: string,
+    welcomeChannelId: string,
+  ) => Promise<ScoutLiveRuntime | null>;
   deliverAcknowledgement?: (
     input: ScoutAcknowledgementInput,
   ) => Promise<ScoutAcknowledgementResult>;
@@ -302,6 +318,8 @@ export function createChannelOnboardingRuntime(
   const ensureCanvas = dependencies.ensureCanvas ?? ensureWelcomeCanvas;
   const ensureTeam = dependencies.ensureTeam ?? ensureWelcomeTeam;
   const startRuntime = dependencies.startRuntime ?? startManagedAgentRuntime;
+  const readScoutRuntime =
+    dependencies.readScoutRuntime ?? defaultReadScoutRuntime;
   const now = dependencies.now ?? Date.now;
   const readReceipt =
     dependencies.readCompanyActionReceipt ??
@@ -319,6 +337,102 @@ export function createChannelOnboardingRuntime(
     const result = await operation();
     await assertCurrent(scope);
     return result;
+  }
+
+  async function validateCurrentScoutRuntime(
+    attempt: ScoutOnboardingAttempt,
+  ): Promise<ScoutLiveRuntime> {
+    const scoutPubkey = attempt.scoutPubkey;
+    if (!scoutPubkey) {
+      throw new Error(
+        "The saved Scout setup has no Chief of Staff identity. No setup was started.",
+      );
+    }
+    const live = await current(() =>
+      readScoutRuntime(scoutPubkey, scope.relayUrl, attempt.welcomeChannelId),
+    );
+    if (!live) {
+      throw new Error(
+        "The saved Scout setup has no current Welcome runtime. Retry setup to reconcile it.",
+      );
+    }
+    const agent = live.agent;
+    if (
+      agent.pubkey.toLowerCase() !== scoutPubkey.toLowerCase() ||
+      agent.relayUrl !== scope.relayUrl ||
+      agent.teamId !== WELCOME_TEAM_ID ||
+      agent.personaId !== WELCOME_GUIDE_PERSONA_ID ||
+      !live.status.localSetup ||
+      !runtimeIsUsable(live.status, scoutPubkey, scope.relayUrl)
+    ) {
+      throw new Error(
+        "The saved Scout setup no longer matches the current Welcome runtime. Retry setup to reconcile it.",
+      );
+    }
+    return live;
+  }
+
+  function scoutRuntimeMatches(
+    live: ScoutLiveRuntime | null,
+    attempt: ScoutOnboardingAttempt,
+  ) {
+    const scoutPubkey = attempt.scoutPubkey;
+    if (!live || !scoutPubkey) return false;
+    return (
+      live.agent.pubkey.toLowerCase() === scoutPubkey.toLowerCase() &&
+      live.agent.relayUrl === scope.relayUrl &&
+      live.agent.teamId === WELCOME_TEAM_ID &&
+      live.agent.personaId === WELCOME_GUIDE_PERSONA_ID &&
+      live.status.localSetup === true &&
+      runtimeIsUsable(live.status, scoutPubkey, scope.relayUrl)
+    );
+  }
+
+  async function validateStoredReadyAttempt(
+    attempt: ScoutOnboardingAttempt,
+    input: ScoutSetupInput,
+  ): Promise<ScoutSetupProof> {
+    if (
+      !attempt.profileReceipt ||
+      !attempt.scoutPubkey ||
+      !attempt.runtimeStatus ||
+      !attempt.acknowledgement ||
+      !attempt.proof
+    ) {
+      throw new Error(
+        "The saved Scout setup is incomplete. No new setup was started.",
+      );
+    }
+    assertSavedProfileAction(attempt, scope, input);
+    assertProfileReceiptForAttempt(attempt.profileReceipt, attempt);
+    const receipt = await current(() =>
+      readReceipt(attempt.profileActionEventId, attempt.relayPubkey, scope),
+    );
+    if (!receipt) {
+      throw new Error(
+        "The saved company receipt could not be verified. Retry this setup to check the same update.",
+      );
+    }
+    assertProfileReceiptForAttempt(receipt, attempt);
+    await validateStoredAcknowledgement(attempt, input);
+    if (dependencies.validateProof) {
+      await dependencies.validateProof(
+        attempt.proof,
+        scope,
+        attempt.scoutPubkey,
+        attempt.acknowledgement.eventId,
+        attempt.approvalRequestId,
+      );
+    } else {
+      assertScoutSetupProof(
+        attempt.proof,
+        scope,
+        attempt.scoutPubkey,
+        attempt.acknowledgement.eventId,
+        attempt.approvalRequestId,
+      );
+    }
+    return clone(attempt.proof);
   }
 
   async function loadAndValidateRoot(input: ScoutSetupInput) {
@@ -418,42 +532,62 @@ export function createChannelOnboardingRuntime(
           assertAttemptMatches(attempt, scope, reviewed, root);
           assertSavedProfileAction(attempt, scope, reviewed);
           if (attempt.phase === "ready") {
-            if (
-              !attempt.profileReceipt ||
-              !attempt.scoutPubkey ||
-              !attempt.runtimeStatus ||
-              !attempt.acknowledgement ||
-              !attempt.proof ||
-              !runtimeIsUsable(
-                attempt.runtimeStatus,
-                attempt.scoutPubkey,
+            const readyAttempt = attempt;
+            const savedProof = await validateStoredReadyAttempt(
+              readyAttempt,
+              readyAttempt.input,
+            );
+            const live = await current(() =>
+              readScoutRuntime(
+                readyAttempt.scoutPubkey ?? "",
                 scope.relayUrl,
-              )
+                readyAttempt.welcomeChannelId,
+              ),
+            );
+            if (scoutRuntimeMatches(live, readyAttempt)) {
+              return savedProof;
+            }
+
+            // Reload reconciliation is deliberately read-only, but an owner
+            // pressing Retry has explicitly asked us to repair a stopped or
+            // replaced local Scout. Welcome provisioning is idempotent: it
+            // returns the existing Scout when possible and creates one only
+            // when the saved identity is gone.
+            await current(() => ensureCanvas(readyAttempt.welcomeChannelId));
+            const team = await current(() =>
+              ensureTeam(readyAttempt.welcomeChannelId, scope.relayUrl),
+            );
+            const scout = teamScout(team);
+            if (
+              scout.pubkey.toLowerCase() ===
+              readyAttempt.scoutPubkey?.toLowerCase()
             ) {
-              throw new Error(
-                "The saved Scout setup is incomplete. No new setup was started.",
+              const runtimeStatus = await current(() =>
+                startRuntime(scout.pubkey, scope.relayUrl, scope.ownerPubkey),
               );
+              if (
+                !runtimeIsUsable(runtimeStatus, scout.pubkey, scope.relayUrl)
+              ) {
+                throw new Error(
+                  runtimeStatus.error ??
+                    "Scout could not restart its real runtime.",
+                );
+              }
+              readyAttempt.runtimeStatus = runtimeStatus;
+              store.write(scope, readyAttempt);
+              return savedProof;
             }
-            assertProfileReceiptForAttempt(attempt.profileReceipt, attempt);
-            await validateStoredAcknowledgement(attempt, attempt.input);
-            if (dependencies.validateProof) {
-              await dependencies.validateProof(
-                attempt.proof,
-                scope,
-                attempt.scoutPubkey,
-                attempt.acknowledgement.eventId,
-                attempt.approvalRequestId,
-              );
-            } else {
-              assertScoutSetupProof(
-                attempt.proof,
-                scope,
-                attempt.scoutPubkey,
-                attempt.acknowledgement.eventId,
-                attempt.approvalRequestId,
-              );
-            }
-            return clone(attempt.proof);
+
+            // A replacement Scout cannot use the old owner acknowledgment or
+            // reply proof because both are addressed to the previous key.
+            // Keep the applied company receipt and exact signed action, then
+            // continue through the normal runtime/acknowledgment path below.
+            readyAttempt.scoutPubkey = scout.pubkey;
+            readyAttempt.runtimeStatus = null;
+            readyAttempt.acknowledgement = null;
+            readyAttempt.proof = null;
+            readyAttempt.phase = "team-ready";
+            store.write(scope, readyAttempt);
           }
         } else if (attempt.phase !== "ready") {
           throw new Error(
@@ -784,17 +918,13 @@ export function createChannelOnboardingRuntime(
         !attempt.scoutPubkey ||
         !attempt.runtimeStatus ||
         !attempt.acknowledgement ||
-        !attempt.proof ||
-        !runtimeIsUsable(
-          attempt.runtimeStatus,
-          attempt.scoutPubkey,
-          scope.relayUrl,
-        )
+        !attempt.proof
       ) {
         throw new Error(
           "The saved Scout setup is incomplete. Retry the same request.",
         );
       }
+      await validateCurrentScoutRuntime(attempt);
       assertSavedProfileAction(attempt, scope, reviewed);
       assertProfileReceiptForAttempt(attempt.profileReceipt, attempt);
       const receipt = await readReceipt(

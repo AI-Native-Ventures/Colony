@@ -3,6 +3,7 @@ import { hexToBytes } from "@noble/hashes/utils.js";
 import { finalizeEvent, verifyEvent } from "nostr-tools/pure";
 
 import type { RelayEvent } from "../../src/shared/api/types";
+import { KIND_READ_STATE } from "../../src/shared/constants/kinds";
 import {
   createScoutOnboardingRootPayload,
   parseScoutOnboardingRoot,
@@ -25,6 +26,10 @@ type Route = "new" | "existing" | "deciding";
 
 type FixtureWindow = Window & {
   __BUZZ_E2E_COMMANDS__?: string[];
+  __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
+    command: string;
+    payload: unknown;
+  }>;
   __BUZZ_E2E_EMIT_MOCK_EVENT__?: (input: {
     channelName: string;
     event: RelayEvent;
@@ -78,8 +83,22 @@ const SETUP_MUTATION_COMMANDS = new Set([
   "update_company_profile",
 ]);
 
-function setupMutationCommands(commands: readonly string[]) {
-  return commands.filter((command) => SETUP_MUTATION_COMMANDS.has(command));
+type LoggedCommand = {
+  command: string;
+  payload: unknown;
+};
+
+function isReadStateSigning(command: LoggedCommand) {
+  if (command.command !== "sign_event") return false;
+  if (!command.payload || typeof command.payload !== "object") return false;
+  return (command.payload as { kind?: unknown }).kind === KIND_READ_STATE;
+}
+
+function setupMutationCommands(commands: readonly LoggedCommand[]) {
+  return commands
+    .filter((command) => !isReadStateSigning(command))
+    .map((command) => command.command)
+    .filter((command) => SETUP_MUTATION_COMMANDS.has(command));
 }
 
 function signedRoot(
@@ -114,7 +133,7 @@ function scoutSurface(page: Page) {
 
 async function commandLog(page: Page) {
   return page.evaluate(() => [
-    ...((window as FixtureWindow).__BUZZ_E2E_COMMANDS__ ?? []),
+    ...((window as FixtureWindow).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []),
   ]);
 }
 
