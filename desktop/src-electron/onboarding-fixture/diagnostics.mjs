@@ -43,6 +43,92 @@ export async function readRenderedCompany(page, moduleUrls = []) {
     .catch((error) => ({ unavailable: error.name }));
 }
 
+/**
+ * Read the exact production Task lookup once after Start fails. This is
+ * failure evidence only: it does not retry, accept a receipt as a Task, or
+ * export the parsed record. The bounded result distinguishes a repository
+ * miss/parse failure from a task that became visible after the action.
+ */
+export async function readRenderedTask(page, taskId, moduleUrls = []) {
+  if (typeof taskId !== "string" || taskId.length === 0)
+    return { unavailable: "task-id-not-retained" };
+  return page
+    .evaluate(async ({ moduleUrls, taskId }) => {
+      const candidates = [
+        ...moduleUrls,
+        ...performance
+          .getEntriesByType("resource")
+          .map((entry) => entry.name)
+          .filter((name) =>
+            /^colony:\/\/app\/assets\/(?:workRepository|companyRepository)-[^/]+\.js$/.test(
+              name,
+            ),
+          ),
+      ];
+      const safeMessage = (reason) =>
+        Array.from(String(reason), (char) =>
+          char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? " " : char,
+        )
+          .join("")
+          .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[redacted-url]")
+          .replace(/\b(?:nsec1|npub1)[a-z0-9]+\b/gi, "[redacted-key]")
+          .replace(/\b[a-f0-9]{64,}\b/gi, "[redacted-key]")
+          .replace(
+            /["']?\b(?:password|(?:access[_-]|refresh[_-])?token|(?:client[_-])?secret|api[_-]?key)["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi,
+            "[redacted-credential]",
+          )
+          .replace(/\b(?:Bearer|Basic)\s+\S+/gi, "[redacted-credential]")
+          .replace(/\s+/g, " ")
+          .slice(0, 500);
+      for (const name of new Set(candidates)) {
+        let module;
+        try {
+          module = await import(name);
+        } catch {
+          continue;
+        }
+        const repository = Object.values(module).find(
+          (value) =>
+            value &&
+            typeof value.getActiveCompany === "function" &&
+            typeof value.getTask === "function",
+        );
+        if (!repository) continue;
+        let read;
+        try {
+          read = repository.getTask(taskId);
+        } catch (error) {
+          return {
+            unavailable: "getTask-throw",
+            message: safeMessage(error?.message ?? error),
+          };
+        }
+        const result = await Promise.race([
+          read,
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ unavailable: "getTask-timeout" }), 5_000),
+          ),
+        ]);
+        if (result?.unavailable) return result;
+        if (result?.ok === true)
+          return {
+            ok: true,
+            taskId: result.value?.id ?? null,
+            status: result.value?.status ?? null,
+          };
+        if (result?.ok === false)
+          return {
+            ok: false,
+            code: result.code,
+            message: safeMessage(result.message),
+          };
+        return { unavailable: "getTask-shape" };
+      }
+      return { unavailable: "Loaded repository export not found" };
+    }, { moduleUrls, taskId })
+    .catch((error) => ({ unavailable: error.name }));
+}
+
 /** Read only public attempt references from this exact owner/business/root slot. */
 export async function readPendingAttempt(page, account) {
   const tuple = [

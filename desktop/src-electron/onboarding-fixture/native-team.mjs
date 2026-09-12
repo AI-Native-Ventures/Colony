@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { verifyEvent } from "nostr-tools/pure";
 import { readCurrentFixtureTask } from "./task-head.mjs";
-import { wireEvent } from "./failure-diagnostics.mjs";
+import { redactReason, wireEvent } from "./failure-diagnostics.mjs";
 
 export function verifySigned(event, kind, author) {
   assert.equal(event.kind, kind);
@@ -172,13 +172,62 @@ export function nativeProofReader({
       channelId: account.channelId,
       rootId: account.rootEventId,
     });
+  const taskHeadEvidence = async () => {
+    let candidates = [];
+    try {
+      const heads = await events(30181);
+      let current;
+      try {
+        current = readCurrentFixtureTask(
+          heads,
+          {
+            relayPubkey,
+            channelId: account.channelId,
+            rootId: account.rootEventId,
+          },
+          (value) => {
+            candidates = value;
+          },
+        );
+      } catch (error) {
+        return {
+          current: null,
+          candidates,
+          validationError: redactReason(
+            error instanceof Error ? error.message : String(error),
+          ),
+        };
+      }
+      return {
+        current:
+          candidates.find(
+            (candidate) =>
+              candidate.taskId === current.id &&
+              candidate.channelId === account.channelId &&
+              candidate.rootId === account.rootEventId,
+          ) ?? null,
+        candidates,
+      };
+    } catch (error) {
+      return {
+        current: null,
+        candidates,
+        unavailable: redactReason(
+          error instanceof Error ? error.message : String(error),
+        ),
+      };
+    }
+  };
   const failureEvidence = async () =>
-    taskFailureEvidence({
-      account,
-      relayPubkey,
-      actions: await events(40013),
-      receipts: await events(40014),
-      teams: await events(30176),
+    ({
+      ...taskFailureEvidence({
+        account,
+        relayPubkey,
+        actions: await events(40013),
+        receipts: await events(40014),
+        teams: await events(30176),
+      }),
+      taskHeads: await taskHeadEvidence(),
     });
   async function readTeam() {
     const approvals = await replies("colony:first-job-team-approval:v1");
