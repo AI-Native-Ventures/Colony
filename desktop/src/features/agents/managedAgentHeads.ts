@@ -238,6 +238,15 @@ export function resolveManagedAgentRank(
       // agent to executive the moment Colony's Chief of Staff is seeded, and
       // draws two chiefs of staff with no indication which one the relay
       // obeys.
+      //
+      // SAME ROLE ONLY, deliberately. Colony seeds an executive into every
+      // workspace, so a rule of the form "a provisioned employee outranks
+      // any other executive" silently reassigns every workspace's chart and
+      // its escalation routing. The relay learned that the hard way in
+      // #757: it promoted an ask to the provisioned Chief of Staff in a
+      // workspace whose own executive held a different office entirely. A
+      // workspace's own executive keeps its office; Colony takes over only
+      // the office it provides.
       const heldByColony =
         employee.provisioned != null &&
         employee.provisioned !== "" &&
@@ -252,27 +261,6 @@ export function resolveManagedAgentRank(
     }
   }
   return head.tierRank ?? rankImpliedByRole(head.roleId);
-}
-
-/**
- * Whether this agent is the one the relay routes escalations to.
- *
- * Mirrors `find_unique_executive` after relay 0.11.15: the payroll answers
- * first, and a provisioned employee holding the role wins outright. The chart
- * uses this to say which of two executives is the one in the chair, because
- * two records disagreeing with no visible answer is the shape that made this
- * confusing in the first place.
- */
-export function holdsTheExecutiveOffice(
-  pubkey: string,
-  employeesByRole: ReadonlyMap<
-    string,
-    { rank: AgentRank; pubkey?: string; provisioned?: string | null }
-  >,
-): boolean {
-  const holder = employeesByRole.get("chief-of-staff");
-  if (!holder?.pubkey) return false;
-  return normalizePubkey(holder.pubkey) === normalizePubkey(pubkey);
 }
 
 /**

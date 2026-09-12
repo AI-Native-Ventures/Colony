@@ -3,7 +3,6 @@ import { test } from "node:test";
 
 import {
   buildRankedHeadContent,
-  holdsTheExecutiveOffice,
   newestOwnerAuthoredHeadEvent,
   parseManagedAgentHead,
   rankedHeadTags,
@@ -465,14 +464,3 @@ test("a role held by a workspace's own hire behaves exactly as before", () => {
   );
 });
 
-test("the chart can say which agent holds the office", () => {
-  assert.equal(holdsTheExecutiveOffice(COLONY_CHIEF, heldByColony), true);
-  assert.equal(holdsTheExecutiveOffice(OTHER_AGENT, heldByColony), false);
-  // Upper case in, same answer: pubkeys are compared normalized.
-  assert.equal(
-    holdsTheExecutiveOffice(COLONY_CHIEF.toUpperCase(), heldByColony),
-    true,
-  );
-  // Nobody holds it when no employee fills the role.
-  assert.equal(holdsTheExecutiveOffice(COLONY_CHIEF, new Map()), false);
-});
