@@ -13,8 +13,14 @@
 #   --profile <profile>   Cargo build profile (default: ci)
 #   --no-build            Use existing target/<profile>/ binaries (CI artifact reuse)
 #
-# Exports:
-#   RELAY_URL=ws://localhost:3000
+# Optional environment:
+#   TEST_RELAY_ORIGIN=ws://localhost:3000
+#   TEST_RELAY_HOST=localhost:3000
+#
+# `TEST_RELAY_ORIGIN` and `TEST_RELAY_HOST` are used by the dedicated
+# tenant-shaped Website proof. They leave the ordinary localhost suite at its
+# existing defaults while allowing that proof to exercise the relay's HTTPS
+# origin and host-bound community lookup against the same local services.
 # =============================================================================
 set -euo pipefail
 
@@ -38,6 +44,24 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CARGO_PROFILE="${CARGO_PROFILE:-ci}"
 SKIP_BUILD=false
+TEST_RELAY_ORIGIN="${TEST_RELAY_ORIGIN:-ws://localhost:3000}"
+TEST_RELAY_HOST="${TEST_RELAY_HOST:-localhost:3000}"
+
+case "${TEST_RELAY_ORIGIN}" in
+  ws://*|wss://*) ;;
+  *)
+    echo "TEST_RELAY_ORIGIN must use ws:// or wss://" >&2
+    exit 1
+    ;;
+esac
+if [[ ! "${TEST_RELAY_HOST}" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "TEST_RELAY_HOST must be a DNS host with an optional port" >&2
+  exit 1
+fi
+if [[ "${TEST_RELAY_ORIGIN}" != "ws://${TEST_RELAY_HOST}" && "${TEST_RELAY_ORIGIN}" != "wss://${TEST_RELAY_HOST}" ]]; then
+  echo "TEST_RELAY_ORIGIN authority must match TEST_RELAY_HOST" >&2
+  exit 1
+fi
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 
@@ -130,25 +154,26 @@ ok "Schema applied"
 # ── Seed the deployment community ────────────────────────────────────────────
 # Multi-tenant: the relay resolves every connection's tenant from the durable
 # communities host map (WHERE host = normalize_host($1)). normalize_host keeps
-# non-default ports, so the host must be 'localhost:3000' verbatim to match
-# RELAY_URL=ws://localhost:3000. The relay never auto-seeds a community
-# (ensure_configured_community has no callers) and fails closed on an unmapped
-# host, so without this row every e2e connection would 404 at host-binding.
+# non-default ports, so the host must match TEST_RELAY_HOST verbatim. The relay
+# Relay startup also reconciles its deployment community, but this seed runs
+# first so startup catalog/reconciliation observes the intended tenant. The
+# relay still fails closed on an unmapped host, so without this row every e2e
+# connection would 404 at host-binding.
 # The unique index is on lower(host), so ON CONFLICT must target that expression.
 # psql is not on PATH in the hermit env; postgres runs as the buzz-postgres
 # docker container, so exec into it (same fallback as setup-desktop-test-data.sh).
-log "Seeding deployment community (host=localhost:3000)..."
+log "Seeding deployment community (host=${TEST_RELAY_HOST})..."
 if command -v psql >/dev/null 2>&1; then
   seed_psql() { PGPASSWORD="${PGPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${PGDATABASE}" -qtA "$@"; }
 else
-  seed_psql() { docker exec -e PGPASSWORD="${PGPASSWORD}" buzz-postgres psql -U "${PGUSER}" -d "${PGDATABASE}" -qtA "$@"; }
+  seed_psql() { docker exec -i -e PGPASSWORD="${PGPASSWORD}" buzz-postgres psql -U "${PGUSER}" -d "${PGDATABASE}" -qtA "$@"; }
 fi
-seed_psql -c "
+seed_psql -v ON_ERROR_STOP=1 -v "test_relay_host=${TEST_RELAY_HOST}" <<'SQL'
 INSERT INTO communities (id, host)
-VALUES ('00000000-0000-4000-8000-00000000c0de', 'localhost:3000')
+VALUES ('00000000-0000-4000-8000-00000000c0de', :'test_relay_host')
 ON CONFLICT (lower(host)) DO NOTHING
 ;
-"
+SQL
 ok "Community seeded"
 
 # ── Build relay ──────────────────────────────────────────────────────────────
@@ -173,7 +198,7 @@ log "Starting relay..."
 nohup env \
   DATABASE_URL=postgres://buzz:buzz_dev@localhost:5432/buzz \
   REDIS_URL=redis://localhost:6379 \
-  RELAY_URL=ws://localhost:3000 \
+  RELAY_URL="${TEST_RELAY_ORIGIN}" \
   BUZZ_BIND_ADDR=0.0.0.0:3000 \
   BUZZ_REQUIRE_AUTH_TOKEN=false \
   BUZZ_RECONCILE_CHANNELS=true \
@@ -191,10 +216,11 @@ for attempt in $(seq 1 60); do
     cat /tmp/buzz-relay.log
     exit 1
   fi
-  status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/_readiness || true)
+  status_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Host: ${TEST_RELAY_HOST}" http://127.0.0.1:3000/_readiness || true)
   if [ "${status_code}" = "200" ]; then
-    ok "Relay is ready at ws://localhost:3000"
-    export RELAY_URL=ws://localhost:3000
+    ok "Relay is ready at ${TEST_RELAY_ORIGIN}"
+    export RELAY_URL="${TEST_RELAY_ORIGIN}"
     exit 0
   fi
   sleep 1

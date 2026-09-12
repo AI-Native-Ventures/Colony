@@ -1423,6 +1423,72 @@ jobs:
           path: /tmp/buzz-relay.log
           if-no-files-found: ignore
 
+  website-private-e2e:
+    name: Website Private Blossom E2E
+    runs-on: ubuntu-latest
+    # This job compiles the feature-gated e2e_website target on its own
+    # runner. Keep the relay-suite work bounded while leaving room for a cold
+    # buzz-test-client dependency build before the lifecycle starts.
+    timeout-minutes: 30
+    needs: [changes, desktop-e2e-relay]
+    if: >
+      (needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
+      needs.changes.outputs.raw-integration-services == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      # Reuse the relay binary built by Desktop E2E Relay. The existing
+      # Postgres, Redis and MinIO services remain local to this job; only the
+      # configured relay origin and host map differ from the ordinary ws test.
+      - name: Download relay binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-e2e-relay
+          path: target/ci
+      - name: Start HTTPS-shaped tenant relay
+        run: |
+          chmod +x ./target/ci/buzz-relay ./target/ci/git-credential-nostr
+          ./scripts/start-relay-for-tests.sh --no-build
+        env:
+          # The listener is local HTTP for the runner, while RELAY_URL is the
+          # WSS origin whose host is mapped to the pre-seeded tenant. Website
+          # artifacts therefore retain their public-shaped HTTPS descriptors.
+          TEST_RELAY_ORIGIN: wss://website-owner.example.com
+          TEST_RELAY_HOST: website-owner.example.com
+          BUZZ_TEST_RELAY_PRIVATE_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+          BUZZ_REQUIRE_RELAY_MEMBERSHIP: "true"
+          RELAY_OWNER_PUBKEY: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+          BUZZ_EMPLOYEE_KEK: "0000000000000000000000000000000000000000000000000000000000000001"
+          BUZZ_RATE_LIMIT_AGENT_STANDARD_API_CALLS_PER_MIN: "100000"
+          BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN: "100000"
+          BUZZ_RATE_LIMIT_HUMAN_API_CALLS_PER_MIN: "100000"
+          BUZZ_RATE_LIMIT_HUMAN_MESSAGES_PER_MIN: "100000"
+          BUZZ_RATE_LIMIT_HUMAN_WS_EVENTS_PER_SEC: "10000"
+      - name: Website private Blossom lifecycle
+        run: >
+          cargo test -p buzz-test-client --features private-website-proof
+          --test e2e_website
+          e2e_website_private::private_blossom_website_lifecycle_is_tenant_scoped
+          -- --ignored --exact --nocapture --test-threads 1
+        env:
+          RELAY_URL: wss://website-owner.example.com
+          RELAY_HTTP_URL: http://127.0.0.1:3000
+          WEBSITE_RELAY_HTTP_URL: http://127.0.0.1:3000
+          WEBSITE_TENANT_HOST: website-owner.example.com
+          WEBSITE_FOREIGN_TENANT_HOST: website-foreign.example.com
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Upload private relay log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: website-private-e2e-artifacts
+          path: /tmp/buzz-relay.log
+          if-no-files-found: ignore
+
   agent-ask-e2e:
     name: Agent Ask E2E
     runs-on: ubuntu-latest
@@ -1484,10 +1550,10 @@ jobs:
     name: Relay Suites
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, backend-integration, relay-e2e, agent-ask-e2e]
+    needs: [changes, backend-integration, relay-e2e, website-private-e2e, agent-ask-e2e]
     # `always()` so this still reports when a dependency fails or is skipped;
     # without it the job is skipped along with them and reports nothing, which
-    # is the state this exists to end. The path condition matches the three
+    # is the state this exists to end. The path condition matches the four
     # upstream jobs exactly, so a PR that touches no Rust skips this too and the
     # required check is satisfied by the skip.
     if: >
@@ -1497,9 +1563,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      # One stable check name standing in for three long jobs.
+      # One stable check name standing in for four long jobs.
       #
-      # `Backend Integration`, `relay-e2e`, and `agent-ask-e2e` run the
+      # `Backend Integration`, `relay-e2e`, `website-private-e2e`, and
+      # `agent-ask-e2e` run the
       # Postgres-gated relay suites -- `interrupt_gate`, `interrupt_runtime`,
       # `e2e_interrupts`, the live ACP ask-answer path, the workflow
       # owner-routing tests and the write-path guard. None of those jobs is a
@@ -1512,7 +1579,7 @@ jobs:
       # rule that stops agents interrupting a human was one working queue away
       # from landing with its own tests failing.
       #
-      # Requiring the three jobs directly would add three names to the ruleset.
+      # Requiring the four jobs directly would add four names to the ruleset.
       # This adds one cheap stable name instead -- the same reasoning that keeps
       # `Server Cross-Compile` (a varying matrix) out of the required set.
       - name: Check relay suites
@@ -1526,6 +1593,11 @@ jobs:
           if [ "${{ needs.relay-e2e.result }}" != "success" ]; then
             echo "Relay E2E finished with: ${{ needs.relay-e2e.result }}"
             echo "e2e_interrupts runs there and did not pass."
+            exit 1
+          fi
+          if [ "${{ needs.website-private-e2e.result }}" != "success" ]; then
+            echo "Website Private Blossom E2E finished with: ${{ needs.website-private-e2e.result }}"
+            echo "The tenant-scoped Website artifact lifecycle did not pass."
             exit 1
           fi
           if [ "${{ needs.agent-ask-e2e.result }}" != "success" ]; then

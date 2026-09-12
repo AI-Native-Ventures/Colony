@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Integration test client and E2E test suite for Buzz"
 
+[features]
+private-website-proof = []
+
 [dependencies]
 anyhow = { workspace = true }
 buzz-core = { workspace = true }

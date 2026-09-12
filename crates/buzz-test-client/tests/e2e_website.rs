@@ -15,6 +15,17 @@
 //! cargo test -p buzz-test-client --test e2e_website -- --ignored --nocapture --test-threads 1
 //! ```
 //!
+//! The tenant-scoped private Blossom case is feature-gated and runs in the
+//! dedicated GitHub job after its relay has been seeded with an HTTPS-shaped
+//! tenant host:
+//!
+//! ```text
+//! cargo test -p buzz-test-client --features private-website-proof \
+//!   --test e2e_website \
+//!   e2e_website_private::private_blossom_website_lifecycle_is_tenant_scoped \
+//!   -- --ignored --exact --nocapture --test-threads 1
+//! ```
+//!
 //! Artifact bytes are fetched by the broker from public HTTPS URLs, and the
 //! local relay's bounded fetcher rejects localhost and private addresses. The
 //! lifecycle case uses immutable public fixture URLs so real ingest and
@@ -1331,8 +1342,22 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         "exact Block replay is accepted: {}",
         replay.message
     );
+    const DUPLICATE_PREFIX: &str = "duplicate: ";
+    assert!(
+        replay.message.starts_with(DUPLICATE_PREFIX),
+        "exact Block replay must carry the idempotent duplicate discriminator: {}",
+        replay.message
+    );
+    let replay_body = replay
+        .message
+        .strip_prefix(DUPLICATE_PREFIX)
+        .expect("duplicate prefix was asserted above");
     let replay_message: serde_json::Value =
-        serde_json::from_str(&replay.message).expect("replay result JSON");
+        serde_json::from_str(replay_body).unwrap_or_else(|error| {
+            panic!(
+                "replay result JSON after duplicate prefix: {error}; body={replay_body}"
+            )
+        });
     assert_eq!(
         replay_message["action_event_id"].as_str(),
         Some(request_changes.event_id.as_str()),
@@ -1543,3 +1568,7 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         fixture.coordinator.public_key().to_hex()
     );
 }
+
+#[cfg(feature = "private-website-proof")]
+#[path = "e2e_website/private/mod.rs"]
+mod e2e_website_private;
