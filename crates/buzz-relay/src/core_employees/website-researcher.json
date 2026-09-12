@@ -3,7 +3,7 @@
   "handle": "website-researcher",
   "version": 1,
   "display_name": "Ren",
-  "role_id": "website-research",
+  "role_id": "website-researcher",
   "rank": "worker",
   "harness": "claude",
   "model": null,

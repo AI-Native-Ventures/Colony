@@ -59,18 +59,20 @@ pub const REN_PERSONA_ID: &str = "website-manager-ren";
 pub const JULES_PERSONA_ID: &str = "website-manager-jules";
 pub const VERA_PERSONA_ID: &str = "website-manager-vera";
 
-/// The provisioned handles the relay bundles for this pack: the four agent
-/// identities plus the recipe id itself.
+/// The provisioned handles the relay bundles for this pack, spelled exactly as
+/// `crates/buzz-relay/src/core_employees/*.json` spells them. A handle is not a
+/// persona id and not a role slug: the bundle picks its own, and skills land
+/// for an adopted employee only when this list matches it, so a drift here is
+/// silent and leaves three of the four agents with no runbooks.
 ///
 /// Matched exactly, never by prefix. The relay names each bundled employee
 /// after one of this pack's own identifiers, so a future pack whose name
 /// merely starts with the same prefix can never inherit these runbooks.
 pub const PROVISIONED_HANDLES: &[&str] = &[
     RECIPE_ID,
-    AVERY_PERSONA_ID,
-    REN_PERSONA_ID,
-    JULES_PERSONA_ID,
-    VERA_PERSONA_ID,
+    "website-researcher",
+    "website-designer-builder",
+    "website-reviewer",
 ];
 
 /// Whether a provisioned handle names an employee this pack provides.

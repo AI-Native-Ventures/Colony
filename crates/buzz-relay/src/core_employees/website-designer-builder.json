@@ -3,7 +3,7 @@
   "handle": "website-designer-builder",
   "version": 1,
   "display_name": "Jules",
-  "role_id": "designer-builder",
+  "role_id": "website-designer-builder",
   "rank": "worker",
   "harness": "claude",
   "model": null,

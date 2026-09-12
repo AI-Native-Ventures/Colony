@@ -3,7 +3,7 @@
   "handle": "website-reviewer",
   "version": 1,
   "display_name": "Vera",
-  "role_id": "independent-reviewer",
+  "role_id": "website-reviewer",
   "rank": "worker",
   "harness": "claude",
   "model": null,
