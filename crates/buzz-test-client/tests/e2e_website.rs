@@ -854,7 +854,7 @@ fn block_decision_event(
     .expect("website Block decision builds against the trusted manifest")
     .builder
     .sign_with_keys(owner)
-    .expect("website Block decision signs");
+    .expect("website Block decision signs")
 }
 
 async fn send_block_decision(
