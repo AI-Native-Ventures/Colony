@@ -1242,7 +1242,11 @@ test("mocked community switch clears pending website state", async ({
   );
   await installMockBridge(
     page,
-    { relaySelf: OWNER_PUBKEY, ...mockWebsiteTeam() },
+    {
+      activeIdentityInDefaultChannels: true,
+      relaySelf: OWNER_PUBKEY,
+      ...mockWebsiteTeam(),
+    },
     { skipCommunitySeed: true },
   );
   await page.goto("/");
