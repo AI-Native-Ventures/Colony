@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- chore(desktop): the menu-bar icon is Colony's ant, and the native layer calls the product Colony where you can read it.
+
 ## relay-v0.11.12
 
 - feat(relay): Colony now provisions employees. A bundled registry seeds one employee per workspace at startup and at provisioning, with its own sealed key, and the relay refuses every attempt to archive, retire, rank, rename or re-prompt it, so an employee we provide cannot be edited or deleted by anyone but us.

@@ -5531,7 +5531,7 @@ function mockWorkspaceFile(path: string) {
   const file = MOCK_WORKSPACE_FILES[relative];
   if (!file) {
     throw new Error(
-      `${path} is not a file in the Buzz workspace or your repos folder`,
+      `${path} is not a file in the Colony workspace or your repos folder`,
     );
   }
   return { ...file, path: `${MOCK_WORKSPACE_ROOT}/${relative}`, relative };

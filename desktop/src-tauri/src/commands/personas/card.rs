@@ -344,7 +344,7 @@ pub(crate) fn build_card_instructions(
         )
     };
     format!(
-        r#"You are designing one premium collectible trading card for the Buzz agent "{agent_name}".
+        r#"You are designing one premium collectible trading card for the Colony agent "{agent_name}".
 
 Input image 1 is the official Buzz card frame template (gold honeycomb border, dark interior, name banner top, hex badge top-right, text box lower third). Input image 2 is the agent's avatar — study its exact art style: medium, pixel grid if any, palette, shading, background motifs.
 
