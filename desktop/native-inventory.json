@@ -1,7 +1,7 @@
 {
   "files": {
-    "rust_total": 523,
-    "tauri_coupled": 212,
+    "rust_total": 524,
+    "tauri_coupled": 213,
     "portable": 311,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
@@ -173,6 +173,7 @@
       "src-tauri/src/managed_agents/runtime/provisioned.rs",
       "src-tauri/src/managed_agents/runtime/record_state.rs",
       "src-tauri/src/managed_agents/runtime/stop.rs",
+      "src-tauri/src/managed_agents/runtime/summary.rs",
       "src-tauri/src/managed_agents/runtime_commands.rs",
       "src-tauri/src/managed_agents/runtime_commands/start.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
@@ -1176,7 +1177,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriSubscriptionConnections.ts:48"
+        "src/shared/api/tauriSubscriptionConnections.ts:65"
       ]
     },
     "copy_image_to_clipboard": {
@@ -2392,7 +2393,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriSubscriptionConnections.ts:38"
+        "src/shared/api/tauriSubscriptionConnections.ts:55"
       ]
     },
     "get_task_artifact_event": {
@@ -2575,7 +2576,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriSubscriptionConnections.ts:57"
+        "src/shared/api/tauriSubscriptionConnections.ts:74"
       ]
     },
     "install_website_team": {
@@ -3671,7 +3672,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/agents/ui/AgentConfigFields.tsx:191",
+        "src/features/agents/ui/AgentConfigFields.tsx:192",
         "src/features/agents/ui/OpenRouterConnectField.tsx:8",
         "src/features/agents/ui/OpenRouterConnectField.tsx:71"
       ]

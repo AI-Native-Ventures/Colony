@@ -437,11 +437,14 @@ uncaught exceptions, unhandled rejections, renderer/child-process loss, and a
 120-second watchdog. A hung or crashed run therefore leaves the last completed
 phase and an error record on disk instead of an empty file.
 
-The workflow now fails the job whenever `proof.json` reports
-`complete: false` or any check with `ok: true` missing, in addition to
-rejecting a `failed` clip result; an `unavailable` clip result is reported but
-is not treated as proof. The report step prints the raw JSON before its
-assertions.
+The workflow now fails the job unless `proof.json` has the expected schema,
+`complete: true`, a non-empty exact set of the 16 checks above with every
+`ok: true`, and both desktop/mobile geometry records with their canonical CSS
+widths plus fitted dimensions and height tolerances. The report gate also
+requires a clip status of `proven` or `unavailable` with diagnostic detail;
+`unavailable` is reported as unproven and remains allowed when the OS withholds
+screen capture, while `failed` rejects the run. The report step prints the raw
+JSON and a check-name/missing-check summary before its assertions.
 
 This is host-fixture proof. It does not prove packaged Colony adoption, the
 production artifact loader against a real CDN, relay review integration, or
@@ -468,8 +471,9 @@ Exact limits of the current evidence:
 1. The native clipping pixel proof has not run; `"hide"` remains the
    production default and `"clip"` is not adopted. `desktopCapturer` may be
    unavailable on a CI runner; that is recorded as `unavailable`, not proof.
-   The workflow rejects `complete: false`, any failed check, and a `failed`
-   clip result, while an `unavailable` clip result does not fail the job.
+   The workflow rejects incomplete or malformed reports, missing or unexpected
+   check names, failed checks, incomplete geometry, and a `failed` clip result,
+   while an `unavailable` clip result with diagnostics does not fail the job.
 2. Second-page CSP behavior is proven by source tests and by the fixture proof
    only. Real generated sites with unusual inline constructs (template-literal
    scripts containing `</script>` text, attribute values we decode

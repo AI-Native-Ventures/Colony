@@ -72,6 +72,28 @@ const results = {
   notes: [],
 };
 
+// Keep the native proof from completing when a phase accidentally stops
+// recording a check. The workflow repeats this contract against proof.json so
+// a report serialization regression cannot turn a partial run into a pass.
+const REQUIRED_CHECK_NAMES = Object.freeze([
+  "geometry.desktopCssViewport",
+  "geometry.desktopMediaQuery",
+  "interaction.inlineScript",
+  "interaction.inlineHandler",
+  "interaction.secondPageNavigation",
+  "interaction.secondPageInlineScript",
+  "interaction.secondPageInlineHandler",
+  "geometry.mobileCssViewport",
+  "geometry.mobileMediaQuery",
+  "denial.externalNavigation",
+  "denial.popup",
+  "denial.permission",
+  "denial.network",
+  "isolation.crossEntryNavigation",
+  "isolation.distinctPartitions",
+  "lifecycle.closed",
+]);
+
 // Crash-safe reporting: the file exists before any Electron work and keeps the
 // last completed phase on disk. The watchdog turns a hang into a written
 // timeout error instead of a job that dies with nothing to read.
@@ -538,8 +560,55 @@ async function main() {
   window.destroy();
 
   const failed = results.checks.filter((entry) => entry.ok !== true);
-  if (failed.length > 0) {
-    report.fail("checks", new Error(`${failed.length} proof check(s) failed`));
+  const actualCheckNames = results.checks.map((entry) => entry.name);
+  const checkNames = new Set(actualCheckNames);
+  const missing = REQUIRED_CHECK_NAMES.filter((name) => !checkNames.has(name));
+  const unexpected = [
+    ...new Set(
+      actualCheckNames.filter((name) => !REQUIRED_CHECK_NAMES.includes(name)),
+    ),
+  ];
+  const duplicate = [
+    ...new Set(
+      actualCheckNames.filter(
+        (name, index) => actualCheckNames.indexOf(name) !== index,
+      ),
+    ),
+  ];
+  const geometryReady = [
+    [results.geometry.desktop, 1440],
+    [results.geometry.mobile, 390],
+  ].every(([entry, expectedWidth]) =>
+    entry !== null &&
+    typeof entry === "object" &&
+    entry.width === expectedWidth &&
+    Number.isFinite(entry.height) &&
+    Number.isFinite(entry.expectedCssHeight) &&
+    Number.isFinite(entry.tolerance) &&
+    entry.fitted !== null &&
+    typeof entry.fitted === "object" &&
+    Number.isFinite(entry.fitted.width) &&
+    Number.isFinite(entry.fitted.height),
+  );
+  const clipReady =
+    results.clip !== null &&
+    typeof results.clip === "object" &&
+    (results.clip.status === "proven" ||
+      results.clip.status === "unavailable") &&
+    results.clip.detail !== null;
+  const gateFailures = [
+    results.checks.length === 0 ? "no proof checks were recorded" : null,
+    missing.length > 0 ? `missing checks: ${missing.join(", ")}` : null,
+    unexpected.length > 0
+      ? `unexpected checks: ${unexpected.join(", ")}`
+      : null,
+    duplicate.length > 0 ? `duplicate checks: ${duplicate.join(", ")}` : null,
+    geometryReady ? null : "desktop/mobile geometry evidence is incomplete",
+    clipReady ? null : "clip evidence is missing or invalid",
+    failed.length > 0 ? `${failed.length} proof check(s) failed` : null,
+  ].filter(Boolean);
+  if (gateFailures.length > 0) {
+    report.fail("checks", new Error(gateFailures.join("; ")));
     app.exit(1);
     return;
   }

@@ -53,12 +53,73 @@ jobs:
           # Print the raw record first so a partial or malformed file is
           # visible in the log before any assertion can fail.
           jq . "$PROOF" || true
-          jq '{complete, phase, clip: .clip.status, geometry, failures: [.checks[] | select(.ok != true) | .name]}' "$PROOF"
-          jq -e '.complete == true' "$PROOF" > /dev/null
-          jq -e '[.checks[] | select(.ok != true)] | length == 0' "$PROOF" > /dev/null
-          # `unavailable` clip capture is recorded as unproven, not a pass;
-          # only an actual failed pixel proof rejects the run.
-          jq -e '.clip.status != "failed"' "$PROOF" > /dev/null
+          required_checks='[
+            "geometry.desktopCssViewport",
+            "geometry.desktopMediaQuery",
+            "interaction.inlineScript",
+            "interaction.inlineHandler",
+            "interaction.secondPageNavigation",
+            "interaction.secondPageInlineScript",
+            "interaction.secondPageInlineHandler",
+            "geometry.mobileCssViewport",
+            "geometry.mobileMediaQuery",
+            "denial.externalNavigation",
+            "denial.popup",
+            "denial.permission",
+            "denial.network",
+            "isolation.crossEntryNavigation",
+            "isolation.distinctPartitions",
+            "lifecycle.closed"
+          ]'
+          jq --argjson required "$required_checks" '
+            ($required | sort) as $requiredNames
+            | ((.checks? // []) | map(.name) | sort) as $actualNames
+            | {
+                complete,
+                phase,
+                clip: .clip.status,
+                geometry,
+                checkCount: ($actualNames | length),
+                checkNames: $actualNames,
+                missing: ($requiredNames - $actualNames),
+                unexpected: ($actualNames - $requiredNames),
+                failures: [(.checks? // [])[]? | select(.ok != true) | .name]
+              }
+          ' "$PROOF" || true
+          jq -e --argjson required "$required_checks" '
+            .schema == "colony.website-preview-host-proof/1"
+            and .complete == true
+            and ((.checks? | type) == "array")
+            and ((.checks | length) > 0)
+            and (([.checks[]? | .name] | sort) == ($required | sort))
+            and (([.checks[]? | select(.ok != true)] | length) == 0)
+            and ((.geometry? | type) == "object")
+            and ((.geometry.desktop? | type) == "object")
+            and ((.geometry.mobile? | type) == "object")
+            and (.geometry.desktop.width == 1440)
+            and (.geometry.mobile.width == 390)
+            and ((.geometry.desktop.height? | type) == "number")
+            and ((.geometry.mobile.height? | type) == "number")
+            and ((.geometry.desktop.fitted? | type) == "object")
+            and ((.geometry.mobile.fitted? | type) == "object")
+            and ((.geometry.desktop.fitted.width? | type) == "number")
+            and ((.geometry.desktop.fitted.height? | type) == "number")
+            and ((.geometry.mobile.fitted.width? | type) == "number")
+            and ((.geometry.mobile.fitted.height? | type) == "number")
+            and ((.geometry.desktop.expectedCssHeight? | type) == "number")
+            and ((.geometry.mobile.expectedCssHeight? | type) == "number")
+            and ((.geometry.desktop.tolerance? | type) == "number")
+            and ((.geometry.mobile.tolerance? | type) == "number")
+            and (.geometry.desktop.tolerance <= 2)
+            and (.geometry.mobile.tolerance <= 2)
+            and (.geometry.desktop.expectedCssHeight >= 898)
+            and (.geometry.desktop.expectedCssHeight <= 902)
+            and (.geometry.mobile.expectedCssHeight >= 842)
+            and (.geometry.mobile.expectedCssHeight <= 846)
+            and ((.clip? | type) == "object")
+            and (.clip.status == "proven" or .clip.status == "unavailable")
+            and (.clip.detail != null)
+          ' "$PROOF" > /dev/null
       - name: Preserve preview host proof
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

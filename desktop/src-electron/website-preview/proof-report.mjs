@@ -65,7 +65,8 @@ export function createProofReport({
 
   function phase(name, extra = {}) {
     state.phase = name;
-    flush(extra);
+    Object.assign(state, extra);
+    flush();
     log(`[proof] phase ${name}`);
   }
 

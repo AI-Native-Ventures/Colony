@@ -1,12 +1,14 @@
 # Website Manager implementation plan
 
-> Execution: DeepSeek V4.1 Flash workers on OpenRouter, `max` reasoning. The root agent owns orchestration, design review, integration and GitHub operations. The root does not write product implementation code.
+> Execution: GPT-5.6 Luna workers with `max` reasoning. The root agent owns orchestration, design review, integration and GitHub operations. The root does not write product implementation code.
 
 **Goal:** Deliver the approved Website Manager experience in real Colony threads: a brief, delegated Studio Method work, substantial before/redesign previews, real revisions, version-bound owner review and an approved handover.
 
 **Architecture:** Reuse company tasks and the job broker for execution. Extend the existing Blocks grammar and signed action path for presentation and decisions. Add a narrowly scoped durable review record where current Block data cannot enforce version identity and action ordering. Website creation remains agent work through bundled, editable skills. No second workflow engine, simulated progress, generic HTML renderer, or hardcoded client design.
 
 **Reference:** [Approved design](../specs/2026-09-10-website-manager-design.md), [proof matrix](../specs/2026-09-10-website-manager-proof.md), [Studio Method](../specs/2026-09-10-website-studio-method.md).
+
+> Takeover checkpoint (2026-09-12): the candidate branch contains the Website Manager source slice at HEAD `91208cba01`. GitHub CI run `34697231268` is red because Desktop Core reported stale `desktop/native-inventory.json`; the exact single-file correction from successful Format diff run `34697228681` is applied locally and awaits root review, commit and push. No CI rerun has been performed; packaged adoption and the live end-to-end Website Manager flow remain unproven.
 
 ## Phase 1: shared contract, isolated preview and team recipe
 
@@ -21,7 +23,7 @@ Acceptance gate: reviewed source establishes one consistent preview artifact/rev
 - [ ] Preview worker: implement a dedicated ephemeral Electron preview host under `desktop/src-electron/website-preview/`. Do not reuse `BrowserViews.sessionFor`, which contains signed-in business cookies. Use sandbox, no Node/preload/privileged IPC, deny permissions/downloads/popups, and restrict navigation/resource loading to the pinned preview artifact.
 - [ ] Preview worker: verify a bounded manifest and every loaded file's digest before rendering. Reject traversal, duplicate paths, oversized assets, remote redirects to privileged/private locations and incomplete bundles. Release views/sessions on close/community change. Preserve exact desktop/mobile viewport semantics when fitting inline/expanded panes.
 - [ ] Team worker: add a portable Website Manager persona pack with manager, researcher, fused designer-builder and independent reviewer roles plus actual job skills. Use the existing persona-pack format and supported Colony CLI/browser/filesystem capabilities. No developer-machine paths or silent provider/deployment-account changes.
-- [ ] Team worker: document a precise idempotent integration path through the existing persona/team installation APIs; do not alter the owner's unrelated installed agents or overwrite customized personas.
+- [ ] Team worker: document a precise idempotent integration path through the existing persona/team installation APIs. Preserve unrelated user-customized agents; provisioned core employees must exist, cannot be deleted, adopt the current role holder, and receive updated bundled configuration on reconciliation.
 
 ### Preview artifact contract to share
 
@@ -41,7 +43,7 @@ Acceptance gate: a job can be created, advanced by real worker outcomes, revised
 - [ ] Frontend worker: extend `features/blocks/contracts.ts`, validation and `ui/primitives/BlockPrimitive.tsx` through the existing registry. Add new focused Website Preview and stage components. Keep image/video/document viewing in the shared PR #682 components.
 - [ ] Frontend worker: wire current job head, exact revision, pending/error/receipt state and signed action inputs through `BlockMessage` / `BlockRenderContext`. Do not create a second submission path, fake local success, separate job dashboard or unrelated thread.
 - [ ] Add Before/Redesign, desktop/mobile, expansion, version selection, QA details, a genuine revision request and owner approval. Older versions remain inspectable but cannot be used to approve newer work. Handover exposes approved source/assets and a draft domain-access request; it never publishes the website itself.
-- [ ] Connect the bundled team to an ordinary-language starter in the actual agent/team UI. Scope installation and dispatch to the active community and selected channel/thread; inherit Power defaults and preserve customized agents.
+- [ ] Connect the bundled team to an ordinary-language starter in the actual agent/team UI. Scope installation and dispatch to the active community and selected channel/thread; inherit Power defaults; provisioned core employees must exist, cannot be deleted, adopt the current role holder, and receive updated bundled configuration, while unrelated customized agents remain preserved.
 
 ## Phase 3: GitHub checks and rendered proof
 
