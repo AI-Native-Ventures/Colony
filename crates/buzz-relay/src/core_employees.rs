@@ -577,7 +577,14 @@ async fn seed_one(
         // The row the write produced is the authority, not the bundle
         // resolution: when the bundle names no manager the update left an
         // existing one in place, and the head must carry that same edge.
-        publish_records(state, community, employee, updated.manager.as_deref(), &keys).await;
+        publish_records(
+            state,
+            community,
+            employee,
+            updated.manager.as_deref(),
+            &keys,
+        )
+        .await;
         return Ok(SeedOutcome::Updated);
     }
 
@@ -621,8 +628,14 @@ async fn seed_one(
                 // As in the update path: publish the row's own manager, so a
                 // reporting line the workspace had before adoption survives on
                 // both the row and the head.
-                publish_records(state, community, employee, adopted.manager.as_deref(), &keys)
-                    .await;
+                publish_records(
+                    state,
+                    community,
+                    employee,
+                    adopted.manager.as_deref(),
+                    &keys,
+                )
+                .await;
                 return Ok(SeedOutcome::Adopted);
             }
 
@@ -687,7 +700,14 @@ async fn seed_one(
         return Ok(SeedOutcome::Unchanged);
     };
 
-    publish_records(state, community, employee, inserted.manager.as_deref(), &keys).await;
+    publish_records(
+        state,
+        community,
+        employee,
+        inserted.manager.as_deref(),
+        &keys,
+    )
+    .await;
     Ok(SeedOutcome::Seeded)
 }
 
@@ -750,7 +770,11 @@ fn choose_role_holder(candidates: &RoleCandidates) -> Option<RoleHolder> {
     if let Some(row) = candidates.employees.first() {
         return Some(RoleHolder::Employee(row.clone()));
     }
-    candidates.managed_agents.first().cloned().map(RoleHolder::ManagedAgent)
+    candidates
+        .managed_agents
+        .first()
+        .cloned()
+        .map(RoleHolder::ManagedAgent)
 }
 
 /// How many distinct identities could have filled the role, for the choice
@@ -826,7 +850,9 @@ async fn resolve_role_holder(
             event_id: stored.event.id.to_hex(),
         });
     }
-    candidates.managed_agents.sort_by(|left, right| left.pubkey.cmp(&right.pubkey));
+    candidates
+        .managed_agents
+        .sort_by(|left, right| left.pubkey.cmp(&right.pubkey));
 
     let Some(holder) = choose_role_holder(&candidates) else {
         return Ok(None);
@@ -1158,7 +1184,10 @@ mod tests {
         assert_eq!(sales.display_name, "Sales");
         assert_eq!(sales.version, 2);
         assert_eq!(sales.tier(), Some(AgentTier::Leader));
-        assert!(sales.reports_to.is_none(), "sales sits at the top of the chart");
+        assert!(
+            sales.reports_to.is_none(),
+            "sales sits at the top of the chart"
+        );
         assert!(sales.prompt.contains("outreach"));
         assert_eq!(
             sales.requires_commands,
@@ -1186,7 +1215,10 @@ mod tests {
         assert_eq!(chief.tier(), Some(AgentTier::Executive));
         assert!(chief.reports_to.is_none(), "the chief sits at the top");
         assert_eq!(chief.version, 1);
-        assert_eq!(chief.requires_commands, vec!["asks".to_owned(), "decisions".to_owned()]);
+        assert_eq!(
+            chief.requires_commands,
+            vec!["asks".to_owned(), "decisions".to_owned()]
+        );
 
         let avery = by_handle("website-manager");
         assert_eq!(avery.display_name, "Avery");
@@ -1311,7 +1343,10 @@ mod tests {
             .iter()
             .find(|event| event.kind.as_u16() as u32 == KIND_EMPLOYEE)
             .expect("an employee head is published");
-        assert_eq!(tag_value(head, "manager").as_deref(), Some(manager_hex.as_str()));
+        assert_eq!(
+            tag_value(head, "manager").as_deref(),
+            Some(manager_hex.as_str())
+        );
         let definition = records
             .iter()
             .find(|event| event.kind.as_u16() as u32 == KIND_MANAGED_AGENT)
@@ -1403,7 +1438,10 @@ mod tests {
             employees: Vec::new(),
             managed_agents: vec![head.clone()],
         };
-        assert_eq!(choose_role_holder(&head_only), Some(RoleHolder::ManagedAgent(head.clone())));
+        assert_eq!(
+            choose_role_holder(&head_only),
+            Some(RoleHolder::ManagedAgent(head.clone()))
+        );
 
         let row_and_head = RoleCandidates {
             provisioned: None,
@@ -1420,7 +1458,10 @@ mod tests {
             employees: vec![employee],
             managed_agents: vec![head],
         };
-        assert_eq!(choose_role_holder(&everything), Some(RoleHolder::Employee(provisioned)));
+        assert_eq!(
+            choose_role_holder(&everything),
+            Some(RoleHolder::Employee(provisioned))
+        );
     }
 
     #[test]
@@ -1433,7 +1474,10 @@ mod tests {
         };
 
         let mixed_case = head(serde_json::json!({ "role_id": " Chief-Of-Staff " }));
-        assert_eq!(managed_agent_role(&mixed_case).as_deref(), Some("chief-of-staff"));
+        assert_eq!(
+            managed_agent_role(&mixed_case).as_deref(),
+            Some("chief-of-staff")
+        );
         assert!(managed_agent_role(&head(serde_json::json!({ "name": "Fizz" }))).is_none());
         let bad_slug = head(serde_json::json!({ "role_id": "chief of staff" }));
         assert!(
@@ -1447,10 +1491,15 @@ mod tests {
         let owner = Keys::generate();
         let subject = Keys::generate();
         let event = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), "{}")
-            .tags(vec![Tag::parse(["d", &subject.public_key().to_hex()]).expect("d tag")])
+            .tags(vec![
+                Tag::parse(["d", &subject.public_key().to_hex()]).expect("d tag")
+            ])
             .sign_with_keys(&owner)
             .expect("sign the head");
-        assert_eq!(managed_agent_pubkey(&event), Some(subject.public_key().to_bytes()));
+        assert_eq!(
+            managed_agent_pubkey(&event),
+            Some(subject.public_key().to_bytes())
+        );
 
         let unnamed = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), "{}")
             .sign_with_keys(&owner)

@@ -25,12 +25,12 @@ use crate::managed_agents::provisioned::{
     missing_commands, missing_commands_message, trusted_provisioned_definitions,
     ProvisionedDefinition,
 };
+use crate::managed_agents::website_team::{
+    install_recipe_skills, owns_provisioned_handle, InstalledWebsiteSkill,
+};
 use crate::managed_agents::{
     storage::{load_managed_agents, save_managed_agents},
     ManagedAgentRecord, DEFAULT_ACP_COMMAND,
-};
-use crate::managed_agents::website_team::{
-    install_recipe_skills, owns_provisioned_handle, InstalledWebsiteSkill,
 };
 use buzz_core_pkg::kind::{KIND_EMPLOYEE, KIND_MANAGED_AGENT};
 
@@ -508,9 +508,7 @@ mod tests {
             install_pack_skills_at(root.path()).is_empty(),
             "the first pass lands every skill without a failure"
         );
-        let skill = root
-            .path()
-            .join(".agents/skills/website-research/SKILL.md");
+        let skill = root.path().join(".agents/skills/website-research/SKILL.md");
         assert!(skill.exists(), "the runbook is written to the workspace");
 
         std::fs::write(&skill, "my edited runbook").expect("write user edit");

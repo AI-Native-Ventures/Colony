@@ -838,8 +838,8 @@ fn a_provisioned_agent_is_refused_before_the_remote_guard() {
     // The provisioned refusal is its own door, checked at the delete command
     // before the remote-deployment guard, so forcing a remote delete cannot
     // reach an agent this app provides.
-    let err = crate::managed_agents::provisioned::refuse_delete_if_provisioned(&record)
-        .unwrap_err();
+    let err =
+        crate::managed_agents::provisioned::refuse_delete_if_provisioned(&record).unwrap_err();
 
     assert!(
         err.contains("Avery") && err.contains("cannot be deleted"),

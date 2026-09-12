@@ -41,8 +41,8 @@ mod skills;
 pub use install::{install_status, install_website_team};
 pub use journal::WebsiteTeamJournalEntry;
 pub use recipe::{
-    EXAMPLE_PROMPT, INTEGRATION_NOTE, OUTCOME_SENTENCE, PERSONAS, RECIPE_ID, RECIPE_VERSION,
-    SKILLS, TEAM_NAME, TEAM_SLUG, owns_provisioned_handle,
+    owns_provisioned_handle, EXAMPLE_PROMPT, INTEGRATION_NOTE, OUTCOME_SENTENCE, PERSONAS,
+    RECIPE_ID, RECIPE_VERSION, SKILLS, TEAM_NAME, TEAM_SLUG,
 };
 pub use skills::{install_recipe_skills, InstalledWebsiteSkill};
 

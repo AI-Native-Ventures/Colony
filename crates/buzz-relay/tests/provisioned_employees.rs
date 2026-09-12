@@ -212,7 +212,9 @@ async fn publish_managed_agent_head(
     if let Some(created_at) = created_at {
         builder = builder.custom_created_at(created_at);
     }
-    let event = builder.sign_with_keys(author).expect("sign the managed-agent head");
+    let event = builder
+        .sign_with_keys(author)
+        .expect("sign the managed-agent head");
     let result = ingest_event(state, tenant, event, auth_for(author.public_key()))
         .await
         .expect("ingest answers");
@@ -239,7 +241,11 @@ async fn seeding_creates_the_sales_employee_once_and_settles_on_a_re_run() {
     let first = ensure_core_employees(&state, community_id)
         .await
         .expect("seeding succeeds");
-    assert_eq!(first, bundled.len(), "the first run seeds exactly the bundled employees");
+    assert_eq!(
+        first,
+        bundled.len(),
+        "the first run seeds exactly the bundled employees"
+    );
 
     let row = seeded_sales(&db, community_id).await;
     assert_eq!(row.display_name, "Sales");
@@ -642,7 +648,8 @@ async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
         .await
         .expect("seeding still succeeds");
     assert_eq!(
-        written, bundled.len(),
+        written,
+        bundled.len(),
         "the existing role holder is adopted and the rest of the bundle seeds"
     );
 
@@ -662,7 +669,8 @@ async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
     assert_eq!(adopted.status, "active");
     assert_eq!(adopted.provisioned_version, Some(sales_version));
     assert_eq!(
-        adopted.manager.as_deref(), Some(their_manager.public_key().to_bytes().as_slice()),
+        adopted.manager.as_deref(),
+        Some(their_manager.public_key().to_bytes().as_slice()),
         "a reporting line the sales bundle does not specify survives adoption"
     );
     // The head must agree with the row: the preserved manager is republished.
@@ -674,7 +682,10 @@ async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
         "the republished head carries the row's manager"
     );
     // The ordinary hire provenance is kept: the owner did hire this row.
-    assert_eq!(adopted.hired_by.as_deref(), Some(owner.public_key().to_bytes().as_slice()));
+    assert_eq!(
+        adopted.hired_by.as_deref(),
+        Some(owner.public_key().to_bytes().as_slice())
+    );
 
     // The adopted row rides the ordinary version path from here on. Ageing it
     // stands in for a newer bundle shipping: the next pass must re-apply the
@@ -696,8 +707,14 @@ async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
         .await
         .expect("query the adopted employee")
         .expect("the adopted employee remains");
-    assert_eq!(healed.pubkey, pubkey_bytes, "the later version keeps the identity");
-    assert_eq!(healed.display_name, "Sales", "the later version re-applies the name");
+    assert_eq!(
+        healed.pubkey, pubkey_bytes,
+        "the later version keeps the identity"
+    );
+    assert_eq!(
+        healed.display_name, "Sales",
+        "the later version re-applies the name"
+    );
     assert_eq!(healed.provisioned_version, Some(sales_version));
 
     // A user's managed agent with the same name is a different concept and is
@@ -711,7 +728,10 @@ async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
     .fetch_one(&pool)
     .await
     .expect("count sales rows");
-    assert_eq!(rows, 1, "one employee per role, adopted rather than duplicated");
+    assert_eq!(
+        rows, 1,
+        "one employee per role, adopted rather than duplicated"
+    );
 }
 
 #[tokio::test]
@@ -734,7 +754,8 @@ async fn a_chief_of_staff_that_exists_only_as_a_head_is_not_duplicated() {
         .await
         .expect("seeding succeeds");
     assert_eq!(
-        written, bundled.len() - 1,
+        written,
+        bundled.len() - 1,
         "every bundled employee but the held chief of staff is written"
     );
     assert!(
@@ -752,7 +773,8 @@ async fn a_chief_of_staff_that_exists_only_as_a_head_is_not_duplicated() {
         .expect("query the website manager")
         .expect("the website manager is seeded");
     assert_eq!(
-        avery.manager.as_deref(), Some(theirs.public_key().to_bytes().as_slice()),
+        avery.manager.as_deref(),
+        Some(theirs.public_key().to_bytes().as_slice()),
         "the website manager reports to the owner's chief of staff"
     );
     let avery_hex = sales_keys_from(&avery).to_hex();
@@ -840,7 +862,11 @@ async fn a_row_and_a_head_both_holding_the_role_keep_the_row() {
     let written = ensure_core_employees(&state, community_id)
         .await
         .expect("seeding succeeds");
-    assert_eq!(written, bundled.len(), "the row is adopted and the rest seed");
+    assert_eq!(
+        written,
+        bundled.len(),
+        "the row is adopted and the rest seed"
+    );
 
     let chief = db
         .find_provisioned_employee(community_id, "chief-of-staff")
@@ -936,13 +962,25 @@ async fn a_superseded_head_stops_holding_the_role() {
         Some(earlier),
     )
     .await;
-    publish_managed_agent_head(&state, &tenant, &owner, &theirs, "company-coordinator", None).await;
+    publish_managed_agent_head(
+        &state,
+        &tenant,
+        &owner,
+        &theirs,
+        "company-coordinator",
+        None,
+    )
+    .await;
 
     let bundled = core_employee_manifests().expect("bundled employees are valid");
     let written = ensure_core_employees(&state, community_id)
         .await
         .expect("seeding succeeds");
-    assert_eq!(written, bundled.len(), "the superseded role claim does not hold");
+    assert_eq!(
+        written,
+        bundled.len(),
+        "the superseded role claim does not hold"
+    );
     assert!(
         db.find_provisioned_employee(community_id, "chief-of-staff")
             .await

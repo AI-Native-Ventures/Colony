@@ -323,7 +323,13 @@ mod tests {
         }
         // Exact match: a prefix rule would hand these runbooks to a future
         // pack, and an empty handle matches nothing.
-        for other in ["", "sales", "website", "website-manager-sam", "website-managerX"] {
+        for other in [
+            "",
+            "sales",
+            "website",
+            "website-manager-sam",
+            "website-managerX",
+        ] {
             assert!(!owns_provisioned_handle(other), "{other} must not match");
         }
     }
