@@ -5166,149 +5166,128 @@ mod company_onboarding_prompt_tests {
     const PROMPT: &str = include_str!("company_onboarding_prompt.md");
 
     #[test]
-    fn company_onboarding_asks_for_the_website_once_and_scans_it() {
-        assert!(PROMPT.contains("ask for it a single time"));
-        assert!(PROMPT.contains("Do not ask again"));
-        assert!(PROMPT.contains("buzz company scan --url"));
+    fn onboarding_starts_with_the_three_way_owner_choice() {
+        assert!(PROMPT.contains("first substantive onboarding\nquestion a single choice"));
+        for choice in ["NEW business", "EXISTING business", "DECIDE what to start"] {
+            assert!(PROMPT.contains(choice), "missing owner choice `{choice}`");
+        }
+        assert!(PROMPT.contains("When a direction is already persisted"));
+        assert!(PROMPT.contains("Never show the three choices again"));
+        assert!(PROMPT.contains("owner-signed onboarding choice or snapshot record"));
+        assert!(PROMPT.contains("do not make the owner repeat or re-publish a choice"));
+        assert!(PROMPT.contains("When the product uses a signed Block action"));
     }
 
-    /// Signup already asked for the website, the location, the work and the
-    /// first task. Asking again teaches a brand-new owner that nothing they
-    /// type is kept, so the protocol reads their brief before it speaks.
     #[test]
-    fn company_onboarding_reads_the_owners_brief_before_asking_anything() {
-        assert!(PROMPT.contains("Read the owner's brief before you say anything"));
-        assert!(PROMPT.contains("Never ask for a fact the brief already carries"));
-        assert!(PROMPT.contains("scan it without asking"));
-        // No brief is a state to report, not a licence to invent familiarity.
-        assert!(PROMPT.contains("say so plainly rather than pretending to know them"));
+    fn new_business_collects_direction_stage_and_relevant_priority() {
+        assert!(PROMPT.contains("what the business should do"));
+        assert!(PROMPT.contains("choice from a few categories"));
+        assert!(PROMPT.contains("plain-language description"));
+        for stage in ["idea", "preparing", "testing"] {
+            assert!(PROMPT.contains(stage), "missing business stage `{stage}`");
+        }
+        assert!(PROMPT.contains("most relevant priority"));
+        assert!(PROMPT.contains("Do not require a\ncomplete business plan"));
     }
 
-    /// A scan reads a website; it does not audit a business. Overclaiming here
-    /// would put invented facts into a company record the owner then trusts.
     #[test]
-    fn company_onboarding_never_overclaims_what_a_scan_proves() {
-        assert!(PROMPT.contains("evidence, not truth"));
-        assert!(PROMPT.contains("Never describe a scanned fact as verified beyond its source"));
-        assert!(PROMPT.contains(
-            "You read a
-website; you did not audit a business"
-        ));
-        // The scanner's own confidence levels must survive into the brief.
-        for level in ["stated", "declared", "inferred"] {
+    fn existing_business_reuses_context_and_labels_provenance() {
+        for source in [
+            "existing signup website and company context",
+            "approved imported\nfacts",
+            "summary for the owner to check",
+            "Owner confirmed",
+            "Approved import",
+            "Source evidence",
+            "Unknown",
+        ] {
             assert!(
-                PROMPT.contains(level),
-                "confidence `{level}` must be carried through"
+                PROMPT.contains(source),
+                "missing existing-business rule `{source}`"
             );
         }
-    }
-
-    /// The owner has to see what was found before being asked to fill holes in
-    /// it, and a brief that hides gaps cannot be corrected.
-    #[test]
-    fn company_onboarding_publishes_the_brief_before_any_question() {
-        assert!(PROMPT.contains("Publish the brief before asking anything"));
-        assert!(PROMPT.contains("company-brief"));
-        // Each of the three Blocks the protocol runs on. A prompt that names
-        // a handle the relay does not bundle sends the agent to a Block that
-        // does not exist, which fails silently as "nothing happened".
-        assert!(PROMPT.contains("interview"));
-        assert!(PROMPT.contains("company-blueprint"));
-        // The catalog is a menu, not a checklist. Asked to propose "the
-        // baseline roster", a real model enabled all thirteen roles for a
-        // four-person web agency.
-        assert!(PROMPT.contains("not a list to fill"));
-        assert!(PROMPT.contains("Include every gap you found"));
-    }
-
-    /// The closed set is what stops the interview running forever.
-    #[test]
-    fn company_onboarding_bounds_the_interview_to_six_facts() {
-        assert!(PROMPT.contains("Establish exactly six facts, then stop"));
-        assert!(PROMPT.contains("Ask about nothing else"));
-        for fact in [
-            "Services and products",
-            "Type of work and process",
-            "Pricing per service",
-            "Target audience",
-            "Location",
-            "Who does the work today",
-        ] {
-            assert!(PROMPT.contains(fact), "missing required fact `{fact}`");
-        }
-    }
-
-    /// The two rules that guarantee termination, stated to the agent in the
-    /// same terms the code enforces.
-    #[test]
-    fn company_onboarding_makes_unknown_terminal_and_follow_ups_bounded() {
-        assert!(PROMPT.contains("\"I don't know\" is a complete answer"));
-        assert!(PROMPT.contains("never ask again"));
-        assert!(PROMPT.contains("One follow-up per fact, maximum"));
-        assert!(PROMPT.contains("Never restate the original question"));
+        assert!(PROMPT.contains("Source evidence is not an owner-confirmed fact"));
+        assert!(PROMPT.contains("Never make up a business, client, location"));
         assert!(
-            PROMPT.contains("one question per Interview Block")
-                || PROMPT.contains("one question per Interview")
+            PROMPT.contains("Ask for a website only when the authoritative record is missing one")
         );
+        assert!(PROMPT.contains("continue\nwithout a site"));
+        assert!(PROMPT.contains("“No website” is a complete answer"));
+        assert!(PROMPT.contains("existing business's current priority"));
+        assert!(!PROMPT.contains("buzz company scan --url"));
     }
 
-    /// A website often answers part of something; the follow-up has to build on
-    /// what is known rather than start over.
     #[test]
-    fn company_onboarding_distinguishes_partial_from_missing() {
-        assert!(PROMPT.contains("**partial**"));
-        assert!(
-            PROMPT.contains(
-                "builds on
-what you already know"
-            ) || PROMPT.contains("builds on")
-        );
-        assert!(PROMPT.contains("**answered**"));
-        assert!(PROMPT.contains("Do not ask."));
+    fn decide_branch_learns_interests_without_requiring_a_website() {
+        assert!(PROMPT.contains("skills, interests, and experience"));
+        assert!(PROMPT.contains("small set of\nchoices"));
+        assert!(PROMPT.contains("No website is required for this branch"));
+        assert!(PROMPT.contains("choose **keep exploring**"));
+        assert!(PROMPT.contains("Keep\nexploring is a valid outcome"));
+        assert!(PROMPT.contains("which priority would make the next conversation useful"));
     }
 
-    /// An owner explaining a delivery process usually has it written down.
     #[test]
-    fn company_onboarding_accepts_links_and_documents_as_answers() {
-        assert!(PROMPT.contains("a link, or an attached document"));
-        assert!(PROMPT.contains("better evidence than a retyped summary"));
+    fn answers_are_reused_and_unknowns_are_allowed() {
+        assert!(PROMPT.contains("Reuse every relevant answer already present"));
+        assert!(PROMPT.contains("optional owner bio"));
+        assert!(PROMPT.contains("“I don't know,” “not yet,” or “prefer\nnot to say”"));
+        assert!(PROMPT.contains("Do not repeatedly\nask for an answer"));
+        assert!(PROMPT.contains("Do not restart an intake interview"));
     }
 
-    /// The blueprint describes people and structure. A blueprint carrying
-    /// executable configuration is a blueprint that can be used to run code.
     #[test]
-    fn company_onboarding_keeps_executable_configuration_out_of_the_blueprint() {
-        assert!(PROMPT.contains("Never include system prompts, runtime settings, commands"));
-        assert!(PROMPT.contains("credentials"));
-        assert!(PROMPT.contains("describes people and structure only"));
+    fn the_first_job_is_understanding_before_business_work() {
+        assert!(PROMPT.contains("The first job is to\nunderstand the person and the business"));
+        assert!(PROMPT.contains("The first job here is understanding the person and business"));
+        assert!(PROMPT.contains("Do not jump to a\ncontent campaign, client pitch, outreach"));
+        assert!(PROMPT.contains("Do not create an initiative, job, proposal"));
+    }
+
+    #[test]
+    fn setup_waits_for_understanding_and_stays_minimal() {
+        assert!(PROMPT.contains("Confirm understanding before minimal workspace setup"));
+        assert!(PROMPT.contains("confirm that Scout understands"));
+        assert!(PROMPT.contains("existing **Welcome** channel and thread"));
+        assert!(PROMPT.contains("**Scout only** as the default starting teammate"));
+        assert!(PROMPT.contains("normal Colony channels\nand threads"));
+        assert!(PROMPT.contains("Setup approval authorizes this minimal workspace handoff only"));
+        assert!(PROMPT.contains("does not\napprove a business job"));
+        assert!(PROMPT.contains("extra teammate"));
+    }
+
+    #[test]
+    fn signed_actions_and_trust_boundaries_remain_explicit() {
+        assert!(PROMPT.contains("Every signed action is read back and receipted"));
+        assert!(PROMPT.contains("read the actual action"));
+        assert!(PROMPT.contains("record its receipt"));
+        assert!(PROMPT.contains("plain reply"));
+        assert!(PROMPT.contains("prompt alone enforces authorization"));
         assert!(PROMPT.contains("trusted role IDs"));
+        assert!(PROMPT.contains("declared schemas"));
+        assert!(PROMPT.contains("Connected does not mean ready"));
+        assert!(PROMPT.contains("State and persisted events are authoritative and scoped"));
+        assert!(PROMPT.contains("Do not invent interfaces"));
+        assert!(PROMPT.contains("buzz blocks describe --handle"));
+        assert!(PROMPT.contains("buzz blocks actions --channel"));
+        assert!(PROMPT.contains("buzz blocks receipt --channel"));
     }
 
     #[test]
-    fn company_onboarding_refuses_a_generic_operations_team() {
-        assert!(PROMPT.contains("Never invent a generic \"Operations\" team"));
-        assert!(PROMPT.contains("exactly three initiatives"));
-    }
-
-    /// The promise the opener makes to the owner, restated where the agent
-    /// will act on it.
-    #[test]
-    fn company_onboarding_starts_nothing_before_approval() {
-        assert!(PROMPT.contains("Do nothing until approval"));
-        assert!(PROMPT
-            .contains("Do not start agents, send anything, spend anything, or begin any proposed"));
-        assert!(PROMPT.contains("Proposing is your whole job here"));
-    }
-
-    /// The owner may close the app between any two messages, so the thread has
-    /// to be the record rather than the agent's memory.
-    #[test]
-    fn company_onboarding_reads_state_from_the_thread() {
-        assert!(PROMPT.contains("State lives in this thread"));
-        assert!(PROMPT.contains("re-read the thread"));
-        assert!(PROMPT.contains(
-            "State is read from persistent thread Blocks, owner replies and signed action receipts"
-        ));
+    fn superseded_automatic_interview_and_blueprint_contract_is_gone() {
+        for removed in [
+            "company that does not exist yet",
+            "company-brief",
+            "company-blueprint",
+            "Establish exactly six facts, then stop",
+            "Pricing per service",
+            "buzz company scan --url",
+        ] {
+            assert!(
+                !PROMPT.contains(removed),
+                "superseded contract remains: `{removed}`"
+            );
+        }
     }
 }
 

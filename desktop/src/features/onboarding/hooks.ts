@@ -78,10 +78,13 @@ export async function initializeStarterChannels(
     focus,
     pubkey,
     communityScope,
+    seedWelcomeExperience: shouldSeedWelcomeExperience = true,
   }: {
     focus: boolean;
     pubkey: string | null;
     communityScope: string | null;
+    /** Choice-first handoff creates only the channel; setup seeds it later. */
+    seedWelcomeExperience?: boolean;
   },
 ): Promise<ChannelInitResult> {
   try {
@@ -131,12 +134,14 @@ export async function initializeStarterChannels(
         ...channels.filter((channel) => !ensuredIds.has(channel.id)),
       ];
     });
-    void seedWelcomeExperience(
-      queryClient,
-      welcomeChannel.id,
-      pubkey,
-      communityScope,
-    );
+    if (shouldSeedWelcomeExperience) {
+      void seedWelcomeExperience(
+        queryClient,
+        welcomeChannel.id,
+        pubkey,
+        communityScope,
+      );
+    }
     await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
     if (focus) {
       // Refreshing can briefly replace the optimistic cache with an older relay

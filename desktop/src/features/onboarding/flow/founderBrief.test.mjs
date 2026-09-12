@@ -81,11 +81,11 @@ test("no website means no website line", () => {
   assert.doesNotMatch(buildOnboardingFirstTaskMessage(draft), /Website:/);
 });
 
-test("the draft always carries a first task, or delivery is skipped", () => {
-  // CommunityOnboardingFlow only sends when firstTask.content is non-empty.
+test("the choice-first draft carries no automatic social task", () => {
   for (const company of ["Rosebank Auto Care", null]) {
     const draft = draftFromAnswers(answers({ company }));
-    assert.ok(draft.firstTask.content.trim().length > 0, String(company));
+    assert.equal(draft.firstTask.content, "", String(company));
+    assert.equal(draft.firstTask.mode, "choice");
   }
   assert.match(firstTaskFor(answers()), /Rosebank Auto Care/);
 });
@@ -118,12 +118,13 @@ test("a signup that never asked where they live says nothing about location", ()
   assert.match(opening, /Independent workshop servicing German cars\./);
 });
 
-test("an unanswered flow still produces a sendable draft", () => {
-  // Someone can skip their way through; the brief should degrade to a thin
-  // one rather than throwing on a null founder.
+test("an unanswered flow still produces a choice-first draft", () => {
+  // Someone can skip their way through; the root should still degrade to a
+  // thin context rather than throwing on a null founder.
   const draft = draftFromAnswers({ ...EMPTY_ANSWERS });
   assert.equal(draft.founder.fullName, "");
-  assert.ok(draft.firstTask.content.trim().length > 0);
+  assert.equal(draft.firstTask.mode, "choice");
+  assert.equal(draft.firstTask.content, "");
   assert.doesNotThrow(() => buildOnboardingFirstTaskMessage(draft));
 });
 
@@ -139,17 +140,9 @@ test("a persisted brief marker survives rebuilding completion after a retry", ()
   );
 });
 
-test("Canvas creates a reviewable setup suggestion, not an invented owner request", () => {
+test("Canvas creates a choice-first handoff without an automatic owner request", () => {
   const draft = draftFromAnswers(answers());
   assert.equal(draft.company.name, "Rosebank Auto Care");
-  assert.equal(draft.firstTask.mode, "suggestion");
-  assert.match(
-    draft.firstTask.content,
-    /five Instagram captions and five matching visual briefs/,
-  );
-  assert.match(
-    draft.firstTask.content,
-    /business context.*ready for my review/,
-  );
-  assert.doesNotMatch(draft.firstTask.content, /Get to know|I am on it/);
+  assert.equal(draft.firstTask.mode, "choice");
+  assert.equal(draft.firstTask.content, "");
 });
