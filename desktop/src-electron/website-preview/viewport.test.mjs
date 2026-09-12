@@ -25,6 +25,12 @@ test("clip opt-in preserves the CSS viewport without rescaling", async () => {
     height: 450,
   });
   assert.deepEqual(view.bounds, { x: 0, y: 0, width: 720, height: 450 });
+  assert.deepEqual(host.byHandle.get(state.handle).wrapperLayout.child, {
+    x: 0,
+    y: 0,
+    width: 720,
+    height: 450,
+  });
   assert.equal(view.webContents.zoomFactor, 0.5);
   assert.equal(container.borderRadius, 8);
 
@@ -46,7 +52,15 @@ test("clip opt-in preserves the CSS viewport without rescaling", async () => {
     width: 720,
     height: 100,
   });
-  assert.deepEqual(view.bounds, { x: 0, y: 0, width: 720, height: 450 });
+  // The native view is fitted to the visible rectangle; the wrapper keeps
+  // the full artifact viewport in its CSS-clipped iframe.
+  assert.deepEqual(view.bounds, { x: 0, y: 0, width: 720, height: 100 });
+  assert.deepEqual(host.byHandle.get(state.handle).wrapperLayout.child, {
+    x: 0,
+    y: 0,
+    width: 720,
+    height: 450,
+  });
   assert.equal(view.webContents.zoomFactor, 0.5);
   assert.equal(container.visible, true);
 
@@ -60,7 +74,7 @@ test("clip opt-in preserves the CSS viewport without rescaling", async () => {
   });
   assert.equal(container.visible, false);
   assert.equal(view.visible, false);
-  assert.deepEqual(view.bounds, { x: 0, y: 0, width: 720, height: 450 });
+  assert.deepEqual(view.bounds, { x: 0, y: 0, width: 720, height: 100 });
 
   // Application zoom converts CSS bounds into content pixels.
   host.updateBounds({
@@ -98,10 +112,13 @@ test("clip opt-in preserves the CSS viewport without rescaling", async () => {
   });
   const mobileView = world.views[1];
   assert.equal(mobileView.bounds.width, 300);
-  assert.equal(mobileView.bounds.height, Math.round((844 * 300) / 390));
+  assert.equal(mobileView.bounds.height, 844);
   assert.equal(mobileView.webContents.zoomFactor, 300 / 390);
+  const mobileLayout = host.byHandle.get(mobile.handle).wrapperLayout;
+  assert.equal(mobileLayout.child.width, 300);
+  assert.equal(mobileLayout.child.height, Math.round((844 * 300) / 390));
   const cssHeight =
-    mobileView.bounds.height / mobileView.webContents.zoomFactor;
+    mobileLayout.child.height / mobileView.webContents.zoomFactor;
   assert.ok(Math.abs(cssHeight - 844) <= 1, `css height ${cssHeight}`);
 });
 

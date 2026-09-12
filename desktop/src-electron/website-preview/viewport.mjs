@@ -1,13 +1,11 @@
 /**
  * Pure viewport math for the native preview view.
  *
- * The host keeps the page's real CSS viewport at the site's native size
+ * The host keeps the artifact's real CSS viewport at the site's native size
  * (1440x900 desktop, 390x844 mobile) no matter how small the inline pane is.
- * That is done deliberately: the native view is sized in device-independent
- * pixels and `webContents.setZoomFactor` is derived from the fitted width, so
- * CSS pixels scale instead of the CSS viewport shrinking. Media queries and
- * `window.innerWidth` therefore keep native semantics while the view fits the
- * pane without cropping.
+ * Clip mode places that artifact in a fixed-size iframe inside a bounded
+ * native wrapper; the wrapper's own viewport may be smaller, while media
+ * queries and `window.innerWidth` in the artifact keep native semantics.
  */
 
 import { PreviewHostError } from "./host-errors.mjs";
@@ -141,10 +139,11 @@ function contains(outer, inner) {
  *
  * `bounds` is the full, unclipped element rectangle, so the fit scale is
  * derived once and stays stable while the pane scrolls. `clip` selects the
- * visible part. `clipStrategy: "clip"` (default) maps the visible part to the
- * container view, which clips the child, and `clipStrategy: "hide"` hides the
- * view whenever the visible part is not the whole element (the fallback for a
- * platform where container clipping is not proven).
+ * visible part. `clipStrategy: "clip"` (default) maps the visible part to a
+ * bounded native wrapper; its fixed-size iframe clips the artifact. The
+ * `clipStrategy: "hide"` fallback hides the view whenever the visible part is
+ * not the whole element (the production default until clipping proof passes
+ * on a platform).
  *
  * Returns `{ visible: false }` when there is no paintable intersection, or
  * `{ visible: true, container, child, zoomFactor, cssWidth, cssHeight }`.

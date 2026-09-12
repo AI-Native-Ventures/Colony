@@ -7,10 +7,11 @@
  *
  * This instantiates real `View`, `WebContentsView`, and `session` objects,
  * mounts a fixture artifact (manifest bytes and file bytes are generated
- * in-process; the network is never used), and measures actual rendered
- * behavior: CSS viewport and media queries, inline-script execution, and
- * denial of navigation, popups, permissions, and network. It also attempts a
- * composited pixel sample for container clipping via `desktopCapturer`;
+ * in-process; the network is never used) through the separate-origin native
+ * clip wrapper, and measures the actual artifact child frame: CSS viewport and
+ * media queries, inline-script execution, and denial of navigation, popups,
+ * permissions, and network. It also attempts a composited pixel sample for
+ * wrapper clipping via `desktopCapturer`;
  * when the OS withholds screen capture the clip result is reported
  * `unavailable`, never silently passed.
  *
@@ -36,7 +37,7 @@ import {
 
 import { createWebsitePreviewHost } from "./host.mjs";
 import { createProofReport } from "./proof-report.mjs";
-import { PREVIEW_SCHEME_DESCRIPTOR } from "./scheme.mjs";
+import { PREVIEW_SCHEME_DESCRIPTOR, parsePreviewUrl } from "./scheme.mjs";
 
 // Same pre-ready registration as the real app: the proof origin must be a
 // standard secure context for relative paths and navigator APIs to behave
@@ -205,6 +206,43 @@ async function evaluate(webContents, expression) {
   }
 }
 
+function artifactFrame(entry, path = entry.site.entrypoint) {
+  try {
+    const frames = entry.webContents.mainFrame?.frames;
+    if (!Array.isArray(frames)) return null;
+    return (
+      frames.find((frame) => {
+        const parsed = parsePreviewUrl(frame?.url);
+        if (parsed === null || parsed.token !== entry.token) return false;
+        const framePath =
+          parsed.path === "" ? entry.site.entrypoint : parsed.path;
+        return framePath === path;
+      }) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function waitForArtifactFrame(entry, path = entry.site.entrypoint) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const frame = artifactFrame(entry, path);
+    if (frame !== null) return frame;
+    await delay(25);
+  }
+  throw new Error(`artifact frame did not load ${path}`);
+}
+
+async function evaluateArtifact(entry, expression, path = entry.site.entrypoint) {
+  try {
+    const frame = await waitForArtifactFrame(entry, path);
+    return await frame.executeJavaScript(expression);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -216,12 +254,17 @@ async function proveGeometry(host, window, fixture) {
     }),
   );
   phase("mount");
-  const wc = host.byHandle.get(desktop.handle).webContents;
-  const metrics = await evaluate(
-    wc,
+  const desktopEntry = host.byHandle.get(desktop.handle);
+  const wc = desktopEntry.webContents;
+  const desktopFrame = await waitForArtifactFrame(desktopEntry);
+  const metrics = await evaluateArtifact(
+    desktopEntry,
     "({ width: innerWidth, height: innerHeight, narrow: matchMedia('(max-width: 1439px)').matches, ready: window.__ready === true })",
   );
-  const desktopView = host.byHandle.get(desktop.handle).view.getBounds();
+  // The native wrapper is intentionally sized to the visible slice. The
+  // artifact frame retains the fitted child geometry inside its fixed CSS
+  // iframe, which is the viewport this proof must measure.
+  const desktopView = desktopEntry.layout.child;
   const desktopExpectedCssHeight =
     desktopView.height / (desktopView.width / 1440);
   const desktopMeasuredDelta = Math.abs(
@@ -230,6 +273,11 @@ async function proveGeometry(host, window, fixture) {
   const desktopTolerance = Math.abs(desktopExpectedCssHeight - 900);
   results.geometry.desktop = {
     ...metrics,
+    childFrameUrl: desktopFrame.url,
+    wrapperBounds: {
+      width: desktopEntry.view.getBounds().width,
+      height: desktopEntry.view.getBounds().height,
+    },
     fitted: { width: desktopView.width, height: desktopView.height },
     expectedCssHeight: desktopExpectedCssHeight,
     tolerance: desktopTolerance,
@@ -256,8 +304,14 @@ async function proveGeometry(host, window, fixture) {
     metrics.ready === true,
     "verified inline script ran under the hash-authorized CSP",
   );
-  await evaluate(wc, "document.getElementById('btn').click()");
-  const clicked = await evaluate(wc, "window.__clicked === 1");
+  await evaluateArtifact(
+    desktopEntry,
+    "document.getElementById('btn').click()",
+  );
+  const clicked = await evaluateArtifact(
+    desktopEntry,
+    "window.__clicked === 1",
+  );
   check(
     "interaction.inlineHandler",
     clicked === true,
@@ -266,11 +320,12 @@ async function proveGeometry(host, window, fixture) {
 
   // A verified second document must receive its own hash-authorized CSP; the
   // entrypoint's authorization must not be the only one that works.
-  await evaluate(wc, "location.href = 'page2.html'; 'set'");
+  await evaluateArtifact(desktopEntry, "location.href = 'page2.html'; 'set'");
   await delay(500);
-  const secondPage = await evaluate(
-    wc,
+  const secondPage = await evaluateArtifact(
+    desktopEntry,
     "({ url: location.href, script: window.__page2 === true })",
+    "page2.html",
   );
   check(
     "interaction.secondPageNavigation",
@@ -283,9 +338,10 @@ async function proveGeometry(host, window, fixture) {
     secondPage.script === true,
     "second verified HTML page ran its own inline script",
   );
-  const secondClicked = await evaluate(
-    wc,
+  const secondClicked = await evaluateArtifact(
+    desktopEntry,
     "document.getElementById('p2').click(); window.__page2Clicked === true",
+    "page2.html",
   );
   check(
     "interaction.secondPageInlineHandler",
@@ -293,7 +349,7 @@ async function proveGeometry(host, window, fixture) {
     "second page inline handler ran",
   );
   phase("interactions");
-  await evaluate(wc, "history.back(); 'set'");
+  await evaluateArtifact(desktopEntry, "history.back(); 'set'", "page2.html");
   await delay(400);
 
   const mobile = await host.open(
@@ -305,12 +361,13 @@ async function proveGeometry(host, window, fixture) {
       bounds: { x: 0, y: 64, width: 360, height: 700 },
     }),
   );
-  const mobileWc = host.byHandle.get(mobile.handle).webContents;
-  const mobileMetrics = await evaluate(
-    mobileWc,
+  const mobileEntry = host.byHandle.get(mobile.handle);
+  const mobileFrame = await waitForArtifactFrame(mobileEntry);
+  const mobileMetrics = await evaluateArtifact(
+    mobileEntry,
     "({ width: innerWidth, height: innerHeight, narrow: matchMedia('(max-width: 500px)').matches })",
   );
-  const mobileView = host.byHandle.get(mobile.handle).view.getBounds();
+  const mobileView = mobileEntry.layout.child;
   const mobileExpectedCssHeight = mobileView.height / (mobileView.width / 390);
   const mobileMeasuredDelta = Math.abs(
     mobileMetrics.height - mobileExpectedCssHeight,
@@ -318,6 +375,11 @@ async function proveGeometry(host, window, fixture) {
   const mobileTolerance = Math.abs(mobileExpectedCssHeight - 844);
   results.geometry.mobile = {
     ...mobileMetrics,
+    childFrameUrl: mobileFrame.url,
+    wrapperBounds: {
+      width: mobileEntry.view.getBounds().width,
+      height: mobileEntry.view.getBounds().height,
+    },
     fitted: { width: mobileView.width, height: mobileView.height },
     expectedCssHeight: mobileExpectedCssHeight,
     tolerance: mobileTolerance,
@@ -345,42 +407,69 @@ async function proveGeometry(host, window, fixture) {
 async function proveDenials(host, _fixture, handles) {
   const entry = host.byHandle.get(handles.desktop.handle);
   const wc = entry.webContents;
-  const before = wc.getURL();
-  await evaluate(wc, "location.href = 'https://example.com/'; 'set'");
+  const beforeFrame = await waitForArtifactFrame(entry);
+  const before = beforeFrame.url;
+  await evaluateArtifact(
+    entry,
+    "location.href = 'https://example.com/'; 'set'",
+  );
   await delay(400);
+  const afterExternal = await waitForArtifactFrame(entry);
   check(
     "denial.externalNavigation",
-    wc.getURL() === before,
-    `url=${wc.getURL()}`,
+    afterExternal.url === before,
+    `url=${afterExternal.url}`,
   );
 
-  const popup = await evaluate(
-    wc,
+  const popup = await evaluateArtifact(
+    entry,
     "window.open('https://example.com/') === null",
   );
   check("denial.popup", popup === true, "window.open returned null");
 
-  const media = await evaluate(
-    wc,
-    "navigator.mediaDevices.getUserMedia({audio:true}).then(() => 'granted').catch(() => 'denied')",
+  const media = await evaluateArtifact(
+    entry,
+    "navigator.mediaDevices?.getUserMedia ? navigator.mediaDevices.getUserMedia({audio:true}).then(() => 'granted').catch(() => 'denied') : 'denied'",
   );
   check("denial.permission", media === "denied", `gum=${media}`);
 
-  const network = await evaluate(
-    wc,
+  const network = await evaluateArtifact(
+    entry,
     "fetch('https://example.com/').then(() => 'reached').catch(() => 'blocked')",
   );
   check("denial.network", network === "blocked", `fetch=${network}`);
   phase("denials");
 
   const other = host.byHandle.get(handles.mobile.handle);
-  const otherUrl = other.webContents.getURL();
-  await evaluate(wc, `location.href = ${JSON.stringify(otherUrl)}; 'set'`);
+  const otherFrame = await waitForArtifactFrame(other);
+  const otherUrl = otherFrame.url;
+  const wrapperBoundary = await evaluateArtifact(
+    entry,
+    `(() => {
+      try {
+        window.top.document.documentElement.dataset.colonyPreviewTampered = "yes";
+        return { accessible: true };
+      } catch (error) {
+        return { accessible: false, name: error?.name ?? "unknown" };
+      }
+    })()`,
+  );
+  const wrapperMarker = await evaluate(
+    wc,
+    "document.documentElement.dataset.colonyPreviewTampered ?? null",
+  );
+  await evaluateArtifact(
+    entry,
+    `location.href = ${JSON.stringify(otherUrl)}; 'set'`,
+  );
   await delay(400);
+  const afterCrossEntry = await waitForArtifactFrame(entry);
   check(
     "isolation.crossEntryNavigation",
-    wc.getURL() === before,
-    "entry A refused entry B's origin",
+    afterCrossEntry.url === before &&
+      wrapperBoundary?.accessible === false &&
+      wrapperMarker === null,
+    `entry A refused entry B's origin; wrapperBoundary=${JSON.stringify(wrapperBoundary)} marker=${wrapperMarker}`,
   );
   const urls = [before, otherUrl].map((value) => new URL(value).hostname);
   check(
@@ -588,6 +677,12 @@ async function main() {
       Number.isFinite(entry.height) &&
       Number.isFinite(entry.expectedCssHeight) &&
       Number.isFinite(entry.tolerance) &&
+      typeof entry.childFrameUrl === "string" &&
+      entry.childFrameUrl.startsWith("colony-preview:") &&
+      entry.wrapperBounds !== null &&
+      typeof entry.wrapperBounds === "object" &&
+      Number.isFinite(entry.wrapperBounds.width) &&
+      Number.isFinite(entry.wrapperBounds.height) &&
       entry.fitted !== null &&
       typeof entry.fitted === "object" &&
       Number.isFinite(entry.fitted.width) &&

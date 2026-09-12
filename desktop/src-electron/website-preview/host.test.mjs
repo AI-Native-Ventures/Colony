@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import { PREVIEW_LOADING_RESERVE_BYTES } from "./host.mjs";
+import { isFinishedArtifactEntrypointFrame } from "./lifecycle.mjs";
 import {
   PREVIEW_CSP,
   PREVIEW_SCHEME,
@@ -247,6 +248,129 @@ test("the partition protocol serves only verified listed files", async () => {
     method: "GET",
   });
   assert.equal(afterClose.status, 404);
+});
+
+test("clip mode isolates the artifact behind a trusted wrapper origin", async () => {
+  const { host, world } = createHost({ clipStrategy: "clip" });
+  const window = createWindow();
+  const state = await host.open(
+    requestFor(window, {
+      bounds: { x: 0, y: 0, width: 720, height: 450 },
+    }),
+  );
+  const entry = host.byHandle.get(state.handle);
+  const view = world.views[0];
+  const previewSession = world.sessions.get(world.partitions[0]);
+  const handler = previewSession.protocol.handlers.get(PREVIEW_SCHEME);
+  const artifactBase = `${PREVIEW_SCHEME}://${entry.token}`;
+  const wrapperBase = `${PREVIEW_SCHEME}://${entry.wrapperToken}`;
+  const wrapperUrl = `${wrapperBase}/${entry.wrapperPath}`;
+
+  assert.notEqual(entry.token, entry.wrapperToken);
+  assert.equal(view.webContents.loaded[0], wrapperUrl);
+  const wrapper = await handler({ url: wrapperUrl, method: "GET" });
+  const wrapperBody = Buffer.from(await wrapper.arrayBuffer()).toString(
+    "utf8",
+  );
+  assert.equal(wrapper.status, 200);
+  assert.match(wrapperBody, /sandbox="allow-scripts allow-same-origin"/);
+  assert.match(wrapperBody, new RegExp(`${artifactBase}/index\\.html`));
+  assert.match(
+    wrapper.headers.get("content-security-policy"),
+    new RegExp(`frame-src ${artifactBase}`),
+  );
+
+  const artifact = await handler({
+    url: `${artifactBase}/index.html`,
+    method: "GET",
+  });
+  assert.match(
+    artifact.headers.get("content-security-policy"),
+    new RegExp(`frame-ancestors ${wrapperBase}`),
+  );
+
+  const mainArtifact = event();
+  view.webContents.emit(
+    "will-navigate",
+    mainArtifact,
+    `${artifactBase}/index.html`,
+  );
+  assert.equal(mainArtifact.prevented, true);
+  const mainWrapper = event();
+  view.webContents.emit("will-navigate", mainWrapper, wrapperUrl);
+  assert.equal(mainWrapper.prevented, false);
+
+  const childArtifact = event();
+  view.webContents.emit("will-frame-navigate", childArtifact, {
+    url: `${artifactBase}/index.html`,
+    isMainFrame: false,
+  });
+  assert.equal(childArtifact.prevented, false);
+  const childWrapper = event();
+  view.webContents.emit("will-frame-navigate", childWrapper, {
+    url: wrapperUrl,
+    isMainFrame: false,
+  });
+  assert.equal(childWrapper.prevented, true);
+
+  let requestOptions;
+  previewSession.webRequest.handler(
+    { url: wrapperUrl },
+    (options) => {
+      requestOptions = options;
+    },
+  );
+  assert.deepEqual(requestOptions, { cancel: false });
+  previewSession.webRequest.handler(
+    { url: `${artifactBase}/index.html` },
+    (options) => {
+      requestOptions = options;
+    },
+  );
+  assert.deepEqual(requestOptions, { cancel: false });
+  previewSession.webRequest.handler(
+    { url: "https://evil.example.com/" },
+    (options) => {
+      requestOptions = options;
+    },
+  );
+  assert.deepEqual(requestOptions, { cancel: true });
+
+  await host.close({ window, handle: state.handle });
+});
+
+test("wrapper readiness requires the intended child frame identity", async () => {
+  const { host } = createHost({ clipStrategy: "clip" });
+  const window = createWindow();
+  const state = await host.open(requestFor(window));
+  const entry = host.byHandle.get(state.handle);
+  const frame = entry.webContents.mainFrame.frames[0];
+
+  assert.equal(
+    isFinishedArtifactEntrypointFrame(entry, {
+      isMainFrame: false,
+      frameProcessId: frame.processId + 1,
+      frameRoutingId: frame.routingId,
+    }),
+    false,
+  );
+  assert.equal(
+    isFinishedArtifactEntrypointFrame(entry, {
+      isMainFrame: true,
+      frameProcessId: frame.processId,
+      frameRoutingId: frame.routingId,
+    }),
+    false,
+  );
+  assert.equal(
+    isFinishedArtifactEntrypointFrame(entry, {
+      isMainFrame: false,
+      frameProcessId: frame.processId,
+      frameRoutingId: frame.routingId,
+    }),
+    true,
+  );
+  await host.close({ window, handle: state.handle });
 });
 
 test("inline authorizations are computed per served HTML page", async () => {

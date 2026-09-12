@@ -10,7 +10,13 @@
 import { randomBytes } from "node:crypto";
 
 import { PreviewHostError } from "./host-errors.mjs";
-import { PREVIEW_SCHEME, previewEntryUrl } from "./scheme.mjs";
+import {
+  PREVIEW_SCHEME,
+  PREVIEW_WRAPPER_PATH,
+  parsePreviewUrl,
+  previewEntryUrl,
+  previewOrigin,
+} from "./scheme.mjs";
 import { isAllowedEntryUrl, servePreviewRequest } from "./serving.mjs";
 
 /** Cap on the first main-frame load before the view is reported failed. */
@@ -45,10 +51,14 @@ export function configurePreviewSession(entry, previewSession) {
   previewSession.on("will-download", onDownload);
   entry.sessionListeners.push(["will-download", onDownload]);
 
-  const allowedPrefix = `${PREVIEW_SCHEME}://${entry.token}/`;
+  const allowedPrefixes = [entry.token, entry.wrapperToken]
+    .filter((token) => typeof token === "string" && token !== "")
+    .map((token) => `${previewOrigin(token)}/`);
   const onBeforeRequest = (details, callback) => {
     const url = typeof details?.url === "string" ? details.url : "";
-    callback({ cancel: !url.startsWith(allowedPrefix) });
+    callback({
+      cancel: !allowedPrefixes.some((prefix) => url.startsWith(prefix)),
+    });
   };
   previewSession.webRequest.onBeforeRequest(
     { urls: ["<all_urls>"] },
@@ -69,7 +79,8 @@ export function configurePreviewSession(entry, previewSession) {
 
 /**
  * Deny popups, subframes, webviews, downloads, and any navigation that is not
- * a listed file on this entry's own origin.
+ * the generated wrapper on its own origin or a listed file in the verified
+ * artifact child frame.
  *
  * `onLayout` re-applies geometry after a load event and `onState` pushes a
  * scoped state update after a failure, so a stopped renderer is reported to
@@ -83,18 +94,42 @@ export function configurePreviewWebContents(entry, onLayout, onState) {
   };
   webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   on("will-navigate", (event, url) => {
-    if (!isAllowedEntryUrl(entry, url)) event.preventDefault();
+    if (!isAllowedEntryUrl(entry, url, { isMainFrame: true })) {
+      event.preventDefault();
+    }
   });
-  on("will-redirect", (event, url) => {
-    if (!isAllowedEntryUrl(entry, url)) event.preventDefault();
+  on("will-redirect", (event, url, ...rest) => {
+    const booleans = rest.filter((value) => typeof value === "boolean");
+    const isMainFrame = booleans.length === 0 ? true : booleans.at(-1);
+    if (!isAllowedEntryUrl(entry, url, { isMainFrame })) {
+      event.preventDefault();
+    }
   });
-  on("will-frame-navigate", (event) => {
-    if (!isAllowedEntryUrl(entry, event?.url)) event.preventDefault();
+  on("will-frame-navigate", (event, details) => {
+    const navigation = details ?? event;
+    const url =
+      typeof navigation?.url === "string"
+        ? navigation.url
+        : typeof event?.url === "string"
+          ? event.url
+          : "";
+    const isMainFrame =
+      typeof navigation?.isMainFrame === "boolean"
+        ? navigation.isMainFrame
+        : typeof event?.isMainFrame === "boolean"
+          ? event.isMainFrame
+          : true;
+    if (!isAllowedEntryUrl(entry, url, { isMainFrame })) {
+      event.preventDefault();
+    }
   });
   on("will-attach-webview", (event) => {
     event.preventDefault();
   });
   on("did-finish-load", () => {
+    onLayout();
+  });
+  on("did-frame-finish-load", () => {
     onLayout();
   });
   on("did-navigate", () => {
@@ -116,8 +151,73 @@ export function configurePreviewWebContents(entry, onLayout, onState) {
   });
 }
 
+function isArtifactEntrypointUrl(entry, rawUrl) {
+  if (entry.site === null || entry.paths === null) return false;
+  const parsed = parsePreviewUrl(rawUrl);
+  if (parsed === null || parsed.token !== entry.token) return false;
+  const path = parsed.path === "" ? entry.site.entrypoint : parsed.path;
+  return (
+    path === entry.site.entrypoint &&
+    isAllowedEntryUrl(entry, rawUrl, { isMainFrame: false })
+  );
+}
+
+function frameIdentity(frame) {
+  return {
+    processId: frame?.processId ?? frame?.frameProcessId,
+    routingId: frame?.routingId ?? frame?.frameRoutingId,
+  };
+}
+
+/** True only when the finished frame identity names the intended child. */
+export function isFinishedArtifactEntrypointFrame(entry, details = {}) {
+  if (details.isMainFrame === true) return false;
+  if (!Number.isInteger(details.frameProcessId)) return false;
+  if (!Number.isInteger(details.frameRoutingId)) return false;
+  try {
+    const frames = entry.webContents?.mainFrame?.frames;
+    return (
+      Array.isArray(frames) &&
+      frames.some((frame) => {
+        const identity = frameIdentity(frame);
+        return (
+          identity.processId === details.frameProcessId &&
+          identity.routingId === details.frameRoutingId &&
+          isArtifactEntrypointUrl(entry, frame?.url)
+        );
+      })
+    );
+  } catch {
+    return false;
+  }
+}
+
+function frameEventDetails(args) {
+  const event = args[0];
+  const details = args.find(
+    (value, index) => index > 0 && value !== null && typeof value === "object",
+  );
+  const isMainFrame =
+    typeof event?.isMainFrame === "boolean"
+      ? event.isMainFrame
+      : typeof details?.isMainFrame === "boolean"
+        ? details.isMainFrame
+        : typeof args[1] === "boolean"
+          ? args[1]
+          : undefined;
+  const frameProcessId =
+    details?.frameProcessId ??
+    details?.processId ??
+    (Number.isInteger(args[2]) ? args[2] : undefined);
+  const frameRoutingId =
+    details?.frameRoutingId ??
+    details?.routingId ??
+    (Number.isInteger(args[3]) ? args[3] : undefined);
+  return { isMainFrame, frameProcessId, frameRoutingId };
+}
+
 /**
- * Wait for the first main-frame load to finish, fail, abort, or time out.
+ * Wait for the first entrypoint load to finish, fail, abort, or time out.
  *
  * This is the real readiness gate: `open` does not resolve `ready` until this
  * settles, so a blank or failed first paint can never be labelled
@@ -150,9 +250,35 @@ function waitForFirstLoad(entry) {
       entry.webContentsListeners.push([event, handler]);
       listeners.push([event, handler]);
     };
-    on("did-finish-load", () => settle(null));
-    on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
-      if (isMainFrame !== true || code === -3) return;
+    on("did-finish-load", () => {
+      if (entry.wrapperEnabled !== true) {
+        settle(null);
+      }
+    });
+    on("did-frame-finish-load", (...args) => {
+      if (!entry.wrapperEnabled) return;
+      if (isFinishedArtifactEntrypointFrame(entry, frameEventDetails(args))) {
+        settle(null);
+      }
+    });
+    on("did-fail-load", (_event, code, description, url, isMainFrame) => {
+      if (code === -3) return;
+      if (
+        entry.wrapperEnabled === true &&
+        isMainFrame !== true &&
+        isArtifactEntrypointUrl(entry, url)
+      ) {
+        settle(
+          invalid(
+            "preview_load_failed",
+            typeof description === "string" && description !== ""
+              ? description
+              : "the preview entrypoint failed to load",
+          ),
+        );
+        return;
+      }
+      if (isMainFrame !== true) return;
       settle(
         invalid(
           "preview_load_failed",
@@ -204,6 +330,7 @@ export async function mountEntry(host, entry) {
     throw invalid("window_closed", "the owning window is gone");
   }
   const token = randomBytes(16).toString("hex");
+  const wrapperEnabled = host.clipStrategy === "clip";
   const partition = `preview-${token}`;
   const previewSession = host.session.fromPartition(partition);
   if (
@@ -217,6 +344,11 @@ export async function mountEntry(host, entry) {
     );
   }
   entry.token = token;
+  entry.wrapperEnabled = wrapperEnabled;
+  entry.wrapperToken = wrapperEnabled
+    ? randomBytes(16).toString("hex")
+    : null;
+  entry.wrapperPath = wrapperEnabled ? PREVIEW_WRAPPER_PATH : null;
   entry.partition = partition;
   entry.previewSession = previewSession;
   configurePreviewSession(entry, previewSession);
@@ -269,9 +401,10 @@ export async function mountEntry(host, entry) {
   host.applyLayout(entry);
   const load = waitForFirstLoad(entry);
   try {
-    await view.webContents.loadURL(
-      previewEntryUrl(token, entry.site.entrypoint),
-    );
+    const initialUrl = wrapperEnabled
+      ? previewEntryUrl(entry.wrapperToken, entry.wrapperPath)
+      : previewEntryUrl(token, entry.site.entrypoint);
+    await view.webContents.loadURL(initialUrl);
   } catch (error) {
     load.fail(
       invalid(
@@ -373,6 +506,10 @@ export async function destroyEntry(entry) {
   }
   entry.site = null;
   entry.paths = null;
+  entry.wrapperEnabled = false;
+  entry.wrapperToken = null;
+  entry.wrapperPath = null;
+  entry.wrapperLayout = null;
   entry.webContents = null;
   entry.view = null;
   entry.container = null;

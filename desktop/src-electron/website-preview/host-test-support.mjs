@@ -12,10 +12,12 @@ export const SHA = "a".repeat(64);
 export const MANIFEST_URL = "https://cdn.example.com/site/manifest.json";
 
 class FakeWebContents {
-  constructor(options = {}) {
+  constructor(options = {}, previewSession = null) {
     this.listeners = new Map();
     this.loaded = [];
     this.url = "";
+    this.previewSession = previewSession;
+    this.mainFrame = { frames: [] };
     this.zoomFactor = 1;
     this.zoomFactorCalls = [];
     this.windowOpenHandler = null;
@@ -54,7 +56,7 @@ class FakeWebContents {
     this.loaded.push(url);
     // Deliver the load result on a microtask so listeners registered around
     // loadURL observe it, matching real Electron ordering.
-    queueMicrotask(() => {
+    queueMicrotask(async () => {
       if (this.loadFailure !== null) {
         this.emit(
           "did-fail-load",
@@ -66,6 +68,28 @@ class FakeWebContents {
         );
       } else {
         this.emit("did-finish-load");
+        if (url.endsWith("/__colony_preview_wrapper.html")) {
+          const handler = this.previewSession?.protocol?.handlers?.get(
+            "colony-preview",
+          );
+          if (handler !== undefined) {
+            const response = await handler({ url, method: "GET" });
+            const html = await response.text();
+            const childUrl = html.match(/\ssrc=\"([^\"]+)\"/)?.[1];
+            if (childUrl !== undefined) {
+              this.mainFrame.frames = [
+                { url: childUrl, processId: 7, routingId: 11 },
+              ];
+              this.emit(
+                "did-frame-finish-load",
+                { isMainFrame: false },
+                false,
+                7,
+                11,
+              );
+            }
+          }
+        }
       }
     });
     return Promise.resolve();
@@ -187,7 +211,7 @@ export function createElectron(options = {}) {
     constructor(viewOptions) {
       super();
       this.options = viewOptions;
-      this.webContents = new FakeWebContents(options);
+      this.webContents = new FakeWebContents(options, viewOptions.session);
       views.push(this);
     }
   }

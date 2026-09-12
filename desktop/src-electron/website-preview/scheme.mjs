@@ -12,6 +12,9 @@
 /** Custom scheme reserved for verified website preview artifacts. */
 export const PREVIEW_SCHEME = "colony-preview";
 
+/** Synthetic route used by the native clip wrapper, never by an artifact. */
+export const PREVIEW_WRAPPER_PATH = "__colony_preview_wrapper.html";
+
 /**
  * Privileges handed to `registerSchemesAsPrivileged` for the preview scheme.
  *
@@ -81,14 +84,36 @@ export const PREVIEW_CSP_DIRECTIVES = Object.freeze([
  * token is added only when handler hashes exist. There is no code path that
  * adds `'unsafe-inline'` to `script-src`.
  */
-export function previewCsp({ scriptHashes = [], handlerHashes = [] } = {}) {
+export function previewCsp({
+  scriptHashes = [],
+  handlerHashes = [],
+  frameSrc,
+  childSrc,
+  frameAncestors,
+} = {}) {
   return PREVIEW_CSP_DIRECTIVES.map((directive) => {
-    if (!directive.startsWith("script-src")) return directive;
-    const tokens = [...scriptHashes];
-    if (handlerHashes.length > 0) {
-      tokens.push("'unsafe-hashes'", ...handlerHashes);
+    if (directive.startsWith("script-src")) {
+      const tokens = [...scriptHashes];
+      if (handlerHashes.length > 0) {
+        tokens.push("'unsafe-hashes'", ...handlerHashes);
+      }
+      return tokens.length === 0
+        ? directive
+        : `${directive} ${tokens.join(" ")}`;
     }
-    return tokens.length === 0 ? directive : `${directive} ${tokens.join(" ")}`;
+    if (directive.startsWith("frame-src") && frameSrc !== undefined) {
+      return `frame-src ${frameSrc}`;
+    }
+    if (directive.startsWith("child-src") && childSrc !== undefined) {
+      return `child-src ${childSrc}`;
+    }
+    if (
+      directive.startsWith("frame-ancestors") &&
+      frameAncestors !== undefined
+    ) {
+      return `frame-ancestors ${frameAncestors}`;
+    }
+    return directive;
   }).join("; ");
 }
 
@@ -161,20 +186,28 @@ export function previewEntryUrl(token, entrypoint) {
   return `${PREVIEW_SCHEME}://${token}/${entrypoint}`;
 }
 
+/** Origin string for one opaque preview token. */
+export function previewOrigin(token) {
+  return `${PREVIEW_SCHEME}://${token}`;
+}
+
 /** Content type for a manifest MIME, with UTF-8 for textual payloads. */
 export function previewContentType(mime) {
   return TEXTUAL_MIMES.has(mime) ? `${mime}; charset=utf-8` : mime;
 }
 
 /** Response headers for one verified file. */
-export function previewHeaders(mime, { csp = PREVIEW_CSP } = {}) {
+export function previewHeaders(
+  mime,
+  { csp = PREVIEW_CSP, crossOriginResourcePolicy = "same-origin" } = {},
+) {
   return {
     "content-type": previewContentType(mime),
     "cache-control": "no-store",
     "content-security-policy": csp,
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
-    "cross-origin-resource-policy": "same-origin",
+    "cross-origin-resource-policy": crossOriginResourcePolicy,
     "cross-origin-opener-policy": "same-origin",
   };
 }

@@ -5,7 +5,9 @@
  * thread root, revision, manifest hash). Each view gets its own ephemeral
  * Electron session partition, a partition-scoped `colony-preview:` protocol
  * that serves only loader-verified file bytes, and a native container used to
- * clip the page to the pane the caller says is visible. There is no preload,
+ * bound a trusted wrapper to the pane the caller says is visible. In clip
+ * mode, that wrapper CSS-clips the verified artifact in a separate-origin
+ * iframe. There is no preload,
  * no Node integration, no app session, and no IPC surface on this object.
  *
  * Electron dependencies are injected so the lifecycle can be unit tested in
@@ -43,6 +45,7 @@ import {
   normalizeClip,
   normalizeRect,
 } from "./viewport.mjs";
+import { PREVIEW_WRAPPER_FRAME_ID } from "./serving.mjs";
 
 export { PREVIEW_FIRST_LOAD_TIMEOUT_MS };
 
@@ -265,6 +268,10 @@ export class WebsitePreviewHost {
       site: null,
       paths: null,
       token: null,
+      wrapperEnabled: false,
+      wrapperToken: null,
+      wrapperPath: null,
+      wrapperLayout: null,
       partition: null,
       previewSession: null,
       container: null,
@@ -424,16 +431,62 @@ export class WebsitePreviewHost {
     });
   }
 
+  /** Keep the trusted wrapper's iframe aligned with the fitted native layout. */
+  syncWrapperLayout(entry, layout) {
+    entry.wrapperLayout = layout;
+    if (
+      entry.wrapperEnabled !== true ||
+      layout.visible !== true ||
+      entry.webContents === null ||
+      typeof entry.webContents.executeJavaScript !== "function"
+    ) {
+      return;
+    }
+    const zoomFactor = layout.zoomFactor;
+    const left = layout.child.x / zoomFactor;
+    const top = layout.child.y / zoomFactor;
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+    const frameId = JSON.stringify(PREVIEW_WRAPPER_FRAME_ID);
+    const leftCss = JSON.stringify(`${left}px`);
+    const topCss = JSON.stringify(`${top}px`);
+    const expression =
+      `(() => { const frame = document.getElementById(${frameId}); ` +
+      `if (frame === null) return false; ` +
+      `frame.style.left = ${leftCss}; frame.style.top = ${topCss}; return true; })()`;
+    try {
+      Promise.resolve(entry.webContents.executeJavaScript(expression)).catch(
+        () => {},
+      );
+    } catch {
+      // The wrapper may be between navigations or teardown.
+    }
+  }
+
   applyLayout(entry) {
     if (entry.disposed || entry.container === null || entry.view === null)
       return;
     const layout = this.layoutFor(entry);
     entry.layout = layout;
+    if (entry.wrapperEnabled === true) entry.wrapperLayout = layout;
     const visible =
       entry.requestedVisible && layout.visible === true && !entry.failed;
     if (layout.visible === true) {
       entry.container.setBounds(layout.container);
-      entry.view.setBounds(layout.child);
+      if (entry.wrapperEnabled === true) {
+        // The wrapper is the only native child and is sized to the visible
+        // rectangle. The verified artifact stays in a CSS-clipped iframe, so
+        // it can never paint beyond the native view on platforms where a
+        // nested View does not clip its child WebContentsView.
+        entry.view.setBounds({
+          x: 0,
+          y: 0,
+          width: layout.container.width,
+          height: layout.container.height,
+        });
+        this.syncWrapperLayout(entry, layout);
+      } else {
+        entry.view.setBounds(layout.child);
+      }
       // Always re-apply the factor. Electron's zoom map is per origin and a
       // factor set before the first commit (or reset by navigation) is
       // discarded, so this must run again after every load/navigation.
