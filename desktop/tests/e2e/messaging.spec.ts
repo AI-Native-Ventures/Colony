@@ -1352,8 +1352,10 @@ test("composer no-image link embeds keep the attachment footprint", async ({
     .locator('[data-link-preview="github-pull-request"]');
   await expect(card).toHaveAttribute("data-image-state", "none");
   await expect(card.locator("[data-link-preview-thumbnail]")).toBeVisible();
+  // "Buzz" here is the repository name in github.com/block/buzz, not the
+  // product, so it stays even though the app now calls itself Colony.
   await expect(card.locator('[data-slot="attachment-title"]')).toContainText(
-    /github\.com|Colony/,
+    /github\.com|Buzz/,
   );
   await expect(card).toHaveCSS("height", "55px");
 });
