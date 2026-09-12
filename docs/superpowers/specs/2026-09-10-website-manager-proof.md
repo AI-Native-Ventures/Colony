@@ -1,6 +1,6 @@
 # Website Manager proof contract
 
-The approved visual and product contract is [the design specification](2026-09-10-website-manager-design.md). Implementation is delegated to DeepSeek V4.1 Flash through OpenRouter at `max` reasoning. The orchestrator reviews and integrates the work. Automated checks, builds and tests run in GitHub CI, not on the owner's Mac.
+The approved visual and product contract is [the design specification](2026-09-10-website-manager-design.md). Implementation is delegated to GPT-5.6 Luna workers at `max` reasoning. The orchestrator reviews and integrates the work. Automated checks, builds and tests run in GitHub CI, not on the owner's Mac.
 
 ## Proof stages
 
@@ -35,10 +35,16 @@ Keep implementation, automated checks, rendered acceptance, real agent work, mer
 - Both desktop and mobile previews must fit available width and height while retaining the real 1440x900 or390x844 CSS viewport. A portrait preview that remains partly hidden at every scroll position fails acceptance.
 - The expanded preview must hide the inline native view and remain usable with app zoom and a small window. Faked view bounds are source-level test evidence only; actual Electron rendering is required.
 - QA rows must come from the actual verified reviewer report. Reference presence, matching-shaped hashes, a boolean pass flag and a screenshot alone do not establish content, navigation, layout or functional checks.
-- Team setup must install actual editable runtime skills, persist community-scoped identities and hierarchy, inherit existing Power defaults, preserve customizations, and recover partial installation without duplicate agents. A pack in the repository or local team card alone is not installation proof.
+- Team setup must install actual editable runtime skills, persist community-scoped identities and hierarchy, and inherit existing Power defaults. Provisioned core employees must exist, cannot be deleted, adopt the current role holder, and receive updated bundled configuration during reconciliation; unrelated customized agents remain preserved. A pack in the repository or local team card alone is not installation proof.
 
-## Current checkpoint
+## Historical checkpoint — 2026-09-10
 
 DeepSeek V4.1 Flash via OpenRouter, reasoning max, is writing the implementation. Root is reviewing and orchestrating. Native artifact loader and pure review-contract source have been drafted and received source review; remaining corrections are included in subsequent worker tasks. UI source currently includes preview controls/surface and work-stage presentation, with remaining review/handover/starter components in progress. Backend persistence and actual Electron hosting are in progress.
 
 No feature commit, PR, GitHub test result, rendered five-state acceptance, installed runtime adoption or real website-job proof has passed at this checkpoint. Shared Blocks PR682 remains a separate dependency; its source will be consumed after it lands. No local CI has been run.
+
+## Current evidence checkpoint — 2026-09-12
+
+PR #691 is open as a draft on `codex/website-manager`; the current pushed source head is `448196b306f7318cf9e8a717c681c9e647a28b8b`. Worker evidence records 9 mock UI tests and 7 real-relay tests passing on the earlier source head `91208cba01d72b3225e2be1c3120be8e2488afbd`; those results are automated evidence for that earlier head and do not establish the current head's complete proof. Shared Blocks PR #682 has merged.
+
+The exact-head GitHub `Website preview native proof` run `34707121191` completed with all 16 required non-clip checks passing and desktop/mobile geometry recorded, but its corrected clip gate failed: the white control pixel was valid while both the header and page samples read the preview RGB, proving the current nested native `View` does not clip an overflowing `WebContentsView` child. Production remains on the fail-closed hide fallback; no native clipping proof has passed. The packaged managed Website Manager job and authenticated/live end-to-end flow remain unknown. CI, rendered acceptance, installed runtime adoption and release state must be checked against the exact pushed head before any completion claim.

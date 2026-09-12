@@ -927,11 +927,7 @@ async function captureViewport(
   name: string,
   locator?: Locator | readonly Locator[],
 ) {
-  const targets = locator
-    ? Array.isArray(locator)
-      ? locator
-      : [locator]
-    : [];
+  const targets = locator ? (Array.isArray(locator) ? locator : [locator]) : [];
   for (const target of targets) {
     await target.evaluate((element) =>
       element.scrollIntoView({ block: "start", inline: "nearest" }),
@@ -1071,8 +1067,9 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   const versionHistoryDisclosure = versionHistory.getByTestId(
     "website-version-history-disclosure",
   );
-  await expect(versionHistory.getByTestId("website-current-version-summary"))
-    .toContainText("Current · Version 2");
+  await expect(
+    versionHistory.getByTestId("website-current-version-summary"),
+  ).toContainText("Current · Version 2");
   await expect(versionHistoryDisclosure).toHaveJSProperty("open", false);
   await expect(
     versionHistoryDisclosure.locator("ul > li").first(),
@@ -1165,8 +1162,9 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   const versionHistoryDisclosure = versionHistory.getByTestId(
     "website-version-history-disclosure",
   );
-  await expect(versionHistory.getByTestId("website-current-version-summary"))
-    .toContainText("Current · Version 2");
+  await expect(
+    versionHistory.getByTestId("website-current-version-summary"),
+  ).toContainText("Current · Version 2");
   await expect(versionHistoryDisclosure).toHaveJSProperty("open", false);
   await expect(
     versionHistoryDisclosure.locator("ul > li").first(),
