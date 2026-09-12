@@ -1437,7 +1437,8 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   await page.getByTestId("appearance-mode-light").click();
 
   // Switch to a light theme — verifies dark→light transition
-  await page.getByTestId("theme-option-github-light").click();
+  await page.getByTestId("theme-style-trigger").click();
+  await page.getByTestId("theme-option-default").click();
 
   await expect
     .poll(() =>
@@ -1463,13 +1464,13 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
   // Theme name persists in localStorage
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("buzz-theme")))
-    .toBe("github-light");
+    .toBe("buzz");
 
   // Switch to Dark mode tab to reveal dark themes
   await page.getByTestId("appearance-mode-dark").click();
 
   // Switch back to a dark theme — verifies light→dark transition
-  await page.getByTestId("theme-option-dracula").click();
+  await page.getByTestId("theme-option-custom").click();
 
   await expect
     .poll(() =>
@@ -1479,7 +1480,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
 
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("buzz-theme")))
-    .toBe("dracula");
+    .toBe("buzz-dark");
 
   // Close settings with keyboard shortcut
   await page.keyboard.press(

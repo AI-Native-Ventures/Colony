@@ -393,3 +393,36 @@ export function AccentPickerContent({
     </SettingsOptionRow>
   );
 }
+
+/** Two color inputs added in place beneath the existing Custom theme tile. */
+export function CustomGradientControls() {
+  const { customGradient, setCustomGradient } = useTheme();
+  return (
+    <div data-testid="custom-gradient-controls">
+      {(["color1", "color2"] as const).map((key, index) => (
+        <SettingsOptionRow key={key}>
+          <label className="text-sm font-medium" htmlFor={`gradient-${key}`}>
+            Color {index + 1}
+          </label>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground">
+              {customGradient[key].toUpperCase()}
+            </span>
+            <input
+              className="h-9 w-12 cursor-pointer rounded-md border border-border bg-transparent p-1 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              id={`gradient-${key}`}
+              type="color"
+              value={customGradient[key]}
+              onChange={(event) =>
+                setCustomGradient({
+                  ...customGradient,
+                  [key]: event.target.value,
+                })
+              }
+            />
+          </div>
+        </SettingsOptionRow>
+      ))}
+    </div>
+  );
+}

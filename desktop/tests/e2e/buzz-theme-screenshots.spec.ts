@@ -547,7 +547,7 @@ test("appearance groups theme and preferences into labeled rows", async ({
   await expect(themeCard.getByTestId("glass-background-toggle")).toBeVisible();
   await expect(
     themeCard.getByTestId("prominent-active-tab-toggle"),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(
     preferencesCard.getByTestId("prominent-active-tab-toggle"),
   ).toHaveCount(0);
@@ -561,7 +561,7 @@ test("appearance groups theme and preferences into labeled rows", async ({
   );
   await expect(themeStyleTrigger).toHaveAttribute(
     "aria-label",
-    "Theme style, Github Light",
+    "Theme style, Default",
   );
   await expect(themeStyleTrigger).not.toContainText("Github Light");
   await expect(themeStyleTrigger).toHaveAttribute("aria-expanded", "false");
@@ -585,7 +585,7 @@ test("appearance groups theme and preferences into labeled rows", async ({
   await themeStyleTrigger.click();
   await expect(themeStyleTrigger).toHaveAttribute("aria-expanded", "true");
   await expect(themeStyleOptions).toBeVisible();
-  await themeCard.getByTestId("theme-option-buzz").click();
+  await themeCard.getByTestId("theme-option-default").click();
   await expect(themeStyleTrigger).toHaveAttribute("aria-expanded", "true");
   await expect(themeStyleOptions).toBeVisible();
 
@@ -872,7 +872,7 @@ for (const { hoverSurface, mode, theme } of [
     await expect(root).toHaveClass(
       new RegExp(`(^|\\s)${mode === "dark" ? "dark" : "light"}($|\\s)`),
     );
-    await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
+    await expect(root).toHaveAttribute("data-prominent-active-tab", "");
     const activeSurface = await readThemeColor(
       page,
       "hsl(var(--buzz-workspace-raised))",
@@ -901,7 +901,9 @@ for (const { mode, theme } of [
   { mode: "light" as const, theme: "github-light" },
   { mode: "dark" as const, theme: "github-dark" },
 ]) {
-  test(`${theme} ignores the Buzz prominent preference`, async ({ page }) => {
+  test(`${theme} migrates to Default and keeps the prominent preference`, async ({
+    page,
+  }) => {
     await seedTheme(page, theme);
     await page.addInitScript(
       ({ key }) => window.localStorage.setItem(key, "true"),
@@ -912,43 +914,20 @@ for (const { mode, theme } of [
 
     const root = page.locator("html");
     const activeRow = page.getByTestId("settings-nav-appearance");
-    await expect(page.getByTestId("prominent-active-tab-row")).toHaveCount(0);
-    await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
+    await expect(page.getByTestId("prominent-active-tab-row")).toBeVisible();
+    await expect(root).toHaveAttribute("data-prominent-active-tab", "");
 
-    const productionStyle = await page.evaluate(() => {
-      const sidebar = document.querySelector<HTMLElement>(
-        '[data-testid="settings-sidebar"]',
-      );
-      const row = document.querySelector<HTMLElement>(
-        '[data-testid="settings-nav-appearance"]',
-      );
-      if (!sidebar || !row) return null;
-      const probe = document.createElement("span");
-      probe.style.backgroundColor = "hsl(var(--sidebar-active))";
-      probe.style.color = "hsl(var(--sidebar-active-foreground))";
-      sidebar.append(probe);
-      const probeStyles = getComputedStyle(probe);
-      const rowStyles = getComputedStyle(row);
-      const result = {
-        expectedBackground: probeStyles.backgroundColor,
-        expectedForeground: probeStyles.color,
-        background: rowStyles.backgroundColor,
-        color: rowStyles.color,
-        fontWeight: rowStyles.fontWeight,
-      };
-      probe.remove();
-      return result;
-    });
-
-    expect(productionStyle).not.toBeNull();
-    expect(productionStyle?.background).toBe(
-      productionStyle?.expectedBackground,
+    await expect(root).toHaveAttribute(
+      "data-buzz-theme",
+      mode === "dark" ? "buzz-dark" : "buzz",
     );
-    expect(productionStyle?.color).toBe(productionStyle?.expectedForeground);
     await expect(activeRow).toHaveCSS(
-      "font-weight",
-      productionStyle?.fontWeight ?? "",
+      "background-color",
+      mode === "dark"
+        ? "rgba(255, 255, 255, 0.18)"
+        : "rgba(255, 255, 255, 0.82)",
     );
+    await expect(page.getByTestId("prominent-active-tab-toggle")).toBeChecked();
   });
 }
 
@@ -1217,10 +1196,10 @@ test("glass background keeps the content panel solid", async ({ page }) => {
     .toBe("false");
 });
 
-test("non-Buzz glass preserves the selected theme sidebar tint", async ({
+test("Custom colors appear in the existing theme rows and preserve glass", async ({
   page,
 }) => {
-  await seedTheme(page, "rose-pine-dawn");
+  await seedTheme(page, "buzz");
   await page.addInitScript(() => {
     (window as typeof window & { isTauri?: boolean }).isTauri = true;
     Object.defineProperty(navigator, "platform", {
@@ -1230,116 +1209,66 @@ test("non-Buzz glass preserves the selected theme sidebar tint", async ({
   });
   await installMockBridge(page);
   await openAppearance(page, "light");
-
-  const root = page.locator("html");
-  await expect(root).not.toHaveAttribute("data-buzz-sidebar", "");
-  await page.getByTestId("glass-background-toggle").click();
-  await expect(root).toHaveAttribute("data-glass-background", "");
-
-  const tint = await page
-    .locator(".buzz-theme-gradient-layer")
-    .evaluate((element) => {
-      const rootStyles = getComputedStyle(document.documentElement);
-      const sidebar = rootStyles
-        .getPropertyValue("--sidebar-background")
-        .trim();
-      const staticFallback = rootStyles.getPropertyValue("--sidebar").trim();
-      const probe = document.createElement("div");
-      probe.style.backgroundColor = `hsl(${sidebar} / 65%)`;
-      document.body.appendChild(probe);
-      const expected = getComputedStyle(probe).backgroundColor;
-      probe.remove();
-
-      return {
-        actual: getComputedStyle(element).backgroundColor,
-        expected,
-        sidebar,
-        staticFallback,
-      };
-    });
-
-  expect(tint.sidebar).not.toBe(tint.staticFallback);
-  expect(tint.actual).toBe(tint.expected);
-});
-
-test("accent choice remains available when changing theme styles", async ({
-  page,
-}) => {
-  // Every theme exposes the existing accent choice. Only Colony adds the
-  // coordinated workspace background patterns; switching themes retains both.
-  await seedTheme(page, "github-light");
-  await installMockBridge(page);
-  await openAppearance(page, "light");
-  await expect(page.getByTestId("accent-color-neutral")).toBeVisible();
-  const nonBuzzSettingOrder = await page
+  await page.getByTestId("theme-style-trigger").click();
+  await page.getByTestId("theme-option-custom").click();
+  await expect(page.getByLabel("Color 1", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Color 2", { exact: true })).toBeVisible();
+  const order = await page
     .getByTestId("appearance-theme-card")
     .locator(
-      '[data-testid="appearance-color-mode-row"], [data-testid="theme-style-row"], [data-testid="accent-color-options"], [data-testid="glass-background-row"], [data-testid="prominent-active-tab-row"]',
+      '[data-testid="appearance-color-mode-row"], [data-testid="theme-style-row"], [data-testid="custom-gradient-controls"], [data-testid="glass-background-row"], [data-testid="prominent-active-tab-row"]',
     )
     .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-testid")));
-  expect(nonBuzzSettingOrder).toEqual([
+  expect(order).toEqual([
     "appearance-color-mode-row",
     "theme-style-row",
-    "accent-color-options",
+    "custom-gradient-controls",
     "glass-background-row",
+    "prominent-active-tab-row",
   ]);
-
-  // Switch to Colony: keep accents and expose the workspace patterns.
-  await page.getByTestId("theme-style-trigger").click();
-  await page.getByTestId("theme-option-buzz").click();
-  await expect(page.getByTestId("theme-style-trigger")).toHaveAttribute(
-    "aria-expanded",
-    "true",
+  await page.getByLabel("Color 1", { exact: true }).fill("#ff0000");
+  await page.getByLabel("Color 2", { exact: true }).fill("#0000ff");
+  await page.getByTestId("glass-background-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-glass-background",
+    "",
   );
-  await expect(page.getByTestId("accent-color-neutral")).toBeVisible();
-  await expect(page.getByTestId("workspace-pattern-row")).toBeVisible();
-
-  // Other styles retain their own surfaces while leaving accent selection available.
-  await page.getByTestId("theme-option-github-light").click();
-  await expect(page.getByTestId("accent-color-neutral")).toBeVisible();
-  await expect(page.getByTestId("workspace-pattern-row")).toHaveCount(0);
-  await expect(page.getByTestId("theme-style-trigger")).toHaveAttribute(
-    "aria-expanded",
-    "true",
+  await expect(page.locator("html")).toHaveAttribute("data-buzz-sidebar", "");
+  await expect
+    .poll(() =>
+      page
+        .locator(".buzz-theme-gradient-layer-light")
+        .evaluate((element) => getComputedStyle(element).backgroundImage),
+    )
+    .toContain("linear-gradient");
+  await expect
+    .poll(() =>
+      page
+        .locator("html")
+        .evaluate((element) =>
+          getComputedStyle(element)
+            .getPropertyValue("--buzz-gradient-light-top")
+            .trim(),
+        ),
+    )
+    .toBe("#ffbdbd");
+  await expect
+    .poll(() =>
+      page
+        .locator("html")
+        .evaluate((element) =>
+          getComputedStyle(element)
+            .getPropertyValue("--buzz-gradient-light-bottom")
+            .trim(),
+        ),
+    )
+    .toBe("#bdbdff");
+  await page.getByTestId("theme-option-default").click();
+  await expect(page.getByTestId("custom-gradient-controls")).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-glass-background",
+    "",
   );
-
-  const swatchBoxes = await page
-    .getByTestId("accent-color-options")
-    .locator("button")
-    .evaluateAll((buttons) =>
-      buttons.map((button) => {
-        const box = button.getBoundingClientRect();
-        return { x: box.x, y: box.y };
-      }),
-    );
-  // Eleven since Violet joined the ramp as Colony's own hue and the default.
-  expect(swatchBoxes).toHaveLength(11);
-  expect(new Set(swatchBoxes.map((box) => Math.round(box.y))).size).toBe(1);
-  await expect(page.getByTestId("accent-color-options")).toHaveCSS(
-    "overflow-x",
-    "auto",
-  );
-  // Violet leads the ramp and is the default, so it is the pressed swatch on
-  // an install that has never chosen one. Blue held this before violet joined.
-  await expect(page.getByTestId("accent-color-violet")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await expect(
-    page
-      .getByTestId("accent-color-violet")
-      .getByTestId("accent-color-selection"),
-  ).toBeVisible();
-  await waitForAnimations(page);
-  await page.getByTestId("settings-theme").screenshot({
-    path: `${SHOTS}/12-appearance-theme-and-accents.png`,
-  });
-  const accentOptions = page.getByTestId("accent-color-options");
-  await accentOptions.scrollIntoViewIfNeeded();
-  await waitForAnimations(page);
-  await accentOptions.screenshot({
-    path: `${SHOTS}/13-appearance-accent-row.png`,
-  });
 });
 
 test("Buzz light and dark modes apply live without a reload", async ({

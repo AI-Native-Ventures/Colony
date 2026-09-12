@@ -29,7 +29,7 @@ function localStorageStub() {
 test("parses only the versioned stable appearance contract", () => {
   const valid = {
     version: 1,
-    theme: "houston",
+    theme: "buzz-dark",
     accent: "#3b82f6",
     followSystem: false,
   };
@@ -93,10 +93,10 @@ test("local preferences are isolated by pubkey and normalized relay", () => {
   globalThis.window = { localStorage: localStorageStub() };
   const aliceA = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "houston",
+    theme: "buzz-dark",
     followSystem: false,
   };
-  const aliceB = { ...DEFAULT_COMMUNITY_THEME, theme: "catppuccin-latte" };
+  const aliceB = { ...DEFAULT_COMMUNITY_THEME, theme: "buzz" };
   const bobA = { ...DEFAULT_COMMUNITY_THEME, accent: "#ec4899" };
   assert.equal(
     writeCommunityThemePreference("alice", "WSS://A.EXAMPLE/", aliceA),
@@ -130,7 +130,7 @@ test("local preferences are isolated by pubkey and normalized relay", () => {
 
 test("dirty outbox survives restart and clears only its exact revision", () => {
   globalThis.window = { localStorage: localStorageStub() };
-  const first = { ...DEFAULT_COMMUNITY_THEME, theme: "houston" };
+  const first = { ...DEFAULT_COMMUNITY_THEME, theme: "buzz-dark" };
   const second = { ...DEFAULT_COMMUNITY_THEME, accent: "#ec4899" };
 
   assert.equal(
@@ -194,7 +194,7 @@ test("remote preference still applies when its local cache write fails", () => {
 test("already-applied relay state leaves the next user edit publishable", () => {
   const applied = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "catppuccin-latte",
+    theme: "buzz",
     followSystem: false,
   };
 
@@ -235,12 +235,12 @@ test("confirmed first-community migration isolates later empty scopes", () => {
 test("community switch defers stale outgoing appearance persistence", () => {
   const outgoing = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "houston",
+    theme: "buzz-dark",
     followSystem: false,
   };
   const incoming = {
     ...DEFAULT_COMMUNITY_THEME,
-    theme: "catppuccin-latte",
+    theme: "buzz",
   };
 
   assert.equal(communityThemePersistenceAction(incoming, outgoing), "defer");
@@ -249,4 +249,73 @@ test("community switch defers stale outgoing appearance persistence", () => {
     "acknowledge",
   );
   assert.equal(communityThemePersistenceAction(null, incoming), "persist");
+});
+
+test("legacy styles migrate to Default without losing mode or accent", () => {
+  for (const [legacy, theme] of [
+    ["houston", "buzz-dark"],
+    ["catppuccin-latte", "buzz"],
+  ]) {
+    const stored = {
+      ...DEFAULT_COMMUNITY_THEME,
+      theme: legacy,
+      accent: "#3b82f6",
+      followSystem: false,
+    };
+    assert.deepEqual(parseCommunityThemePreference(stored), {
+      ...stored,
+      theme,
+    });
+  }
+});
+
+test("custom gradients survive cache and outbox round trips independently per community", () => {
+  globalThis.window = { localStorage: localStorageStub() };
+  const preference = {
+    ...DEFAULT_COMMUNITY_THEME,
+    customGradient: { enabled: true, color1: "#123456", color2: "#abcdef" },
+  };
+  writeCommunityThemePreference("alice", "wss://a.example", preference);
+  writeCommunityThemeOutbox("alice", "wss://a.example", preference);
+  assert.deepEqual(
+    readCommunityThemePreference("alice", "wss://a.example"),
+    preference,
+  );
+  assert.deepEqual(
+    readCommunityThemeOutbox("alice", "wss://a.example"),
+    preference,
+  );
+  assert.equal(readCommunityThemePreference("alice", "wss://b.example"), null);
+  const edited = {
+    ...preference,
+    customGradient: { ...preference.customGradient, color2: "#112233" },
+  };
+  assert.equal(sameCommunityThemePreference(preference, edited), false);
+  clearCommunityThemeOutbox("alice", "wss://a.example", edited);
+  assert.deepEqual(
+    readCommunityThemeOutbox("alice", "wss://a.example"),
+    preference,
+  );
+  assert.equal(
+    communityThemePersistenceAction(preference, DEFAULT_COMMUNITY_THEME),
+    "defer",
+  );
+  assert.equal(
+    communityThemePersistenceAction(preference, preference),
+    "acknowledge",
+  );
+  assert.equal(
+    parseCommunityThemePreference({
+      ...preference,
+      customGradient: { ...preference.customGradient, color2: "red" },
+    }),
+    null,
+  );
+  assert.equal(
+    sameCommunityThemePreference(preference, {
+      ...preference,
+      customGradient: { ...preference.customGradient, enabled: false },
+    }),
+    false,
+  );
 });

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- feat(desktop): simplify Appearance to Default and Custom, with two saved gradient colors while preserving the default palette and workspace background choices.
+
 - feat(onboarding): show four clear setup steps, require a successful agent reply before entry, and let owners review memories from selected local AI history.
 
 - fix(onboarding): retry a slow or rate-limited relay read during first-job approval instead of failing the setup.
