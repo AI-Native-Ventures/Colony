@@ -780,24 +780,19 @@ async function main() {
     ),
   ];
   const geometryReady = [
-    [results.geometry.desktop, 1440],
-    [results.geometry.mobile, 390],
+    [results.geometry.desktop, 1440, 900],
+    [results.geometry.mobile, 390, 844],
   ].every(
-    ([entry, expectedWidth]) =>
+    ([entry, expectedWidth, expectedHeight]) =>
       entry !== null &&
       typeof entry === "object" &&
       entry.width === expectedWidth &&
-      Number.isFinite(entry.height) &&
-      Number.isFinite(entry.expectedCssHeight) &&
-      Number.isFinite(entry.tolerance) &&
+      entry.height === expectedHeight &&
+      entry.expectedCssHeight === expectedHeight &&
+      entry.tolerance === 0 &&
       typeof entry.childFrameUrl === "string" &&
       entry.childFrameUrl.startsWith("colony-preview:") &&
-      entry.wrapperFrame !== null &&
-      typeof entry.wrapperFrame === "object" &&
-      entry.wrapperFrame.width === expectedWidth &&
-      entry.wrapperFrame.height === entry.expectedCssHeight &&
-      entry.wrapperFrame.styleWidth === `${expectedWidth}px` &&
-      entry.wrapperFrame.styleHeight === `${entry.expectedCssHeight}px` &&
+      hasExpectedWrapperSize(entry.wrapperFrame, expectedWidth, expectedHeight) &&
       entry.wrapperBounds !== null &&
       typeof entry.wrapperBounds === "object" &&
       Number.isFinite(entry.wrapperBounds.width) &&
