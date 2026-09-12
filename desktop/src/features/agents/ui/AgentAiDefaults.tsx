@@ -1,6 +1,7 @@
 import type * as React from "react";
 import type { InheritedDefault } from "./bakedEnvHelpers";
 import { getPersonaProviderOptions } from "./agentConfigOptions";
+import { ModelEnvOverrideNotice } from "./ModelEnvOverrideNotice";
 import { Button } from "@/shared/ui/button";
 
 function providerLabel(providerId: string) {
@@ -31,6 +32,7 @@ export function AgentAiDefaultsNotice({
   triggerRef,
   explicitModel,
   explicitProvider,
+  envVars,
   harness,
   inheritedModel,
   inheritedProvider,
@@ -40,6 +42,12 @@ export function AgentAiDefaultsNotice({
   triggerRef?: React.Ref<HTMLButtonElement>;
   explicitModel: string;
   explicitProvider: string;
+  /**
+   * The env vars saved on whatever this notice summarises. Only used to warn
+   * about a saved `BUZZ_ACP_MODEL`/`BUZZ_ACP_PROVIDER`, which the resolved
+   * configuration overrides. See {@link ModelEnvOverrideNotice}.
+   */
+  envVars?: Record<string, string> | null;
   harness?: string;
   inheritedModel: InheritedDefault;
   inheritedProvider: InheritedDefault;
@@ -91,6 +99,7 @@ export function AgentAiDefaultsNotice({
           {model || "Not configured"}
         </dd>
       </dl>
+      <ModelEnvOverrideNotice envVars={envVars} />
       <Button
         className="h-auto px-0 py-1"
         data-testid="edit-ai-defaults"
