@@ -48,6 +48,7 @@ jobs:
       raw-mobile: ${{ steps.filter.outputs.mobile }}
       raw-blocks: ${{ steps.filter.outputs.blocks }}
       raw-desktop-integration: ${{ steps.filter.outputs.desktop-integration }}
+      raw-integration-services: ${{ steps.filter.outputs.integration-services }}
       raw-security: ${{ steps.filter.outputs.security }}
       raw-cross-compile: ${{ steps.filter.outputs.cross-compile }}
       web: ${{ steps.filter.outputs.web }}
@@ -182,6 +183,32 @@ jobs:
               - '.github/workflows/ci.yml'
               - 'scripts/ci-activate-hermit.sh'
               - 'scripts/ci-pnpm-store-path.sh'
+            # The compose files CI itself reads. Every job below that starts
+            # services runs `docker compose up` against `docker-compose.yml`,
+            # so a change to it can break all of them, and until this group
+            # existed a pull request changing that file selected NO job that
+            # reads it: #730 fixed the MinIO images with every integration
+            # lane skipped, and was merged on a local `docker compose up` plus
+            # two unrelated branches as the only proof.
+            #
+            # Three of the six jobs reach compose INDIRECTLY, through
+            # `scripts/start-relay-for-tests.sh`, which runs `docker compose
+            # up` itself: Backend Integration, Relay E2E and Agent Ask E2E.
+            # Nobody reading ci.yml alone can see why those belong here, so
+            # this comment is what stops the next tidy-up removing them.
+            #
+            # `docker-compose.harness.yml` is also named by the `blocks`
+            # group, which is why Blocks Live Gate did run on #730. That near
+            # miss is the whole argument for this group.
+            #
+            # Deliberately NOT listed: the deploy compose file and the Helm
+            # values. CI never reads them, and a path filter naming files
+            # nothing reads is decoration that makes the next person believe
+            # the gate covers more than it does.
+            integration-services:
+              - 'docker-compose.yml'
+              - 'docker-compose.harness.yml'
+              - 'scripts/start-relay-for-tests.sh'
             security:
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -593,7 +620,8 @@ jobs:
       (needs.changes.outputs.core-enabled == 'true' &&
         (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')) ||
       (needs.changes.outputs.secondary-enabled == 'true' &&
-        (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true'))
+        (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')) ||
+      needs.changes.outputs.raw-integration-services == 'true'
     permissions:
       contents: read
     steps:
@@ -688,8 +716,9 @@ jobs:
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
     if: >
-      needs.changes.outputs.secondary-enabled == 'true' &&
-      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')
+      (needs.changes.outputs.secondary-enabled == 'true' &&
+        (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')) ||
+      needs.changes.outputs.raw-integration-services == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -884,8 +913,10 @@ jobs:
     timeout-minutes: 5
     needs: [changes, desktop-e2e-integration-shard]
     if: >
-      always() && needs.changes.outputs.secondary-enabled == 'true' &&
-      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')
+      always() &&
+      ((needs.changes.outputs.secondary-enabled == 'true' &&
+        (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')) ||
+       needs.changes.outputs.raw-integration-services == 'true')
     permissions:
       contents: read
     steps:
@@ -1031,7 +1062,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
-    if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
+    if: >
+      (needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
+      needs.changes.outputs.raw-integration-services == 'true'
     permissions:
       contents: read
     steps:
@@ -1283,7 +1316,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
-    if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
+    if: >
+      (needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
+      needs.changes.outputs.raw-integration-services == 'true'
     permissions:
       contents: read
     steps:
@@ -1393,7 +1428,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes, desktop-e2e-relay]
-    if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
+    if: >
+      (needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
+      needs.changes.outputs.raw-integration-services == 'true'
     permissions:
       contents: read
     env:
@@ -1453,7 +1490,10 @@ jobs:
     # is the state this exists to end. The path condition matches the three
     # upstream jobs exactly, so a PR that touches no Rust skips this too and the
     # required check is satisfied by the skip.
-    if: always() && needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
+    if: >
+      always() &&
+      ((needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
+       needs.changes.outputs.raw-integration-services == 'true')
     permissions:
       contents: read
     steps:
