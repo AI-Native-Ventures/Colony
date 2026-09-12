@@ -120,7 +120,11 @@ test("fetch distinguishes absent remote state from unreadable existing state", a
 });
 
 test("live replacement delivered during empty onboarding fetch prevents default seeding", async () => {
-  const remotePreference = { ...preference, theme: "dracula" };
+  const remotePreference = {
+    ...preference,
+    theme: "buzz-dark",
+    customGradient: { enabled: true, color1: "#123456", color2: "#abcdef" },
+  };
   const updates = [];
   let liveCallback;
   globalThis.window ??= {};
@@ -340,7 +344,11 @@ test("new remote invalidates no-op suppression for A to B to A", async () => {
     await waitUntil(() => published.length === 1);
 
     manager.acceptRemote({
-      preference: { ...preference, theme: "dracula" },
+      preference: {
+        ...preference,
+        theme: "buzz-dark",
+        customGradient: { enabled: true, color1: "#123456", color2: "#abcdef" },
+      },
       createdAt: published[0].created_at,
       eventId: "remote-a",
     });
@@ -390,7 +398,11 @@ test("serializes an in-flight publish before sending the latest edit", async () 
     timer.fire();
     await waitUntil(() => published.length === 1);
 
-    const latest = { ...preference, theme: "dracula" };
+    const latest = {
+      ...preference,
+      theme: "buzz-dark",
+      customGradient: { enabled: true, color1: "#123456", color2: "#abcdef" },
+    };
     manager.publish(latest);
     timer.fire();
     await new Promise((resolve) => setImmediate(resolve));
@@ -446,7 +458,11 @@ test("republishes above a newer remote observed while publish is in flight", asy
     await waitUntil(() => published.length === 1);
 
     manager.acceptRemote({
-      preference: { ...preference, theme: "dracula" },
+      preference: {
+        ...preference,
+        theme: "buzz-dark",
+        customGradient: { enabled: true, color1: "#123456", color2: "#abcdef" },
+      },
       createdAt: published[0].created_at + 100,
       eventId: "remote-winner",
     });
@@ -522,7 +538,11 @@ test("delayed live decryption fences publish acknowledgement and preserves local
     assert.deepEqual(manager.getPending(), preference);
 
     remotePlaintext.resolve(
-      JSON.stringify({ ...preference, theme: "dracula" }),
+      JSON.stringify({
+        ...preference,
+        theme: "buzz-dark",
+        customGradient: { enabled: true, color1: "#123456", color2: "#abcdef" },
+      }),
     );
     await waitUntil(() => timer.pending());
     assert.equal(acknowledgements.length, 0);
