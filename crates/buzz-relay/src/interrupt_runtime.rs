@@ -1022,6 +1022,13 @@ pub(crate) struct Payroll {
     /// holds the office when more than one ranks executive. A head that put
     /// `provisioned` in its own content would otherwise promote itself.
     provisioned: std::collections::BTreeSet<String>,
+    /// Lowercase role slugs those same employees hold.
+    ///
+    /// An office Colony provides is Colony's. An owner-authored head naming
+    /// one of these roles is not a candidate for it, which is what keeps a
+    /// workspace's own `chief-of-staff` agent from answering escalations the
+    /// provisioned Chief of Staff holds.
+    provisioned_roles: std::collections::BTreeSet<String>,
 }
 
 async fn active_payroll(tenant: &TenantContext, state: &AppState) -> Result<Payroll, String> {
@@ -1035,6 +1042,12 @@ async fn active_payroll(tenant: &TenantContext, state: &AppState) -> Result<Payr
         .filter(|employee| employee.provisioned_handle.is_some())
         .map(|employee| hex::encode(&employee.pubkey))
         .collect();
+    let provisioned_roles = employees
+        .iter()
+        .filter(|employee| employee.provisioned_handle.is_some())
+        .map(|employee| employee.role_id.trim().to_ascii_lowercase())
+        .filter(|role| !role.is_empty())
+        .collect();
     let role_ranks = employees
         .into_iter()
         .filter_map(|employee| {
@@ -1044,35 +1057,10 @@ async fn active_payroll(tenant: &TenantContext, state: &AppState) -> Result<Payr
     Ok(Payroll {
         role_ranks,
         provisioned,
+        provisioned_roles,
     })
 }
 
-/// Resolve the community's unique executive from an already-fetched
-/// [`ManagedAgentRoster`]: the one agent pubkey (`d` tag) that is an
-/// executive, resolved the way `interrupt_gate::agent_tier` resolves rank.
-///
-/// # Why this reads the role and not just `tier`
-///
-/// Nothing in the product ever writes `content.tier` onto a managed-agent
-/// head, so a `tier`-only lookup found zero executives in every real
-/// workspace and leader-to-executive promotion could never happen. That is
-/// the same dead field the whole ladder used to hang on; `agent_tier` was
-/// taught to read the role instead, and this is the second reader on the
-/// escalation path. `role_ranks` comes from the payroll, so `employees`
-/// stays the single source of rank here too. `content.tier` is retained as
-/// the legacy fallback.
-///
-/// The trust boundary is unchanged and load-bearing: `roster` contains only
-/// heads authored by a CURRENT community owner
-/// ([`fetch_owner_authored_managed_agent_roster`]), so an agent cannot
-/// publish a head about itself naming the executive's role and become the
-/// promotion target. Promotion decides who reaches a human, so a forgeable
-/// target would be worse than no promotion at all.
-///
-/// `Ok(None)` when zero or more than one distinct pubkey qualifies -- design
-/// point 3 (never guess), unchanged. Pure (no I/O) so a caller looping over
-/// many candidates in the same community can call it repeatedly against ONE
-/// fetched roster instead of re-querying.
 #[cfg(test)]
 mod executive_precedence_tests {
     use super::*;
@@ -1084,33 +1072,103 @@ mod executive_precedence_tests {
         }
     }
 
-    fn payroll(role_ranks: &[(&str, AgentTier)], provisioned: &[&str]) -> Payroll {
+    /// `provisioned` mirrors an employees row: the agent's pubkey AND the
+    /// role it holds, because the precedence rule turns on both.
+    fn payroll(role_ranks: &[(&str, AgentTier)], provisioned: &[(&str, &str)]) -> Payroll {
         Payroll {
             role_ranks: role_ranks
                 .iter()
                 .map(|(role, rank)| ((*role).to_owned(), *rank))
                 .collect(),
-            provisioned: provisioned.iter().map(|hex| (*hex).to_owned()).collect(),
+            provisioned: provisioned
+                .iter()
+                .map(|(pubkey, _)| (*pubkey).to_owned())
+                .collect(),
+            provisioned_roles: provisioned
+                .iter()
+                .map(|(_, role)| role.to_ascii_lowercase())
+                .collect(),
         }
     }
 
     #[test]
-    fn a_provisioned_holder_wins_when_another_head_also_ranks_executive() {
-        // Colony holds the office. The workspace's own agent keeps its
-        // record and its rank, and stops being the agent escalations reach.
+    fn colony_holds_an_office_an_owner_authored_head_also_claims() {
+        // PR #757's contract: where an owner's own agent claims the very role
+        // Colony provides, the provisioned employee holds it. The owner's
+        // agent keeps its record, its name and its own rank, and stops being
+        // the agent escalations reach.
         let scout = nostr::Keys::generate().public_key().to_hex();
         let chief = nostr::Keys::generate().public_key().to_hex();
         let roster: ManagedAgentRoster = vec![
             (scout.clone(), head("chief-of-staff", Some("executive"))),
             (chief.clone(), head("chief-of-staff", None)),
         ];
-        let payroll = payroll(&[("chief-of-staff", AgentTier::Executive)], &[&chief]);
+        let payroll = payroll(
+            &[("chief-of-staff", AgentTier::Executive)],
+            &[(&chief, "chief-of-staff")],
+        );
 
         let resolved = unique_executive_in_roster(&roster, &payroll)
             .expect("resolution succeeds")
             .expect("the provisioned holder resolves");
         assert_eq!(resolved.to_hex(), chief);
         assert_ne!(resolved.to_hex(), scout);
+    }
+
+    #[test]
+    fn a_workspace_executive_in_another_office_still_answers_its_own_asks() {
+        // The regression the first shape of this change shipped. Colony seeds
+        // a provisioned executive into EVERY workspace, so a workspace whose
+        // own executive holds a different office had every escalation
+        // redirected to Colony. Proven against a live relay on 2026-09-12:
+        // the control ask in the e2e
+        // `a_leader_answers_a_workers_ask_and_the_owner_never_sees_it` was
+        // promoted to the provisioned chief rather than to the workspace's
+        // own executive, and the test timed out waiting for it.
+        let founder = nostr::Keys::generate().public_key().to_hex();
+        let chief = nostr::Keys::generate().public_key().to_hex();
+        let roster: ManagedAgentRoster = vec![
+            (founder.clone(), head("founder-agent", None)),
+            (chief.clone(), head("chief-of-staff", None)),
+        ];
+        let payroll = payroll(
+            &[
+                ("founder-agent", AgentTier::Executive),
+                ("chief-of-staff", AgentTier::Executive),
+            ],
+            &[(&chief, "chief-of-staff")],
+        );
+
+        let resolved = unique_executive_in_roster(&roster, &payroll)
+            .expect("resolution succeeds")
+            .expect("the workspace's own executive resolves");
+        assert_eq!(resolved.to_hex(), founder);
+        assert_ne!(resolved.to_hex(), chief);
+    }
+
+    #[test]
+    fn colony_stands_in_where_the_workspace_has_no_executive_of_its_own() {
+        // The gap this whole change exists to close: without the provisioned
+        // employee in the roster, an ask that climbs past the leader rung has
+        // nowhere left to go.
+        let lead = nostr::Keys::generate().public_key().to_hex();
+        let chief = nostr::Keys::generate().public_key().to_hex();
+        let roster: ManagedAgentRoster = vec![
+            (lead, head("eng-lead", None)),
+            (chief.clone(), head("chief-of-staff", None)),
+        ];
+        let payroll = payroll(
+            &[
+                ("eng-lead", AgentTier::Leader),
+                ("chief-of-staff", AgentTier::Executive),
+            ],
+            &[(&chief, "chief-of-staff")],
+        );
+
+        let resolved = unique_executive_in_roster(&roster, &payroll)
+            .expect("resolution succeeds")
+            .expect("the provisioned employee stands in");
+        assert_eq!(resolved.to_hex(), chief);
     }
 
     #[test]
@@ -1179,7 +1237,10 @@ mod executive_precedence_tests {
         // the roster there is nothing to escalate to, which is precisely the
         // gap this change closes by admitting the employee's own head.
         let chief = nostr::Keys::generate().public_key().to_hex();
-        let payroll = payroll(&[("chief-of-staff", AgentTier::Executive)], &[&chief]);
+        let payroll = payroll(
+            &[("chief-of-staff", AgentTier::Executive)],
+            &[(&chief, "chief-of-staff")],
+        );
         assert!(
             unique_executive_in_roster(&ManagedAgentRoster::new(), &payroll)
                 .expect("resolution succeeds")
@@ -1216,12 +1277,77 @@ fn head_rank(content: &serde_json::Value, role_ranks: &RoleRanks) -> Option<Agen
         })
 }
 
+/// The role a head claims, normalised the way [`head_rank`] reads it.
+///
+/// Separate from [`head_rank`] because the precedence rule needs the role
+/// itself, not the rank it confers: an owner-authored head is excluded from
+/// an office by NAMING a provisioned employee's role, whatever rank that
+/// role happens to carry.
+fn head_role(content: &serde_json::Value) -> Option<String> {
+    content
+        .get("role_id")
+        .and_then(|value| value.as_str())
+        .map(|role| role.trim().to_ascii_lowercase())
+        .filter(|role| !role.is_empty())
+}
+
+/// Resolve the community's unique executive from an already-fetched
+/// [`ManagedAgentRoster`]: the one agent pubkey (`d` tag) that is an
+/// executive, resolved the way `interrupt_gate::agent_tier` resolves rank.
+///
+/// # Why this reads the role and not just `tier`
+///
+/// Nothing in the product ever writes `content.tier` onto a managed-agent
+/// head, so a `tier`-only lookup found zero executives in every real
+/// workspace and leader-to-executive promotion could never happen. That is
+/// the same dead field the whole ladder used to hang on; `agent_tier` was
+/// taught to read the role instead, and this is the second reader on the
+/// escalation path. `role_ranks` comes from the payroll, so `employees`
+/// stays the single source of rank here too. `content.tier` is retained as
+/// the legacy fallback.
+///
+/// The trust boundary is unchanged and load-bearing: `roster` contains only
+/// heads authored by a CURRENT community owner
+/// ([`fetch_owner_authored_managed_agent_roster`]), so an agent cannot
+/// publish a head about itself naming the executive's role and become the
+/// promotion target. Promotion decides who reaches a human, so a forgeable
+/// target would be worse than no promotion at all.
+///
+/// `Ok(None)` when zero or more than one distinct pubkey qualifies -- design
+/// point 3 (never guess), unchanged. Pure (no I/O) so a caller looping over
+/// many candidates in the same community can call it repeatedly against ONE
+/// fetched roster instead of re-querying.
+///
+/// # Who holds the office when more than one head ranks executive
+///
+/// A workspace's own executive answers its own escalations. Colony's
+/// provisioned employee stands in only where the workspace has no executive
+/// of its own, and takes an office over only when an owner-authored head
+/// claims the very role Colony provides.
+///
+/// Both halves are load-bearing, and each was learned from a failure:
+///
+/// * Without the takeover, an owner's own `chief-of-staff` agent and the
+///   provisioned one are simply two executives, nobody resolves, and the
+///   ladder is dead. That is the state PR #757 set out to repair.
+/// * Without workspace-first, seeding a provisioned executive into EVERY
+///   workspace silently redirects every escalation to Colony, including in a
+///   workspace whose own executive holds a different office entirely. Proven
+///   against a live relay on 2026-09-12: the control ask in
+///   `a_leader_answers_a_workers_ask_and_the_owner_never_sees_it` was
+///   promoted to the provisioned chief instead of the workspace's executive,
+///   and the test timed out waiting for an ask that had already been
+///   delivered elsewhere.
+///
+/// Ties on either side still resolve to nobody, so neither half weakens the
+/// never-guess rule.
 fn unique_executive_in_roster(
     roster: &ManagedAgentRoster,
     payroll: &Payroll,
 ) -> Result<Option<PublicKey>, String> {
     let role_ranks = &payroll.role_ranks;
-    let mut executives: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+    let mut provisioned: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+    let mut workspace: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     for (d_tag, content) in roster {
         if head_rank(content, role_ranks) != Some(AgentTier::Executive) {
             continue;
@@ -1229,30 +1355,32 @@ fn unique_executive_in_roster(
         let Ok(pubkey_bytes) = hex::decode(d_tag) else {
             continue;
         };
-        if let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) {
-            executives.insert(*pubkey.as_bytes());
+        let Ok(pubkey) = PublicKey::from_slice(&pubkey_bytes) else {
+            continue;
+        };
+        let bytes = *pubkey.as_bytes();
+        if payroll.provisioned.contains(&hex::encode(bytes)) {
+            // Membership comes from the employees table, never from a head's
+            // own content, so a head cannot join this side by describing
+            // itself as provisioned.
+            provisioned.insert(bytes);
+        } else if !head_role(content).is_some_and(|role| payroll.provisioned_roles.contains(&role))
+        {
+            // Everything else the workspace put in its own roster, minus any
+            // head claiming an office Colony provides.
+            workspace.insert(bytes);
         }
     }
 
-    // Colony holds the office. When more than one candidate ranks executive,
-    // the provisioned one wins rather than the pair resolving to nobody: an
-    // agent the workspace created keeps its record, its name and its own
-    // rank, and stops being the agent escalations reach.
-    //
-    // Membership of that set comes from the employees table, never from a
-    // head's own content, so a head cannot claim the office by describing
-    // itself as provisioned.
-    let provisioned: Vec<[u8; 32]> = executives
-        .iter()
-        .copied()
-        .filter(|bytes| payroll.provisioned.contains(&hex::encode(bytes)))
-        .collect();
-    let resolved = match (provisioned.as_slice(), executives.len()) {
-        ([only], _) => Some(*only),
-        // Two provisioned executives is a corrupt payroll rather than an
-        // ambiguity worth resolving, and an unowned tie is the existing
-        // never-guess rule: both answer nobody.
-        ([], 1) => executives.into_iter().next(),
+    let resolved = match (workspace.len(), provisioned.len()) {
+        // The workspace's own executive answers, and a provisioned employee
+        // standing beside it changes nothing about who escalations reach.
+        (1, _) => workspace.into_iter().next(),
+        // Nobody of their own: Colony's employee stands in rather than the
+        // ask climbing to a rung that does not exist.
+        (0, 1) => provisioned.into_iter().next(),
+        // Two of either is an ambiguity (or, for two provisioned employees, a
+        // corrupt payroll). Both answer nobody: design point 3, never guess.
         _ => None,
     };
 
