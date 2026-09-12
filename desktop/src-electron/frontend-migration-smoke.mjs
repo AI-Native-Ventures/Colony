@@ -163,8 +163,34 @@ try {
   assert.equal(migrated.theme, "buzz-dark");
   // Edit after the scoped startup preference has settled, so this proves
   // later Electron edits survive relaunch without importing the legacy store again.
+  // This offline storage fixture has no connected workspace UI. Update the
+  // authoritative scoped record as well as its global cache, just as a saved
+  // Appearance edit does; changing only the cache is intentionally overwritten.
   await page.evaluate(() => {
+    const owner =
+      "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+    const communities = JSON.parse(localStorage.getItem("buzz-communities"));
+    const active = communities.find(
+      (community) =>
+        community.id === localStorage.getItem("buzz-active-community-id"),
+    );
+    const scope = `${owner}:${encodeURIComponent(active.relayUrl.replace(/\/$/, ""))}`;
+    const key = `buzz-community-theme.v2:${scope}`;
+    const preference = JSON.parse(localStorage.getItem(key)) ?? {
+      version: 1,
+      accent: localStorage.getItem("buzz-accent-color"),
+      gradientPattern:
+        localStorage.getItem("buzz-workspace-gradient") ?? "soft-mesh",
+    };
+    const edited = JSON.stringify({
+      ...preference,
+      theme: "buzz",
+      followSystem: false,
+    });
+    localStorage.setItem(key, edited);
+    localStorage.setItem(`buzz-community-theme-outbox.v1:${scope}`, edited);
     localStorage.setItem("buzz-theme", "buzz");
+    localStorage.setItem("buzz-follow-system", "false");
     localStorage.setItem(
       "buzz-drafts.v1:migration-proof",
       "newer Electron draft",
@@ -211,6 +237,9 @@ try {
           rootMounted: !!document.querySelector("#root")?.children.length,
           status: document.querySelector("#status")?.textContent ?? null,
           migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
+          theme: localStorage.getItem("buzz-theme"),
+          renderedTheme: document.documentElement.dataset.buzzTheme,
+          followSystem: localStorage.getItem("buzz-follow-system"),
         }))
         .catch(() => ({ status: "The renderer was unavailable" }))
     : {
