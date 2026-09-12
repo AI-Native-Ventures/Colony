@@ -1983,9 +1983,27 @@ jobs:
           # leniency — every require_success / require_optional check below
           # applies identically, so a hotfix carries the same proof a promotion
           # does. Any other head ref is still refused.
-          if [ "$HEAD_REF" != "develop" ] && [[ "$HEAD_REF" != hotfix/* ]]; then
-            fail "Promotions to main must come from develop or a hotfix/* branch; got '$HEAD_REF'"
-          fi
+          #
+          # The release lanes below are pinned snapshots of develop, not a
+          # third source of code: a promotion branch is cut at one develop
+          # commit so later pushes to develop cannot reset its matrix, which
+          # is how #705 was reset twice in one evening. They buy no leniency
+          # either; every check below applies identically.
+          #
+          # `.github/workflows/auto-tag-on-release-pr-merge.yml` already
+          # resolves exactly these names into tags, so refusing them here left
+          # the two halves of the release lane disagreeing: the tagger expected
+          # a pinned branch the gate would not admit. Relay 0.11.12 was opened
+          # from one, refused, reopened from develop, and the two Promotion
+          # Gate verdicts that left on one commit then stopped the tagger,
+          # which requires exactly one. Keep this list and the tagger's lanes
+          # in step; `scripts/test-release-pipeline-contract.sh` asserts it.
+          case "$HEAD_REF" in
+            develop | hotfix/* | version-bump/* | relay-release/* | chart-release/* | push-chart-release/*) ;;
+            *)
+              fail "Promotions to main must come from develop, a hotfix/* branch, or a pinned release branch (version-bump/*, relay-release/*, chart-release/*, push-chart-release/*); got '$HEAD_REF'"
+              ;;
+          esac
 
           require_success "Detect Changed Paths" "$CHANGES_RESULT"
 
