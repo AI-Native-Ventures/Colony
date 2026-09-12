@@ -241,6 +241,12 @@ pub(crate) fn spawn_key_refusal(record: &ManagedAgentRecord) -> Option<String> {
 
 /// Read the raw unified store — keyed instances AND key-less definitions —
 /// with fail-loud parse handling. Internal seam; public readers filter.
+///
+/// Normalisation runs here so both halves of the store get it:
+/// `env_vars::migrate_config_owned_model_env` lifts a stale `BUZZ_ACP_MODEL` /
+/// `BUZZ_ACP_PROVIDER` out of `env_vars` and onto the structured fields. Like
+/// the inline-key migration in [`hydrate_keys`], the change is in memory and the
+/// next save is what persists it; a record carrying neither key is untouched.
 fn load_agent_store(app: &AppHandle) -> Result<Vec<ManagedAgentRecord>, String> {
     let path = managed_agents_store_path(app)?;
     if !path.exists() {
@@ -249,7 +255,7 @@ fn load_agent_store(app: &AppHandle) -> Result<Vec<ManagedAgentRecord>, String> 
 
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("failed to read agent store: {error}"))?;
-    serde_json::from_str(&content).map_err(|error| {
+    let mut records: Vec<ManagedAgentRecord> = serde_json::from_str(&content).map_err(|error| {
         // Fail loudly and preserve the evidence: a later in-app save rewrites
         // this file wholesale, which would silently destroy a malformed hand
         // edit. Best-effort file-authoring contract (see managed_agents::
@@ -258,7 +264,11 @@ fn load_agent_store(app: &AppHandle) -> Result<Vec<ManagedAgentRecord>, String> 
         // swallowed into an empty store.
         backup_invalid_store(&path);
         format!("failed to parse agent store (preserved as .invalid): {error}")
-    })
+    })?;
+    for record in &mut records {
+        super::env_vars::migrate_config_owned_model_env(record);
+    }
+    Ok(records)
 }
 
 /// Load the keyed agent *instances*. Key-less definitions (former personas,
