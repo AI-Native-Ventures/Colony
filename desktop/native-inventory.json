@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 514,
-    "tauri_coupled": 205,
-    "portable": 309,
+    "rust_total": 516,
+    "tauri_coupled": 206,
+    "portable": 310,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -73,6 +73,7 @@
       "src-tauri/src/commands/messages/markers.rs",
       "src-tauri/src/commands/notifications.rs",
       "src-tauri/src/commands/observer_archive.rs",
+      "src-tauri/src/commands/onboarding_history.rs",
       "src-tauri/src/commands/onboarding_recovery.rs",
       "src-tauri/src/commands/openrouter_connect.rs",
       "src-tauri/src/commands/openrouter_quota.rs",
@@ -274,6 +275,7 @@
       "src-tauri/src/commands/messages/feed.rs",
       "src-tauri/src/commands/messages_tests.rs",
       "src-tauri/src/commands/mod.rs",
+      "src-tauri/src/commands/onboarding_history_hermes.rs",
       "src-tauri/src/commands/onboarding_recovery_fixture.rs",
       "src-tauri/src/commands/onboarding_recovery_state.rs",
       "src-tauri/src/commands/onboarding_recovery_tests.rs",
@@ -526,10 +528,10 @@
     ]
   },
   "commands": {
-    "registered": 373,
-    "defined": 373,
+    "registered": 376,
+    "defined": 376,
     "by_reach": {
-      "frontend": 362,
+      "frontend": 365,
       "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
@@ -546,16 +548,16 @@
     ]
   },
   "params": {
-    "AppHandle": 412,
-    "State": 270,
+    "AppHandle": 413,
+    "State": 271,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 409,
-      "State": 270,
+      "AppHandle": 410,
+      "State": 271,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -672,6 +674,7 @@
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
+    "src-tauri/src/commands/onboarding_history.rs": 3,
     "src-tauri/src/electron_host/updater.rs": 3,
     "src-tauri/src/huddle/agent_voice.rs": 3,
     "src-tauri/src/huddle/audio_output.rs": 3,
@@ -1532,6 +1535,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1493",
         "src/shared/api/tauri.ts:803"
+      ]
+    },
+    "discover_onboarding_history": {
+      "defining_file": "src-tauri/src/commands/onboarding_history.rs",
+      "module": "onboarding_history",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/onboarding/ui/new/screens/HistoryScreen.tsx:135"
       ]
     },
     "download_file": {
@@ -3236,6 +3248,15 @@
         "src/shared/api/tauriMedia.ts:76"
       ]
     },
+    "read_onboarding_history": {
+      "defining_file": "src-tauri/src/commands/onboarding_history.rs",
+      "module": "onboarding_history",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/onboarding/ui/new/screens/HistoryScreen.tsx:211"
+      ]
+    },
     "read_unindexed_observer_rows": {
       "defining_file": "src-tauri/src/archive/mod.rs",
       "module": "mod",
@@ -3486,6 +3507,16 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/tauriIdentity.ts:136"
+      ]
+    },
+    "save_onboarding_memories": {
+      "defining_file": "src-tauri/src/commands/onboarding_history.rs",
+      "module": "onboarding_history",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/onboarding/ui/new/screens/HistoryScreen.tsx:313",
+        "src/features/onboarding/ui/new/screens/HistoryScreen.tsx:342"
       ]
     },
     "save_png_data_url": {

@@ -19,6 +19,7 @@ export const ONBOARDING_STEPS = [
   "recovery",
   "company",
   "brain",
+  "history",
   "invite",
 ] as const;
 
@@ -91,6 +92,7 @@ export function nextStep(
   if (current === "account") return "recovery";
   if (current === "recovery") return "company";
   if (current === "company") return "brain";
+  if (current === "brain") return "history";
   return "done";
 }
 
@@ -99,7 +101,7 @@ export type StepVisibility = {
   creditsNeeded: boolean;
 };
 export function visibleSteps(_state: StepVisibility): OnboardingStep[] {
-  return ["account", "company", "brain"];
+  return ["account", "company", "brain", "history"];
 }
 export function stepPosition(
   step: OnboardingStep,
@@ -107,8 +109,14 @@ export function stepPosition(
 ): { index: number; total: number } {
   return {
     index:
-      step === "account" || step === "recovery" ? 0 : step === "brain" ? 2 : 1,
-    total: 3,
+      step === "account" || step === "recovery"
+        ? 0
+        : step === "history"
+          ? 3
+          : step === "brain"
+            ? 2
+            : 1,
+    total: 4,
   };
 }
 export function backStep(

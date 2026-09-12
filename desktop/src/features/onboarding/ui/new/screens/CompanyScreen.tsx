@@ -222,9 +222,6 @@ export function CompanyScreen({
           {isSubmitting ? "Preparing your business…" : "Continue"}
           {!isSubmitting && <ArrowRight aria-hidden="true" />}
         </Button>
-        <p className="onb-simple-note">
-          Your teammate will use this context for the first job.
-        </p>
         {onBack && (
           <button
             className="onb-simple-link"

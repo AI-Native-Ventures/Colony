@@ -95,7 +95,7 @@ test("concurrent HTTP handlers have unique IDs; mutable counter baseline reprodu
   // Hosted negative control restores only the old late reads of the shared counter.
   const url = new URL("./provider.mjs", import.meta.url);
   const source = await readFile(url, "utf8");
-  assert.equal(source.split("${requestNumber}").length - 1, 2);
+  assert.equal(source.split("${requestNumber}").length - 1, 3);
   const baseline = source
     .replaceAll("${requestNumber}", "${calls}")
     .replace(
@@ -189,4 +189,66 @@ test("final settlement requires distinct exact intents and debits, not a matchin
       "5000000000",
     ),
   );
+});
+
+async function probeRequest(provider, content) {
+  return fetch(`${provider.httpUrl}/v1/chat/completions`, {
+    method: "POST",
+    signal: AbortSignal.timeout(5000),
+    headers: {
+      Authorization: "Bearer synthetic-onboarding-provider",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "deepseek/deepseek-v4-flash",
+      messages: [{ role: "user", content }],
+    }),
+  });
+}
+const probe =
+  "Colony connection test. Reply in this thread with a short greeting and this verification code: 11111111-1111-4111-8111-111111111111. Do not use tools or start any other work.";
+test("explicit bounded connection probe echoes nonce, records debit evidence and never emits tools", async () => {
+  const provider = await createOnboardingFixtureProvider();
+  try {
+    provider.authorizeConnectionTest();
+    const earlier = probe.replaceAll(
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    );
+    const response = await probeRequest(
+      provider,
+      `${earlier}\nEarlier failed request.\n${probe}`,
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.match(
+      body.choices[0].message.content,
+      /11111111-1111-4111-8111-111111111111/,
+    );
+    assert.equal(body.choices[0].message.tool_calls, undefined);
+    assert.equal(provider.tools.length, 0);
+    assert.equal(provider.probeRequests.length, 1);
+    assert.equal(provider.requests[0].stage, "connection-test");
+    provider.finishConnectionTest();
+    assert.equal((await probeRequest(provider, probe)).status, 500);
+  } finally {
+    await provider.close();
+  }
+});
+test("unauthorized and unrelated pre-approval model work is rejected", async () => {
+  for (const authorize of [false, true]) {
+    const provider = await createOnboardingFixtureProvider();
+    try {
+      if (authorize) provider.authorizeConnectionTest();
+      assert.equal(
+        (await probeRequest(provider, authorize ? FIRST_JOB_BRIEF : probe))
+          .status,
+        500,
+      );
+      assert.equal(provider.requests.length, 0);
+      assert.equal(provider.tools.length, 0);
+    } finally {
+      await provider.close();
+    }
+  }
 });
