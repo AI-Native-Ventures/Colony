@@ -146,10 +146,7 @@ pub(crate) fn block_action_targets_processor(event: &Event, processor_pubkey: &s
 /// to this processor. The relay is the authority for whether the action may be
 /// applied; this gate prevents a permissive ACP subscription from waking an
 /// unrelated session or routing a coordinator's own action back to itself.
-pub(crate) fn website_begin_work_targets_processor(
-    event: &Event,
-    processor_pubkey: &str,
-) -> bool {
+pub(crate) fn website_begin_work_targets_processor(event: &Event, processor_pubkey: &str) -> bool {
     let Ok(action) = buzz_core::website::parse_website_action(event) else {
         return false;
     };
@@ -158,10 +155,7 @@ pub(crate) fn website_begin_work_targets_processor(
             .target_pubkey
             .as_deref()
             .is_some_and(|target| target.eq_ignore_ascii_case(processor_pubkey))
-        && !event
-            .pubkey
-            .to_hex()
-            .eq_ignore_ascii_case(processor_pubkey)
+        && !event.pubkey.to_hex().eq_ignore_ascii_case(processor_pubkey)
 }
 
 /// Maximum events queued per channel before oldest events are dropped.
@@ -1081,8 +1075,7 @@ pub struct ThreadTags {
 /// Buzz always generates marker-based tags (see relay messages.rs:762-783).
 pub fn parse_thread_tags(event: &Event) -> ThreadTags {
     let mut mentions = Vec::new();
-    let is_website_action =
-        event.kind.as_u16() as u32 == buzz_core::kind::KIND_WEBSITE_ACTION;
+    let is_website_action = event.kind.as_u16() as u32 == buzz_core::kind::KIND_WEBSITE_ACTION;
 
     // Website actions carry their canonical thread in the strict `thread`
     // action tag. Do not let an unrelated NIP-10 `e` tag steer the ACP session
@@ -1384,10 +1377,7 @@ pub(crate) fn format_event_block(
         ));
     }
     if let Ok(action) = buzz_core::website::parse_website_action(&be.event) {
-        if matches!(
-            &action.op,
-            buzz_core::website::WebsiteActionOp::BeginWork
-        ) {
+        if matches!(&action.op, buzz_core::website::WebsiteActionOp::BeginWork) {
             let target = action.target_pubkey.as_deref().unwrap_or_default();
             let generation = action.generation.unwrap_or_default();
             block.push_str(&format!(
@@ -2212,7 +2202,10 @@ mod tests {
         ));
 
         let missing = make_website_begin_work(&owner, None);
-        assert!(!website_begin_work_targets_processor(&missing, &processor_hex));
+        assert!(!website_begin_work_targets_processor(
+            &missing,
+            &processor_hex
+        ));
 
         let wrong_target = make_website_begin_work(&owner, Some(&other.public_key().to_hex()));
         assert!(!website_begin_work_targets_processor(

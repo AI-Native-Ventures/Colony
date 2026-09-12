@@ -74,8 +74,7 @@ pub fn parse_website_action(event: &Event) -> Result<WebsiteAction, WebsiteComma
                 .ok_or(WebsiteCommandError::InvalidGeneration)
         })
         .transpose()?;
-    let target_pubkey = optional_tag(event, "p")
-        .map_err(|error| map_tag_error("p", error))?;
+    let target_pubkey = optional_tag(event, "p").map_err(|error| map_tag_error("p", error))?;
     if target_pubkey
         .as_deref()
         .is_some_and(|value| !is_lower_hex64(value) || PublicKey::parse(value).is_err())

@@ -60,7 +60,7 @@ fn signed_action(keys: &Keys, action: &WebsiteAction) -> nostr::Event {
     )
     .tags(action.event_tags().expect("action tags"))
     .sign_with_keys(keys)
-        .expect("sign action")
+    .expect("sign action")
 }
 
 fn signed_begin_work(keys: &Keys, target: Option<&str>) -> nostr::Event {

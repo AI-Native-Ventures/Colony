@@ -770,7 +770,11 @@ async fn website_head_from_response(
     client: &mut BuzzTestClient,
     ok: &buzz_ws_client::OkResponse,
 ) -> (Event, buzz_core::website::WebsiteReview) {
-    assert!(ok.accepted, "website transition must be accepted: {}", ok.message);
+    assert!(
+        ok.accepted,
+        "website transition must be accepted: {}",
+        ok.message
+    );
     let message: serde_json::Value = serde_json::from_str(&ok.message).expect("result JSON");
     assert!(
         message["receipt_event_id"].as_str().is_some(),
@@ -820,7 +824,10 @@ fn decision_data(
     if let Some(note) = note {
         data.as_object_mut()
             .expect("decision data is an object")
-            .insert("note".to_owned(), serde_json::Value::String(note.to_owned()));
+            .insert(
+                "note".to_owned(),
+                serde_json::Value::String(note.to_owned()),
+            );
     }
     data
 }
@@ -1192,11 +1199,8 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         .await
         .expect("connect as coordinator");
 
-    let job_id = WebsiteAction::derive_job_id(
-        community_id().await,
-        &fixture.task_id,
-        &fixture.thread_root,
-    );
+    let job_id =
+        WebsiteAction::derive_job_id(community_id().await, &fixture.task_id, &fixture.thread_root);
     let manifest_event = event_by_id(&mut owner_client, &fixture.manifest_event_id)
         .await
         .expect("the pinned website-job manifest is stored");
@@ -1253,7 +1257,10 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
     let (head, review) = website_head_from_response(&mut reviewer_client, &record_qa_1_ok).await;
     assert_head_generation(&head, 4);
     assert_eq!(review.status, buzz_core::website::WebsiteStatus::Working);
-    assert_eq!(review.revisions[0].qa.as_ref().map(|qa| qa.passed), Some(true));
+    assert_eq!(
+        review.revisions[0].qa.as_ref().map(|qa| qa.passed),
+        Some(true)
+    );
     assert_eq!(
         review.revisions[0]
             .qa
@@ -1319,7 +1326,11 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         "replayed owner request changes",
     )
     .await;
-    assert!(replay.accepted, "exact Block replay is accepted: {}", replay.message);
+    assert!(
+        replay.accepted,
+        "exact Block replay is accepted: {}",
+        replay.message
+    );
     let replay_message: serde_json::Value =
         serde_json::from_str(&replay.message).expect("replay result JSON");
     assert_eq!(
@@ -1398,7 +1409,10 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
     let record_qa_2_ok = send_action(&mut reviewer_client, &reviewer, &record_qa_2).await;
     let (head, review) = website_head_from_response(&mut reviewer_client, &record_qa_2_ok).await;
     assert_head_generation(&head, 8);
-    assert_eq!(review.revisions[1].qa.as_ref().map(|qa| qa.passed), Some(true));
+    assert_eq!(
+        review.revisions[1].qa.as_ref().map(|qa| qa.passed),
+        Some(true)
+    );
 
     let ready_2 = update_action(&fixture, &fixture.coordinator, 8, WebsiteActionOp::Ready);
     let ready_2_ok = send_action(&mut coordinator_client, &fixture.coordinator, &ready_2).await;
@@ -1461,7 +1475,9 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         "approval for an older revision is refused even at the current generation"
     );
     assert!(
-        same_generation_old_revision.message.contains("stale_revision"),
+        same_generation_old_revision
+            .message
+            .contains("stale_revision"),
         "the immutable revision gate rejects the old revision: {}",
         same_generation_old_revision.message
     );
@@ -1510,8 +1526,7 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
             access_request: None,
         },
     );
-    let handover_ok =
-        send_action(&mut coordinator_client, &fixture.coordinator, &handover).await;
+    let handover_ok = send_action(&mut coordinator_client, &fixture.coordinator, &handover).await;
     let (head, review) = website_head_from_response(&mut coordinator_client, &handover_ok).await;
     assert_head_generation(&head, 11);
     assert_eq!(review.status, buzz_core::website::WebsiteStatus::HandedOver);
