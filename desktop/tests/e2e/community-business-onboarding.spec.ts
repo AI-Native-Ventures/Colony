@@ -181,7 +181,6 @@ test("a named owner creates from the real rail, resumes Business and Power, and 
     path: "test-results/community-business-power-controls.png",
   });
   await complete.click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expectRetainedBusinessContext(page, {

@@ -72,7 +72,6 @@ test("public first run: account, business and power reach Welcome with the owner
   await waitForAnimations(page);
   await page.screenshot({ path: "test-results/simple-founder-power-1440.png" });
   await page.getByRole("button", { name: "Test connection" }).click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();

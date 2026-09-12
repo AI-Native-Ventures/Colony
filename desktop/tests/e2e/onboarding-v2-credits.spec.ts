@@ -127,7 +127,6 @@ test("a created community connects its detected subscription and chooses a model
   await model.selectOption("claude-test-model");
   await expect(openColony).toBeEnabled();
   await openColony.click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
   await expectRetainedBusinessContext(page, {

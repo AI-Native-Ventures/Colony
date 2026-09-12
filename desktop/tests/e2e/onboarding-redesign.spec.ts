@@ -172,7 +172,6 @@ test("power offers all three choices and saves the selected defaults", async ({
     power.getByRole("button", { name: "Test connection" }),
   ).toBeEnabled();
   await power.getByRole("button", { name: "Test connection" }).click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
   const saved = await page.evaluate(async () => {
@@ -261,7 +260,6 @@ test("legacy Credits keeps its funding choice until the owner updates the connec
   // Updating the draft is explicit; it still does not save before completion.
   expect(await readSavedConfig()).toEqual(legacyConfig);
   await complete.click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
   expect(await readSavedConfig()).toMatchObject({
@@ -392,7 +390,6 @@ for (const provider of ["anthropic", "openrouter"] as const) {
     await continueFounderBusiness(page);
     await expect(complete).toBeEnabled();
     await complete.click();
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page
       .getByRole("button", { name: "Skip for now", exact: true })
       .click();
