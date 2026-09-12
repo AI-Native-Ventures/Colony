@@ -602,7 +602,7 @@ async fn seed_one(
                     community = %community,
                     handle = %employee.handle,
                     role = %employee.role_id,
-                    pubkey = %hex::encode(&holder.pubkey),
+                    pubkey = %hex::encode(holder.pubkey),
                     "the role is already held by a different provisioned employee; not seeding this one"
                 );
                 return Ok(SeedOutcome::Unchanged);
@@ -721,8 +721,9 @@ async fn seed_one(
 /// sealed key and can never adopt it into the payroll.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RoleHolder {
-    /// A row in `employees`, provisioned or the workspace's own hire.
-    Employee(buzz_db::employees::EmployeeRow),
+    /// A row in `employees`, provisioned or the workspace's own hire. Boxed
+    /// because it dwarfs the head variant beside it.
+    Employee(Box<buzz_db::employees::EmployeeRow>),
     /// An owner-published managed-agent head naming this role.
     ManagedAgent(ManagedAgentHolder),
 }
@@ -765,10 +766,10 @@ struct RoleCandidates {
 /// arrives sorted by pubkey, so within a tier the lowest pubkey wins.
 fn choose_role_holder(candidates: &RoleCandidates) -> Option<RoleHolder> {
     if let Some(row) = &candidates.provisioned {
-        return Some(RoleHolder::Employee(row.clone()));
+        return Some(RoleHolder::Employee(Box::new(row.clone())));
     }
     if let Some(row) = candidates.employees.first() {
-        return Some(RoleHolder::Employee(row.clone()));
+        return Some(RoleHolder::Employee(Box::new(row.clone())));
     }
     candidates
         .managed_agents
@@ -852,7 +853,7 @@ async fn resolve_role_holder(
     }
     candidates
         .managed_agents
-        .sort_by(|left, right| left.pubkey.cmp(&right.pubkey));
+        .sort_by_key(|holder| holder.pubkey.clone());
 
     let Some(holder) = choose_role_holder(&candidates) else {
         return Ok(None);
@@ -1450,7 +1451,7 @@ mod tests {
         };
         assert_eq!(
             choose_role_holder(&row_and_head),
-            Some(RoleHolder::Employee(employee.clone()))
+            Some(RoleHolder::Employee(Box::new(employee.clone())))
         );
 
         let everything = RoleCandidates {
@@ -1460,7 +1461,7 @@ mod tests {
         };
         assert_eq!(
             choose_role_holder(&everything),
-            Some(RoleHolder::Employee(provisioned))
+            Some(RoleHolder::Employee(Box::new(provisioned)))
         );
     }
 
