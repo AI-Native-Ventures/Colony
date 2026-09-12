@@ -110,7 +110,9 @@ export type CreateChannelManagedAgentsResult = {
  */
 export function isAlreadyMemberError(message: string): boolean {
   const normalized = message.trim().toLowerCase();
-  return normalized === "already a member" || normalized === "already a member.";
+  return (
+    normalized === "already a member" || normalized === "already a member."
+  );
 }
 
 export async function attachManagedAgentToChannel(
