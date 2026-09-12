@@ -104,81 +104,160 @@ fn format_elapsed(elapsed: Duration) -> String {
     format!("{hours}h {minutes}m {seconds}s")
 }
 
-/// Builds the standalone Buzz bee as a transparent, macOS template image.
-///
-/// The app icon includes a rounded square, which is useful for the Dock but
-/// looks out of place beside the monochrome menu-bar icons. Keeping this
-/// vector-derived mask here also lets macOS tint it correctly in light and
-/// dark menu bars without a separate bitmap asset.
-fn tray_bee_icon() -> Image<'static> {
-    const WIDTH: u32 = 64;
-    const HEIGHT: u32 = 43;
-    const SAMPLES_PER_AXIS: u32 = 4;
-    const BEE_WIDTH: f32 = 466.0;
-    const BEE_HEIGHT: f32 = 309.0;
+/// Bounding box of the ant in `desktop/public/colony.svg`, in the coordinates
+/// of that file's inner `translate(73 180) scale(1.9)` group. The rasteriser
+/// samples exactly this window, so the icon's aspect ratio is the artwork's.
+const ANT_MIN_X: f32 = 24.0;
+const ANT_MIN_Y: f32 = 37.0;
+const ANT_MAX_X: f32 = 440.0;
+const ANT_MAX_Y: f32 = 313.0;
+/// Half of the artwork's `stroke-width="26"`.
+const ANT_STROKE_RADIUS: f32 = 13.0;
+/// 416 by 276 artwork units, rounded to whole pixels at the menu bar's height.
+const ANT_ICON_WIDTH: u32 = 65;
+const ANT_ICON_HEIGHT: u32 = 43;
+const ANT_SAMPLES_PER_AXIS: u32 = 4;
 
-    fn circle_contains(x: f32, y: f32, center_x: f32, center_y: f32, radius: f32) -> bool {
-        let delta_x = x - center_x;
-        let delta_y = y - center_y;
-        delta_x * delta_x + delta_y * delta_y <= radius * radius
+/// Body: the three filled circles of the masked group.
+const ANT_BODY_CIRCLES: [(f32, f32, f32); 3] = [
+    (104.0, 172.0, 80.0),
+    (226.0, 164.0, 52.0),
+    (313.0, 148.0, 46.0),
+];
+/// The eye the mask punches out of the body.
+const ANT_EYE: (f32, f32, f32) = (335.0, 136.0, 11.0);
+/// Legs: round-capped straight strokes.
+const ANT_LEGS: [(f32, f32, f32, f32); 6] = [
+    (202.0, 203.0, 136.0, 292.0),
+    (220.0, 210.0, 196.0, 298.0),
+    (235.0, 209.0, 246.0, 300.0),
+    (247.0, 205.0, 294.0, 294.0),
+    (257.0, 198.0, 336.0, 282.0),
+    (164.0, 215.0, 112.0, 272.0),
+];
+/// Antennae: round-capped quadratic strokes, as `from`, `control`, `to`.
+const ANT_ANTENNAE: [((f32, f32), (f32, f32), (f32, f32)); 2] = [
+    ((327.0, 114.0), (345.0, 64.0), (397.0, 50.0)),
+    ((343.0, 126.0), (377.0, 86.0), (427.0, 80.0)),
+];
+
+fn circle_contains(x: f32, y: f32, center_x: f32, center_y: f32, radius: f32) -> bool {
+    let delta_x = x - center_x;
+    let delta_y = y - center_y;
+    delta_x * delta_x + delta_y * delta_y <= radius * radius
+}
+
+/// The shape SVG paints for a `stroke-linecap="round"` straight segment.
+fn segment_contains(x: f32, y: f32, from: (f32, f32), to: (f32, f32), radius: f32) -> bool {
+    let delta_x = to.0 - from.0;
+    let delta_y = to.1 - from.1;
+    let length_squared = delta_x * delta_x + delta_y * delta_y;
+    let along = if length_squared <= f32::EPSILON {
+        0.0
+    } else {
+        (((x - from.0) * delta_x + (y - from.1) * delta_y) / length_squared).clamp(0.0, 1.0)
+    };
+    circle_contains(
+        x,
+        y,
+        from.0 + along * delta_x,
+        from.1 + along * delta_y,
+        radius,
+    )
+}
+
+/// The same, for a quadratic curve, flattened into round-capped segments.
+fn quadratic_contains(
+    x: f32,
+    y: f32,
+    from: (f32, f32),
+    control: (f32, f32),
+    to: (f32, f32),
+    radius: f32,
+) -> bool {
+    const FLATTENING_STEPS: u32 = 16;
+
+    let mut previous = from;
+    for step in 1..=FLATTENING_STEPS {
+        let t = step as f32 / FLATTENING_STEPS as f32;
+        let inverse = 1.0 - t;
+        let point = (
+            inverse * inverse * from.0 + 2.0 * inverse * t * control.0 + t * t * to.0,
+            inverse * inverse * from.1 + 2.0 * inverse * t * control.1 + t * t * to.1,
+        );
+        if segment_contains(x, y, previous, point, radius) {
+            return true;
+        }
+        previous = point;
     }
 
-    fn rounded_rect_contains(
-        x: f32,
-        y: f32,
-        left: f32,
-        top: f32,
-        width: f32,
-        height: f32,
-        radius: f32,
-    ) -> bool {
-        let right = left + width;
-        let bottom = top + height;
-        let closest_x = x.clamp(left + radius, right - radius);
-        let closest_y = y.clamp(top + radius, bottom - radius);
-        let delta_x = x - closest_x;
-        let delta_y = y - closest_y;
-        delta_x * delta_x + delta_y * delta_y <= radius * radius
+    false
+}
+
+fn ant_contains(x: f32, y: f32) -> bool {
+    // The legs and antennae are stroked in their own unmasked group, painted
+    // under the body, so the eye cutout removes body fill and never stroke.
+    let stroked = ANT_LEGS.iter().any(|&(from_x, from_y, to_x, to_y)| {
+        segment_contains(x, y, (from_x, from_y), (to_x, to_y), ANT_STROKE_RADIUS)
+    }) || ANT_ANTENNAE
+        .iter()
+        .any(|&(from, control, to)| quadratic_contains(x, y, from, control, to, ANT_STROKE_RADIUS));
+    if stroked {
+        return true;
     }
 
-    fn bee_contains(x: f32, y: f32) -> bool {
-        let silhouette = circle_contains(x, y, 91.7, 154.5, 91.7)
-            || circle_contains(x, y, 374.3, 154.5, 91.7)
-            || rounded_rect_contains(x, y, 128.0, 0.0, 210.0, 309.0, 34.0);
-        let cutout = circle_contains(x, y, 193.3, 84.4, 27.0)
-            || circle_contains(x, y, 276.0, 84.4, 27.0)
-            || rounded_rect_contains(x, y, 166.3, 157.2, 136.9, 38.3, 5.0)
-            || rounded_rect_contains(x, y, 166.9, 235.1, 136.2, 37.6, 5.0);
+    let body = ANT_BODY_CIRCLES
+        .iter()
+        .any(|&(center_x, center_y, radius)| circle_contains(x, y, center_x, center_y, radius));
+    body && !circle_contains(x, y, ANT_EYE.0, ANT_EYE.1, ANT_EYE.2)
+}
 
-        silhouette && !cutout
-    }
+/// Supersamples the ant silhouette into a one-byte-per-pixel coverage mask.
+fn ant_alpha_mask(width: u32, height: u32) -> Vec<u8> {
+    let samples = ANT_SAMPLES_PER_AXIS * ANT_SAMPLES_PER_AXIS;
+    let mut alpha = vec![0u8; (width * height) as usize];
 
-    let mut rgba = vec![0; (WIDTH * HEIGHT * 4) as usize];
-    let samples = SAMPLES_PER_AXIS * SAMPLES_PER_AXIS;
-
-    for pixel_y in 0..HEIGHT {
-        for pixel_x in 0..WIDTH {
+    for pixel_y in 0..height {
+        for pixel_x in 0..width {
             let mut covered_samples = 0;
-            for sample_y in 0..SAMPLES_PER_AXIS {
-                for sample_x in 0..SAMPLES_PER_AXIS {
-                    let x = (pixel_x as f32 + (sample_x as f32 + 0.5) / SAMPLES_PER_AXIS as f32)
-                        / WIDTH as f32
-                        * BEE_WIDTH;
-                    let y = (pixel_y as f32 + (sample_y as f32 + 0.5) / SAMPLES_PER_AXIS as f32)
-                        / HEIGHT as f32
-                        * BEE_HEIGHT;
-                    if bee_contains(x, y) {
+            for sample_y in 0..ANT_SAMPLES_PER_AXIS {
+                for sample_x in 0..ANT_SAMPLES_PER_AXIS {
+                    let x = ANT_MIN_X
+                        + (pixel_x as f32 + (sample_x as f32 + 0.5) / ANT_SAMPLES_PER_AXIS as f32)
+                            / width as f32
+                            * (ANT_MAX_X - ANT_MIN_X);
+                    let y = ANT_MIN_Y
+                        + (pixel_y as f32 + (sample_y as f32 + 0.5) / ANT_SAMPLES_PER_AXIS as f32)
+                            / height as f32
+                            * (ANT_MAX_Y - ANT_MIN_Y);
+                    if ant_contains(x, y) {
                         covered_samples += 1;
                     }
                 }
             }
 
-            let index = ((pixel_y * WIDTH + pixel_x) * 4) as usize;
-            rgba[index + 3] = (covered_samples * u8::MAX as u32 / samples) as u8;
+            alpha[(pixel_y * width + pixel_x) as usize] =
+                (covered_samples * u8::MAX as u32 / samples) as u8;
         }
     }
 
-    Image::new_owned(rgba, WIDTH, HEIGHT)
+    alpha
+}
+
+/// Builds the standalone Colony ant as a transparent, macOS template image.
+///
+/// The app icon includes a rounded square, which is useful for the Dock but
+/// looks out of place beside the monochrome menu-bar icons. Keeping this
+/// vector-derived mask here also lets macOS tint it correctly in light and
+/// dark menu bars without a separate bitmap asset.
+fn tray_ant_icon() -> Image<'static> {
+    let alpha = ant_alpha_mask(ANT_ICON_WIDTH, ANT_ICON_HEIGHT);
+    let mut rgba = vec![0; alpha.len() * 4];
+    for (index, coverage) in alpha.iter().enumerate() {
+        rgba[index * 4 + 3] = *coverage;
+    }
+
+    Image::new_owned(rgba, ANT_ICON_WIDTH, ANT_ICON_HEIGHT)
 }
 
 /// A running agent and its current channel.
@@ -339,7 +418,7 @@ fn build_menu<R: Runtime>(
     menu.append(&MenuItem::with_id(
         app,
         OPEN_BUZZ_ID,
-        "Open Buzz",
+        "Open Colony",
         true,
         None::<&str>,
     )?)?;
@@ -347,7 +426,7 @@ fn build_menu<R: Runtime>(
     menu.append(&MenuItem::with_id(
         app,
         QUIT_ID,
-        "Quit Buzz",
+        "Quit Colony",
         true,
         None::<&str>,
     )?)?;
@@ -491,7 +570,7 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     });
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .icon(tray_bee_icon())
+        .icon(tray_ant_icon())
         .icon_as_template(true)
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
@@ -617,7 +696,105 @@ pub fn update_tray_agent_activity<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::{requeue_actions, TrayAction, TrayActionQueue};
+    use super::{
+        ant_alpha_mask, requeue_actions, TrayAction, TrayActionQueue, ANT_ICON_HEIGHT,
+        ANT_ICON_WIDTH, ANT_MAX_X, ANT_MAX_Y, ANT_MIN_X, ANT_MIN_Y,
+    };
+
+    /// Reads the mask at a point given in the artwork's own coordinates, so the
+    /// assertions below can be checked directly against `colony.svg`.
+    fn alpha_at(mask: &[u8], x: f32, y: f32) -> u8 {
+        let pixel_x = (((x - ANT_MIN_X) / (ANT_MAX_X - ANT_MIN_X) * ANT_ICON_WIDTH as f32) as u32)
+            .min(ANT_ICON_WIDTH - 1);
+        let pixel_y = (((y - ANT_MIN_Y) / (ANT_MAX_Y - ANT_MIN_Y) * ANT_ICON_HEIGHT as f32) as u32)
+            .min(ANT_ICON_HEIGHT - 1);
+        mask[(pixel_y * ANT_ICON_WIDTH + pixel_x) as usize]
+    }
+
+    #[test]
+    fn tray_ant_icon_keeps_the_artwork_aspect_ratio() {
+        let artwork = (ANT_MAX_X - ANT_MIN_X) / (ANT_MAX_Y - ANT_MIN_Y);
+        let raster = ANT_ICON_WIDTH as f32 / ANT_ICON_HEIGHT as f32;
+
+        assert!(
+            (raster - artwork).abs() < 0.01,
+            "raster aspect {raster} must follow the artwork's {artwork}"
+        );
+    }
+
+    #[test]
+    fn tray_ant_icon_mask_is_neither_blank_nor_solid() {
+        let mask = ant_alpha_mask(ANT_ICON_WIDTH, ANT_ICON_HEIGHT);
+        assert_eq!(mask.len(), (ANT_ICON_WIDTH * ANT_ICON_HEIGHT) as usize);
+
+        let coverage =
+            mask.iter().map(|alpha| *alpha as f32).sum::<f32>() / (mask.len() as f32 * 255.0);
+        assert!(
+            (0.30..0.60).contains(&coverage),
+            "ant coverage {coverage} is outside the band a drawn silhouette occupies"
+        );
+        assert!(
+            mask.iter().any(|alpha| *alpha == u8::MAX),
+            "the ant must have fully opaque interior pixels"
+        );
+        assert!(
+            mask.iter().any(|alpha| *alpha == 0),
+            "the ant must leave fully transparent background pixels"
+        );
+    }
+
+    #[test]
+    fn tray_ant_icon_mask_follows_the_artwork_geometry() {
+        let mask = ant_alpha_mask(ANT_ICON_WIDTH, ANT_ICON_HEIGHT);
+
+        // One point per drawing primitive, so a dropped primitive fails here:
+        // the three body circle centres, a leg segment's midpoint, and an
+        // antenna's far endpoint (the only points the curve flattening reaches
+        // exactly).
+        for (label, x, y) in [
+            ("abdomen circle centre", 104.0, 172.0),
+            ("thorax circle centre", 226.0, 164.0),
+            ("head circle centre", 313.0, 148.0),
+            ("front-left leg midpoint", 169.0, 247.5),
+            ("upper antenna tip", 397.0, 50.0),
+        ] {
+            assert_eq!(
+                alpha_at(&mask, x, y),
+                u8::MAX,
+                "{label} at ({x}, {y}) must be opaque"
+            );
+        }
+
+        // Corners of the sampled window, which the ant's convex-ish silhouette
+        // never reaches, plus the gap to the right of the head below the
+        // antennae.
+        for (label, x, y) in [
+            ("top-left of the window", 24.0, 37.0),
+            ("bottom-left of the window", 60.0, 300.0),
+            ("bottom-right of the window", 430.0, 300.0),
+            ("gap under the lower antenna", 430.0, 140.0),
+        ] {
+            assert_eq!(
+                alpha_at(&mask, x, y),
+                0,
+                "{label} at ({x}, {y}) must be transparent"
+            );
+        }
+
+        // The eye. Its centre is deliberately not sampled: the lower antenna's
+        // round cap is painted under the masked body and fills that pixel, so
+        // the cutout only clears fully at (328, 136.5), one pixel left of it.
+        assert_eq!(
+            alpha_at(&mask, 328.0, 136.5),
+            0,
+            "the eye must be punched out of the head"
+        );
+        assert_eq!(
+            alpha_at(&mask, 321.0, 136.5),
+            u8::MAX,
+            "the head must stay solid immediately beside the eye"
+        );
+    }
 
     #[test]
     fn open_channel_action_serializes_with_frontend_field_names() {
