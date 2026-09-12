@@ -49,7 +49,12 @@ export async function completeFixtureWork({
         window.colonyDesktop.request("invoke", { command, args }),
       { command, args },
     );
-  const probeCalls = account.connectionProbe.calls;
+  const preJobCalls = account.preLegacyModelCalls;
+  assert.ok(
+    Number.isInteger(preJobCalls) &&
+      preJobCalls >= account.connectionProbe.calls,
+    "Account proof records the paid Scout setup baseline before the legacy job",
+  );
   const welcomeUrl = page.url();
   assert.equal(
     new URL(
@@ -103,7 +108,10 @@ export async function completeFixtureWork({
     "Actual onboarding supplies Scout only",
   );
   assert.equal(originalAgents[0].persona_id, "builtin:fizz");
-  assert.equal(originalAgents[0].pid, null);
+  assert.ok(
+    Number(originalAgents[0].pid) > 0,
+    "Approved setup leaves the starter Scout runtime available",
+  );
   assert.equal(originalAgents[0].relay_url, account.relayUrl);
   assert.equal(originalAgents[0].owner_identified, true);
   const starterPersona = (await invoke("list_personas")).find(
@@ -135,7 +143,7 @@ export async function completeFixtureWork({
     "The packaged builtin is local; no custom worker definition exists before approval",
   );
   assert.equal((await reader.events(30181)).length, 0);
-  assert.equal(provider.receivedCallCount, probeCalls);
+  assert.equal(provider.receivedCallCount, preJobCalls);
   const teamPreviews = {};
   const waitForProposal = async (phase, startedAt = Date.now()) => {
     await waitForTeamPreview({
@@ -195,7 +203,7 @@ export async function completeFixtureWork({
   assert.equal(saved.restarted_count, 0);
   const proposalReloadStartedAt = Date.now();
   await reloadWelcome();
-  assert.equal(provider.receivedCallCount, probeCalls);
+  assert.equal(provider.receivedCallCount, preJobCalls);
   assert.equal((await readPendingAttempt(page, account)).exists, false);
   await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
   await waitForProposal("afterReload", proposalReloadStartedAt);
@@ -250,7 +258,7 @@ export async function completeFixtureWork({
     relay,
   });
   onEvidence({ teamLoss });
-  assert.equal(provider.receivedCallCount, probeCalls);
+  assert.equal(provider.receivedCallCount, preJobCalls);
   assert.equal((await reader.events(30181)).length, 0);
   onProgress("genuine-synced-team-projection-loss-injected");
   await page.evaluate(installNativePublishObserver, {
@@ -342,8 +350,8 @@ export async function completeFixtureWork({
           );
           assert.equal(
             provider.receivedCallCount,
-            probeCalls,
-            "Do not retry after model work began",
+            preJobCalls,
+            "Do not retry after legacy model work began",
           );
           const pendingAttempt = await readPendingAttempt(page, account);
           quotaRetries.push({

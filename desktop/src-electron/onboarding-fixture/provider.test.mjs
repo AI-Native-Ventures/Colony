@@ -3,7 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   createOnboardingFixtureProvider,
+  extractLatestPromptEventId,
   FIRST_JOB_BRIEF,
+  SCOUT_SETUP_REPLY,
 } from "./provider.mjs";
 import { assertCreditsProof } from "./credits-proof.mjs";
 
@@ -250,5 +252,83 @@ test("unauthorized and unrelated pre-approval model work is rejected", async () 
     } finally {
       await provider.close();
     }
+  }
+});
+
+test("approved Scout setup uses the signed approval event and publishes one reply", async () => {
+  const provider = await createOnboardingFixtureProvider();
+  const rootId = "a".repeat(64);
+  const channelId = "22222222-2222-4222-8222-222222222222";
+  const acknowledgementId = "b".repeat(64);
+  const replyId = "c".repeat(64);
+  const prompt = {
+    role: "user",
+    content: `Event ID: ${acknowledgementId}\nChannel: ${channelId}\nRoot: ${rootId}\nTags: colony:scout-onboarding-approval:v1`,
+  };
+  try {
+    assert.equal(
+      extractLatestPromptEventId([
+        { role: "user", content: `Event ID: ${rootId}` },
+        prompt,
+      ]),
+      acknowledgementId,
+    );
+    provider.authorizeScoutSetup({ rootId, channelId });
+    const first = await fetch(`${provider.httpUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer synthetic-onboarding-provider",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-flash",
+        messages: [prompt],
+        tools: [{ function: { name: "buzz__shell" } }],
+      }),
+    });
+    assert.equal(first.status, 200);
+    const firstBody = await first.json();
+    const toolCallId = firstBody.choices[0].message.tool_calls[0].id;
+    const second = await fetch(`${provider.httpUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer synthetic-onboarding-provider",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-flash",
+        messages: [
+          prompt,
+          firstBody.choices[0].message,
+          {
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: JSON.stringify({
+              stdout: JSON.stringify({ accepted: true, event_id: replyId }),
+              stderr: "",
+              exit_code: 0,
+              timed_out: false,
+            }),
+          },
+        ],
+        tools: [{ function: { name: "buzz__shell" } }],
+      }),
+    });
+    assert.equal(second.status, 200);
+    assert.equal(
+      (await second.json()).choices[0].message.content,
+      SCOUT_SETUP_REPLY,
+    );
+    provider.assertHealthy();
+    assert.equal(provider.setupRequests.length, 2);
+    assert.equal(provider.scoutSetup.ackEventId, acknowledgementId);
+    assert.equal(provider.scoutSetup.replyEventId, replyId);
+    assert.equal(provider.scoutSetup.completed, true);
+    assert.deepEqual(
+      provider.requests.map(({ stage }) => stage),
+      ["scout-onboarding", "scout-onboarding"],
+    );
+  } finally {
+    await provider.close();
   }
 });
