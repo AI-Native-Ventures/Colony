@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   buildRankedHeadContent,
+  holdsTheExecutiveOffice,
   newestOwnerAuthoredHeadEvent,
   parseManagedAgentHead,
   rankedHeadTags,
@@ -396,4 +397,82 @@ test("an owner's newer head still wins over the employee's own", () => {
   );
   assert.equal(heads.length, 1);
   assert.equal(heads[0].roleId, "engineer");
+});
+
+// ── the office Colony holds ────────────────────────────────────────────────
+//
+// From relay 0.11.15 a provisioned employee holds its role outright. The
+// chart has to say the same thing, or it promotes every agent claiming that
+// role to executive the moment Colony's Chief of Staff is seeded and draws
+// two chiefs of staff with no indication which one the relay obeys.
+
+const COLONY_CHIEF =
+  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+const heldByColony = new Map([
+  [
+    "chief-of-staff",
+    { rank: "executive", pubkey: COLONY_CHIEF, provisioned: "chief-of-staff" },
+  ],
+]);
+
+const heldByAHire = new Map([
+  ["chief-of-staff", { rank: "executive", pubkey: AGENT, provisioned: null }],
+]);
+
+test("a role Colony holds does not promote somebody else's agent", () => {
+  // The five-of-six case: a Scout with no stated rank. Before this it
+  // inherited executive from our payroll entry.
+  assert.equal(
+    resolveManagedAgentRank(
+      { roleId: "chief-of-staff", tierRank: null, pubkey: OTHER_AGENT },
+      heldByColony,
+    ),
+    "leader",
+  );
+});
+
+test("an agent the owner ranked keeps the rank the owner gave it", () => {
+  // Not holding the office is not the same as being demoted, and demoting an
+  // agent the owner created is not ours to do.
+  assert.equal(
+    resolveManagedAgentRank(
+      { roleId: "chief-of-staff", tierRank: "executive", pubkey: OTHER_AGENT },
+      heldByColony,
+    ),
+    "executive",
+  );
+});
+
+test("the holder itself still takes the rank of the role it holds", () => {
+  assert.equal(
+    resolveManagedAgentRank(
+      { roleId: "chief-of-staff", tierRank: null, pubkey: COLONY_CHIEF },
+      heldByColony,
+    ),
+    "executive",
+  );
+});
+
+test("a role held by a workspace's own hire behaves exactly as before", () => {
+  // Nothing that worked before this change stops working.
+  assert.equal(
+    resolveManagedAgentRank(
+      { roleId: "chief-of-staff", tierRank: null, pubkey: OTHER_AGENT },
+      heldByAHire,
+    ),
+    "executive",
+  );
+});
+
+test("the chart can say which agent holds the office", () => {
+  assert.equal(holdsTheExecutiveOffice(COLONY_CHIEF, heldByColony), true);
+  assert.equal(holdsTheExecutiveOffice(OTHER_AGENT, heldByColony), false);
+  // Upper case in, same answer: pubkeys are compared normalized.
+  assert.equal(
+    holdsTheExecutiveOffice(COLONY_CHIEF.toUpperCase(), heldByColony),
+    true,
+  );
+  // Nobody holds it when no employee fills the role.
+  assert.equal(holdsTheExecutiveOffice(COLONY_CHIEF, new Map()), false);
 });
