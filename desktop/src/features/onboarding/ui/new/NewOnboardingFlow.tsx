@@ -36,6 +36,8 @@ import { AccountSetup } from "./AccountSetup";
 import { OnboardingCanvas } from "./OnboardingCanvas";
 import { RecoveryScreen } from "./screens/RecoveryScreen";
 import { CompanyScreen } from "./screens/CompanyScreen";
+import { HistoryScreen } from "./screens/HistoryScreen";
+import type { AgentResponseProof } from "../../verifyAgentResponse";
 import { PowerScreen } from "./screens/PowerScreen";
 import {
   clearAccountNameDraft,
@@ -143,6 +145,7 @@ export function NewOnboardingFlow({
   const [loadingRecovery, setLoadingRecovery] = useState(!existingIdentity);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [verified, setVerified] = useState<AgentResponseProof | null>(null);
   const [error, setError] = useState<string | null>(null);
   const running = useRef(false);
   const activeRun = useRef<symbol | null>(null);
@@ -318,7 +321,7 @@ export function NewOnboardingFlow({
       }
     }
   }
-  async function finishPower(save: () => Promise<void>) {
+  async function finishPower() {
     if (running.current) return;
     running.current = true;
     const run = Symbol("onboarding-power");
@@ -332,7 +335,8 @@ export function NewOnboardingFlow({
     setError(null);
     try {
       if (!isCurrentRun()) return;
-      await save();
+      if (!verified) throw new Error("Test your connection before continuing.");
+      await verified.assertValid();
       if (!isCurrentRun()) return;
       await onComplete(answersRef.current, isCurrentRun);
       // Completion may unmount this flow. Its successful handoff has already
@@ -366,11 +370,13 @@ export function NewOnboardingFlow({
     creditsNeeded: false,
   });
   const position = existingIdentity
-    ? { index: step === "brain" ? 1 : 0, total: 2 }
-    : basePosition;
+    ? { index: verified ? 2 : step === "brain" ? 1 : 0, total: 3 }
+    : verified
+      ? { index: 3, total: 4 }
+      : basePosition;
   return (
     <OnboardingCanvas
-      step={step}
+      step={verified ? "history" : step}
       track="colony"
       {...position}
       overlay={
@@ -401,6 +407,19 @@ export function NewOnboardingFlow({
           }
           onContinue={acknowledgeRecovery}
         />
+      ) : step === "brain" && verified ? (
+        <HistoryScreen
+          proof={verified}
+          scope={verified.scope}
+          businessOnly={existingIdentity}
+          busy={busy}
+          error={error}
+          onBack={() => {
+            setVerified(null);
+            setError(null);
+          }}
+          onContinue={finishPower}
+        />
       ) : step === "brain" ? (
         <PowerScreen
           key={powerScopeKey}
@@ -416,7 +435,11 @@ export function NewOnboardingFlow({
             persist({ ...answersRef.current, businessConfirmed: false });
             setError(null);
           }}
-          onContinue={finishPower}
+          onContinue={async (proof) => {
+            await proof.assertValid();
+            setVerified(proof);
+            setError(null);
+          }}
         />
       ) : (
         <CompanyScreen

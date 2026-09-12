@@ -69,6 +69,9 @@ const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 /** Serve the OpenAI-compatible upstream consumed by the real local credits gateway. */
 export async function createOnboardingFixtureProvider() {
   let context;
+  let probeAuthorized = false;
+  let probeNonce;
+  const probeRequests = [];
   let error;
   let calls = 0;
   const requests = [];
@@ -91,6 +94,65 @@ export async function createOnboardingFixtureProvider() {
         assert.ok(Buffer.byteLength(raw) <= 4 * 1024 * 1024);
       }
       const body = JSON.parse(raw);
+      if (!context && probeAuthorized) {
+        const prompt = JSON.stringify(body.messages);
+        const nonce = [
+          ...prompt.matchAll(
+            /Colony connection test\. Reply in this thread with a short greeting and this verification code: ([a-f0-9-]{36})\. Do not use tools or start any other work\./g,
+          ),
+        ].at(-1)?.[1];
+        assert.ok(
+          nonce,
+          "Only the exact onboarding verification prompt is authorized",
+        );
+        assert.ok(
+          !probeNonce || probeNonce === nonce,
+          "One verification turn per authorization",
+        );
+        assert.ok(probeRequests.length < 3, "Bounded verification call budget");
+        probeNonce = nonce;
+        const completion =
+          typeof body.messages.at(-1)?.content === "string" &&
+          body.messages.at(-1).content.startsWith("You have stopped.");
+        const responseId = `onboarding-${requestNumber}`;
+        const usage = {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+        };
+        const record = {
+          actor: "scout",
+          stage: "connection-test",
+          completion,
+          model: body.model,
+          responseId,
+          usage,
+        };
+        requests.push(record);
+        probeRequests.push(record);
+        response.setHeader("Content-Type", "application/json");
+        response.end(
+          JSON.stringify({
+            id: responseId,
+            object: "chat.completion",
+            model: body.model,
+            usage,
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  content: completion
+                    ? '{"complete":true}'
+                    : `Hello, your Colony connection is ready. ${nonce}`,
+                },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+        );
+        return;
+      }
       assert.ok(
         context,
         "No model calls are allowed before explicit staffing and Start",
@@ -257,6 +319,21 @@ export async function createOnboardingFixtureProvider() {
   return {
     httpUrl: `http://127.0.0.1:${server.address().port}`,
     requests,
+    probeRequests,
+    authorizeConnectionTest() {
+      assert.equal(context, undefined);
+      assert.equal(probeAuthorized, false);
+      assert.equal(
+        calls,
+        0,
+        "No upstream call before explicit probe authorization",
+      );
+      probeAuthorized = true;
+    },
+    finishConnectionTest() {
+      assert.ok(probeRequests.length > 0);
+      probeAuthorized = false;
+    },
     get receivedCallCount() {
       return calls;
     },

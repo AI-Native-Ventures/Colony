@@ -52,6 +52,7 @@ export async function completeFixtureWork({
         window.colonyDesktop.request("invoke", { command, args }),
       { command, args },
     );
+  const probeCalls = account.connectionProbe.calls;
   const welcomeUrl = page.url();
   assert.equal(
     new URL(
@@ -137,7 +138,7 @@ export async function completeFixtureWork({
     "The packaged builtin is local; no custom worker definition exists before approval",
   );
   assert.equal((await reader.events(30181)).length, 0);
-  assert.equal(provider.receivedCallCount, 0);
+  assert.equal(provider.receivedCallCount, probeCalls);
   const teamPreviews = {};
   const waitForProposal = async (phase, startedAt = Date.now()) => {
     await waitForTeamPreview({
@@ -172,12 +173,14 @@ export async function completeFixtureWork({
       cards.first().getByTestId("first-job-team-proposal"),
     ).toContainText("Content & Campaign Specialist");
   };
-  await waitForProposal("beforeFunding");
-  // Only this isolated ledger is seeded, through the existing real operator CLI.
-  await relay.seedCredits(account.ownerPubkey);
+  await waitForProposal("beforeWorkApproval");
+  // The connection probe already seeded this isolated ledger through the operator CLI.
   const initialCredits = await invoke("get_colony_credits_account");
-  assert.equal(initialCredits.available_balance_nanousd, "5000000000");
-  assert.equal(initialCredits.total_balance_nanousd, "5000000000");
+  assert.equal(
+    initialCredits.available_balance_nanousd,
+    initialCredits.total_balance_nanousd,
+  );
+  assert.ok(BigInt(initialCredits.total_balance_nanousd) < 5000000000n);
   const config = await invoke("get_global_agent_config");
   assert.equal(config.credential_mode, "colony_credits");
   assert.equal(config.preferred_runtime, "buzz-agent");
@@ -195,7 +198,7 @@ export async function completeFixtureWork({
   assert.equal(saved.restarted_count, 0);
   const proposalReloadStartedAt = Date.now();
   await reloadWelcome();
-  assert.equal(provider.receivedCallCount, 0);
+  assert.equal(provider.receivedCallCount, probeCalls);
   assert.equal((await readPendingAttempt(page, account)).exists, false);
   await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
   await waitForProposal("afterReload", proposalReloadStartedAt);
@@ -250,7 +253,7 @@ export async function completeFixtureWork({
     relay,
   });
   onEvidence({ teamLoss });
-  assert.equal(provider.receivedCallCount, 0);
+  assert.equal(provider.receivedCallCount, probeCalls);
   assert.equal((await reader.events(30181)).length, 0);
   onProgress("genuine-synced-team-projection-loss-injected");
   await page.evaluate(installNativePublishObserver, {
@@ -342,7 +345,7 @@ export async function completeFixtureWork({
           );
           assert.equal(
             provider.receivedCallCount,
-            0,
+            probeCalls,
             "Do not retry after model work began",
           );
           const pendingAttempt = await readPendingAttempt(page, account);
@@ -739,7 +742,7 @@ export async function completeFixtureWork({
           debits = assertCreditsProof(
             accounting,
             chargedResponses,
-            initialCredits.total_balance_nanousd,
+            account.connectionProbe.fundingNanousd,
           );
           return true;
         } catch {
@@ -758,7 +761,7 @@ export async function completeFixtureWork({
   debits = assertCreditsProof(
     accounting,
     chargedResponses,
-    initialCredits.total_balance_nanousd,
+    account.connectionProbe.fundingNanousd,
   );
   const finalCredits = await invoke("get_colony_credits_account");
   assert.equal(finalCredits.total_balance_nanousd, accounting.balance);
@@ -769,6 +772,7 @@ export async function completeFixtureWork({
   provider.assertHealthy();
   const creditsSettlement = {
     initial: initialCredits,
+    totalSyntheticFundingNanousd: account.connectionProbe.fundingNanousd,
     final: finalCredits,
     debits,
     chargedResponses,

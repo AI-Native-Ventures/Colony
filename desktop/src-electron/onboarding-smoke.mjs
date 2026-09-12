@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { _electron as electron, expect } from "@playwright/test";
+import { _electron as electron } from "@playwright/test";
 import { waitForAnimations } from "../tests/helpers/animations.ts";
 import { completeFixtureOnboarding } from "./onboarding-fixture/account.mjs";
 import { createPassiveAccountDiagnostics } from "./onboarding-fixture/account-diagnostics.mjs";
@@ -156,14 +156,6 @@ const proof = {
     .update(await readFile(path.join(bundle, "Contents/Resources/app.asar")))
     .digest("hex"),
 };
-
-async function invoke(command, args = {}) {
-  return page.evaluate(
-    ({ command, args }) =>
-      window.colonyDesktop.request("invoke", { command, args }),
-    { command, args },
-  );
-}
 
 async function launch() {
   application = await electron.launch({
@@ -368,6 +360,8 @@ try {
       return launch();
     },
     proxy,
+    relay,
+    provider,
     recoveryPath,
     proofDirectory,
     onProgress(stage) {
@@ -403,34 +397,16 @@ try {
     instruction: "0",
     tasks: "0",
   });
-  const credits = await invoke("get_colony_credits_account");
-  assert.equal(credits.available_balance_nanousd, "0");
-  const card = page
-    .getByTestId("first-job-suggestion")
-    .filter({ visible: true })
-    .first();
-  await card
-    .getByRole("button", { name: "Approve team and start", exact: true })
-    .click();
-  await expect(card.getByTestId("first-job-status")).toHaveText(
-    "Add credits before starting this job. Your brief stays here.",
-    { timeout: 30_000 },
-  );
-  assert.deepEqual(await counts(), {
-    suggestion: "1",
-    instruction: "0",
-    tasks: "0",
-  });
   provider.assertHealthy();
-  assert.equal(provider.receivedCallCount, 0);
-  await waitForAnimations(page);
-  await page.screenshot({
-    path: path.join(proofDirectory, "joined-zero-credit-block.png"),
-  });
+  assert.equal(provider.receivedCallCount, result.connectionProbe.calls);
+  assert.ok(
+    provider.requests.every((request) => request.stage === "connection-test"),
+  );
   const { page: _page, rootEvent: _event, ...identifiers } = result;
   Object.assign(proof, identifiers, {
     accountCompleted: true,
-    zeroCreditStart: "blocked without Task, instruction or model call",
+    zeroCreditConnection: "blocked before model call; funded probe then passed",
+    beforeWorkApproval: "no Task, job instruction or business-work model call",
     hostedSignup: "not tested",
     workerCompletion: "not completed",
   });
@@ -456,7 +432,8 @@ try {
     : "not tested";
   Object.assign(proof, identifiers, {
     completed: true,
-    zeroCreditStart: "blocked without Task, instruction or model call",
+    zeroCreditConnection: "blocked before model call; funded probe then passed",
+    beforeWorkApproval: "no Task, job instruction or business-work model call",
     hostedSignup: "not tested",
     workerCompletion,
     chromiumTrust:
