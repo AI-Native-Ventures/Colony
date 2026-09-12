@@ -101,7 +101,9 @@ test("lost boot offers phone recovery with a single-use QR", async ({
   await expect(page.getByTestId("identity-recovery-pairing")).toBeVisible();
   await expect(page.getByTestId("identity-recovery-qr")).toBeVisible();
   await expect(
-    page.getByText("Scan this code with a signed-in Colony phone."),
+    page
+      .getByTestId("identity-recovery-pairing")
+      .getByText("Scan this code with a signed-in Colony phone."),
   ).toBeVisible();
   await expect(
     page.getByText("On your phone, open Settings → Send identity to desktop."),
