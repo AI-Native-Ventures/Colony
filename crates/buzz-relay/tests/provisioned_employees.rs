@@ -12,8 +12,9 @@
 //!   second identity, or every relay restart would give a workspace another
 //!   Sales.
 //! - **A role is filled once.** A workspace employee already holding a
-//!   bundled role is adopted rather than duplicated: same key, bundled config,
-//!   and later version bumps keep updating that same row.
+//!   bundled role is adopted rather than duplicated; an agent that exists only
+//!   as an owner-published managed-agent head is honoured in place, with no
+//!   second employee minted and reporting lines pointing at it.
 
 use buzz_auth::Scope;
 use buzz_core::kind::{
@@ -186,6 +187,40 @@ fn tag_value(event: &Event, name: &str) -> Option<String> {
         .iter()
         .find(|tag| tag.kind().to_string() == name)
         .and_then(|tag| tag.content().map(str::to_string))
+}
+
+/// Publish a kind-30177 managed-agent head for `agent` under `role_id`, signed
+/// by `author` and shaped exactly as the desktop writes one. A backdated
+/// `created_at` lets a test deterministically supersede an earlier head in the
+/// same `d` coordinate.
+async fn publish_managed_agent_head(
+    state: &Arc<AppState>,
+    tenant: &TenantContext,
+    author: &Keys,
+    agent: &Keys,
+    role_id: &str,
+    created_at: Option<nostr::Timestamp>,
+) {
+    let content = serde_json::json!({
+        "name": "Fizz",
+        "role_id": role_id,
+        "tier": "executive",
+    })
+    .to_string();
+    let mut builder = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content)
+        .tags(vec![tag(&["d", &agent.public_key().to_hex()])]);
+    if let Some(created_at) = created_at {
+        builder = builder.custom_created_at(created_at);
+    }
+    let event = builder.sign_with_keys(author).expect("sign the managed-agent head");
+    let result = ingest_event(state, tenant, event, auth_for(author.public_key()))
+        .await
+        .expect("ingest answers");
+    assert!(
+        result.accepted(),
+        "the managed-agent head must be accepted: {}",
+        result.message()
+    );
 }
 
 #[tokio::test]
@@ -677,4 +712,284 @@ async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
     .await
     .expect("count sales rows");
     assert_eq!(rows, 1, "one employee per role, adopted rather than duplicated");
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_chief_of_staff_that_exists_only_as_a_head_is_not_duplicated() {
+    let (db, pool) = setup().await;
+    let community_id = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = tenant_for(community_id);
+
+    let owner = Keys::generate();
+    add_owner(&pool, community_id, &owner.public_key().to_hex()).await;
+
+    // The owner's own Chief of Staff: a kind-30177 head and no employees row.
+    let theirs = Keys::generate();
+    publish_managed_agent_head(&state, &tenant, &owner, &theirs, "chief-of-staff", None).await;
+
+    let bundled = core_employee_manifests().expect("bundled employees are valid");
+    let written = ensure_core_employees(&state, community_id)
+        .await
+        .expect("seeding succeeds");
+    assert_eq!(
+        written, bundled.len() - 1,
+        "every bundled employee but the held chief of staff is written"
+    );
+    assert!(
+        db.find_provisioned_employee(community_id, "chief-of-staff")
+            .await
+            .expect("query the chief of staff")
+            .is_none(),
+        "no second chief of staff is minted beside the owner's agent"
+    );
+
+    // Avery reports to the owner's agent, on the row and on the published head.
+    let avery = db
+        .find_provisioned_employee(community_id, "website-manager")
+        .await
+        .expect("query the website manager")
+        .expect("the website manager is seeded");
+    assert_eq!(
+        avery.manager.as_deref(), Some(theirs.public_key().to_bytes().as_slice()),
+        "the website manager reports to the owner's chief of staff"
+    );
+    let avery_hex = sales_keys_from(&avery).to_hex();
+    let heads = events_of_kind(&db, community_id, KIND_EMPLOYEE, &avery_hex).await;
+    assert_eq!(
+        tag_value(&heads[0], "manager").as_deref(),
+        Some(theirs.public_key().to_hex().as_str()),
+        "the head carries the same manager the row holds"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_workspace_with_no_chief_of_staff_gets_the_bundled_one() {
+    let (db, pool) = setup().await;
+    let community_id = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+
+    let owner = Keys::generate();
+    add_owner(&pool, community_id, &owner.public_key().to_hex()).await;
+
+    ensure_core_employees(&state, community_id)
+        .await
+        .expect("seeding succeeds");
+
+    let chief = db
+        .find_provisioned_employee(community_id, "chief-of-staff")
+        .await
+        .expect("query the chief of staff")
+        .expect("the bundled chief of staff is seeded");
+    let avery = db
+        .find_provisioned_employee(community_id, "website-manager")
+        .await
+        .expect("query the website manager")
+        .expect("the website manager is seeded");
+    assert_eq!(
+        avery.manager.as_deref(),
+        Some(chief.pubkey.as_slice()),
+        "with no existing agent, Avery reports to the bundled chief of staff"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_row_and_a_head_both_holding_the_role_keep_the_row() {
+    let (db, pool) = setup().await;
+    let community_id = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = tenant_for(community_id);
+
+    let owner = Keys::generate();
+    add_owner(&pool, community_id, &owner.public_key().to_hex()).await;
+
+    // The workspace's own hire fills the role...
+    let row_keys = Keys::generate();
+    let sealer =
+        buzz_relay::employee_key::EmployeeKeySealer::from_hex(TEST_KEK_HEX).expect("KEK parses");
+    let secret: [u8; 32] = row_keys.secret_key().to_secret_bytes();
+    let row_pubkey = row_keys.public_key().to_bytes();
+    let sealed = sealer
+        .seal(*community_id.as_uuid(), &row_pubkey, &secret)
+        .expect("seal the test key");
+    db.insert_employee(
+        community_id,
+        buzz_db::employees::NewEmployee {
+            pubkey: &row_pubkey,
+            sealed_key: &sealed,
+            role_id: "chief-of-staff",
+            display_name: "Their Chief",
+            rank: "executive",
+            hired_by: &owner.public_key().to_bytes(),
+            hire_event: &row_pubkey,
+            manager: None,
+        },
+    )
+    .await
+    .expect("insert the workspace's own employee")
+    .expect("the row inserts");
+
+    // ...and a different agent is published as a head for the same role.
+    let head_keys = Keys::generate();
+    publish_managed_agent_head(&state, &tenant, &owner, &head_keys, "chief-of-staff", None).await;
+
+    let bundled = core_employee_manifests().expect("bundled employees are valid");
+    let written = ensure_core_employees(&state, community_id)
+        .await
+        .expect("seeding succeeds");
+    assert_eq!(written, bundled.len(), "the row is adopted and the rest seed");
+
+    let chief = db
+        .find_provisioned_employee(community_id, "chief-of-staff")
+        .await
+        .expect("query the chief of staff")
+        .expect("the chief of staff is seeded");
+    assert_eq!(
+        chief.pubkey, row_pubkey,
+        "the employees row outranks the head and keeps its identity"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_deleted_head_stops_holding_the_role_and_the_manager_heals() {
+    let (db, pool) = setup().await;
+    let community_id = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = tenant_for(community_id);
+
+    let owner = Keys::generate();
+    add_owner(&pool, community_id, &owner.public_key().to_hex()).await;
+
+    let theirs = Keys::generate();
+    publish_managed_agent_head(&state, &tenant, &owner, &theirs, "chief-of-staff", None).await;
+    ensure_core_employees(&state, community_id)
+        .await
+        .expect("the first seeding pass succeeds");
+    assert!(
+        db.find_provisioned_employee(community_id, "chief-of-staff")
+            .await
+            .expect("query the chief of staff")
+            .is_none(),
+        "the head holds the role on the first pass"
+    );
+
+    // A NIP-09 deletion: the head no longer counts, so the next pass seeds the
+    // bundled chief of staff and heals Avery's reporting line to it.
+    let deleted = sqlx::query(
+        "UPDATE events SET deleted_at = now() \
+         WHERE community_id = $1 AND kind = $2 AND d_tag = $3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(KIND_MANAGED_AGENT as i32)
+    .bind(theirs.public_key().to_hex())
+    .execute(&pool)
+    .await
+    .expect("delete the head");
+    assert_eq!(deleted.rows_affected(), 1, "the owner's head is deleted");
+
+    ensure_core_employees(&state, community_id)
+        .await
+        .expect("the second seeding pass succeeds");
+    let chief = db
+        .find_provisioned_employee(community_id, "chief-of-staff")
+        .await
+        .expect("query the chief of staff")
+        .expect("the bundled chief of staff is seeded once the head is gone");
+    let avery = db
+        .find_provisioned_employee(community_id, "website-manager")
+        .await
+        .expect("query the website manager")
+        .expect("the website manager stays seeded");
+    assert_eq!(
+        avery.manager.as_deref(),
+        Some(chief.pubkey.as_slice()),
+        "the reporting line heals to the bundled chief of staff"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_superseded_head_stops_holding_the_role() {
+    let (db, pool) = setup().await;
+    let community_id = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = tenant_for(community_id);
+
+    let owner = Keys::generate();
+    add_owner(&pool, community_id, &owner.public_key().to_hex()).await;
+
+    // The first head claims the role; a newer head at the same `d` tag
+    // supersedes it and does not. The first is backdated so the ordering is
+    // deterministic rather than decided by event id inside one second.
+    let theirs = Keys::generate();
+    let earlier = nostr::Timestamp::from_secs(nostr::Timestamp::now().as_secs() - 60);
+    publish_managed_agent_head(
+        &state,
+        &tenant,
+        &owner,
+        &theirs,
+        "chief-of-staff",
+        Some(earlier),
+    )
+    .await;
+    publish_managed_agent_head(&state, &tenant, &owner, &theirs, "company-coordinator", None).await;
+
+    let bundled = core_employee_manifests().expect("bundled employees are valid");
+    let written = ensure_core_employees(&state, community_id)
+        .await
+        .expect("seeding succeeds");
+    assert_eq!(written, bundled.len(), "the superseded role claim does not hold");
+    assert!(
+        db.find_provisioned_employee(community_id, "chief-of-staff")
+            .await
+            .expect("query the chief of staff")
+            .is_some(),
+        "the bundled chief of staff is seeded once the old claim is superseded"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_members_head_does_not_hold_the_role() {
+    let (db, pool) = setup().await;
+    let community_id = community(&pool).await;
+    let state = state(db.clone(), &pool).await;
+    let tenant = tenant_for(community_id);
+
+    let owner = Keys::generate();
+    add_owner(&pool, community_id, &owner.public_key().to_hex()).await;
+
+    // A plain member, not an owner, publishes a head claiming the role.
+    let member = Keys::generate();
+    sqlx::query("INSERT INTO relay_members (community_id, pubkey, role) VALUES ($1, $2, 'member')")
+        .bind(community_id.as_uuid())
+        .bind(member.public_key().to_hex())
+        .execute(&pool)
+        .await
+        .expect("insert the member");
+    let impostor_agent = Keys::generate();
+    publish_managed_agent_head(
+        &state,
+        &tenant,
+        &member,
+        &impostor_agent,
+        "chief-of-staff",
+        None,
+    )
+    .await;
+
+    ensure_core_employees(&state, community_id)
+        .await
+        .expect("seeding succeeds");
+    assert!(
+        db.find_provisioned_employee(community_id, "chief-of-staff")
+            .await
+            .expect("query the chief of staff")
+            .is_some(),
+        "only an owner-published head can hold a role"
+    );
 }

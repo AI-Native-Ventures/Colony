@@ -17,7 +17,8 @@
 //! away every user path that would archive, retire, rename or re-prompt one.
 //! An employee a workspace creates for a role Colony does not bundle stays
 //! entirely its own; one it created for a bundled role is adopted and becomes
-//! Colony-maintained from then on.
+//! Colony-maintained, while an owner-published agent that holds a bundled role
+//! keeps its own key and its place in the chart.
 //!
 //! Two properties this module is built around:
 //!
@@ -25,14 +26,20 @@
 //!   and an employee that could not be seeded is a missing colleague, not a
 //!   dead workspace. A relay with no employee key-encryption key configured
 //!   simply has no provisioned employees, logged once per start.
-//! - **Seeding never mints a second identity for a role.** A workspace that
-//!   already employs somebody in a bundled role has that employee adopted:
-//!   the same pubkey, now carrying the bundled handle, brief, name and rank,
-//!   so the workspace gets every later improvement with no user action. An
-//!   employee a workspace creates for a role Colony does not bundle stays
-//!   entirely its own.
+//! - **Seeding never mints a second identity for a role.** A role that is
+//!   already filled is honoured. An `employees` row is adopted: the same
+//!   pubkey, now carrying the bundled handle, brief, name and rank, so the
+//!   workspace gets every later improvement with no user action. An agent
+//!   that exists only as an owner-published managed-agent head (kind 30177)
+//!   cannot be adopted -- the desktop keeps its key -- but it still means the
+//!   role is filled, so no second employee is minted and reporting lines
+//!   point at that agent. An employee a workspace creates for a role Colony
+//!   does not bundle stays entirely its own.
+
+use std::collections::BTreeSet;
 
 use anyhow::Context;
+use buzz_core::employee::is_valid_role_slug;
 use buzz_core::interrupt::AgentTier;
 use buzz_core::kind::{KIND_EMPLOYEE, KIND_MANAGED_AGENT, KIND_PROFILE};
 use buzz_core::CommunityId;
@@ -41,6 +48,11 @@ use serde::Deserialize;
 use tracing::{info, warn};
 
 use crate::state::AppState;
+
+/// How many owner-published managed-agent heads one role lookup will scan.
+/// A community has a handful of agents; the cap only bounds a pathological
+/// relay.
+const MAX_ROLE_HOLDER_HEADS: i64 = 200;
 
 /// Every bundled employee: the manifest, and the persona prompt it names.
 ///
@@ -304,6 +316,11 @@ pub enum SeedOutcome {
     /// was adopted into the bundle: the same pubkey, now carrying the bundled
     /// handle and config.
     Adopted,
+    /// The role is filled by an owner-published managed-agent head. The relay
+    /// holds no sealed key for it, so it is neither adopted nor duplicated:
+    /// the desktop keeps the agent and applies the bundle, and reporting
+    /// lines resolve to its pubkey.
+    HeldByManagedAgent,
     /// A newer bundled version replaced what was already seeded.
     Updated,
     /// The bundled version is already the seeded one. Nothing was written.
@@ -352,6 +369,11 @@ pub async fn ensure_core_employees(
                     version = employee.version,
                     "a workspace employee already held this role; it was adopted into the bundled employee and now carries its brief, name and rank"
                 );
+            }
+            Ok(SeedOutcome::HeldByManagedAgent) => {
+                // No row was written. `seed_one` logs the holder (pubkey and
+                // head) where it resolved it, so the central log stays quiet
+                // rather than repeating a line it has less detail for.
             }
             Ok(SeedOutcome::Updated) => {
                 written += 1;
@@ -559,40 +581,73 @@ async fn seed_one(
         return Ok(SeedOutcome::Updated);
     }
 
-    // Nothing seeded under this handle. If the role is already filled, the
-    // holder is this employee's counterpart in this workspace: adopt it rather
-    // than minting a second identity for one role. The holder keeps its key,
-    // its history and every thread it has spoken in; what changes is that the
-    // bundle now owns its brief.
-    if let Some(holder) = role_holder(state, community, employee).await? {
-        let adopted = state
-            .db
-            .adopt_provisioned_employee(
-                community,
-                &holder.pubkey,
-                &employee.handle,
-                employee.version,
-                &employee.display_name,
-                &employee.role_id,
-                &employee.rank,
-                manager.as_deref(),
-            )
-            .await
-            .context("failed to adopt the workspace employee holding this role")?;
+    // Nothing seeded under this handle. Resolve who fills the role across
+    // both ledgers: an employee row can be adopted, an owner-published
+    // managed-agent head cannot (its key lives on the desktop) but still
+    // means the role is filled, so no second identity is minted either way.
+    match resolve_role_holder(state, community, &employee.role_id, Some(&employee.handle)).await? {
+        Some(RoleHolder::Employee(holder)) => {
+            if holder.provisioned_handle.is_some() {
+                // A different bundled handle already owns this role. The
+                // bundle refuses duplicate roles at load, so this is a row no
+                // seeded pass produced; stop rather than fight it.
+                warn!(
+                    community = %community,
+                    handle = %employee.handle,
+                    role = %employee.role_id,
+                    pubkey = %hex::encode(&holder.pubkey),
+                    "the role is already held by a different provisioned employee; not seeding this one"
+                );
+                return Ok(SeedOutcome::Unchanged);
+            }
 
-        if let Some(adopted) = adopted {
-            let keys = open_keys(sealer, community, &adopted.pubkey, &adopted.sealed_key)?;
-            // As in the update path: publish the row's own manager, so a
-            // reporting line the workspace had before adoption survives on
-            // both the row and the head.
-            publish_records(state, community, employee, adopted.manager.as_deref(), &keys).await;
-            return Ok(SeedOutcome::Adopted);
+            let adopted = state
+                .db
+                .adopt_provisioned_employee(
+                    community,
+                    &holder.pubkey,
+                    &employee.handle,
+                    employee.version,
+                    &employee.display_name,
+                    &employee.role_id,
+                    &employee.rank,
+                    manager.as_deref(),
+                )
+                .await
+                .context("failed to adopt the workspace employee holding this role")?;
+
+            if let Some(adopted) = adopted {
+                let keys = open_keys(sealer, community, &adopted.pubkey, &adopted.sealed_key)?;
+                // As in the update path: publish the row's own manager, so a
+                // reporting line the workspace had before adoption survives on
+                // both the row and the head.
+                publish_records(state, community, employee, adopted.manager.as_deref(), &keys)
+                    .await;
+                return Ok(SeedOutcome::Adopted);
+            }
+
+            // The row moved between the lookup and the update: it retired, or
+            // a concurrent pass adopted it first. Nothing is wrong; the next
+            // start reconciles from whatever state this pass left behind.
+            return Ok(SeedOutcome::Unchanged);
         }
-
-        // The row moved between the lookup and the update: it retired, or a
-        // concurrent pass adopted it first. Nothing is wrong; the next start
-        // reconciles from whatever state this pass left behind.
-        return Ok(SeedOutcome::Unchanged);
+        Some(RoleHolder::ManagedAgent(holder)) => {
+            // The owner's own agent holds this role and the relay holds no
+            // sealed key for it, so it cannot be adopted into the payroll. The
+            // desktop applies the bundle on its side; here the only job is to
+            // not mint a duplicate. `reports_to` resolves to this pubkey
+            // through the same resolver on this and every later pass.
+            info!(
+                community = %community,
+                handle = %employee.handle,
+                role = %employee.role_id,
+                pubkey = %hex::encode(&holder.pubkey),
+                head = %holder.event_id,
+                "the role is held by an owner-published agent; no provisioned employee was seeded for it"
+            );
+            return Ok(SeedOutcome::HeldByManagedAgent);
+        }
+        None => {}
     }
 
     // Mint independently of the relay's own keypair, for the same reason
@@ -636,58 +691,188 @@ async fn seed_one(
     Ok(SeedOutcome::Seeded)
 }
 
-/// The workspace employee that currently fills `employee`'s role, if any.
+/// Who fills a bundled employee's role in one community, and which ledger
+/// answered.
 ///
-/// The active-role unique index admits one holder, but the read is a list
-/// ordered by pubkey so a legacy or damaged pair still resolves the same way
-/// every pass: the lowest pubkey, with a warning naming the collision.
+/// Two ledgers can hold a role. The payroll (`employees`) is relay-written: a
+/// seeded or adopted employee can be updated and republished. An
+/// owner-published managed-agent head (kind 30177) is desktop-owned: the
+/// relay can resolve it and point reporting lines at it, but it holds no
+/// sealed key and can never adopt it into the payroll.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RoleHolder {
+    /// A row in `employees`, provisioned or the workspace's own hire.
+    Employee(buzz_db::employees::EmployeeRow),
+    /// An owner-published managed-agent head naming this role.
+    ManagedAgent(ManagedAgentHolder),
+}
+
+impl RoleHolder {
+    /// The identity a reporting line must carry.
+    fn pubkey(&self) -> &[u8] {
+        match self {
+            Self::Employee(row) => row.pubkey.as_slice(),
+            Self::ManagedAgent(holder) => holder.pubkey.as_slice(),
+        }
+    }
+}
+
+/// One owner-published managed-agent head, resolved to the agent it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManagedAgentHolder {
+    /// The head's `d` tag: the agent's pubkey.
+    pubkey: [u8; 32],
+    /// The head event id, for logs.
+    event_id: String,
+}
+
+/// Every candidate holder for one role, gathered from both ledgers before a
+/// choice is made so a crowded role can be logged with what was not chosen.
+#[derive(Debug, Default)]
+struct RoleCandidates {
+    /// A row under the bundled handle the caller named, which outranks every
+    /// other candidate.
+    provisioned: Option<buzz_db::employees::EmployeeRow>,
+    /// Active employee rows filling the role, lowest pubkey first.
+    employees: Vec<buzz_db::employees::EmployeeRow>,
+    /// Owner-published managed-agent heads naming the role, lowest pubkey
+    /// first.
+    managed_agents: Vec<ManagedAgentHolder>,
+}
+
+/// Pick the holder: the provisioned row under the bundled handle, then an
+/// active employee row, then an owner-published agent head. Each list
+/// arrives sorted by pubkey, so within a tier the lowest pubkey wins.
+fn choose_role_holder(candidates: &RoleCandidates) -> Option<RoleHolder> {
+    if let Some(row) = &candidates.provisioned {
+        return Some(RoleHolder::Employee(row.clone()));
+    }
+    if let Some(row) = candidates.employees.first() {
+        return Some(RoleHolder::Employee(row.clone()));
+    }
+    candidates.managed_agents.first().cloned().map(RoleHolder::ManagedAgent)
+}
+
+/// How many distinct identities could have filled the role, for the choice
+/// log. The provisioned row is usually also an active employee row, so this
+/// counts pubkeys rather than rows.
+fn candidate_pubkeys(candidates: &RoleCandidates) -> BTreeSet<Vec<u8>> {
+    let mut pubkeys = BTreeSet::new();
+    if let Some(row) = &candidates.provisioned {
+        pubkeys.insert(row.pubkey.clone());
+    }
+    for row in &candidates.employees {
+        pubkeys.insert(row.pubkey.clone());
+    }
+    for holder in &candidates.managed_agents {
+        pubkeys.insert(holder.pubkey.to_vec());
+    }
+    pubkeys
+}
+
+/// Resolve who fills `role_id` in this community: a provisioned employee
+/// carrying `provisioned_handle` wins, else an active employee row, else an
+/// owner-published managed-agent head; ties inside a tier go to the lowest
+/// pubkey and a crowded choice is logged.
 ///
-/// A holder already provisioned under another handle is not adoptable and
-/// cannot be seeded over, because the role index would refuse the insert. That
-/// state can only come from a bundle with two entries for one role, which
-/// [`core_employee_manifests`] refuses before seeding starts; here it is
-/// logged and skipped rather than escalated.
-async fn role_holder(
+/// The managed-agent scan goes through
+/// [`buzz_db::Db::query_latest_owner_authored_heads`], the same access the
+/// interrupt gate uses: community-scoped, deleted heads excluded, NIP-33
+/// latest-wins per `d` tag, and only heads authored by a CURRENT community
+/// owner. A non-owner's head can never fill a role, and a superseded or
+/// deleted head stops counting the moment a newer one lands or the delete is
+/// recorded.
+async fn resolve_role_holder(
     state: &AppState,
     community: CommunityId,
-    employee: &ProvisionedEmployee,
-) -> anyhow::Result<Option<buzz_db::employees::EmployeeRow>> {
-    let holders = state
-        .db
-        .list_active_employees_by_role(community, &employee.role_id)
-        .await
-        .with_context(|| format!("failed to look up who holds role `{}`", employee.role_id))?;
+    role_id: &str,
+    provisioned_handle: Option<&str>,
+) -> anyhow::Result<Option<RoleHolder>> {
+    let role_id = role_id.trim().to_ascii_lowercase();
+    let mut candidates = RoleCandidates::default();
 
-    let Some((first, rest)) = holders.split_first() else {
+    if let Some(handle) = provisioned_handle {
+        candidates.provisioned = state
+            .db
+            .find_provisioned_employee(community, handle)
+            .await
+            .with_context(|| format!("failed to look up the seeded employee `{handle}`"))?;
+    }
+
+    candidates.employees = state
+        .db
+        .list_active_employees_by_role(community, &role_id)
+        .await
+        .with_context(|| format!("failed to look up who holds role `{role_id}`"))?;
+
+    let heads = state
+        .db
+        .query_latest_owner_authored_heads(
+            community,
+            KIND_MANAGED_AGENT as i32,
+            MAX_ROLE_HOLDER_HEADS,
+        )
+        .await
+        .context("failed to scan owner-published managed-agent heads")?;
+    for stored in heads {
+        if managed_agent_role(&stored.event).as_deref() != Some(role_id.as_str()) {
+            continue;
+        }
+        let Some(pubkey) = managed_agent_pubkey(&stored.event) else {
+            continue;
+        };
+        candidates.managed_agents.push(ManagedAgentHolder {
+            pubkey,
+            event_id: stored.event.id.to_hex(),
+        });
+    }
+    candidates.managed_agents.sort_by(|left, right| left.pubkey.cmp(&right.pubkey));
+
+    let Some(holder) = choose_role_holder(&candidates) else {
         return Ok(None);
     };
-    if !rest.is_empty() {
+    let distinct = candidate_pubkeys(&candidates);
+    if distinct.len() > 1 {
         warn!(
             community = %community,
-            handle = %employee.handle,
-            role = %employee.role_id,
-            pubkey = %hex::encode(&first.pubkey),
-            "several active employees hold this role; using the lowest pubkey"
+            role = %role_id,
+            pubkey = %hex::encode(holder.pubkey()),
+            candidates = distinct.len(),
+            "more than one candidate fills this role; using the preferred holder"
         );
     }
-    if first.provisioned_handle.is_some() {
-        warn!(
-            community = %community,
-            handle = %employee.handle,
-            role = %employee.role_id,
-            "the role is already held by a different provisioned employee; not seeding this one"
-        );
-        return Ok(None);
-    }
-    Ok(Some(first.clone()))
+    Ok(Some(holder))
+}
+
+/// The role an owner-published managed-agent head claims, normalized the way
+/// `employees.role_id` is stored. `None` when the content is not JSON, names
+/// no role, or names one outside the role-slug grammar.
+fn managed_agent_role(event: &Event) -> Option<String> {
+    let content: serde_json::Value = serde_json::from_str(&event.content).ok()?;
+    let raw = content.get("role_id")?.as_str()?;
+    let role_id = raw.trim().to_ascii_lowercase();
+    is_valid_role_slug(&role_id).then_some(role_id)
+}
+
+/// The agent an owner-published managed-agent head describes: its `d` tag,
+/// which is the agent's pubkey. Managed-agent heads are keyed by the agent
+/// they describe, exactly as the interrupt gate reads them.
+fn managed_agent_pubkey(event: &Event) -> Option<[u8; 32]> {
+    let hex = event.tags.iter().find_map(|tag| {
+        let parts = tag.as_slice();
+        (parts.len() >= 2 && parts[0] == "d").then(|| parts[1].clone())
+    })?;
+    nostr::PublicKey::from_hex(&hex)
+        .ok()
+        .map(|pubkey| pubkey.to_bytes())
 }
 
 /// The pubkey `employee` should report to, resolved the way the org chart
-/// resolves a role: a provisioned employee carrying the named handle wins,
-/// and otherwise whoever fills that handle's `role_id` in this community is
-/// the manager. That second step is what makes an adopted workspace employee
-/// (an existing Chief of Staff, say) the manager of the employees reporting to
-/// that role.
+/// resolves a role: a provisioned employee carrying the named handle wins;
+/// otherwise an active employee row, or an owner-published managed-agent head,
+/// fills that handle's role. The employee and head steps are what make an
+/// existing Chief of Staff -- adopted, hired, or desktop-owned -- the manager
+/// of the employees reporting to that role.
 ///
 /// A missing manager is logged and seeded as no manager rather than failing
 /// the pass: the manager's own seeding may have failed, and a later pass heals
@@ -702,46 +887,25 @@ async fn resolve_manager(
         return Ok(None);
     };
 
-    if let Some(seeded) = state
-        .db
-        .find_provisioned_employee(community, manager_handle)
-        .await
-        .with_context(|| format!("failed to look up the manager `{manager_handle}`"))?
-    {
-        return Ok(Some(seeded.pubkey));
-    }
-
     let role_id = manifests
         .iter()
         .find(|entry| entry.handle == manager_handle)
         .map(|entry| entry.role_id.as_str())
         .expect("every reports_to names a bundled handle, checked at load");
-    let holders = state
-        .db
-        .list_active_employees_by_role(community, role_id)
-        .await
-        .with_context(|| format!("failed to look up who holds role `{role_id}`"))?;
 
-    let Some((first, rest)) = holders.split_first() else {
-        warn!(
-            community = %community,
-            handle = %employee.handle,
-            manager = manager_handle,
-            role = role_id,
-            "the manager for this provisioned employee is not in place yet; seeding without one"
-        );
-        return Ok(None);
-    };
-    if !rest.is_empty() {
-        warn!(
-            community = %community,
-            handle = %employee.handle,
-            manager = manager_handle,
-            role = role_id,
-            "several active employees hold the manager's role; using the lowest pubkey"
-        );
+    match resolve_role_holder(state, community, role_id, Some(manager_handle)).await? {
+        Some(holder) => Ok(Some(holder.pubkey().to_vec())),
+        None => {
+            warn!(
+                community = %community,
+                handle = %employee.handle,
+                manager = manager_handle,
+                role = role_id,
+                "the manager for this provisioned employee is not in place yet; seeding without one"
+            );
+            Ok(None)
+        }
     }
-    Ok(Some(first.pubkey.clone()))
 }
 
 /// Re-derive a seeded employee's signing keys from its sealed column.
@@ -1204,6 +1368,94 @@ mod tests {
             .map(|employee| employee.handle.as_str())
             .collect();
         assert_eq!(handles, vec!["executive", "leader", "worker"]);
+    }
+
+    /// One employee row with only the fields role resolution reads.
+    fn employee_row(pubkey: [u8; 32], handle: Option<&str>) -> buzz_db::employees::EmployeeRow {
+        buzz_db::employees::EmployeeRow {
+            pubkey: pubkey.to_vec(),
+            sealed_key: vec![0; 32],
+            role_id: "chief-of-staff".to_owned(),
+            display_name: "Fizz".to_owned(),
+            rank: "executive".to_owned(),
+            hired_by: None,
+            hire_event: None,
+            manager: None,
+            provisioned_handle: handle.map(str::to_owned),
+            provisioned_version: handle.map(|_| 1),
+            status: "active".to_owned(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn role_holders_are_chosen_in_the_contract_order() {
+        let provisioned = employee_row([1; 32], Some("chief-of-staff"));
+        let employee = employee_row([2; 32], None);
+        let head = ManagedAgentHolder {
+            pubkey: [3; 32],
+            event_id: "cc".repeat(32),
+        };
+
+        let head_only = RoleCandidates {
+            provisioned: None,
+            employees: Vec::new(),
+            managed_agents: vec![head.clone()],
+        };
+        assert_eq!(choose_role_holder(&head_only), Some(RoleHolder::ManagedAgent(head.clone())));
+
+        let row_and_head = RoleCandidates {
+            provisioned: None,
+            employees: vec![employee.clone()],
+            managed_agents: vec![head.clone()],
+        };
+        assert_eq!(
+            choose_role_holder(&row_and_head),
+            Some(RoleHolder::Employee(employee.clone()))
+        );
+
+        let everything = RoleCandidates {
+            provisioned: Some(provisioned.clone()),
+            employees: vec![employee],
+            managed_agents: vec![head],
+        };
+        assert_eq!(choose_role_holder(&everything), Some(RoleHolder::Employee(provisioned)));
+    }
+
+    #[test]
+    fn a_managed_agent_head_names_only_a_valid_normalized_role() {
+        let keys = Keys::generate();
+        let head = |content: serde_json::Value| {
+            EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content.to_string())
+                .sign_with_keys(&keys)
+                .expect("sign the head")
+        };
+
+        let mixed_case = head(serde_json::json!({ "role_id": " Chief-Of-Staff " }));
+        assert_eq!(managed_agent_role(&mixed_case).as_deref(), Some("chief-of-staff"));
+        assert!(managed_agent_role(&head(serde_json::json!({ "name": "Fizz" }))).is_none());
+        let bad_slug = head(serde_json::json!({ "role_id": "chief of staff" }));
+        assert!(
+            managed_agent_role(&bad_slug).is_none(),
+            "a role outside the slug grammar names nothing"
+        );
+    }
+
+    #[test]
+    fn a_managed_agent_head_identifies_its_agent_through_the_d_tag() {
+        let owner = Keys::generate();
+        let subject = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), "{}")
+            .tags(vec![Tag::parse(["d", &subject.public_key().to_hex()]).expect("d tag")])
+            .sign_with_keys(&owner)
+            .expect("sign the head");
+        assert_eq!(managed_agent_pubkey(&event), Some(subject.public_key().to_bytes()));
+
+        let unnamed = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), "{}")
+            .sign_with_keys(&owner)
+            .expect("sign the head");
+        assert_eq!(managed_agent_pubkey(&unnamed), None);
     }
 
     fn tag_value(event: &Event, name: &str) -> Option<String> {
