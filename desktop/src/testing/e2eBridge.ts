@@ -5531,7 +5531,7 @@ function mockWorkspaceFile(path: string) {
   const file = MOCK_WORKSPACE_FILES[relative];
   if (!file) {
     throw new Error(
-      `${path} is not a file in the Buzz workspace or your repos folder`,
+      `${path} is not a file in the Colony workspace or your repos folder`,
     );
   }
   return { ...file, path: `${MOCK_WORKSPACE_ROOT}/${relative}`, relative };
@@ -6494,7 +6494,7 @@ const MOCK_PROJECT_SEEDS = [
     dtag: "buzz",
     name: "buzz",
     description:
-      "Relay, desktop, and mobile clients for the Buzz community platform.",
+      "Relay, desktop, and mobile clients for the Colony community platform.",
     cloneUrl: `${DEFAULT_RELAY_HTTP_URL}/git/${MOCK_IDENTITY_PUBKEY}/buzz`,
     owner: MOCK_IDENTITY_PUBKEY,
     contributors: [ALICE_PUBKEY, BOB_PUBKEY, CHARLIE_PUBKEY],
@@ -6696,7 +6696,7 @@ function buildMockProjectEvents(): RelayEvent[] {
       [
         ["d", "buzz"],
         ["name", "buzz"],
-        ["description", "The complete Buzz community platform."],
+        ["description", "The complete Colony community platform."],
         // Makes `general` a project channel in mock mode, which is what gates
         // the workspace kinds that need a project (factory, project terminal).
         ["buzz-channel", STARTER_GENERAL_CHANNEL_ID],
@@ -13099,7 +13099,7 @@ export function maybeInstallE2eTauriMocks() {
               kind: "blob",
               size: 33120,
               preview_content:
-                "// Smart HTTP git transport\n// Handles upload-pack and receive-pack for Buzz git repos.\n",
+                "// Smart HTTP git transport\n// Handles upload-pack and receive-pack for Colony git repos.\n",
             },
           ],
         };

@@ -19,8 +19,25 @@ export type SubscriptionAccount = {
     durationMinutes: number | null;
     accountWide: boolean;
   }[];
-  models: { id: string; label: string; isDefault: boolean }[];
+  models: SubscriptionModel[];
   notice: string | null;
+};
+
+/**
+ * One model the provider offers, with the reasoning efforts it advertises.
+ *
+ * `efforts` is empty when the provider reported none for this model, which is a
+ * real answer: Claude's Haiku entry has no effort axis at all. `defaultEffort` is
+ * null when the provider advertises efforts without naming the one it would have
+ * used, which is what Claude does, so the owner keeps an explicit "the provider
+ * decides" choice rather than one Colony picked for them.
+ */
+export type SubscriptionModel = {
+  id: string;
+  label: string;
+  isDefault: boolean;
+  efforts: { effort: string; description: string | null }[];
+  defaultEffort: string | null;
 };
 
 export type SubscriptionConnection = {

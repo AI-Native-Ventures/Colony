@@ -11,6 +11,7 @@ import { KIND_COMPANY_RECEIPT } from "@/shared/constants/kinds";
 import { createFirstJobBrowserStore } from "./firstJobBrowserStore";
 import {
   createFirstJobBusinessContext,
+  createFirstJobBusinessHeadLoader,
   firstJobBusinessRequestId,
   isFirstJobBusinessAttempt,
   validateFirstJobSuggestionRoot,
@@ -88,14 +89,11 @@ export const ensureFirstJobBusinessContext = createFirstJobBusinessContext({
       fetchEvents: (filter) =>
         current(scope, () => relayClient.fetchEvents(filter)),
     });
-    const result = await current(scope, () =>
-      repository.getActiveCompanyHead(),
-    );
-    if (!result.ok)
-      throw new Error(
-        "Your company profile could not be read. Your setup is saved; try again.",
-      );
-    return result.value;
+    return createFirstJobBusinessHeadLoader({
+      assertCurrent: () => assertFirstJobScope(scope),
+      loadHead: () => repository.getActiveCompanyHead(),
+      delay,
+    })();
   },
   async sign(scope, input) {
     return JSON.parse(

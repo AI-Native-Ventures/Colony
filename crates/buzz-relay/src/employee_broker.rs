@@ -31,8 +31,9 @@ use buzz_core::employee::{
     parse_employee_update, parse_hire_request, ParsedEmployeeUpdate, ParsedHireRequest,
 };
 use buzz_core::interrupt::AgentTier;
-use buzz_core::kind::{KIND_EMPLOYEE, KIND_MANAGED_AGENT};
+use buzz_core::kind::{KIND_ASK_RESOLUTION, KIND_EMPLOYEE, KIND_MANAGED_AGENT};
 use buzz_core::tenant::TenantContext;
+use buzz_db::asks::AskRow;
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Tag};
 use tracing::{info, warn};
 
@@ -187,7 +188,271 @@ pub async fn handle_hire_request(
         employee = %keys.public_key().to_hex(),
         "employee hired"
     );
+
+    // The hire may be the answer to an agent's `hiring` ask. Closing it here
+    // is what makes the existing wake-up receipt fire, so the agent that
+    // asked resumes where it stalled instead of waiting to be told by hand.
+    // Best effort, like everything else on this path: the employee exists
+    // either way, and a missed wake-up is recoverable.
+    resolve_hiring_ask_for_hire(tenant, state, event, HireOutcome::Hired, &request, &keys).await;
+
     Ok(HireOutcome::Hired)
+}
+
+/// The escalation category a hire answers. Asks filed under it are the ones
+/// a completed hire may close.
+const HIRING_CATEGORY: &str = "hiring";
+
+/// Pick the ask a completed hire answers, or `None` to leave every ask open.
+///
+/// Pure, so the whole rule is testable without a database. In order:
+///
+/// - The hire must actually have HIRED someone. `AlreadyHired` means this
+///   request was already processed (its ask, if any, was closed then), and
+///   `RoleTaken` means nothing was hired at all.
+/// - `explicit` -- the still-open ask named by an `e` tag on the hire
+///   request -- wins outright. An `e` tag naming a closed or unknown ask
+///   arrives here as `None` and falls through to the fallback, because a
+///   stale pointer is not a reason to leave a live ask hanging.
+/// - Otherwise the fallback closes an ask only when the open `hiring` asks
+///   addressed to this owner number EXACTLY one. Zero means there is
+///   nothing to answer; more than one means we cannot tell which was
+///   answered, and closing the wrong hiring request is worse than the owner
+///   nudging the right agent once.
+fn select_hiring_ask(
+    outcome: HireOutcome,
+    explicit: Option<AskRow>,
+    candidates: Vec<AskRow>,
+) -> Option<AskRow> {
+    if outcome != HireOutcome::Hired {
+        return None;
+    }
+    if let Some(explicit) = explicit {
+        return Some(explicit);
+    }
+    match candidates.len() {
+        1 => candidates.into_iter().next(),
+        _ => None,
+    }
+}
+
+/// Close the hiring ask this hire answers, then wake the agent that filed
+/// it -- the same three steps a human resolution takes
+/// (`ask_broker::handle_resolution`): a relay-signed kind 44301, a
+/// conditional `resolve_ask` claim, and `emit_ask_receipt` into the ask's
+/// origin thread.
+///
+/// Every failure is logged and swallowed. The hire itself is already
+/// durable by the time this runs, and an ask that stays open can still be
+/// answered by hand; nothing here may undo employment.
+///
+/// Idempotence comes from two places: this only runs on
+/// [`HireOutcome::Hired`], which a repeat of the same request never
+/// produces, and `resolve_ask` is a conditional `UPDATE ... WHERE status =
+/// 'open'`, so two relays racing the same hire produce exactly one
+/// resolution.
+async fn resolve_hiring_ask_for_hire(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    hire_event: &Event,
+    outcome: HireOutcome,
+    request: &ParsedHireRequest,
+    employee_keys: &Keys,
+) {
+    // Same requirement resolution already carries: without a durable relay
+    // key every install shares the fallback dev key, and a forgeable "your
+    // ask was resolved" receipt is worse than no receipt.
+    if state.config.relay_private_key.is_none() {
+        warn!(
+            "hire did not resolve a hiring ask: no durable relay signing key \
+             (set BUZZ_RELAY_PRIVATE_KEY)"
+        );
+        return;
+    }
+
+    let explicit = match explicit_open_ask(tenant, state, hire_event).await {
+        Ok(explicit) => explicit,
+        Err(error) => {
+            warn!(error = %error, "hire: failed to look up the ask named by the request");
+            return;
+        }
+    };
+    let candidates = match state
+        .db
+        .find_open_asks_by_category_and_audience(
+            tenant.community(),
+            HIRING_CATEGORY,
+            &hire_event.pubkey.to_bytes(),
+        )
+        .await
+    {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            warn!(error = %error, "hire: failed to load open hiring asks for this owner");
+            return;
+        }
+    };
+    let candidate_count = candidates.len();
+
+    let Some(row) = select_hiring_ask(outcome, explicit, candidates) else {
+        info!(
+            candidate_count,
+            "hire resolved no ask: no unambiguous open hiring ask to close"
+        );
+        return;
+    };
+
+    let ask_event_hex = hex::encode(&row.ask_event_id);
+    let answer = serde_json::json!({
+        "hired": {
+            "role": request.role_id,
+            "name": request.display_name,
+            "pubkey": employee_keys.public_key().to_hex(),
+        }
+    });
+    let content = serde_json::json!({
+        "answer": answer,
+        "default_executed": false,
+    })
+    .to_string();
+    let tag = match Tag::parse(["e", &ask_event_hex]) {
+        Ok(tag) => tag,
+        Err(error) => {
+            warn!(error = %error, "hire: failed to build the resolution `e` tag");
+            return;
+        }
+    };
+    let resolution = match EventBuilder::new(Kind::Custom(KIND_ASK_RESOLUTION as u16), content)
+        .tags(vec![tag])
+        .sign_with_keys(&state.relay_keypair)
+    {
+        Ok(resolution) => resolution,
+        Err(error) => {
+            warn!(error = %error, "hire: failed to sign the ask resolution");
+            return;
+        }
+    };
+
+    // Claim the row before any side effect, exactly as the sweep's
+    // default-execution path does: a lost race means someone else already
+    // closed this ask and there is nothing left to wake.
+    let flipped = match state
+        .db
+        .resolve_ask(
+            tenant.community(),
+            &row.ask_event_id,
+            resolution.id.as_bytes(),
+            &hire_event.pubkey.to_bytes(),
+            false,
+        )
+        .await
+    {
+        Ok(flipped) => flipped,
+        Err(error) => {
+            warn!(error = %error, "hire: failed to resolve the hiring ask");
+            return;
+        }
+    };
+    if !flipped {
+        return;
+    }
+
+    // The ask's outcome just changed: close its deadline head so no client
+    // keeps counting down toward a deadline that can no longer fire.
+    crate::ask_state_head::publish_closed_head(
+        tenant,
+        state,
+        &row.ask_event_id,
+        &crate::ask_state_head::AskClosure::Resolved {
+            default_executed: false,
+            default_option: None,
+        },
+    )
+    .await;
+
+    // Relay-authored, so it bypasses ingest: store it here the way the
+    // interrupt sweep stores its own resolutions, and keep it best effort --
+    // the ask is already durably resolved above.
+    if let Err(error) = state
+        .db
+        .insert_event(tenant.community(), &resolution, None)
+        .await
+    {
+        warn!(error = %error, "hire: failed to store the ask resolution event");
+    }
+
+    info!(ask = %ask_event_hex, "hire resolved the hiring ask it answers");
+
+    let Some(origin_thread) = &row.origin_thread else {
+        return;
+    };
+    let filer = match PublicKey::from_slice(&row.filer_pubkey) {
+        Ok(filer) => filer,
+        Err(error) => {
+            warn!(error = %error, "hire: stored filer pubkey is not valid, cannot wake it");
+            return;
+        }
+    };
+    let ask_channel_id = match state
+        .db
+        .get_event_by_id(tenant.community(), &row.ask_event_id)
+        .await
+    {
+        Ok(stored) => stored.and_then(|stored| stored.channel_id),
+        Err(error) => {
+            warn!(error = %error, "hire: failed to load the ask event to wake its filer");
+            return;
+        }
+    };
+    crate::ask_broker::emit_ask_receipt(
+        tenant,
+        state,
+        &hex::encode(origin_thread),
+        &format!(
+            "Hired {} as {}. You asked for this; you can carry on.",
+            request.display_name, request.role_id
+        ),
+        filer,
+        ask_channel_id,
+    )
+    .await;
+}
+
+/// The still-OPEN ask named by an `e` tag on the hire request, if any.
+///
+/// `None` covers every "no exact link" case the fallback then handles: no
+/// `e` tag, a duplicated or malformed one, and a tag naming an ask that is
+/// unknown to this community or already closed.
+async fn explicit_open_ask(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    hire_event: &Event,
+) -> Result<Option<AskRow>, String> {
+    let tag = match buzz_core::event_tags::optional_tag(hire_event, "e") {
+        Ok(Some(tag)) => tag,
+        Ok(None) => return Ok(None),
+        Err(_) => {
+            warn!("hire: the request carries more than one `e` tag; ignoring the exact link");
+            return Ok(None);
+        }
+    };
+    let Ok(ask_event_id) = hex::decode(&tag) else {
+        warn!(tag = %tag, "hire: the request's `e` tag is not hex; ignoring the exact link");
+        return Ok(None);
+    };
+    let row = state
+        .db
+        .find_open_ask_by_event_id(tenant.community(), &ask_event_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if row.is_none() {
+        warn!(
+            ask = %tag,
+            "hire: the request names an ask that is closed or unknown here; \
+             falling back to the unambiguous open hiring ask, if there is one"
+        );
+    }
+    Ok(row)
 }
 
 /// Enforce every rule a kind 9046 update must satisfy, at INGEST time, so
@@ -772,5 +1037,102 @@ async fn sign_store_and_fan_out_head(
         .await
     {
         warn!(error = %error, "employee head fan-out failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use buzz_core::CommunityId;
+
+    /// An open ask row with `category` and the given event id; only the
+    /// fields [`select_hiring_ask`] and its caller read are meaningful.
+    fn open_hiring_ask(ask_event_id: u8) -> AskRow {
+        AskRow {
+            community_id: CommunityId::from_uuid(uuid::Uuid::nil()),
+            ask_event_id: vec![ask_event_id; 32],
+            ask_type: "decision".to_string(),
+            initiative_id: "initiative-1".to_string(),
+            need_key: format!("need-{ask_event_id}"),
+            audience_pubkey: vec![0x01; 32],
+            filer_pubkey: vec![0x02; 32],
+            origin_thread: Some(vec![0x03; 32]),
+            prior_ask: None,
+            category: Some(HIRING_CATEGORY.to_string()),
+            default_option: None,
+            deadline_at: None,
+            status: "open".to_string(),
+            resolution_event: None,
+            resolved_by: None,
+            default_executed: false,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// An explicit `e` tag is the whole point of the exact link: it must win
+    /// even where the fallback would have refused to choose.
+    #[test]
+    fn an_explicitly_named_ask_wins_over_an_ambiguous_fallback() {
+        let explicit = open_hiring_ask(0xaa);
+        let selected = select_hiring_ask(
+            HireOutcome::Hired,
+            Some(explicit.clone()),
+            vec![open_hiring_ask(0xbb), open_hiring_ask(0xcc)],
+        );
+        assert_eq!(selected, Some(explicit));
+    }
+
+    /// The fallback: one open hiring ask addressed to this owner is
+    /// unambiguous, so the hire closes it.
+    #[test]
+    fn exactly_one_open_hiring_ask_is_the_one_the_hire_answers() {
+        let only = open_hiring_ask(0xaa);
+        let selected = select_hiring_ask(HireOutcome::Hired, None, vec![only.clone()]);
+        assert_eq!(selected, Some(only));
+    }
+
+    /// Two open hiring asks: we cannot tell which one this hire answered,
+    /// and closing the wrong one is worse than the owner nudging once.
+    #[test]
+    fn two_open_hiring_asks_resolve_nothing() {
+        let selected = select_hiring_ask(
+            HireOutcome::Hired,
+            None,
+            vec![open_hiring_ask(0xaa), open_hiring_ask(0xbb)],
+        );
+        assert_eq!(selected, None);
+    }
+
+    /// Nothing was asked for, so nothing is answered.
+    #[test]
+    fn no_open_hiring_ask_resolves_nothing() {
+        assert_eq!(
+            select_hiring_ask(HireOutcome::Hired, None, Vec::new()),
+            None
+        );
+    }
+
+    /// A re-run of a hire request that already produced an employee must not
+    /// publish a second resolution: `AlreadyHired` closes nothing, even with
+    /// an exact link and an otherwise unambiguous fallback.
+    #[test]
+    fn a_repeat_of_an_already_completed_hire_resolves_nothing() {
+        assert_eq!(
+            select_hiring_ask(
+                HireOutcome::AlreadyHired,
+                Some(open_hiring_ask(0xaa)),
+                vec![open_hiring_ask(0xbb)],
+            ),
+            None
+        );
+        assert_eq!(
+            select_hiring_ask(
+                HireOutcome::RoleTaken,
+                Some(open_hiring_ask(0xaa)),
+                vec![open_hiring_ask(0xbb)],
+            ),
+            None
+        );
     }
 }

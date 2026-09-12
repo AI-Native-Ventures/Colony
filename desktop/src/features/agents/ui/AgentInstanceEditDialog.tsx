@@ -1059,7 +1059,6 @@ export function AgentInstanceEditDialog({
               />
             ) : null}
 
-            {/* Model */}
             <div className="space-y-1.5">
               <label
                 className="text-sm font-medium text-foreground"
@@ -1116,6 +1115,7 @@ export function AgentInstanceEditDialog({
               triggerRef={aiDefaultsTriggerRef}
               explicitModel={inheritedSubmission.model ?? ""}
               explicitProvider={inheritedSubmission.provider ?? ""}
+              envVars={envVars}
               inheritedModel={inheritedModelDefault}
               inheritedProvider={inheritedProviderDefault}
             />

@@ -134,7 +134,7 @@ pub fn resolve_under_roots(roots: &[PathBuf], raw: &str) -> Result<PathBuf, Stri
         }
     }
     Err(format!(
-        "{trimmed} is not a file in the Buzz workspace or your repos folder"
+        "{trimmed} is not a file in the Colony workspace or your repos folder"
     ))
 }
 

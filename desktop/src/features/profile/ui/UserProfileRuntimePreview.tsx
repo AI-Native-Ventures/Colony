@@ -28,7 +28,9 @@ const PROFILE_RUNTIME_PREVIEW: RuntimeConfigSurface = {
       writeVia: { type: "readOnly" },
     },
   ],
-  extensions: [{ enabled: true, kind: "stdio", name: "Buzz developer tools" }],
+  extensions: [
+    { enabled: true, kind: "stdio", name: "Colony developer tools" },
+  ],
   isPreSpawn: false,
   normalized: {
     contextLimit: previewField("200,000"),

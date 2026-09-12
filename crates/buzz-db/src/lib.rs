@@ -6555,6 +6555,24 @@ impl Db {
         asks::find_open_asks_by_thread(&self.pool, community, thread_root).await
     }
 
+    /// Returns every open ask in `community` with this `category`
+    /// (case-insensitive) addressed to `audience_pubkey`. Backs hiring
+    /// wake-up receipts. See [`asks::find_open_asks_by_category_and_audience`].
+    pub async fn find_open_asks_by_category_and_audience(
+        &self,
+        community: CommunityId,
+        category: &str,
+        audience_pubkey: &[u8],
+    ) -> Result<Vec<asks::AskRow>> {
+        asks::find_open_asks_by_category_and_audience(
+            &self.pool,
+            community,
+            category,
+            audience_pubkey,
+        )
+        .await
+    }
+
     /// Mints a v2 use-limited relay invite. The plaintext code is returned
     /// exactly once; only its SHA-256 hash is persisted.
     ///

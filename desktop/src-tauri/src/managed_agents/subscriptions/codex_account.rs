@@ -187,6 +187,35 @@ fn models_from_value(value: &Value) -> Vec<SubscriptionModel> {
                     .get("isDefault")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                efforts: efforts_from_value(value),
+                default_effort: effort_token(
+                    value.get("defaultReasoningEffort").and_then(Value::as_str),
+                ),
+            })
+        })
+        .collect()
+}
+
+/// Read `supportedReasoningEfforts` as the vendor reports it for this model.
+///
+/// Codex sends `[{reasoningEffort, description}]`. A model that reports none, or
+/// reports a value in a shape we will not pass on (see [`effort_token`]), simply
+/// offers the owner no choice; nothing is guessed to fill the gap.
+fn efforts_from_value(value: &Value) -> Vec<SubscriptionModelEffort> {
+    value
+        .get("supportedReasoningEfforts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|option| {
+            Some(SubscriptionModelEffort {
+                effort: effort_token(option.get("reasoningEffort").and_then(Value::as_str))?,
+                description: option
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|description| !description.is_empty())
+                    .map(str::to_owned),
             })
         })
         .collect()
@@ -216,6 +245,44 @@ mod tests {
         );
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].used_percent, 0.0);
+    }
+
+    /// Shapes taken from this Mac's own `model/list` response.
+    #[test]
+    fn a_model_keeps_the_efforts_and_default_the_provider_reported() {
+        let models = models_from_value(&json!({"data":[{
+            "model":"gpt-5.6-sol","displayName":"GPT-5.6-Sol","isDefault":true,
+            "defaultReasoningEffort":"low",
+            "supportedReasoningEfforts":[
+                {"reasoningEffort":"low","description":"Fastest"},
+                {"reasoningEffort":"max","description":"Hardest problems"},
+                {"reasoningEffort":"  ","description":"Not a value"}
+            ]
+        }]}));
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].default_effort.as_deref(), Some("low"));
+        assert_eq!(
+            models[0].efforts,
+            vec![
+                SubscriptionModelEffort {
+                    effort: "low".into(),
+                    description: Some("Fastest".into()),
+                },
+                SubscriptionModelEffort {
+                    effort: "max".into(),
+                    description: Some("Hardest problems".into()),
+                },
+            ],
+            "a malformed entry is dropped, never renamed or guessed"
+        );
+    }
+
+    #[test]
+    fn a_model_reporting_no_efforts_still_parses_and_offers_no_choice() {
+        let models = models_from_value(&json!({"data":[{"model":"synthetic-model"}]}));
+        assert_eq!(models.len(), 1);
+        assert!(models[0].efforts.is_empty());
+        assert_eq!(models[0].default_effort, None);
     }
 
     #[test]

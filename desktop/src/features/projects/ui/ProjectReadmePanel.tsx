@@ -211,13 +211,13 @@ export function ReadmePanel({
     const unavailableContent = {
       authentication: {
         description:
-          "Buzz could not authenticate with this repository. Check your access and try again.",
+          "Colony could not authenticate with this repository. Check your access and try again.",
         icon: LockKeyhole,
         title: "Repository access failed",
       },
       missing: {
         description:
-          "The project announcement exists, but its git repository was not found on the Buzz relay.",
+          "The project announcement exists, but its git repository was not found on the Colony relay.",
         icon: CircleAlert,
         title: "Repository not initialized",
       },
@@ -235,7 +235,7 @@ export function ReadmePanel({
       },
       network: {
         description:
-          "The Buzz git service could not be reached. Check your connection and try again.",
+          "The Colony git service could not be reached. Check your connection and try again.",
         icon: CloudOff,
         title: "Couldn’t reach repository",
       },
@@ -247,7 +247,7 @@ export function ReadmePanel({
       },
       unknown: {
         description:
-          "Buzz could not load this repository. Try again or contact the project owner.",
+          "Colony could not load this repository. Try again or contact the project owner.",
         icon: CircleAlert,
         title: "Repository unavailable",
       },
@@ -281,7 +281,7 @@ export function ReadmePanel({
           </h3>
           <p className="mt-1 max-w-lg text-sm text-muted-foreground">
             {externalHost ? (
-              "Clone this repository locally to explore its files, commits, and contributors in Buzz."
+              "Clone this repository locally to explore its files, commits, and contributors in Colony."
             ) : reason === "access" && accessChannelId ? (
               <AccessRestrictedDescription accessChannelId={accessChannelId} />
             ) : (

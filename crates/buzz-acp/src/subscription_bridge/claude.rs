@@ -64,13 +64,15 @@ impl Claude {
         {
             bail!("Connect a Claude subscription for this business before starting the agent");
         }
-        if !initialized["models"].as_array().is_some_and(|models| {
-            models
-                .iter()
-                .any(|model| model["value"] == config.model || model["id"] == config.model)
-        }) {
+        let Some(entry) = initialized["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|model| model["value"] == config.model || model["id"] == config.model)
+        else {
             bail!("Claude no longer offers the selected model. Choose a model in Power setup");
-        }
+        };
+        require_supported_effort(entry, config.reasoning_effort.as_deref())?;
         Ok(())
     }
 
@@ -167,10 +169,40 @@ fn restricted_command(config: &Config, system_prompt: &str) -> tokio::process::C
         "--mcp-config",
         &json!({"mcpServers": config.mcp_servers}).to_string(),
     ]);
+    // Claude takes the effort as a session flag rather than a per-turn field, and
+    // only for a model that advertised support for one (`initialize` gates this
+    // through `require_supported_effort`). Absent leaves the CLI's own default.
+    if let Some(effort) = &config.reasoning_effort {
+        command.arg("--effort").arg(effort);
+    }
     if !system_prompt.is_empty() {
         command.arg("--append-system-prompt").arg(system_prompt);
     }
     command
+}
+
+/// Accept the chosen effort only when this model's own initialize entry advertises
+/// it.
+///
+/// Claude reports `supportsEffort` plus a flat `supportedEffortLevels` array, and
+/// omits both for a model that has no effort axis at all (measured: Haiku). Either
+/// way, an effort the model did not advertise fails startup instead of reaching
+/// `--effort`, where the CLI's own rejection would surface as an unexplained
+/// teammate that cannot start.
+fn require_supported_effort(entry: &Value, effort: Option<&str>) -> Result<()> {
+    let Some(effort) = effort else {
+        return Ok(());
+    };
+    let advertised = entry["supportsEffort"] == true
+        && entry["supportedEffortLevels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|level| level.as_str() == Some(effort));
+    if !advertised {
+        bail!("This model does not offer that reasoning effort on your Claude subscription. Choose one in Power setup");
+    }
+    Ok(())
 }
 
 fn permission_response(config: &Config, request: &Value) -> Value {
@@ -224,6 +256,7 @@ mod tests {
             profile: "/private/provider".into(),
             workspace: "/private/worker".into(),
             model: "synthetic-model".into(),
+            reasoning_effort: None,
             mcp_servers: json!({"colony_work":{"command":"/usr/bin/sandbox-exec","args":["synthetic"],"env":{}}}),
             host_login: None,
         }
@@ -280,6 +313,40 @@ mod tests {
             )["behavior"],
             "deny"
         );
+    }
+
+    #[test]
+    fn an_effort_reaches_the_cli_only_when_the_model_advertised_it() {
+        let arguments = |config: &Config| -> Vec<String> {
+            restricted_command(config, "")
+                .as_std()
+                .get_args()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect()
+        };
+        let mut config = config();
+        assert!(
+            !arguments(&config)
+                .iter()
+                .any(|argument| argument == "--effort"),
+            "no chosen effort leaves the CLI's own default alone"
+        );
+        config.reasoning_effort = Some("xhigh".into());
+        assert!(arguments(&config)
+            .windows(2)
+            .any(|pair| pair == ["--effort", "xhigh"]));
+
+        // Shapes taken from the installed CLI's initialize response.
+        let supported = json!({"value":"synthetic-model","supportsEffort":true,"supportedEffortLevels":["low","xhigh"]});
+        assert!(require_supported_effort(&supported, Some("xhigh")).is_ok());
+        assert!(require_supported_effort(&supported, None).is_ok());
+        assert!(
+            require_supported_effort(&supported, Some("ultra")).is_err(),
+            "an effort this model never advertised must fail startup, not be passed on"
+        );
+        let effortless = json!({"value":"haiku"});
+        assert!(require_supported_effort(&effortless, None).is_ok());
+        assert!(require_supported_effort(&effortless, Some("high")).is_err());
     }
 
     #[test]

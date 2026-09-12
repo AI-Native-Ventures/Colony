@@ -155,6 +155,7 @@ for line in sys.stdin:
                     profile,
                     workspace,
                     model: "fixture-model".into(),
+                    reasoning_effort: None,
                     mcp_servers: json!({"colony_work": {
                         "command":"/usr/bin/sandbox-exec",
                         "args":["-f", "/synthetic/native-owned.sb", "/synthetic/work-tool"]
@@ -426,6 +427,21 @@ for line in sys.stdin:
         let mut agent = fixture.start().await.expect("nullable array capability");
         agent.shutdown().await;
     }
+}
+
+/// Catalog shape taken from this Mac's own `model/list` response.
+#[test]
+fn an_effort_the_model_never_advertised_is_refused_rather_than_sent() {
+    let entry = json!({"model":"gpt-5.6-luna","defaultReasoningEffort":"medium",
+        "supportedReasoningEfforts":[{"reasoningEffort":"medium","description":"Balanced"},
+            {"reasoningEffort":"max","description":"Hardest problems"}]});
+    assert!(require_supported_effort(&entry, None).is_ok());
+    assert!(require_supported_effort(&entry, Some("max")).is_ok());
+    assert!(
+        require_supported_effort(&entry, Some("ultra")).is_err(),
+        "Luna stops short of ultra even though Sol offers it"
+    );
+    assert!(require_supported_effort(&json!({"model":"synthetic"}), Some("low")).is_err());
 }
 
 #[test]

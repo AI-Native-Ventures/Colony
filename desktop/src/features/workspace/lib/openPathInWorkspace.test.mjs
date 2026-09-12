@@ -78,7 +78,7 @@ test("a resolved path opens as a tab and switches the channel to workspace", asy
 
 test("a path the native side refuses reports why and opens nothing", async () => {
   const { calls, dependencies } = harness(async () => {
-    throw "secret.txt is not a file in the Buzz workspace or your repos folder";
+    throw "secret.txt is not a file in the Colony workspace or your repos folder";
   });
 
   const result = await openPathInWorkspace(
@@ -89,7 +89,7 @@ test("a path the native side refuses reports why and opens nothing", async () =>
   assert.deepEqual(result, {
     ok: false,
     message:
-      "secret.txt is not a file in the Buzz workspace or your repos folder",
+      "secret.txt is not a file in the Colony workspace or your repos folder",
   });
   assert.deepEqual(calls, []);
 });

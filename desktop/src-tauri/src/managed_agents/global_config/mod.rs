@@ -106,6 +106,20 @@ pub struct GlobalAgentConfig {
     /// Preferred ACP runtime for definitions without an explicit runtime.
     #[serde(default)]
     pub preferred_runtime: Option<String>,
+
+    /// Global reasoning effort for the chosen model, as the provider named it.
+    ///
+    /// `None` means the vendor's own default decides, which is what every
+    /// teammate did before this field existed. A value is only ever one the
+    /// provider advertised for the selected model (see
+    /// `subscriptions::account::SubscriptionModel::efforts`); the bridge refuses
+    /// an effort the model does not support rather than passing it on.
+    ///
+    /// Global-only on purpose: the Power screen is the one picker, and it saves
+    /// the global defaults. There is deliberately no per-agent or per-persona
+    /// effort field yet, so nothing can disagree with what the owner chose.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Validate a `GlobalAgentConfig` before persisting it.
@@ -176,6 +190,24 @@ pub fn validate_global_config(config: &GlobalAgentConfig) -> Result<(), String> 
         }
     }
 
+    // The reasoning effort reaches a vendor process as an env var, a CLI
+    // argument and a JSON turn parameter, so it is held to the shape every
+    // provider actually advertises (`low` … `ultra`) rather than the generous
+    // model/provider caps above.
+    if let Some(effort) = &config.reasoning_effort {
+        let shaped = effort.len() <= 32
+            && effort
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+        if !effort.trim().is_empty() && !shaped {
+            return Err(
+                "global config `reasoning_effort` must be a single effort name the provider \
+                 advertised"
+                    .into(),
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -206,6 +238,13 @@ pub fn normalize_global_config_fields(config: &mut GlobalAgentConfig) {
     if let Some(v) = &config.model {
         if v.trim().is_empty() {
             config.model = None;
+        }
+    }
+    // "Use the provider's default" is stored as absent, never as an empty
+    // string: a blank effort would otherwise reach the spawn env as a value.
+    if let Some(v) = &config.reasoning_effort {
+        if v.trim().is_empty() {
+            config.reasoning_effort = None;
         }
     }
 }

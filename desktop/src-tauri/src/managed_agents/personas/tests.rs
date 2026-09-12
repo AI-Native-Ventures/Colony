@@ -4,7 +4,7 @@ use super::{
     validate_persona_deletion, BUILT_IN_PERSONAS, BUMBLE_SYSTEM_PROMPT, FIZZ_SYSTEM_PROMPT,
     FORAGER_AVATAR, HONEY_SYSTEM_PROMPT, LEGACY_BUMBLE_BEE_AVATAR, LEGACY_BUMBLE_SYSTEM_PROMPT,
     LEGACY_FIZZ_SYSTEM_PROMPT, LEGACY_HONEY_BEE_AVATAR, LEGACY_HONEY_SYSTEM_PROMPT,
-    RETIRED_PERSONAS, TENDER_AVATAR,
+    LEGACY_SCOUT_BEE_NAME_POOL, RETIRED_PERSONAS, TENDER_AVATAR,
 };
 use crate::managed_agents::discovery::{default_agent_command, effective_agent_command};
 use crate::managed_agents::persona_events::{
@@ -614,5 +614,115 @@ fn fizz_builtin_resolves_to_buzz_agent() {
         effective_agent_command(Some("builtin:fizz"), &records, None),
         "buzz-agent",
         "Fizz must resolve to buzz-agent specifically"
+    );
+}
+
+// -- Teammate naming ----------------------------------------------------------
+
+/// Colony forks Buzz, so the shipped name pool must not read as a beehive.
+/// The property, not any single literal, is what this asserts: a new teammate
+/// can never be named after a bee, a hive, or the upstream product.
+#[test]
+fn scout_name_pool_is_free_of_bee_vocabulary() {
+    let scout = BUILT_IN_PERSONAS
+        .iter()
+        .find(|persona| persona.id == "builtin:fizz")
+        .expect("builtin:fizz must exist");
+
+    assert_eq!(
+        scout.name_pool.len(),
+        18,
+        "the pool size drives clone-naming collision behaviour; keep it at eighteen"
+    );
+
+    const FORBIDDEN: &[&str] = &[
+        "bee", "buzz", "hive", "honey", "nectar", "pollen", "comb", "swarm", "apiary", "queen",
+        "drone", "wax", "sting", "bumble", "fizz",
+    ];
+
+    for name in scout.name_pool {
+        let lowered = name.to_lowercase();
+        assert!(
+            !name.trim().is_empty() && !name.contains(char::is_whitespace),
+            "pool entries must be single words: {name:?}"
+        );
+        for forbidden in FORBIDDEN {
+            assert!(
+                !lowered.contains(forbidden),
+                "{name:?} reads as bee vocabulary ({forbidden})"
+            );
+        }
+        for legacy in LEGACY_SCOUT_BEE_NAME_POOL {
+            assert!(
+                !lowered.eq(&legacy.to_lowercase()),
+                "{name:?} is still an entry from the retired beehive pool"
+            );
+        }
+        for starter in BUILT_IN_PERSONAS {
+            assert!(
+                !lowered.eq(&starter.display_name.to_lowercase()),
+                "{name:?} collides with the starter persona {}",
+                starter.display_name
+            );
+        }
+    }
+
+    let mut unique: Vec<String> = scout
+        .name_pool
+        .iter()
+        .map(|name| name.to_lowercase())
+        .collect();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        scout.name_pool.len(),
+        "pool entries must be distinct from each other"
+    );
+}
+
+#[test]
+fn merge_personas_replaces_the_untouched_bee_era_scout_name_pool() {
+    let mut legacy_scout = custom_persona("builtin:fizz", "Scout");
+    legacy_scout.is_builtin = true;
+    legacy_scout.name_pool = LEGACY_SCOUT_BEE_NAME_POOL
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+
+    let (records, changed) = merge_personas(vec![legacy_scout], "2026-09-12T00:00:00Z");
+
+    assert!(changed);
+    let scout = records
+        .iter()
+        .find(|record| record.id == "builtin:fizz")
+        .expect("fizz built-in should exist");
+    let shipped: Vec<String> = BUILT_IN_PERSONAS
+        .iter()
+        .find(|persona| persona.id == "builtin:fizz")
+        .expect("builtin:fizz must exist")
+        .name_pool
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    assert_eq!(scout.name_pool, shipped);
+}
+
+#[test]
+fn merge_personas_keeps_an_owner_edited_scout_name_pool() {
+    let mut edited = custom_persona("builtin:fizz", "Scout");
+    edited.is_builtin = true;
+    edited.name_pool = vec!["Nectar".to_string(), "Pollen".to_string()];
+
+    let (records, _) = merge_personas(vec![edited], "2026-09-12T00:00:00Z");
+
+    let scout = records
+        .iter()
+        .find(|record| record.id == "builtin:fizz")
+        .expect("fizz built-in should exist");
+    assert_eq!(
+        scout.name_pool,
+        vec!["Nectar".to_string(), "Pollen".to_string()],
+        "a partial pool is owner-authored and must survive the migration"
     );
 }

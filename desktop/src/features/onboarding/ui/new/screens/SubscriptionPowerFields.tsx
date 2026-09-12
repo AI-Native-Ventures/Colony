@@ -13,7 +13,10 @@ import { Button } from "@/shared/ui/button";
 import { openUrl } from "@/shared/api/nativeBridge";
 import {
   subscriptionConnectionReady,
+  subscriptionEffortAllowed,
   subscriptionExhausted,
+  subscriptionModelDefaultEffort,
+  subscriptionModelEfforts,
 } from "../../../subscriptionConnectionState";
 
 /** Provider accounts remain native-owned; this view receives only public metadata. */
@@ -21,6 +24,7 @@ export function SubscriptionPowerFields({
   scope,
   selectedRuntimeId,
   selectedModel,
+  selectedEffort,
   onSelect,
   onValidityChange,
   disabled,
@@ -28,7 +32,9 @@ export function SubscriptionPowerFields({
   scope: SubscriptionScope;
   selectedRuntimeId: string | null | undefined;
   selectedModel: string | null | undefined;
-  onSelect: (runtimeId: string, modelId: string) => void;
+  selectedEffort?: string | null;
+  /** `effort` is null for "let the provider decide", never an empty string. */
+  onSelect: (runtimeId: string, modelId: string, effort: string | null) => void;
   onValidityChange: (valid: boolean) => void;
   disabled?: boolean;
 }) {
@@ -67,10 +73,38 @@ export function SubscriptionPowerFields({
     !query.isError &&
     !connecting &&
     !installing &&
-    subscriptionConnectionReady(selected, selectedModel, Date.now() / 1000);
+    subscriptionConnectionReady(
+      selected,
+      selectedModel,
+      Date.now() / 1000,
+      selectedEffort,
+    );
   useEffect(() => {
     onValidityChange(!!valid);
   }, [valid, onValidityChange]);
+  const efforts = subscriptionModelEfforts(selected, selectedModel);
+  const providerDefaultEffort = subscriptionModelDefaultEffort(
+    selected,
+    selectedModel,
+  );
+  // A saved effort can name something the model in front of the owner does not
+  // offer: the lists differ per model, and a config written for another model
+  // survives the switch. Fall back to this model's own default rather than
+  // leaving a choice on screen that the bridge would refuse at startup.
+  const staleEffort =
+    !!selectedRuntimeId &&
+    !!selectedModel &&
+    !subscriptionEffortAllowed(selected, selectedModel, selectedEffort);
+  useEffect(() => {
+    if (!staleEffort || !selectedRuntimeId || !selectedModel) return;
+    onSelect(selectedRuntimeId, selectedModel, providerDefaultEffort);
+  }, [
+    staleEffort,
+    selectedRuntimeId,
+    selectedModel,
+    providerDefaultEffort,
+    onSelect,
+  ]);
   const locked =
     disabled || query.isFetching || connecting !== null || installing !== null;
 
@@ -194,7 +228,7 @@ export function SubscriptionPowerFields({
                 disabled={locked || !entry.installed}
                 className="flex w-full items-center justify-between gap-3 text-left"
                 onClick={() => {
-                  if (!chosen) onSelect(entry.runtimeId, "");
+                  if (!chosen) onSelect(entry.runtimeId, "", null);
                 }}
               >
                 <strong>
@@ -283,31 +317,81 @@ export function SubscriptionPowerFields({
                     </>
                   )}
                   {connected && (
-                    <label className="block space-y-2">
-                      <span className="text-sm font-medium">Model</span>
-                      <select
-                        aria-label="Subscription model"
-                        className="w-full rounded-lg border border-input bg-background px-3 py-2"
-                        value={selectedModel ?? ""}
-                        disabled={locked}
-                        onChange={(event) =>
-                          onSelect(entry.runtimeId, event.target.value)
-                        }
-                      >
-                        <option value="">Choose a model</option>
-                        {entry.connected.models.map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {model.label}
-                          </option>
-                        ))}
-                      </select>
-                      {!entry.connected.models.length && (
-                        <p className="text-sm">
-                          The provider did not return available models. Check
-                          again before continuing.
-                        </p>
+                    <>
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium">Model</span>
+                        <select
+                          aria-label="Subscription model"
+                          className="w-full rounded-lg border border-input bg-background px-3 py-2"
+                          value={selectedModel ?? ""}
+                          disabled={locked}
+                          onChange={(event) =>
+                            // Changing the model re-derives the effort: the new
+                            // model has its own list and its own default, and
+                            // carrying the old choice over could name an effort
+                            // it does not offer.
+                            onSelect(
+                              entry.runtimeId,
+                              event.target.value,
+                              subscriptionModelDefaultEffort(
+                                entry,
+                                event.target.value,
+                              ),
+                            )
+                          }
+                        >
+                          <option value="">Choose a model</option>
+                          {entry.connected.models.map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.label}
+                            </option>
+                          ))}
+                        </select>
+                        {!entry.connected.models.length && (
+                          <p className="text-sm">
+                            The provider did not return available models. Check
+                            again before continuing.
+                          </p>
+                        )}
+                      </label>
+                      {/* Only the efforts this model advertises, so a model with
+                          no effort axis shows no control instead of an empty one. */}
+                      {!!efforts.length && (
+                        <label className="block space-y-2">
+                          <span className="text-sm font-medium">Reasoning</span>
+                          <select
+                            aria-label="Reasoning effort"
+                            className="w-full rounded-lg border border-input bg-background px-3 py-2"
+                            value={selectedEffort ?? ""}
+                            disabled={locked}
+                            onChange={(event) =>
+                              onSelect(
+                                entry.runtimeId,
+                                selectedModel ?? "",
+                                event.target.value || null,
+                              )
+                            }
+                          >
+                            <option value="">
+                              {providerDefaultEffort
+                                ? `${providerDefaultEffort} · this model's default`
+                                : "The provider decides"}
+                            </option>
+                            {efforts.map((option) => (
+                              <option key={option.effort} value={option.effort}>
+                                {option.description
+                                  ? `${option.effort} · ${option.description}`
+                                  : option.effort}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="text-sm text-muted-foreground">
+                            Higher reasoning uses more of this account's
+                            allowance for every task your teammates do.
+                          </p>
+                        </label>
                       )}
-                    </label>
+                    </>
                   )}
                 </>
               )}
