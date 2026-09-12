@@ -447,6 +447,28 @@ pub async fn start_managed_agent(
 
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
 
+        // An employee Colony provides runs the `buzz` this build ships, and a
+        // brief naming a command that binary lacks is broken before it starts:
+        // the agent reaches for something adjacent and produces work nobody
+        // can act on. Checked HERE and not only at adoption, because the app
+        // can be downgraded under a record a newer build wrote. Absent and
+        // explained beats started and improvising.
+        if !record.provisioned_requires_commands.is_empty() {
+            let available = crate::commands::available_cli_commands();
+            let missing = crate::managed_agents::provisioned::missing_commands(
+                &record.provisioned_requires_commands,
+                &available,
+            );
+            if !missing.is_empty() {
+                return Err(
+                    crate::managed_agents::provisioned::missing_commands_message(
+                        &record.name,
+                        &missing,
+                    ),
+                );
+            }
+        }
+
         // Profile reconcile: the carrier builder resolves the effective
         // harness through the one inheritance chain (the create-time snapshot
         // may be empty or stale for a persona-inherited harness).
@@ -633,6 +655,17 @@ pub async fn delete_managed_agent(
             }
             for pubkey in &exited_pubkeys {
                 state.clear_agent_session_caches(pubkey);
+            }
+
+            // Guard: an employee Colony provides is not the workspace's to
+            // delete. Ingest refuses every destructive path anyway, so a
+            // delete here could only drop this machine's copy and leave the
+            // employee standing, and the next community init would adopt it
+            // straight back: a confusing no-op rather than an outcome.
+            // `validate_persona_deletion` has said the same about built-in
+            // personas for as long as those have existed.
+            if let Some(record) = records.iter().find(|r| r.pubkey == pubkey) {
+                crate::managed_agents::provisioned::refuse_delete_if_provisioned(record)?;
             }
 
             // Guard: reject deletion of deployed remote agents unless explicitly forced.

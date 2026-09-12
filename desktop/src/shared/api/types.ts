@@ -320,6 +320,16 @@ export type ManagedAgent = {
   name: string;
   personaId: string | null;
   /**
+   * The bundled entry this agent was provisioned from, e.g. "sales", or null
+   * for an agent the workspace created itself.
+   *
+   * An employee Colony provides is not the workspace's to edit or delete, so
+   * the UI presents it as locked. Hiding a control is a courtesy, not the
+   * guarantee: the commands refuse both operations, and the relay refuses
+   * every destructive path at ingest regardless of what any client does.
+   */
+  provisioned: string | null;
+  /**
    * The record's harness/runtime id (e.g. "goose", "my-custom-harness").
    * `null` means the agent inherits its harness from the linked persona.
    * Used to count agents referencing a harness definition (delete confirm).

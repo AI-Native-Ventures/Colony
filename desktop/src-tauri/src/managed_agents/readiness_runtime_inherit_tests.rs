@@ -20,6 +20,9 @@ mod tests {
     /// Minimal unpinned record: no runtime, no persona link, no override.
     fn bare_record() -> ManagedAgentRecord {
         crate::managed_agents::types::ManagedAgentRecord {
+            provisioned: None,
+            provisioned_version: None,
+            provisioned_requires_commands: Vec::new(),
             working_dir: None,
             tier: None,
             manager: None,

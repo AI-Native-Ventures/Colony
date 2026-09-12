@@ -5,6 +5,9 @@ use crate::managed_agents::{BackendKind, ManagedAgentRecord, RespondTo};
 /// state right after creation, before any snapshot apply.
 pub(super) fn sample_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,

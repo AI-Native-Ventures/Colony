@@ -241,6 +241,9 @@ fn persona_reference_check_includes_defensive_lead_only_records() {
 
 pub(crate) fn managed_agent(name: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        provisioned: None,
+        provisioned_version: None,
+        provisioned_requires_commands: Vec::new(),
         working_dir: None,
         tier: None,
         manager: None,

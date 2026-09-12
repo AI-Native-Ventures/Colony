@@ -10,8 +10,22 @@ const QUOTED_LITERAL = /["'`]([A-Za-z0-9_:|.-]+)["'`]/g;
 const CALL_SITE = (name) => new RegExp(`(?<![A-Za-z0-9_])${name}\\s*\\(`);
 const FN_DEFINITION = (name) => new RegExp(`\\bfn\\s+${name}\\b`);
 
+// Files whose `generate_handler!` lists register commands with the app.
+//
+// `command_registry.rs` holds the app's own list. It used to live inline in
+// `lib.rs` and moved out when that file hit the desktop file-size ratchet; the
+// macro it defines expands back into `lib.rs`, so the commands are registered
+// exactly as before, but this scanner reads FILES rather than resolving
+// symbols and saw only the six entries literally left behind. Registered fell
+// from 373 to 6 and `native-inventory.json` was regenerated wrong, which is
+// the file the packaging and boundary gates read.
+//
+// If the list is ever split again, add the new file here. The "registered and
+// defined counts must agree" invariant in the sibling test is what catches a
+// forgotten entry, and it names both numbers.
 const REGISTERED_IN = [
   "src-tauri/src/lib.rs",
+  "src-tauri/src/command_registry.rs",
   "src-tauri/src/native_websocket.rs",
 ];
 
@@ -836,6 +850,39 @@ export async function buildInventory(projectRoot) {
   };
 }
 
+// Fields that describe SIZE rather than STRUCTURE, and therefore change on
+// almost every commit to `desktop/src-tauri` without saying anything about the
+// native surface this inventory exists to pin.
+//
+// A global line count inside a committed artefact taxes every open branch: one
+// unrelated commit on develop makes every other branch's committed inventory
+// stale, and the drift check then accuses a PR whose own diff did nothing.
+// Three of four red runs on PR #726 were exactly that, and the error names the
+// innocent file.
+//
+// The `commit` field was removed from this artefact for the same reason, which
+// is the precedent: informational-only fields that churn do not belong in the
+// committed copy. They are still computed and still printed by
+// `formatSummary`; they are simply not persisted, so there is nothing to go
+// stale and nothing to conflict over.
+const VOLATILE_COUNT_FIELDS = ["rust_lines", "portable_lines"];
+
+/**
+ * A copy of `inventory` with the churning size fields removed.
+ *
+ * Tolerant of an inventory that never had them, so it can be applied to both
+ * sides of the drift comparison and to a file committed before this change.
+ */
+export function withoutVolatileCounts(inventory) {
+  const copy = { ...inventory };
+  delete copy.commit;
+  if (copy.files) {
+    copy.files = { ...copy.files };
+    for (const field of VOLATILE_COUNT_FIELDS) delete copy.files[field];
+  }
+  return copy;
+}
+
 export function formatSummary(data) {
   const { files, commands, params, events } = data;
   const lines = [];
@@ -922,10 +969,31 @@ export async function runNativeInventory({ projectRoot, jsonPath, checkPath }) {
       process.exitCode = 1;
       return;
     }
-    const current = { ...data };
-    delete current.commit;
-    const baseline = { ...committed };
-    delete baseline.commit;
+    // The tolerance above has a cost: because the compare strips these
+    // fields from BOTH sides, a branch that regenerated before they were
+    // dropped can carry them back in and nothing would say so, and the next
+    // person to regenerate would reintroduce them for everyone. A guard that
+    // accepts what it is meant to remove decays to nothing, so the committed
+    // copy carrying one is an error in its own right, with the one-line fix
+    // named.
+    const persisted = committed.files ?? {};
+    const strays = VOLATILE_COUNT_FIELDS.filter(
+      (field) => persisted[field] !== undefined,
+    );
+    if (strays.length > 0) {
+      console.error(
+        `native inventory carries ${strays.join(" and ")}, which must not be committed: ` +
+          "they change on every commit to desktop/src-tauri and make every other branch stale.",
+      );
+      console.error(
+        "Run `pnpm generate:native-inventory` and commit the result; it drops them.",
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    const current = withoutVolatileCounts(data);
+    const baseline = withoutVolatileCounts(committed);
     if (!isDeepStrictEqual(current, baseline)) {
       console.error(
         "native inventory is stale: desktop/src-tauri code no longer matches desktop/native-inventory.json.",
@@ -942,7 +1010,13 @@ export async function runNativeInventory({ projectRoot, jsonPath, checkPath }) {
     return;
   }
   if (jsonPath) {
-    await fs.writeFile(jsonPath, `${JSON.stringify(data, null, 2)}\n`);
+    // Written WITHOUT the churning size fields; `formatSummary` below still
+    // prints them from the in-memory data, so the human output is unchanged
+    // and only the committed copy gets quieter.
+    await fs.writeFile(
+      jsonPath,
+      `${JSON.stringify(withoutVolatileCounts(data), null, 2)}\n`,
+    );
   }
   console.log(formatSummary(data));
 }

@@ -698,6 +698,13 @@ pub async fn update_managed_agent(
         }
 
         let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
+
+        // Colony maintains a provisioned employee; a local edit would be
+        // reverted by the next adoption pass at best, and at worst leave this
+        // machine running a private fork of an employee meant to be identical
+        // everywhere.
+        crate::managed_agents::provisioned::refuse_edit_if_provisioned(record)?;
+
         let previous_record = record.clone();
 
         let mut name_changed = false;
