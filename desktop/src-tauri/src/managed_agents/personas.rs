@@ -63,7 +63,7 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
         // upgraded instead of keeping a teammate called Buzz or Hive.
         name_pool: &[
             "Atlas", "Basalt", "Cinder", "Delta", "Flint", "Glint", "Halo", "Indigo", "Lumen",
-            "Mesa", "Nimbus", "Onyx", "Prism", "Ridge", "Slate", "Tundra", "Verge", "Zephyr",
+            "Mesa", "Onyx", "Prism", "Ridge", "Slate", "Tide", "Tundra", "Verge", "Zephyr",
         ],
         model: None,
         runtime: None,
