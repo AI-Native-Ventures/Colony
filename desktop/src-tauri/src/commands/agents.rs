@@ -678,9 +678,16 @@ pub async fn start_managed_agent(
                 .managed_agent_processes
                 .lock()
                 .map_err(|e| e.to_string())?;
+            let workspace_relay = relay_ws_url_with_override(&state);
             let record = records
                 .iter()
-                .find(|r| r.pubkey == pubkey)
+                .find(|r| {
+                    r.pubkey == pubkey
+                        && start_scope
+                            .as_ref()
+                            .map(|scope| scope.check_record(r, &workspace_relay).is_ok())
+                            .unwrap_or(true)
+                })
                 .ok_or_else(|| format!("agent {pubkey} not found"))?;
             let personas = load_personas(&app).unwrap_or_default();
             build_managed_agent_summary(
