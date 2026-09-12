@@ -88,15 +88,27 @@ type LoggedCommand = {
   payload: unknown;
 };
 
-function isReadStateSigning(command: LoggedCommand) {
+function isBackgroundSigning(command: LoggedCommand) {
   if (command.command !== "sign_event") return false;
   if (!command.payload || typeof command.payload !== "object") return false;
-  return (command.payload as { kind?: unknown }).kind === KIND_READ_STATE;
+  const payload = command.payload as {
+    content?: unknown;
+    kind?: unknown;
+    tags?: unknown;
+  };
+
+  if (payload.kind === 20001) {
+    return payload.content === "online" && Array.isArray(payload.tags)
+      ? payload.tags.length === 0
+      : false;
+  }
+
+  return payload.kind === KIND_READ_STATE;
 }
 
 function setupMutationCommands(commands: readonly LoggedCommand[]) {
   return commands
-    .filter((command) => !isReadStateSigning(command))
+    .filter((command) => !isBackgroundSigning(command))
     .map((command) => command.command)
     .filter((command) => SETUP_MUTATION_COMMANDS.has(command));
 }

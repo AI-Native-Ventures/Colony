@@ -2,8 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 
-import { createScoutOnboardingRootDelivery } from "./delivery.ts";
-import { createScoutOnboardingRootPayload } from "./protocol.ts";
+import {
+  createScoutOnboardingRootDelivery,
+  hasScoutOnboardingRootAttempt,
+} from "./delivery.ts";
+import {
+  createScoutOnboardingRootPayload,
+  scoutOnboardingRootStorageKey,
+} from "./protocol.ts";
 
 const key = new Uint8Array(32).fill(9);
 const payload = createScoutOnboardingRootPayload(
@@ -113,4 +119,63 @@ test("changed context or corrupt saved data cannot create a second root", async 
   f.map.set(key, "{}");
   await assert.rejects(f.controller.deliver(payload), /saved signup context/);
   assert.equal(f.signed.length, 1);
+});
+
+test("choice root suppression is scoped to the active owner and relay", () => {
+  const entries = new Map();
+  const storage = {
+    get length() {
+      return entries.size;
+    },
+    key(index) {
+      return [...entries.keys()][index] ?? null;
+    },
+    getItem(key) {
+      return entries.get(key) ?? null;
+    },
+    setItem(key, value) {
+      entries.set(key, value);
+    },
+  };
+  const descriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "localStorage",
+  );
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+  try {
+    assert.equal(
+      hasScoutOnboardingRootAttempt(payload.ownerPubkey, payload.relayUrl),
+      false,
+    );
+    entries.set(
+      scoutOnboardingRootStorageKey(payload),
+      JSON.stringify({
+        version: 1,
+        payload,
+        createdAt: 1_720_000_000,
+        event: null,
+        acknowledged: false,
+      }),
+    );
+    assert.equal(
+      hasScoutOnboardingRootAttempt(payload.ownerPubkey, payload.relayUrl),
+      true,
+    );
+    assert.equal(
+      hasScoutOnboardingRootAttempt(
+        payload.ownerPubkey,
+        "wss://other.example.test",
+      ),
+      false,
+    );
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(globalThis, "localStorage", descriptor);
+    } else {
+      delete globalThis.localStorage;
+    }
+  }
 });

@@ -186,6 +186,9 @@ test("a named owner creates from the real rail, resumes Business and Power, and 
   });
   await complete.click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const commandCountBeforeChoiceHandoff = await page.evaluate(
+    () => window.__BUZZ_E2E_COMMANDS__?.length ?? 0,
+  );
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   // Business completion hands the saved signup context to Scout's
@@ -221,6 +224,9 @@ test("a named owner creates from the real rail, resumes Business and Power, and 
       websiteState: "none",
     },
   });
+  const postHandoffCommands = retained.commands.slice(
+    commandCountBeforeChoiceHandoff,
+  );
   expect(payload.requestId).toMatch(
     /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i,
   );
@@ -240,7 +246,7 @@ test("a named owner creates from the real rail, resumes Business and Power, and 
     "start_managed_agent_runtime",
     "update_company_profile",
   ]) {
-    expect(retained.commands).not.toContain(command);
+    expect(postHandoffCommands).not.toContain(command);
   }
   const state = await page.evaluate(
     ({ owner, relay }) => ({

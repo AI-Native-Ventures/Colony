@@ -3,6 +3,7 @@ import { verifyEvent } from "nostr-tools/pure";
 import type { RelayEvent } from "@/shared/api/types";
 import {
   SCOUT_ONBOARDING_ROOT_KIND,
+  SCOUT_ONBOARDING_ROOT_STORAGE_PREFIX,
   scoutOnboardingRootBody,
   scoutOnboardingRootStorageKey,
   scoutOnboardingRootTag,
@@ -36,6 +37,50 @@ type RootAttempt = {
   event: RelayEvent | null;
   acknowledged: boolean;
 };
+
+/**
+ * Keep the generic post-completion starter hook from seeding a choice-first
+ * Welcome root. The root delivery record is already keyed by the complete
+ * owner, relay, channel, root, and signup tuple; this community-level lookup
+ * only answers whether any such choice flow has begun for the active owner.
+ *
+ * The key is written before signing or publishing. A matching key, including
+ * one whose value is corrupt or incomplete, is therefore a fail-closed
+ * reservation. Suppression can only defer setup; it cannot authorize it.
+ */
+export function hasScoutOnboardingRootAttempt(
+  ownerPubkey: string,
+  relayUrl: string,
+): boolean {
+  try {
+    const storage = globalThis.localStorage;
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (!key?.startsWith(SCOUT_ONBOARDING_ROOT_STORAGE_PREFIX)) continue;
+      let keyScope: unknown;
+      try {
+        keyScope = JSON.parse(
+          key.slice(SCOUT_ONBOARDING_ROOT_STORAGE_PREFIX.length),
+        );
+      } catch {
+        continue;
+      }
+      if (
+        !Array.isArray(keyScope) ||
+        keyScope.length !== 4 ||
+        !keyScope.every((part) => typeof part === "string") ||
+        keyScope[0] !== ownerPubkey ||
+        keyScope[1] !== relayUrl
+      ) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 function validEvent(event: RelayEvent, attempt: RootAttempt): boolean {
   const payload = attempt.payload;

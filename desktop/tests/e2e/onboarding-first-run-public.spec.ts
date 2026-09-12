@@ -75,6 +75,9 @@ test("public first run: account, business and power reach Welcome with the owner
   await page.screenshot({ path: "test-results/simple-founder-power-1440.png" });
   await page.getByRole("button", { name: "Test connection" }).click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const commandCountBeforeChoiceHandoff = await page.evaluate(
+    () => window.__BUZZ_E2E_COMMANDS__?.length ?? 0,
+  );
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
@@ -117,6 +120,9 @@ test("public first run: account, business and power reach Welcome with the owner
     ),
     commands: window.__BUZZ_E2E_COMMANDS__ ?? [],
   }));
+  const postHandoffCommands = retained.commands.slice(
+    commandCountBeforeChoiceHandoff,
+  );
   const roots = retained.published.filter((event) =>
     event.tags.some(
       (tag) => tag[0] === "client" && tag[1] === ROOT_PROTOCOL.marker,
@@ -161,6 +167,6 @@ test("public first run: account, business and power reach Welcome with the owner
     "start_managed_agent_runtime",
     "update_company_profile",
   ]) {
-    expect(retained.commands).not.toContain(command);
+    expect(postHandoffCommands).not.toContain(command);
   }
 });

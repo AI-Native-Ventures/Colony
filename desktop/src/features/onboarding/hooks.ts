@@ -23,6 +23,7 @@ import { useProfileQuery } from "@/features/profile/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { Channel } from "@/shared/api/types";
+import { hasScoutOnboardingRootAttempt } from "./channelOnboardingRuntime/delivery";
 import {
   createChannel,
   deleteChannel,
@@ -590,7 +591,11 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
       !currentPubkey ||
       !starterChannelsCommunityScope ||
       !readOnboardingCompletion(currentPubkey) ||
-      hasEnsuredWelcomeChannel(currentPubkey, starterChannelsCommunityScope)
+      hasEnsuredWelcomeChannel(currentPubkey, starterChannelsCommunityScope) ||
+      hasScoutOnboardingRootAttempt(
+        currentPubkey,
+        starterChannelsCommunityScope,
+      )
     ) {
       return;
     }
