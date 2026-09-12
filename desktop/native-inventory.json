@@ -567,7 +567,7 @@
     ]
   },
   "params": {
-    "AppHandle": 425,
+    "AppHandle": 426,
     "State": 276,
     "Window": 7,
     "ipc::Request": 1,
@@ -575,7 +575,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 422,
+      "AppHandle": 423,
       "State": 276,
       "Window": 7,
       "ipc::Request": 1,
@@ -914,7 +914,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriManagedAgents.ts:65"
+        "src/shared/api/tauriManagedAgents.ts:81"
       ]
     },
     "attach_thread_task": {
@@ -2778,7 +2778,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1425",
-        "src/shared/api/tauriManagedAgents.ts:75"
+        "src/shared/api/tauriManagedAgents.ts:91"
       ]
     },
     "list_managed_agents": {
@@ -3263,7 +3263,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1428",
-        "src/shared/api/tauriManagedAgents.ts:110"
+        "src/shared/api/tauriManagedAgents.ts:126"
       ]
     },
     "read_archived_events": {
@@ -3342,7 +3342,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1434",
-        "src/shared/api/tauriManagedAgents.ts:119"
+        "src/shared/api/tauriManagedAgents.ts:135"
       ]
     },
     "reconnect_colony_credits": {
@@ -3512,7 +3512,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1443",
-        "src/shared/api/tauriManagedAgents.ts:103"
+        "src/shared/api/tauriManagedAgents.ts:119"
       ]
     },
     "save_agent_card": {
@@ -3783,7 +3783,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1449",
-        "src/shared/api/tauriManagedAgents.ts:44"
+        "src/shared/api/tauriManagedAgents.ts:60"
       ]
     },
     "set_managed_agent_start_on_app_launch": {
@@ -3793,7 +3793,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1454",
-        "src/shared/api/tauriManagedAgents.ts:30"
+        "src/shared/api/tauriManagedAgents.ts:46"
       ]
     },
     "set_persona_active": {
@@ -3992,7 +3992,7 @@
       "example_sites": [
         "src/features/huddle/components/AddAgentDialog.tsx:90",
         "src/features/huddle/components/AddAgentDialog.tsx:96",
-        "src/shared/api/tauriManagedAgents.ts:12"
+        "src/shared/api/tauriManagedAgents.ts:22"
       ]
     },
     "start_managed_agent_runtime": {
@@ -4002,7 +4002,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1437",
-        "src/shared/api/tauriManagedAgents.ts:85"
+        "src/shared/api/tauriManagedAgents.ts:101"
       ]
     },
     "start_pairing": {
@@ -4029,7 +4029,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/huddle/components/AddAgentDialog.tsx:119",
-        "src/shared/api/tauriManagedAgents.ts:19"
+        "src/shared/api/tauriManagedAgents.ts:35"
       ]
     },
     "stop_managed_agent_runtime": {
@@ -4039,7 +4039,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1440",
-        "src/shared/api/tauriManagedAgents.ts:96"
+        "src/shared/api/tauriManagedAgents.ts:112"
       ]
     },
     "sync_agents_to_active_huddle": {

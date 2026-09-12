@@ -495,7 +495,8 @@ impl ManagedAgentStartScope {
         {
             return Err("This Website teammate is not approved for the selected account.".into());
         }
-        let record_relay = crate::relay::effective_agent_relay_url(&record.relay_url, workspace_relay);
+        let record_relay =
+            crate::relay::effective_agent_relay_url(&record.relay_url, workspace_relay);
         let record_relay = buzz_core_pkg::relay::normalize_relay_url(&record_relay)
             .map_err(|_| "This Website teammate is not assigned to the selected business.")?;
         if record_relay != self.relay_url {
@@ -546,8 +547,7 @@ pub async fn start_managed_agent(
         (None, None) => None,
         _ => {
             return Err(
-                "Starting a Website teammate requires the original account and business."
-                    .into(),
+                "Starting a Website teammate requires the original account and business.".into(),
             )
         }
     };
@@ -589,8 +589,7 @@ pub async fn start_managed_agent(
             // its own owner/relay-fenced command.
             if record.backend == BackendKind::Local {
                 return Err(
-                    "Website local coordinators must use their pair-scoped runtime start."
-                        .into(),
+                    "Website local coordinators must use their pair-scoped runtime start.".into(),
                 );
             }
             scope.check_record(record, &relay_ws_url_with_override(&state))?;
@@ -632,12 +631,7 @@ pub async fn start_managed_agent(
                 backend: record.backend.clone(),
                 cached_binary_path: record.provider_binary_path.clone(),
                 agent_json: if let Some(scope) = &start_scope {
-                    build_deploy_payload_for_owner(
-                        &app,
-                        &state,
-                        record,
-                        &scope.owner_pubkey,
-                    )?
+                    build_deploy_payload_for_owner(&app, &state, record, &scope.owner_pubkey)?
                 } else {
                     build_deploy_payload(&app, &state, record)?
                 },

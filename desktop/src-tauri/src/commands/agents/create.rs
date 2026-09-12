@@ -513,7 +513,8 @@ pub(crate) async fn create_managed_agent_with_preparation(
                     .ok_or_else(|| "agent disappeared".to_string())?;
                 build_deploy_payload(&app, state, rec)?
             };
-            match deploy_to_provider(&app, state, &pubkey, id, config, agent_json, None, None).await {
+            match deploy_to_provider(&app, state, &pubkey, id, config, agent_json, None, None).await
+            {
                 Ok(()) => spawn_error,
                 Err(e) => Some(e),
             }
