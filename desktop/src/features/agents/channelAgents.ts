@@ -14,8 +14,14 @@ import {
   listManagedAgents,
   updateManagedAgent,
 } from "@/shared/api/tauri";
+import {
+  addWebsiteTeamMember,
+  type WebsiteTeamMembershipScope,
+} from "@/shared/api/tauriWebsiteTeam";
 import { startManagedAgent } from "@/shared/api/tauriManagedAgents";
 import type {
+  AddChannelMembersInput,
+  AddChannelMembersResult,
   AcpRuntime,
   ChannelRole,
   ManagedAgent,
@@ -137,14 +143,19 @@ export function isAlreadyMemberError(message: string): boolean {
   );
 }
 
-export async function attachManagedAgentToChannel(
+type AddChannelMembers = (
+  input: AddChannelMembersInput,
+) => Promise<AddChannelMembersResult>;
+
+async function attachManagedAgentToChannelWithMembership(
   channelId: string,
   input: AttachManagedAgentToChannelInput,
-) {
+  addMembers: AddChannelMembers,
+): Promise<AttachManagedAgentToChannelResult> {
   const role = input.role ?? "bot";
   const ensureRunning = input.ensureRunning ?? true;
   const agentPubkey = normalizePubkey(input.agent.pubkey);
-  const membershipResult = await addChannelMembers({
+  const membershipResult = await addMembers({
     channelId,
     pubkeys: [input.agent.pubkey],
     role,
@@ -209,6 +220,49 @@ export async function attachManagedAgentToChannel(
     membershipAdded,
     started,
   } satisfies AttachManagedAgentToChannelResult;
+}
+
+/** Attach a generic managed agent through the active community API. */
+export async function attachManagedAgentToChannel(
+  channelId: string,
+  input: AttachManagedAgentToChannelInput,
+): Promise<AttachManagedAgentToChannelResult> {
+  return attachManagedAgentToChannelWithMembership(
+    channelId,
+    input,
+    addChannelMembers,
+  );
+}
+
+/**
+ * Attach a Website teammate using the install's captured owner and relay.
+ * Generic channel callers retain their active-community behavior; only the
+ * Website path gets the stricter native scope fence.
+ */
+export async function attachWebsiteManagedAgentToChannel(
+  channelId: string,
+  input: AttachManagedAgentToChannelInput,
+  scope: WebsiteTeamMembershipScope,
+): Promise<AttachManagedAgentToChannelResult> {
+  return attachManagedAgentToChannelWithMembership(
+    channelId,
+    input,
+    async ({ channelId: targetChannelId, pubkeys, role }) => {
+      const [pubkey] = pubkeys;
+      if (pubkeys.length !== 1 || !pubkey) {
+        throw new Error(
+          "Website setup can attach exactly one teammate at a time.",
+        );
+      }
+      return addWebsiteTeamMember({
+        channelId: targetChannelId,
+        pubkey,
+        role,
+        expectedOwnerPubkey: scope.expectedOwnerPubkey,
+        expectedRelayUrl: scope.expectedRelayUrl,
+      });
+    },
+  );
 }
 
 function buildChannelAgentName(runtimeId: string, runtimeLabel: string) {

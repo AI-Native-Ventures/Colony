@@ -9781,8 +9781,28 @@ function upsertMockManagedAgentRuntime(
 // exactly one agent+relay runtime and rejects non-local agents.
 function handleManagedAgentRuntimeAction(
   action: "start" | "stop" | "restart",
-  args: { pubkey: string; relayUrl: string },
+  args: {
+    pubkey: string;
+    relayUrl: string;
+    expectedOwnerPubkey?: string;
+  },
 ): MockManagedAgentRuntimeRow {
+  if (args.expectedOwnerPubkey !== undefined) {
+    const normalizeRelay = (value: string) =>
+      value.trim().replace(/\/+$/, "").toLowerCase();
+    const activeOwner = normalizePubkey(
+      getActiveIdentity(getConfig())?.pubkey ?? "",
+    );
+    const activeRelay = getRelayWsUrl(getConfig());
+    if (
+      normalizePubkey(args.expectedOwnerPubkey) !== activeOwner ||
+      normalizeRelay(args.relayUrl) !== normalizeRelay(activeRelay)
+    ) {
+      throw new Error(
+        "The account or business changed while starting the Website coordinator.",
+      );
+    }
+  }
   const agent = getMockManagedAgent(args.pubkey);
   if (agent.backend.type !== "local") {
     throw new Error("managed runtime pairs require a local agent");
@@ -14193,7 +14213,11 @@ export function maybeInstallE2eTauriMocks() {
       case "start_managed_agent_runtime":
         return handleManagedAgentRuntimeAction(
           "start",
-          payload as { pubkey: string; relayUrl: string },
+          payload as {
+            pubkey: string;
+            relayUrl: string;
+            expectedOwnerPubkey?: string;
+          },
         );
       case "stop_managed_agent_runtime":
         return handleManagedAgentRuntimeAction(
@@ -14560,6 +14584,39 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleAddChannelMembers>[0],
           activeConfig,
         );
+      case "add_website_team_member": {
+        const args = payload as {
+          channelId: string;
+          pubkey: string;
+          role?: RawChannelMember["role"];
+          expectedOwnerPubkey: string;
+          expectedRelayUrl: string;
+        };
+        const expectedOwner = normalizePubkey(args.expectedOwnerPubkey);
+        const activeOwner = normalizePubkey(
+          getActiveIdentity(activeConfig)?.pubkey ?? "",
+        );
+        const normalizeRelay = (value: string) =>
+          value.trim().replace(/\/+$/, "").toLowerCase();
+        if (
+          !expectedOwner ||
+          expectedOwner !== activeOwner ||
+          normalizeRelay(args.expectedRelayUrl) !==
+            normalizeRelay(getRelayWsUrl(activeConfig))
+        ) {
+          throw new Error(
+            "The account or business changed while adding the Website teammate.",
+          );
+        }
+        return handleAddChannelMembers(
+          {
+            channelId: args.channelId,
+            pubkeys: [args.pubkey],
+            role: args.role,
+          },
+          activeConfig,
+        );
+      }
       case "remove_channel_member":
         return handleRemoveChannelMember(
           payload as Parameters<typeof handleRemoveChannelMember>[0],

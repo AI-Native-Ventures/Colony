@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { attachManagedAgentToChannel } from "@/features/agents/channelAgents";
+import { attachWebsiteManagedAgentToChannel } from "@/features/agents/channelAgents";
 import {
   ensureWebsiteCoordinatorReady,
   WebsiteCoordinatorReadinessError,
@@ -95,7 +95,10 @@ function productionDeps(
           getActiveCommunityId: loadActiveCommunityId,
           loadManagedAgents: listManagedAgents,
           attachAgent: async (targetChannel, input) => {
-            return attachManagedAgentToChannel(targetChannel, input);
+            return attachWebsiteManagedAgentToChannel(targetChannel, input, {
+              expectedOwnerPubkey,
+              expectedRelayUrl,
+            });
           },
         });
 

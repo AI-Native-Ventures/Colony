@@ -123,6 +123,7 @@ macro_rules! app_invoke_handler {
             unarchive_channel,
             delete_channel,
             add_channel_members,
+            add_website_team_member,
             remove_channel_member,
             change_channel_member_role,
             join_channel,

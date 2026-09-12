@@ -1,4 +1,8 @@
 import { invokeTauri } from "@/shared/api/tauri";
+import type {
+  AddChannelMembersResult,
+  ChannelRole,
+} from "@/shared/api/types";
 
 /**
  * Safe recipe metadata and install result for the bundled Website Manager
@@ -110,6 +114,35 @@ export type InstallWebsiteTeamInput = {
   seedUrl?: string;
   starterPrompt?: string;
 };
+
+/**
+ * The owner and relay captured by Website setup before its asynchronous
+ * membership write. Native validates this pair again before signing, so a
+ * community or account switch cannot retarget a Website install.
+ */
+export type WebsiteTeamMembershipScope = {
+  expectedOwnerPubkey: string;
+  expectedRelayUrl: string;
+};
+
+export type AddWebsiteTeamMemberInput = WebsiteTeamMembershipScope & {
+  channelId: string;
+  pubkey: string;
+  role?: Exclude<ChannelRole, "owner">;
+};
+
+/** Add one Website teammate through the owner/relay-fenced native command. */
+export async function addWebsiteTeamMember(
+  input: AddWebsiteTeamMemberInput,
+): Promise<AddChannelMembersResult> {
+  return invokeTauri<AddChannelMembersResult>("add_website_team_member", {
+    channelId: input.channelId,
+    pubkey: input.pubkey,
+    role: input.role,
+    expectedOwnerPubkey: input.expectedOwnerPubkey,
+    expectedRelayUrl: input.expectedRelayUrl,
+  });
+}
 
 /** Durable native install journal entry for one `(community, owner)` scope. */
 export type WebsiteTeamInstallStatus = {

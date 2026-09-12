@@ -11,7 +11,7 @@
 
 import * as React from "react";
 
-import { attachManagedAgentToChannel } from "@/features/agents/channelAgents";
+import { attachWebsiteManagedAgentToChannel } from "@/features/agents/channelAgents";
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { useAgentRoleTitles } from "@/features/agents/useKnownAgentPubkeys";
 import { loadActiveCommunityId } from "@/features/communities/communityStorage";
@@ -111,7 +111,11 @@ function WebsiteRootAttachment({
   const ensureCoordinatorReady = React.useCallback(
     () =>
       ensureWebsiteCoordinatorReady({
-        attachAgent: attachManagedAgentToChannel,
+        attachAgent: (targetChannel, input) =>
+          attachWebsiteManagedAgentToChannel(targetChannel, input, {
+            expectedOwnerPubkey: head.ownerPubkey,
+            expectedRelayUrl: relayUrl,
+          }),
         communityId,
         getActiveCommunityId: loadActiveCommunityId,
         channelId: head.channelId,
