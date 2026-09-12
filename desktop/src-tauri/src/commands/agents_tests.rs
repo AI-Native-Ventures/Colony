@@ -62,8 +62,6 @@ fn bare_agent_record(
         runtime: None,
         name_pool: vec![],
         is_builtin: false,
-        provisioned: None,
-        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,
@@ -832,17 +830,22 @@ fn profile_in_sync_when_role_matches() {
 }
 
 #[test]
-fn validate_managed_agent_deletion_rejects_provisioned_agents() {
+fn a_provisioned_agent_is_refused_before_the_remote_guard() {
     let mut record = bare_agent_record(None, None, None);
     record.name = "Avery".to_string();
     record.provisioned = Some("website-manager".to_string());
-    record.provisioned_version = Some("0.1.0".to_string());
 
-    // The provisioned refusal wins even when a remote deletion is forced:
-    // force only unlocks user-created remote deployments.
-    let err = validate_managed_agent_deletion(&record, true).unwrap_err();
+    // The provisioned refusal is its own door, checked at the delete command
+    // before the remote-deployment guard, so forcing a remote delete cannot
+    // reach an agent this app provides.
+    let err = crate::managed_agents::provisioned::refuse_delete_if_provisioned(&record)
+        .unwrap_err();
 
-    assert_eq!(err, "Avery is provided by Colony and cannot be deleted.");
+    assert!(
+        err.contains("Avery") && err.contains("cannot be deleted"),
+        "the refusal names the agent: {err}"
+    );
+    assert!(validate_managed_agent_deletion(&record, true).is_ok());
 }
 
 #[test]

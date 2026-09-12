@@ -660,8 +660,6 @@ pub async fn confirm_agent_snapshot_import(
             respond_to: minted.respond_to,
             respond_to_allowlist: minted.respond_to_allowlist.clone(),
             is_builtin: false,
-            provisioned: None,
-            provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

@@ -314,8 +314,6 @@ mod tests {
             runtime: Some("goose".to_string()),
             name_pool: vec![],
             is_builtin: false,
-            provisioned: None,
-            provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: Some("SENTINEL_SOURCE_TEAM".to_string()), // MUST NOT appear

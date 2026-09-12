@@ -299,8 +299,6 @@ mod tests {
             runtime: Some("goose".to_string()),
             name_pool: vec!["poolname".to_string()],
             is_builtin: true,
-            provisioned: None,
-            provisioned_version: None,
             is_active: false,
             shared: false,
             source_team: None,

@@ -70,8 +70,6 @@ fn make_agent(
         runtime: None,
         name_pool: vec![],
         is_builtin: false,
-        provisioned: None,
-        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

@@ -624,8 +624,6 @@ pub async fn confirm_team_snapshot_import(
             },
             respond_to_allowlist: definition.respond_to_allowlist.clone(),
             is_builtin: false,
-            provisioned: None,
-            provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

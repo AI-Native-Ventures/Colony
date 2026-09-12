@@ -769,7 +769,6 @@ fn summary_fixture(
         persona_id: None,
         runtime: None,
         team_id: None,
-        provisioned: None,
         provisioned_version: None,
         relay_url: String::new(),
         acp_command: "buzz-acp".into(),

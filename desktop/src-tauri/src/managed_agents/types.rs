@@ -168,8 +168,6 @@ impl AgentDefinition {
             runtime: self.runtime,
             name_pool: self.name_pool,
             is_builtin: self.is_builtin,
-            provisioned: self.provisioned,
-            provisioned_version: self.provisioned_version,
             is_active: self.is_active,
             // Catalog visibility is relay+owner scoped, not definition-global.
             shared: false,

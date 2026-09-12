@@ -250,8 +250,6 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
         respond_to: crate::managed_agents::RespondTo::default(),
         respond_to_allowlist: vec![],
         is_builtin: false,
-        provisioned: None,
-        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

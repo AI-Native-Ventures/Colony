@@ -635,12 +635,6 @@ fn validate_managed_agent_deletion(
     record: &crate::managed_agents::ManagedAgentRecord,
     force_remote_delete: bool,
 ) -> Result<(), String> {
-    if record.provisioned.is_some() {
-        return Err(crate::managed_agents::provisioned_deletion_error(
-            &record.name,
-        ));
-    }
-
     if record.backend != BackendKind::Local
         && record.backend_agent_id.is_some()
         && !force_remote_delete
