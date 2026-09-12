@@ -271,8 +271,14 @@ async fn publish_managed_agent(
     .sign_with_keys(owner)
     .expect("managed agent signs");
     let ok = send_past_transport_stall(client, event, "managed agent head").await;
+    // Every test in this file re-seeds the same four agents, and a
+    // parameterized-replaceable head published inside the same second as the
+    // previous test's is refused as superseded. The precondition this seeding
+    // exists for is that a head is there for personas to resolve through, and
+    // a newer one already being stored satisfies it.
+    let already_current = ok.message.contains("superseded");
     assert!(
-        ok.accepted,
+        ok.accepted || already_current,
         "the relay must accept the managed-agent head personas resolve through: {}",
         ok.message
     );
