@@ -714,10 +714,10 @@ pub(crate) async fn write_task_head(
 /// - the head is relay-authored, exactly like every other thread task head;
 ///   no agent gains owner keys and no platform-wide gate changes.
 ///
-/// `reopen` additionally bounces a completed task back to `ready` with the
-/// validated reason and `bounceCount + 1`, clears its completion reports (a
-/// revision request is new work, not a stale completion), and re-claims the
-/// thread slot so dispatch can find it.
+/// `reopen` additionally clears its completion reports (a revision request is
+/// new work, not a stale completion). A completed task is bounced back to
+/// `ready` with the validated reason and `bounceCount + 1`, and its thread
+/// slot is re-claimed so dispatch can find it.
 ///
 /// Idempotent: when the assignment already covers every participant, the QA
 /// persona already matches, and no reopen is needed, it returns the current
@@ -801,6 +801,14 @@ pub(crate) async fn reconcile_website_task(
             "the canonical task was cancelled; reopen it before requesting a revision".to_owned(),
         );
     }
+    if reopen {
+        // A reviewer may have reported the prior revision while the shared
+        // task was still active. That report is complete for the old
+        // revision, so it must not suppress the same reviewer's report for
+        // the new one. Completed tasks take the bounce path below; active
+        // tasks keep their status while still starting a fresh report round.
+        replacement.reported_complete_by.clear();
+    }
     if reopening {
         // A revision request is a genuine bounce, not an un-complete: the
         // existing completed-to-ready arm requires a reason and a bounce
@@ -810,7 +818,6 @@ pub(crate) async fn reconcile_website_task(
             "website revision requested".to_owned(),
         ));
         replacement.bounce_count = replacement.bounce_count.saturating_add(1);
-        replacement.reported_complete_by.clear();
     }
     if replacement == task {
         return Ok(task);

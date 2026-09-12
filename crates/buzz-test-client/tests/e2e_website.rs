@@ -381,6 +381,45 @@ async fn await_task_root(client: &mut BuzzTestClient, task_id: &str, root: &str)
     panic!("the task head never learned its thread root");
 }
 
+/// Poll the relay-authored task head until it reflects the expected report.
+async fn await_task_head(
+    client: &mut BuzzTestClient,
+    task_id: &str,
+    expected_reporter: &str,
+) -> nostr::Event {
+    let relay = relay_self().await;
+    let relay_key = nostr::PublicKey::from_hex(&relay).expect("relay key");
+    for _ in 0..40 {
+        let id = sub_id("task-head");
+        let filter = Filter::new()
+            .kind(Kind::Custom(KIND_TASK as u16))
+            .author(relay_key)
+            .identifier(task_id)
+            .limit(1);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        let events = client
+            .collect_until_eose(&id, Duration::from_secs(5))
+            .await
+            .unwrap_or_default();
+        let _ = client.close_subscription(&id).await;
+        if let Some(event) = events.first() {
+            let task = parse_task_event(event).expect("current task head parses");
+            if task
+                .reported_complete_by
+                .iter()
+                .any(|reporter| reporter == expected_reporter)
+            {
+                return event.clone();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("the relay never reflected the expected report on the current task head");
+}
+
 /// Read one stored event by id.
 async fn event_by_id(client: &mut BuzzTestClient, event_id: &str) -> Option<nostr::Event> {
     for _ in 0..10 {
@@ -1333,7 +1372,7 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         &owner,
         &block_manifest,
         WEBSITE_REQUEST_CHANGES_ACTION_ID,
-        request_changes_data,
+        request_changes_data.clone(),
         request_changes_key,
         "replayed owner request changes",
     )
@@ -1416,6 +1455,45 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         REVISION_2_MANIFEST_SHA256,
     )
     .await;
+    assert!(
+        event_by_id(&mut reviewer_client, &report_2).await.is_some(),
+        "a reviewer may file a new task report after the prior website revision was reopened"
+    );
+    let task_head =
+        await_task_head(&mut reviewer_client, &fixture.task_id, &fixture.personas.review).await;
+    let task = parse_task_event(&task_head).expect("current task head parses");
+    assert!(
+        task.reported_complete_by
+            .contains(&fixture.personas.review),
+        "the active task retains the revision 2 reviewer report before RecordQa"
+    );
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let replay_after_report = send_block_decision(
+        &mut owner_client,
+        &fixture,
+        &owner,
+        &block_manifest,
+        WEBSITE_REQUEST_CHANGES_ACTION_ID,
+        request_changes_data,
+        request_changes_key,
+        "replayed owner request changes after new QA",
+    )
+    .await;
+    assert!(
+        replay_after_report.accepted,
+        "a repeated request-changes decision remains idempotent after a new QA report: {}",
+        replay_after_report.message
+    );
+    assert!(
+        replay_after_report.message.starts_with(DUPLICATE_PREFIX),
+        "the repeated request-changes decision is recorded as a duplicate: {}",
+        replay_after_report.message
+    );
+    assert_eq!(
+        job_row_generation(&fixture.task_id).await,
+        Some(7),
+        "a repeated request-changes decision does not clear or advance the active revision"
+    );
     let record_qa_2 = update_action(
         &fixture,
         &reviewer,
@@ -1565,6 +1643,172 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
     assert_eq!(
         saved_handover.accepted_by,
         fixture.coordinator.public_key().to_hex()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres and public fixture fetches"]
+async fn duplicate_coordinator_request_changes_preserves_current_task_report() {
+    let owner = owner_keys();
+    let mut owner_client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let fixture = setup(&mut owner_client, &owner).await;
+    let builder = agent_keys(0x53);
+    let reviewer = agent_keys(0x54);
+    let mut builder_client = BuzzTestClient::connect(&relay_url(), &builder)
+        .await
+        .expect("connect as builder");
+    let mut reviewer_client = BuzzTestClient::connect(&relay_url(), &reviewer)
+        .await
+        .expect("connect as reviewer");
+    let mut coordinator_client = BuzzTestClient::connect(&relay_url(), &fixture.coordinator)
+        .await
+        .expect("connect as coordinator");
+
+    let coordinator_hex = fixture.coordinator.public_key().to_hex();
+    let create = create_action(&fixture, &coordinator_hex);
+    let create_ok = send_action(&mut owner_client, &owner, &create).await;
+    let (_, review) = website_head_from_response(&mut owner_client, &create_ok).await;
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Draft);
+
+    let begin = update_action(&fixture, &owner, 1, WebsiteActionOp::BeginWork);
+    let begin_ok = send_action(&mut owner_client, &owner, &begin).await;
+    let (_, review) = website_head_from_response(&mut owner_client, &begin_ok).await;
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Working);
+
+    let add_revision_1 = add_revision_action(&fixture, &builder, 2, 1);
+    let add_revision_1_ok = send_action(&mut builder_client, &builder, &add_revision_1).await;
+    let (_, review) = website_head_from_response(&mut builder_client, &add_revision_1_ok).await;
+    assert_eq!(review.current_revision, 1);
+
+    let report_1 = publish_qa_report(
+        &mut reviewer_client,
+        &reviewer,
+        &fixture,
+        1,
+        REVISION_1_MANIFEST_SHA256,
+    )
+    .await;
+    let record_qa_1 = update_action(
+        &fixture,
+        &reviewer,
+        3,
+        WebsiteActionOp::RecordQa {
+            revision: 1,
+            passed: true,
+            report_event_id: report_1,
+            report: artifact_ref(
+                website_fixture_url("revision-1-qa.json"),
+                REVISION_1_REPORT_SHA256,
+            ),
+        },
+    );
+    let record_qa_1_ok = send_action(&mut reviewer_client, &reviewer, &record_qa_1).await;
+    let (_, review) = website_head_from_response(&mut reviewer_client, &record_qa_1_ok).await;
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Working);
+
+    let ready_1 = update_action(&fixture, &fixture.coordinator, 4, WebsiteActionOp::Ready);
+    let ready_1_ok = send_action(&mut coordinator_client, &fixture.coordinator, &ready_1).await;
+    let (_, review) = website_head_from_response(&mut coordinator_client, &ready_1_ok).await;
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::ReadyForReview);
+
+    let request_note = "Revise the mobile hero while retaining the approved wordmark.";
+    let first_request = update_action(
+        &fixture,
+        &fixture.coordinator,
+        5,
+        WebsiteActionOp::RequestChanges {
+            revision: 1,
+            manifest_sha256: REVISION_1_MANIFEST_SHA256.to_owned(),
+            note: request_note.to_owned(),
+        },
+    );
+    let first_request_ok =
+        send_action(&mut coordinator_client, &fixture.coordinator, &first_request).await;
+    let (_, review) = website_head_from_response(&mut coordinator_client, &first_request_ok).await;
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::ChangesRequested);
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(6));
+
+    let add_revision_2 = add_revision_action(&fixture, &builder, 6, 2);
+    let add_revision_2_ok = send_action(&mut builder_client, &builder, &add_revision_2).await;
+    let (_, review) = website_head_from_response(&mut builder_client, &add_revision_2_ok).await;
+    assert_eq!(review.status, buzz_core::website::WebsiteStatus::Working);
+    assert_eq!(review.current_revision, 2);
+    assert_eq!(job_row_generation(&fixture.task_id).await, Some(7));
+
+    let report_2 = publish_qa_report(
+        &mut reviewer_client,
+        &reviewer,
+        &fixture,
+        2,
+        REVISION_2_MANIFEST_SHA256,
+    )
+    .await;
+    assert!(
+        event_by_id(&mut reviewer_client, &report_2).await.is_some(),
+        "the current revision's task report is stored before the duplicate decision"
+    );
+    let task_head =
+        await_task_head(&mut reviewer_client, &fixture.task_id, &fixture.personas.review).await;
+    let task = parse_task_event(&task_head).expect("current task head parses");
+    assert!(
+        task.reported_complete_by
+            .contains(&fixture.personas.review),
+        "the active task records the revision 2 reviewer report"
+    );
+
+    // A fresh request UUID carrying the same semantic decision reaches the
+    // WebsiteActionOp path. It must be a decision duplicate, not a second
+    // revision request that clears the report filed for revision 2.
+    let duplicate_request = update_action(
+        &fixture,
+        &fixture.coordinator,
+        7,
+        WebsiteActionOp::RequestChanges {
+            revision: 1,
+            manifest_sha256: REVISION_1_MANIFEST_SHA256.to_owned(),
+            note: request_note.to_owned(),
+        },
+    );
+    assert_ne!(
+        first_request.request_id, duplicate_request.request_id,
+        "the semantic retry uses a fresh transport request UUID"
+    );
+    let duplicate_ok =
+        send_action(&mut coordinator_client, &fixture.coordinator, &duplicate_request).await;
+    assert!(
+        duplicate_ok.accepted,
+        "a semantic request-changes retry is answered: {}",
+        duplicate_ok.message
+    );
+    let duplicate_message: serde_json::Value =
+        serde_json::from_str(&duplicate_ok.message).expect("semantic retry receipt JSON");
+    let duplicate_receipt_id = duplicate_message["receipt_event_id"]
+        .as_str()
+        .expect("semantic retry names its receipt");
+    let duplicate_receipt_event = event_by_id(&mut coordinator_client, duplicate_receipt_id)
+        .await
+        .expect("semantic retry receipt is stored");
+    let duplicate_receipt = buzz_sdk::website::parse_website_receipt(&duplicate_receipt_event)
+        .expect("semantic retry receipt parses");
+    assert_eq!(
+        duplicate_receipt.outcome, "duplicate",
+        "the fresh-UUID semantic retry carries a duplicate receipt"
+    );
+    assert_eq!(duplicate_receipt.revision, 1);
+    assert_eq!(
+        job_row_generation(&fixture.task_id).await,
+        Some(7),
+        "a semantic duplicate does not advance the active revision"
+    );
+    let task_head =
+        await_task_head(&mut reviewer_client, &fixture.task_id, &fixture.personas.review).await;
+    let task = parse_task_event(&task_head).expect("current task head parses");
+    assert!(
+        task.reported_complete_by
+            .contains(&fixture.personas.review),
+        "a semantic duplicate must preserve the current task report"
     );
 }
 

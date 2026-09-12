@@ -1058,7 +1058,6 @@ async fn apply_update(
             manifest_sha256,
             note,
         } => {
-            reopen_task_for_revision(tenant, state, &job).await?;
             let submission = DecisionSubmission {
                 job_id,
                 task_id: action.task_id.clone(),
@@ -1075,6 +1074,10 @@ async fn apply_update(
                 .map_err(map_website_error)?
             {
                 DecisionOutcome::Applied(_) => {
+                    // Reset completion reports only after the decision is
+                    // known to be new. A duplicate request must leave a
+                    // report filed during the current revision untouched.
+                    reopen_task_for_revision(tenant, state, &job).await?;
                     let new_revision = i32::try_from(review.current_revision)
                         .map_err(|_| "website revision out of range".to_owned())?;
                     let context = UpdateContext {

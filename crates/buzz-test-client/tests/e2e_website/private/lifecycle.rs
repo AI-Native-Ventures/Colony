@@ -180,11 +180,11 @@ async fn private_blossom_website_lifecycle_is_tenant_scoped() {
             revision: 1,
             manifest: artifact_ref(foreign_manifest_url, &manifest.sha256),
             source_url: "https://source.colony.test/sites/horizon-labs".to_owned(),
-            archive: artifact_ref(archive.url.clone(), archive.sha256.clone()),
+            archive: artifact_ref(archive.url.clone(), &archive.sha256),
             captures: WebsiteCaptures {
-                before: artifact_ref(capture.url.clone(), capture.sha256.clone()),
-                desktop: artifact_ref(capture.url.clone(), capture.sha256.clone()),
-                mobile: artifact_ref(capture.url.clone(), capture.sha256.clone()),
+                before: artifact_ref(capture.url.clone(), &capture.sha256),
+                desktop: artifact_ref(capture.url.clone(), &capture.sha256),
+                mobile: artifact_ref(capture.url.clone(), &capture.sha256),
             },
         },
     );
@@ -205,13 +205,13 @@ async fn private_blossom_website_lifecycle_is_tenant_scoped() {
         2,
         WebsiteActionOp::AddRevision {
             revision: 1,
-            manifest: artifact_ref(manifest.url.clone(), manifest.sha256.clone()),
+            manifest: artifact_ref(manifest.url.clone(), &manifest.sha256),
             source_url: "https://source.colony.test/sites/horizon-labs".to_owned(),
-            archive: artifact_ref(archive.url.clone(), archive.sha256.clone()),
+            archive: artifact_ref(archive.url.clone(), &archive.sha256),
             captures: WebsiteCaptures {
-                before: artifact_ref(capture.url.clone(), capture.sha256.clone()),
-                desktop: artifact_ref(capture.url.clone(), capture.sha256.clone()),
-                mobile: artifact_ref(capture.url.clone(), capture.sha256.clone()),
+                before: artifact_ref(capture.url.clone(), &capture.sha256),
+                desktop: artifact_ref(capture.url.clone(), &capture.sha256),
+                mobile: artifact_ref(capture.url.clone(), &capture.sha256),
             },
         },
     );
@@ -249,7 +249,7 @@ async fn private_blossom_website_lifecycle_is_tenant_scoped() {
             revision: 1,
             passed: true,
             report_event_id,
-            report: artifact_ref(report.url.clone(), report.sha256.clone()),
+            report: artifact_ref(report.url.clone(), &report.sha256),
         },
     );
     let (head, review) = private_website_head_from_response(
@@ -315,10 +315,10 @@ async fn private_blossom_website_lifecycle_is_tenant_scoped() {
             approved_revision: 1,
             approved_manifest_sha256: manifest.sha256.clone(),
             source_url: "https://source.colony.test/sites/horizon-labs".to_owned(),
-            source_archive: artifact_ref(archive.url, archive.sha256),
+            source_archive: artifact_ref(archive.url, &archive.sha256),
             assets: vec![HandoverAsset {
                 path: "index.html".to_owned(),
-                artifact: artifact_ref(html.url, html.sha256),
+                artifact: artifact_ref(html.url, &html.sha256),
             }],
             access_request: None,
         },
