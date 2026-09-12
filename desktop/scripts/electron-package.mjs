@@ -230,6 +230,10 @@ try {
     executableName: variant.executableName,
     appBundleId: variant.bundleId,
     appVersion: metadata.version,
+    extendInfo: {
+      NSMicrophoneUsageDescription:
+        "Colony uses your microphone to turn speech into message drafts.",
+    },
     protocols:
       variant.production || variant.canary
         ? [{ name: variant.name, schemes: ["buzz"] }]

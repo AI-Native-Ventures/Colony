@@ -21,6 +21,7 @@ export const MessageComposerToolbar = React.memo(
     composerDisabled,
     editor,
     extraActions,
+    dictationAction,
     formattingDisabled,
     isEmojiPickerOpen,
     isFormattingOpen,
@@ -38,6 +39,7 @@ export const MessageComposerToolbar = React.memo(
     composerDisabled: boolean;
     editor: Editor | null;
     extraActions?: React.ReactNode;
+    dictationAction?: React.ReactNode;
     formattingDisabled: boolean;
     isEmojiPickerOpen: boolean;
     isFormattingOpen: boolean;
@@ -245,6 +247,7 @@ export const MessageComposerToolbar = React.memo(
 
         <div className="flex items-center gap-2">
           {extraActions}
+          {dictationAction}
           <Button
             aria-label={isSending ? "Sending" : "Send message"}
             className="rounded-full"

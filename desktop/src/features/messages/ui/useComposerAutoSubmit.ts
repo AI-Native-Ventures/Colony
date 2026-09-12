@@ -8,7 +8,10 @@ export function useComposerAutoSubmit(
   onComplete: (() => void) | undefined,
   pending: React.RefObject<boolean>,
   submit: React.RefObject<() => void>,
+  hasDictated: () => boolean = () => false,
 ) {
+  const hasDictatedRef = React.useRef(hasDictated);
+  hasDictatedRef.current = hasDictated;
   const completeRef = React.useRef(onComplete);
   completeRef.current = onComplete;
   // biome-ignore lint/correctness/useExhaustiveDependencies: the route trigger is mount-only; refs keep callbacks current.
@@ -17,7 +20,9 @@ export function useComposerAutoSubmit(
     completeRef.current?.();
     return scheduleSettleGatedAutoSubmit({
       isPending: () => pending.current,
-      submit: () => submit.current(),
+      submit: () => {
+        if (!hasDictatedRef.current()) submit.current();
+      },
     });
   }, []);
 }

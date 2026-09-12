@@ -288,6 +288,8 @@ macro_rules! app_invoke_handler {
             open_huddle_window,
             operator_console::open_operator_console,
             push_audio_pcm,
+            dictation::prepare_dictation,
+            dictation::transcribe_dictation,
             reconnect_huddle_audio,
             start_stt_pipeline,
             set_huddle_transcription_enabled,
