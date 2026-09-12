@@ -25,7 +25,7 @@ use crate::util::create_symlink;
 /// install-written skill, relative to the skill directory.
 const SKILL_MARKER_FILE: &str = ".website-skill.json";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledWebsiteSkill {
     pub name: String,
