@@ -568,6 +568,44 @@ pub async fn find_open_asks_by_thread(
     rows.into_iter().map(row_to_ask_row).collect()
 }
 
+/// Returns every OPEN ask in `community` whose `category` matches
+/// `category` case-insensitively and whose `audience_pubkey` is exactly
+/// `audience_pubkey`.
+///
+/// Backs the hiring side of wake-up receipts: an agent that asks its owner
+/// to hire someone files a `hiring` ask and stops, and completing the hire
+/// has to find that ask again without the hire request naming it. The
+/// caller decides what to do with the result -- `buzz-relay`'s
+/// `employee_broker` resolves the ask only when EXACTLY one row comes back,
+/// because closing the wrong hiring request is worse than leaving it open.
+///
+/// `category` is compared with `lower()` on both sides: the column stores
+/// whatever the filing event carried, and the hard-list categories are
+/// defined lowercase.
+pub async fn find_open_asks_by_category_and_audience(
+    pool: &PgPool,
+    community: CommunityId,
+    category: &str,
+    audience_pubkey: &[u8],
+) -> Result<Vec<AskRow>> {
+    let rows = sqlx::query(
+        "SELECT community_id, ask_event_id, ask_type, initiative_id, need_key, \
+                audience_pubkey, filer_pubkey, origin_thread, prior_ask, category, \
+                default_option, deadline_at, status, resolution_event, resolved_by, \
+                default_executed, created_at, updated_at \
+         FROM asks \
+         WHERE community_id = $1 AND lower(category) = lower($2) \
+           AND audience_pubkey = $3 AND status = 'open'",
+    )
+    .bind(community.as_uuid())
+    .bind(category)
+    .bind(audience_pubkey)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(row_to_ask_row).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

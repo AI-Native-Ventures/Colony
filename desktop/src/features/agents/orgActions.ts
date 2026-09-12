@@ -22,6 +22,15 @@ export type HireRequestInput = {
   rank: AgentRank;
   /** Manager pubkey, or null to hire with no reporting line. */
   manager: string | null;
+  /**
+   * The hiring Ask this hire answers, when the flow started from one. Sent
+   * as an `e` tag: the relay closes exactly that Ask on a successful hire
+   * and posts the wake-up receipt that resumes the agent which asked
+   * (`employee_broker::select_hiring_ask`). Without it the relay still
+   * closes an Ask, but only when the owner has exactly one open hiring Ask,
+   * so naming it is what makes the wake-up reliable.
+   */
+  askEventId?: string;
 };
 
 export async function publishHireRequest(
@@ -34,6 +43,9 @@ export async function publishHireRequest(
   ];
   if (input.manager) {
     tags.push(["manager", input.manager]);
+  }
+  if (input.askEventId) {
+    tags.push(["e", input.askEventId]);
   }
   const event = await signRelayEvent({
     kind: KIND_HIRE_REQUEST,
