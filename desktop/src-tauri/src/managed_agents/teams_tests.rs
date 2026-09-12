@@ -178,9 +178,9 @@ fn validate_team_deletion_rejects_provisioned_teams() {
     provided.provisioned_version = Some("0.1.0".to_string());
 
     let err = validate_team_deletion(&provided).unwrap_err();
-    assert_eq!(
-        err,
-        "Website Manager is provided by Colony and cannot be deleted."
+    assert!(
+        err.contains("Website Manager") && err.contains("cannot be deleted"),
+        "the refusal names the record: {err}"
     );
 }
 

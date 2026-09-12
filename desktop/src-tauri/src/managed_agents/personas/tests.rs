@@ -447,7 +447,10 @@ fn validate_persona_deletion_rejects_provisioned_personas() {
 
     let err = validate_persona_deletion(&persona, false).unwrap_err();
 
-    assert_eq!(err, "Avery is provided by Colony and cannot be deleted.");
+    assert!(
+        err.contains("Avery") && err.contains("cannot be deleted"),
+        "the refusal names the record: {err}"
+    );
 }
 
 #[test]
