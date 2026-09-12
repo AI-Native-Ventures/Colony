@@ -12,8 +12,8 @@ use crate::managed_agents::{AgentDefinition, ManagedAgentRecord, TeamRecord};
 
 use super::install::ensure_team_members;
 use super::recipe::{
-    persona_system_prompt, RecipePersona, RECIPE_ID, RECIPE_VERSION, TEAM_DESCRIPTION,
-    TEAM_INSTRUCTIONS, TEAM_NAME,
+    persona_system_prompt, RecipePersona, RECIPE_ID, RECIPE_RECORD_VERSION, RECIPE_VERSION,
+    TEAM_DESCRIPTION, TEAM_INSTRUCTIONS, TEAM_NAME,
 };
 
 /// What a provisioning pass refreshed, if anything.
@@ -137,16 +137,20 @@ pub(super) fn apply_recipe_to_agent(
     manager_pubkey: Option<&str>,
     now: &str,
 ) -> (bool, UpgradeSummary) {
-    let previous = record.provisioned_version.clone();
-    let version_changed = previous.as_deref() != Some(RECIPE_VERSION);
+    // The agent record's own `provisioned_version` is the relay's numeric
+    // stamp for employees it mints, not this recipe's version string, so the
+    // recipe version lives on the definition and the install journal. An
+    // upgrade is detected there and passed in.
+    let previous = record.provisioned_version;
+    let version_changed = previous != Some(RECIPE_RECORD_VERSION);
     let mut changed = false;
 
     if record.provisioned.as_deref() != Some(RECIPE_ID) {
         record.provisioned = Some(RECIPE_ID.to_string());
         changed = true;
     }
-    if record.provisioned_version.as_deref() != Some(RECIPE_VERSION) {
-        record.provisioned_version = Some(RECIPE_VERSION.to_string());
+    if record.provisioned_version != Some(RECIPE_RECORD_VERSION) {
+        record.provisioned_version = Some(RECIPE_RECORD_VERSION);
         changed = true;
     }
     if !record.is_builtin {

@@ -205,7 +205,6 @@ impl ManagedAgentRecord {
             name_pool: self.name_pool.clone(),
             is_builtin: self.is_builtin,
             provisioned: self.provisioned.clone(),
-            provisioned_version: self.provisioned_version.clone(),
             is_active: self.is_active,
             // Projected by `list_personas` from the active retention scope.
             shared: false,
@@ -524,11 +523,6 @@ pub struct ManagedAgentRecord {
     /// Absorbed from `AgentDefinition.is_builtin`.
     #[serde(default)]
     pub is_builtin: bool,
-    /// Absorbed from `AgentDefinition.provisioned` — the recipe that
-    /// provisioned this record. `Some` marks the agent as provided by
-    /// Colony, so the user cannot delete it.
-    /// Absorbed from `AgentDefinition.provisioned_version` — the recipe
-    /// version that last wrote the owned content.
     /// Absorbed from `AgentDefinition.is_active` — `false` means an archived
     /// definition hidden from pickers. Defaults `true` for existing records.
     #[serde(default = "default_record_active")]
