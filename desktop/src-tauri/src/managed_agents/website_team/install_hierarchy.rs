@@ -138,21 +138,31 @@ pub(super) fn repair_missing_chief_of_staff_tier(
 ) -> Result<bool, String> {
     let mut changed = false;
     if let Some((head, head_manager)) = latest {
-        if let Some(role_id) = head.role_id.as_deref().map(str::trim).filter(|role| !role.is_empty())
-            && !role_id.eq_ignore_ascii_case(CHIEF_OF_STAFF)
+        if let Some(role_id) = head
+            .role_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|role| !role.is_empty())
         {
-            return Err(
-                "the latest Chief of Staff head conflicts with the existing role; review the existing team before installing the Website Manager team"
-                    .to_string(),
-            );
+            if !role_id.eq_ignore_ascii_case(CHIEF_OF_STAFF) {
+                return Err(
+                    "the latest Chief of Staff head conflicts with the existing role; review the existing team before installing the Website Manager team"
+                        .to_string(),
+                );
+            }
         }
-        if let Some(tier) = head.tier.as_deref().map(str::trim).filter(|tier| !tier.is_empty())
-            && !tier.eq_ignore_ascii_case(EXECUTIVE_TIER)
+        if let Some(tier) = head
+            .tier
+            .as_deref()
+            .map(str::trim)
+            .filter(|tier| !tier.is_empty())
         {
-            return Err(
-                "the latest Chief of Staff head has an explicit nonexecutive rank; review the existing team before installing the Website Manager team"
-                .to_string(),
-            );
+            if !tier.eq_ignore_ascii_case(EXECUTIVE_TIER) {
+                return Err(
+                    "the latest Chief of Staff head has an explicit nonexecutive rank; review the existing team before installing the Website Manager team"
+                        .to_string(),
+                );
+            }
         }
         changed |= reconcile_public_head_fields(record, head);
         if let Some(manager) = head_manager {
@@ -429,13 +439,13 @@ fn latest_owner_head(
     }
     let content = crate::managed_agents::agent_events::managed_agent_content_from_event(&event)?;
     let manager = single_head_tag(&event, "manager")?.map(|manager| manager.to_ascii_lowercase());
-    if let Some(manager) = manager.as_deref()
-        && (manager.len() != 64 || !manager.bytes().all(|byte| byte.is_ascii_hexdigit()))
-    {
-        return Err(
-            "the latest Chief of Staff head has an invalid reporting line; review the existing team before installing the Website Manager team"
-                .to_string(),
-        );
+    if let Some(manager) = manager.as_deref() {
+        if manager.len() != 64 || !manager.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(
+                "the latest Chief of Staff head has an invalid reporting line; review the existing team before installing the Website Manager team"
+                    .to_string(),
+            );
+        }
     }
     Ok(Some((content, manager)))
 }
