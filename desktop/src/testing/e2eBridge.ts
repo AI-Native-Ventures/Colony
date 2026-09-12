@@ -1,3 +1,4 @@
+import { emitOnboardingResponse } from "./e2eOnboardingResponse";
 import {
   brokerMockCommunityProfileAction,
   canonicalCompanyMockJson,
@@ -10905,7 +10906,7 @@ function sendToMockSocket(args: {
     const filters = rest.slice(1) as MockFilter[];
     if (
       !filters.every((filter) =>
-        isPGatedFilterAuthorized(filter, MOCK_IDENTITY_PUBKEY),
+        isPGatedFilterAuthorized(filter, getMockMemberPubkey(getConfig())),
       )
     ) {
       sendWsText(socket.handler, ["CLOSED", subId, P_GATED_REJECTION_MESSAGE]);
@@ -14263,6 +14264,18 @@ export function maybeInstallE2eTauriMocks() {
       }
       case "get_agent_config_surface": {
         const configArgs = payload as { pubkey: string };
+        if (
+          mockManagedAgents.some((agent) => agent.pubkey === configArgs.pubkey)
+        ) {
+          return {
+            ...buildMockConfigSurface(configArgs.pubkey),
+            runtimeId: mockGlobalAgentConfig?.preferred_runtime || "buzz-agent",
+            normalized: {
+              model: { value: mockGlobalAgentConfig?.model },
+              provider: { value: mockGlobalAgentConfig?.provider },
+            },
+          };
+        }
         return buildMockConfigSurface(configArgs.pubkey);
       }
       case "get_runtime_file_config": {
@@ -14489,11 +14502,21 @@ export function maybeInstallE2eTauriMocks() {
           createdCheckout: false,
         };
       }
-      case "send_channel_message":
-        return handleSendChannelMessage(
-          payload as Parameters<typeof handleSendChannelMessage>[0],
-          activeConfig,
+      case "decrypt_observer_event":
+        return JSON.parse(
+          JSON.parse((payload as { eventJson: string }).eventJson).content,
         );
+      case "send_channel_message": {
+        const input = payload as Parameters<typeof handleSendChannelMessage>[0];
+        const sent = await handleSendChannelMessage(input, activeConfig);
+        emitOnboardingResponse(
+          input,
+          sent.event_id,
+          getMockMemberPubkey(activeConfig),
+          emitMockLiveEvent,
+        );
+        return sent;
+      }
       case "has_managed_agent_channel_message_marker": {
         const args = payload as {
           channelId: string;

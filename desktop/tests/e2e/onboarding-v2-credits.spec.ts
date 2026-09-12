@@ -107,15 +107,13 @@ test("a created community connects its detected subscription and chooses a model
     timeout: 15_000,
   });
   const steps = page.getByTestId("onboarding-step-counter");
-  await expect(steps.locator('[aria-current="step"]')).toHaveText(
-    "1 · Business",
-  );
-  await expect(steps).toContainText("2 · Power");
+  await expect(steps.locator('[aria-current="step"]')).toHaveText("1Business");
+  await expect(steps).toContainText("2Connect and test");
   await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
   await fillSecondBusiness(page);
   await continueFounderBusiness(page);
   const openColony = page.getByRole("button", {
-    name: "Open my Colony",
+    name: "Test connection",
     exact: true,
   });
   // Finding a local account does not establish this business's connection.
@@ -129,6 +127,8 @@ test("a created community connects its detected subscription and chooses a model
   await model.selectOption("claude-test-model");
   await expect(openColony).toBeEnabled();
   await openColony.click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
   await expectRetainedBusinessContext(page, {
     ownerPubkey: TEST_IDENTITIES.tyler.pubkey,

@@ -178,6 +178,7 @@ const SCREEN_HUE: Record<string, HueName> = {
   // Keep both track variants distinct from company and the optional invite.
   "brain:byo": "pink",
   "brain:colony": "green",
+  history: "blue",
   credits: "violet",
   invite: "blue",
 };

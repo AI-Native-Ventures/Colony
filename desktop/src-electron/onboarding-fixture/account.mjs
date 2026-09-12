@@ -154,12 +154,16 @@ export async function completeFixtureOnboarding({
     "Power reads the real scoped relay catalog before continuing",
   );
   await page
-    .getByRole("button", { name: "Open my Colony", exact: true })
+    .getByRole("button", { name: "Test connection", exact: true })
     .click({ trial: true });
   await screenshot(page, proofDirectory, "joined-power.png");
   await page
-    .getByRole("button", { name: "Open my Colony", exact: true })
+    .getByRole("button", { name: "Test connection", exact: true })
     .click();
+  await page
+    .getByRole("button", { name: "Continue", exact: true })
+    .click({ timeout: 130_000 });
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await page
     .getByTestId("first-job-suggestion")
     .first()
