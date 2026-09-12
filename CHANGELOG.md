@@ -6,6 +6,7 @@
 - fix(desktop): the Model you choose for a teammate is the model that runs; a stale BUZZ_ACP_MODEL saved on an older agent no longer overrides it silently.
 - chore(desktop): the app calls itself Colony everywhere you can read it, instead of the upstream project it was forked from.
 - chore(desktop): the menu-bar icon is Colony's ant, and the native layer calls the product Colony where you can read it.
+- chore(desktop): rename the last Buzz references in native messages, and replace the beehive teammate name pool.
 
 ## relay-v0.11.12
 
