@@ -9,6 +9,10 @@
 - chore(desktop): the menu-bar icon is Colony's ant, and the native layer calls the product Colony where you can read it.
 - chore(desktop): rename the last Buzz references in native messages, and replace the beehive teammate name pool.
 
+## relay-v0.11.14
+
+- feat(relay): Colony now provides a Chief of Staff, and every provisioned employee reports to it from the moment it is seeded, so an owner never has to place one on the org chart. This repairs an existing ladder rather than adding a new one: promotion to an executive resolves the role against the payroll, the payroll had no chief of staff in any workspace, and leader-to-executive escalation was therefore dead in sixteen of seventeen production workspaces. Where a workspace already created its own agent holding that role, Colony stands down and leaves the owner's arrangement alone.
+
 ## relay-v0.11.13
 
 - feat(relay): completing a hire now closes the hiring request that asked for it, so the agent waiting on that request wakes up and carries on instead of waiting to be told. The request is closed only when it is unambiguous: the one the hire names, or the single open hiring request addressed to that owner.

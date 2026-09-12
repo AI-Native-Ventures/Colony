@@ -43,11 +43,22 @@ use crate::state::AppState;
 /// The prompt lives in its own file rather than inside the JSON because it is
 /// prose that gets edited often and reviewed on its own terms. A manifest and
 /// its prompt are bound together here, at the one place both are compiled in.
-const CORE_EMPLOYEE_ASSETS: [(&str, &str, &str); 1] = [(
-    "sales.json",
-    include_str!("core_employees/sales.json"),
-    include_str!("core_employees/sales-prompt.md"),
-)];
+/// Order matters. An entry's reporting line is resolved against the payroll
+/// in the same pass that seeds it, so the Chief of Staff has to exist before
+/// anyone who reports to it, or the first pass would seed Sales unassigned
+/// and only attach it on the next relay start.
+const CORE_EMPLOYEE_ASSETS: [(&str, &str, &str); 2] = [
+    (
+        "chief-of-staff.json",
+        include_str!("core_employees/chief-of-staff.json"),
+        include_str!("core_employees/chief-of-staff-prompt.md"),
+    ),
+    (
+        "sales.json",
+        include_str!("core_employees/sales.json"),
+        include_str!("core_employees/sales-prompt.md"),
+    ),
+];
 
 /// The schema string every bundled manifest declares, so a file from some
 /// other part of the product cannot be read as an employee by accident.
@@ -69,6 +80,14 @@ pub struct ProvisionedEmployee {
     pub role_id: String,
     /// One of `worker`, `leader`, `executive`.
     pub rank: String,
+    /// The role slug this employee reports to, or `None` when it reports to
+    /// nobody because it is the top of the chart.
+    ///
+    /// A role rather than a pubkey, because the identity holding a role
+    /// differs per workspace while the org shape does not. Resolved against
+    /// the payroll at seed time; see [`resolve_reporting_line`].
+    #[serde(default)]
+    pub reports_to: Option<String>,
     /// The agent harness that runs it, by catalog id (`claude`, `codex`, ...).
     pub harness: String,
     /// The model to pin, or `None` to let the harness choose.
@@ -147,11 +166,44 @@ pub fn core_employee_manifests() -> anyhow::Result<Vec<ProvisionedEmployee>> {
         {
             anyhow::bail!("bundled employee manifest {path} names an empty required command");
         }
-        if employee.tier().is_none() {
+        let Some(tier) = employee.tier() else {
             anyhow::bail!(
                 "bundled employee manifest {path} has rank `{}`, which is not a tier",
                 employee.rank
             );
+        };
+
+        // The reporting rule the relay already enforces: an agent reports one
+        // rung up, so a `leader` reports to an `executive` and an `executive`
+        // reports to nobody. A `worker` would have to report to a leader, and
+        // Colony provides no leader for it to report to, so an entry shipping
+        // as a worker would land permanently unassigned. Refused at build
+        // time rather than discovered in a workspace.
+        match tier {
+            AgentTier::Executive => {
+                if employee.reports_to.is_some() {
+                    anyhow::bail!(
+                        "bundled employee manifest {path} is an executive, which reports to nobody"
+                    );
+                }
+            }
+            AgentTier::Leader => {
+                let reports_to = employee
+                    .reports_to
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|role| !role.is_empty());
+                if reports_to.is_none() {
+                    anyhow::bail!(
+                        "bundled employee manifest {path} is a leader and must name the role it \
+                         reports to"
+                    );
+                }
+            }
+            AgentTier::Worker => anyhow::bail!(
+                "bundled employee manifest {path} ships as a worker, which reports to a leader \
+                 Colony does not provide; it would stay unassigned in every workspace"
+            ),
         }
         parsed.push(employee);
     }
@@ -178,6 +230,9 @@ pub enum SeedOutcome {
     Unchanged,
     /// A user's own employee already holds this role, so the seed stood down.
     RoleTaken,
+    /// An agent the workspace created already holds this role, so the seed
+    /// stood down and left the owner's arrangement alone.
+    RoleClaimedByWorkspaceAgent,
 }
 
 /// Ensure every bundled employee exists for one community.
@@ -220,6 +275,15 @@ pub async fn ensure_core_employees(
                 );
             }
             Ok(SeedOutcome::Unchanged) => {}
+            Ok(SeedOutcome::RoleClaimedByWorkspaceAgent) => {
+                warn!(
+                    community = %community,
+                    handle = %employee.handle,
+                    role = %employee.role_id,
+                    "an agent this workspace created already holds this role; the provisioned \
+                     employee stood down and the owner's arrangement was left alone"
+                );
+            }
             Ok(SeedOutcome::RoleTaken) => {
                 warn!(
                     community = %community,
@@ -370,12 +434,24 @@ async fn seed_one(
         .as_ref()
         .context("no employee key-encryption key is configured")?;
 
-    if let Some(existing) = state
+    let already_seeded = state
         .db
         .find_provisioned_employee(community, &employee.handle)
         .await
-        .context("failed to look up an already-seeded employee")?
+        .context("failed to look up an already-seeded employee")?;
+
+    // Stand down before minting anything, but only for a workspace that has
+    // not already adopted this employee: once ours exists, an owner creating
+    // an agent in the same role must not make ours stop being maintained.
+    if already_seeded.is_none()
+        && role_claimed_by_workspace_agent(state, community, &employee.role_id).await?
     {
+        return Ok(SeedOutcome::RoleClaimedByWorkspaceAgent);
+    }
+
+    let manager = resolve_reporting_line(state, community, employee).await?;
+
+    if let Some(existing) = already_seeded {
         if existing.provisioned_version.unwrap_or(0) >= employee.version {
             return Ok(SeedOutcome::Unchanged);
         }
@@ -384,18 +460,21 @@ async fn seed_one(
             .db
             .update_provisioned_employee(
                 community,
-                &employee.handle,
-                &employee.display_name,
-                &employee.role_id,
-                &employee.rank,
-                employee.version,
+                buzz_db::employees::ProvisionedEmployeeUpdate {
+                    handle: &employee.handle,
+                    display_name: &employee.display_name,
+                    role_id: &employee.role_id,
+                    rank: &employee.rank,
+                    version: employee.version,
+                    manager: manager.as_deref(),
+                },
             )
             .await
             .context("failed to apply a newer bundled version")?
             .context("the seeded employee vanished while being updated")?;
 
         let keys = open_keys(sealer, community, &updated.pubkey, &updated.sealed_key)?;
-        publish_records(state, community, employee, &keys).await;
+        publish_records(state, community, employee, &keys, manager.as_deref()).await;
         return Ok(SeedOutcome::Updated);
     }
 
@@ -422,6 +501,7 @@ async fn seed_one(
                 rank: &employee.rank,
                 provisioned_handle: &employee.handle,
                 provisioned_version: employee.version,
+                manager: manager.as_deref(),
             },
         )
         .await
@@ -435,8 +515,135 @@ async fn seed_one(
         return Ok(SeedOutcome::RoleTaken);
     }
 
-    publish_records(state, community, employee, &keys).await;
+    publish_records(state, community, employee, &keys, manager.as_deref()).await;
     Ok(SeedOutcome::Seeded)
+}
+
+/// Upper bound on the managed-agent heads one stand-down check reads. A
+/// workspace has tens of agents, not thousands, and this only has to find
+/// whether ONE role is already claimed.
+const MAX_ROLE_CLAIM_HEADS: i64 = 200;
+
+/// Whether an agent the workspace created already holds `role_id`.
+///
+/// Colony provides employees; it does not take a job somebody has already
+/// given to an agent of their own. Six production workspaces had an
+/// owner-created agent holding `chief-of-staff` before this shipped, and
+/// seeding ours beside it would have put two executives in one workspace.
+/// That is worse than doing nothing: `unique_executive_in_roster` returns
+/// None when more than one pubkey qualifies, by design, so the workspace
+/// that had a working escalation target would have ended up with none.
+///
+/// Only OWNER-authored heads count, which matters more than it looks.
+/// Kind 30177 is client-writable, so without that filter an agent could
+/// claim a role to keep Colony out of it. It also keeps us from standing
+/// down against ourselves: a provisioned employee's own definition is signed
+/// by the employee, never by an owner, so our Sales definition can never be
+/// read as a workspace agent already holding `sales`.
+///
+/// Fails closed. A read error stands the seed down rather than risking a
+/// second holder of the role.
+async fn role_claimed_by_workspace_agent(
+    state: &AppState,
+    community: CommunityId,
+    role_id: &str,
+) -> anyhow::Result<bool> {
+    let rows = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_MANAGED_AGENT as i32]),
+            global_only: true,
+            limit: Some(MAX_ROLE_CLAIM_HEADS),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .context("failed to read managed-agent heads while checking the role")?;
+
+    for stored in rows {
+        let claims_role = serde_json::from_str::<serde_json::Value>(&stored.event.content)
+            .ok()
+            .and_then(|content| {
+                content
+                    .get("role_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|value| value.trim().to_ascii_lowercase())
+            })
+            .is_some_and(|claimed| claimed == role_id.trim().to_ascii_lowercase());
+        if !claims_role {
+            continue;
+        }
+
+        let author_is_owner = state
+            .db
+            .get_relay_member(community, &stored.event.pubkey.to_hex())
+            .await
+            .context("failed to check a managed-agent head's author")?
+            .is_some_and(|member| member.role == "owner");
+        if author_is_owner {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// The pubkey of the employee holding `role_id`, when one does and it can
+/// legitimately be this employee's manager.
+///
+/// Deliberately narrow. Seeding writes `employees.manager` directly, which
+/// bypasses `employee_broker::validate_manager_for_rank`, so this has to
+/// apply the same rule the gate would apply to an owner doing it by hand:
+/// the manager must be a real agent in THIS community whose tier is exactly
+/// the escalation target of the rank being seeded. An ACTIVE employee row is
+/// the only source that satisfies it without trusting a client-writable
+/// head, and it is the same source `active_role_ranks` reads.
+///
+/// `None` is the honest answer whenever the role is unfilled or the holder
+/// is the wrong rank. An employee left unassigned is visibly unplaced; an
+/// employee pointed at an escalation target the relay cannot rank looks
+/// placed and escalates nowhere.
+async fn resolve_reporting_line(
+    state: &AppState,
+    community: CommunityId,
+    employee: &ProvisionedEmployee,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    let Some(role) = employee
+        .reports_to
+        .as_deref()
+        .map(str::trim)
+        .filter(|role| !role.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(tier) = employee.tier() else {
+        return Ok(None);
+    };
+
+    let manager = state
+        .db
+        .find_active_employee_by_role(community, &role.to_ascii_lowercase())
+        .await
+        .context("failed to resolve the reporting line")?;
+    let Some(manager) = manager else {
+        return Ok(None);
+    };
+
+    let expected = tier.escalation_target();
+    match AgentTier::parse(&manager.rank) {
+        Some(actual) if actual == expected => Ok(Some(manager.pubkey)),
+        other => {
+            warn!(
+                community = %community,
+                handle = %employee.handle,
+                role,
+                manager_rank = other.map(|tier| tier.as_str()).unwrap_or("unparseable"),
+                expected = expected.as_str(),
+                "the employee holding this role is the wrong rank to be a manager; \
+                 leaving the reporting line unset"
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// Re-derive a seeded employee's signing keys from its sealed column.
@@ -518,9 +725,10 @@ async fn publish_records(
     community: CommunityId,
     employee: &ProvisionedEmployee,
     keys: &Keys,
+    manager: Option<&[u8]>,
 ) {
     let created_at = next_created_at(state, community, keys).await;
-    for event in build_records(employee, keys, created_at) {
+    for event in build_records(employee, keys, created_at, manager) {
         match event {
             Ok(event) => {
                 if let Err(error) = state.db.insert_event(community, &event, None).await {
@@ -554,12 +762,25 @@ pub fn build_records(
     employee: &ProvisionedEmployee,
     keys: &Keys,
     created_at: nostr::Timestamp,
+    manager: Option<&[u8]>,
 ) -> Vec<anyhow::Result<Event>> {
     vec![
         build_profile(employee, keys, created_at),
-        build_employee_head(employee, keys, created_at),
-        build_agent_definition(employee, keys, created_at),
+        build_employee_head(employee, keys, created_at, manager),
+        build_agent_definition(employee, keys, created_at, manager),
     ]
+}
+
+/// Append the `manager` tag when a reporting line was resolved.
+///
+/// One helper for both heads: `direct_reports` queries kinds 30190 and 30177
+/// by this tag, and the desktop org chart reads it off both, so a line
+/// written onto one and not the other would draw half a chart.
+fn push_manager_tag(tags: &mut Vec<Tag>, manager: Option<&[u8]>) -> anyhow::Result<()> {
+    if let Some(manager) = manager {
+        tags.push(Tag::parse(["manager", &hex::encode(manager)])?);
+    }
+    Ok(())
 }
 
 /// The kind 0 profile, so a seeded employee renders as a colleague rather than
@@ -592,8 +813,9 @@ fn build_employee_head(
     employee: &ProvisionedEmployee,
     keys: &Keys,
     created_at: nostr::Timestamp,
+    manager: Option<&[u8]>,
 ) -> anyhow::Result<Event> {
-    let tags = vec![
+    let mut tags = vec![
         Tag::parse(["d", &keys.public_key().to_hex()])?,
         Tag::parse(["role", &employee.role_id])?,
         Tag::parse(["name", &employee.display_name])?,
@@ -601,6 +823,10 @@ fn build_employee_head(
         Tag::parse(["provisioned", &employee.handle])?,
         Tag::parse(["version", &employee.version.to_string()])?,
     ];
+    // The TAG is what the org chart and `direct_reports` read; the column is
+    // what `agent_manager` reads. Both are written, so the chart can never
+    // show a reporting line the gate does not believe.
+    push_manager_tag(&mut tags, manager)?;
     Ok(EventBuilder::new(Kind::Custom(KIND_EMPLOYEE as u16), "")
         .tags(tags)
         .custom_created_at(created_at)
@@ -618,6 +844,7 @@ fn build_agent_definition(
     employee: &ProvisionedEmployee,
     keys: &Keys,
     created_at: nostr::Timestamp,
+    manager: Option<&[u8]>,
 ) -> anyhow::Result<Event> {
     let content = serde_json::json!({
         "name": employee.display_name,
@@ -633,7 +860,7 @@ fn build_agent_definition(
     })
     .to_string();
 
-    let tags = vec![
+    let mut tags = vec![
         Tag::parse(["d", &keys.public_key().to_hex()])?,
         Tag::parse(["role", &employee.role_id])?,
         Tag::parse(["name", &employee.display_name])?,
@@ -641,6 +868,7 @@ fn build_agent_definition(
         Tag::parse(["provisioned", &employee.handle])?,
         Tag::parse(["version", &employee.version.to_string()])?,
     ];
+    push_manager_tag(&mut tags, manager)?;
     Ok(
         EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content)
             .tags(tags)
@@ -667,7 +895,10 @@ mod tests {
             .find(|entry| entry.handle == "sales")
             .expect("the sales employee is bundled");
         assert_eq!(sales.display_name, "Sales");
-        assert_eq!(sales.version, 2);
+        // Not pinned here: a bundled version bump is an ordinary event, and a
+        // test that hardcodes today's number turns every future bump into a
+        // failure that says nothing about the thing that broke.
+        assert!(sales.version >= 3);
         assert_eq!(sales.tier(), Some(AgentTier::Leader));
         assert!(sales.prompt.contains("outreach"));
         assert_eq!(
@@ -683,9 +914,12 @@ mod tests {
     #[test]
     fn the_records_carry_the_provisioned_tag_and_the_prompt() {
         let manifests = core_employee_manifests().expect("bundled employees must be valid");
-        let sales = &manifests[0];
+        let sales = manifests
+            .iter()
+            .find(|entry| entry.handle == "sales")
+            .expect("sales is bundled");
         let keys = Keys::generate();
-        let records: Vec<Event> = build_records(sales, &keys, nostr::Timestamp::now())
+        let records: Vec<Event> = build_records(sales, &keys, nostr::Timestamp::now(), None)
             .into_iter()
             .map(|event| event.expect("records must build"))
             .collect();
@@ -727,6 +961,124 @@ mod tests {
         // All three speak as the same identity.
         for event in &records {
             assert_eq!(event.pubkey, keys.public_key());
+        }
+    }
+
+    #[test]
+    fn the_chief_of_staff_is_bundled_and_reports_to_nobody() {
+        let manifests = core_employee_manifests().expect("bundled employees must be valid");
+        let chief = manifests
+            .iter()
+            .find(|entry| entry.handle == "chief-of-staff")
+            .expect("the chief of staff is bundled");
+        assert_eq!(chief.role_id, "chief-of-staff");
+        assert_eq!(chief.tier(), Some(AgentTier::Executive));
+        assert_eq!(chief.reports_to, None);
+    }
+
+    #[test]
+    fn the_chief_of_staff_is_seeded_before_anyone_who_reports_to_it() {
+        // The reporting line is resolved against the payroll in the same pass
+        // that seeds it, so an entry that reports to a role must come after
+        // the entry that fills it. Out of order, the first pass would seed
+        // Sales unassigned and only attach it on the next relay start.
+        let manifests = core_employee_manifests().expect("bundled employees must be valid");
+        for (index, employee) in manifests.iter().enumerate() {
+            let Some(role) = employee.reports_to.as_deref() else {
+                continue;
+            };
+            let manager_index = manifests
+                .iter()
+                .position(|candidate| candidate.role_id == role)
+                .unwrap_or_else(|| {
+                    panic!("{} reports to an unbundled role {role}", employee.handle)
+                });
+            assert!(
+                manager_index < index,
+                "{} is seeded before the {role} it reports to",
+                employee.handle
+            );
+        }
+    }
+
+    #[test]
+    fn every_bundled_rank_satisfies_the_reporting_rule() {
+        // An executive reports to nobody, a leader names the role one rung
+        // up, and a worker cannot ship at all because Colony provides no
+        // leader for it to report to.
+        let manifests = core_employee_manifests().expect("bundled employees must be valid");
+        for employee in &manifests {
+            match employee.tier().expect("a bundled rank parses") {
+                AgentTier::Executive => assert_eq!(
+                    employee.reports_to, None,
+                    "{} is an executive and must report to nobody",
+                    employee.handle
+                ),
+                AgentTier::Leader => assert!(
+                    employee.reports_to.is_some(),
+                    "{} is a leader and must name the role it reports to",
+                    employee.handle
+                ),
+                AgentTier::Worker => {
+                    panic!(
+                        "{} ships as a worker, which validation refuses",
+                        employee.handle
+                    )
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_resolved_reporting_line_lands_on_both_heads() {
+        // `direct_reports` queries kinds 30190 and 30177 by the manager tag,
+        // and the desktop chart reads it off both, so a line written onto one
+        // and not the other draws half a chart.
+        let manifests = core_employee_manifests().expect("bundled employees must be valid");
+        let sales = manifests
+            .iter()
+            .find(|entry| entry.handle == "sales")
+            .expect("sales is bundled");
+        let chief = Keys::generate();
+        let manager = chief.public_key().to_bytes();
+        let keys = Keys::generate();
+
+        let records: Vec<Event> = build_records(
+            sales,
+            &keys,
+            nostr::Timestamp::now(),
+            Some(manager.as_slice()),
+        )
+        .into_iter()
+        .map(|event| event.expect("records must build"))
+        .collect();
+
+        for kind in [KIND_EMPLOYEE, KIND_MANAGED_AGENT] {
+            let head = records
+                .iter()
+                .find(|event| u32::from(event.kind.as_u16()) == kind)
+                .unwrap_or_else(|| panic!("a head of kind {kind} is published"));
+            assert_eq!(
+                tag_value(head, "manager").as_deref(),
+                Some(hex::encode(manager).as_str()),
+                "kind {kind} must carry the manager tag"
+            );
+        }
+    }
+
+    #[test]
+    fn no_reporting_line_means_no_manager_tag_at_all() {
+        // An unresolved role leaves the employee visibly unplaced rather than
+        // pointed at something that cannot be ranked.
+        let manifests = core_employee_manifests().expect("bundled employees must be valid");
+        let keys = Keys::generate();
+        let records: Vec<Event> =
+            build_records(&manifests[0], &keys, nostr::Timestamp::now(), None)
+                .into_iter()
+                .map(|event| event.expect("records must build"))
+                .collect();
+        for record in &records {
+            assert!(tag_value(record, "manager").is_none());
         }
     }
 
