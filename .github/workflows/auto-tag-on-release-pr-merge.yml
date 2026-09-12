@@ -75,20 +75,30 @@ jobs:
           PROMOTION_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          # A commit can legitimately carry more than one Promotion Gate. Any
+          # promotion that is reopened leaves the earlier verdict behind: a
+          # pinned release branch is refused by the gate on its branch name,
+          # and reopening the same commit from `develop` then adds a second
+          # record. Demanding exactly one record refused a release whose gate
+          # had passed, so what is verified here is the LATEST verdict, which
+          # is the one that describes this commit now.
           mapfile -t gate_conclusions < <(
             gh api --paginate \
               "repos/$GITHUB_REPOSITORY/commits/$PROMOTION_SHA/check-runs?per_page=100" \
-              --jq '.check_runs[] | select(.name == "Promotion Gate") | .conclusion'
+              --jq '[.check_runs[] | select(.name == "Promotion Gate")]
+                    | sort_by(.started_at)
+                    | reverse
+                    | .[].conclusion'
           )
-          if [ "${#gate_conclusions[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one Promotion Gate on $PROMOTION_SHA; found ${#gate_conclusions[@]}"
+          if [ "${#gate_conclusions[@]}" -eq 0 ]; then
+            echo "::error::No Promotion Gate on $PROMOTION_SHA; refusing publication"
             exit 1
           fi
           if [ "${gate_conclusions[0]}" != "success" ]; then
-            echo "::error::Promotion Gate concluded '${gate_conclusions[0]}'; refusing publication"
+            echo "::error::The latest Promotion Gate on $PROMOTION_SHA concluded '${gate_conclusions[0]}'; refusing publication"
             exit 1
           fi
-          echo "Verified one successful Promotion Gate on $PROMOTION_SHA"
+          echo "Verified the latest of ${#gate_conclusions[@]} Promotion Gate run(s) on $PROMOTION_SHA concluded success"
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
