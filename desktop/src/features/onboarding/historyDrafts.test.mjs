@@ -116,3 +116,26 @@ test("Hermes and legacy OpenClaw user messages parse; uncertain memory-file attr
     [true, false, false],
   );
 });
+
+test("recovery key material never becomes a draft memory", async () => {
+  const result = await draftHistoryMemories([
+    {
+      source: "codex",
+      name: "synthetic.jsonl",
+      text: JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "I use ncryptsec1syntheticbackupvalue.",
+            },
+          ],
+        },
+      }),
+    },
+  ]);
+  assert.equal(result.length, 0);
+});

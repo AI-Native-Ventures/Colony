@@ -248,6 +248,22 @@ pub struct ReviewedHistoryMemory {
     pub text: Option<String>,
 }
 
+fn validate_reviewed_memory(entry: &ReviewedHistoryMemory) -> Result<(), String> {
+    if entry.id.len() != 64
+        || !entry.id.bytes().all(|c| c.is_ascii_hexdigit())
+        || entry
+            .text
+            .as_ref()
+            .is_some_and(|t| t.is_empty() || t.len() > 4000)
+    {
+        return Err("Invalid reviewed memory".into());
+    }
+    if let Some(text) = &entry.text {
+        crate::egress_guard::assert_no_key_backup(text, "onboarding memory before encryption")?;
+    }
+    Ok(())
+}
+
 /// Save (or tombstone) reviewed memories using the existing encrypted engram protocol.
 #[tauri::command]
 pub async fn save_onboarding_memories(
@@ -288,15 +304,7 @@ pub async fn save_onboarding_memories(
     let keys = nostr::Keys::parse(&record.private_key_nsec).map_err(|_| "Agent key unavailable")?;
     let url = format!("{}/events", crate::relay::relay_http_base_url(&relay));
     for entry in &memories {
-        if entry.id.len() != 64
-            || !entry.id.bytes().all(|c| c.is_ascii_hexdigit())
-            || entry
-                .text
-                .as_ref()
-                .is_some_and(|t| t.is_empty() || t.len() > 4000)
-        {
-            return Err("Invalid reviewed memory".into());
-        }
+        validate_reviewed_memory(entry)?;
     }
     let mut bodies: Vec<_> = memories
         .iter()
@@ -394,6 +402,24 @@ pub async fn save_onboarding_memories(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reviewed_key_backup_is_rejected_before_encryption() {
+        for text in [
+            "I use ncryptsec1syntheticbackup",
+            "I use NCRYPTSEC1SYNTHETICBACKUP",
+        ] {
+            let entry = ReviewedHistoryMemory {
+                id: "a".repeat(64),
+                text: Some(text.into()),
+            };
+            assert!(validate_reviewed_memory(&entry).is_err());
+        }
+        let safe = ReviewedHistoryMemory {
+            id: "a".repeat(64),
+            text: Some("I prefer concise updates.".into()),
+        };
+        assert!(validate_reviewed_memory(&safe).is_ok());
+    }
     #[test]
     fn scan_is_metadata_only_and_bounded() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;

@@ -9,7 +9,7 @@ export type MemoryDraft = {
   keep: boolean;
 };
 const secret =
-  /(?:\b(?:sk-|ghp_|github_pat_|xox[baprs]-|AKIA|nsec1)[a-zA-Z0-9_-]{8,}|-----BEGIN .*PRIVATE KEY|(?:password|api[_ -]?key|access[_ -]?token|secret)\s*[:=])/i;
+  /(?:\b(?:sk-|ghp_|github_pat_|xox[baprs]-|AKIA|nsec1|ncryptsec1)[a-zA-Z0-9_-]{8,}|-----BEGIN .*PRIVATE KEY|(?:password|api[_ -]?key|access[_ -]?token|secret)\s*[:=])/i;
 const sensitive =
   /\b(?:diagnos|medication|religion|sexual|passport|social security|bank account|credit card)/i;
 function textContent(value: unknown): string {
