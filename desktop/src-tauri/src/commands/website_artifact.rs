@@ -58,7 +58,7 @@ pub(crate) fn validate_website_artifact_url(url: &str, relay_base: &str) -> Resu
                 && ext.len() <= 8
                 && ext
                     .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'z').contains(&byte)) =>
+                    .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase()) =>
         {
             Ok(())
         }
