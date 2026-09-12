@@ -1774,4 +1774,19 @@ mod base_prompt_tests {
             "the base prompt must say what to do when the work has no initiative"
         );
     }
+
+    /// Agents wrote posts, captions and replies as if every reader already
+    /// knew the product and its vocabulary. The rule has to be stated in
+    /// the prompt, not left for the model to infer from "plain words".
+    #[test]
+    fn the_prompt_tells_agents_to_decide_who_is_reading() {
+        assert!(
+            BASE_PROMPT.contains("### Decide who is reading before you write"),
+            "the base prompt must carry the reader rule"
+        );
+        assert!(
+            BASE_PROMPT.contains("write as if they know none of it"),
+            "the base prompt must default to a reader who knows nothing"
+        );
+    }
 }
