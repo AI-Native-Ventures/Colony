@@ -253,7 +253,19 @@ export const settingsSections: SettingsSectionDescriptor[] = [
   },
 ];
 
+/**
+ * Display names for themes whose stored id does not read as its label. The ids
+ * (`buzz`, `buzz-dark`) are persisted preferences and E2E fixtures, so only the
+ * label moves to the product's own name.
+ */
+const THEME_LABEL_OVERRIDES: Readonly<Record<string, string>> = {
+  buzz: "Colony",
+  "buzz-dark": "Colony Dark",
+};
+
 function formatThemeLabel(name: string): string {
+  const override = THEME_LABEL_OVERRIDES[name];
+  if (override) return override;
   return name
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))

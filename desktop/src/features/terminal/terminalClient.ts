@@ -64,7 +64,7 @@ export class TerminalConnection {
     onMessage: (message: Exclude<TerminalMessage, { type: "frame" }>) => void,
     onFrame: (delivery: TerminalDelivery) => void,
   ): Promise<TerminalConnection> {
-    if (!isTauri()) throw new Error("terminal sessions require Buzz Desktop");
+    if (!isTauri()) throw new Error("terminal sessions require Colony Desktop");
 
     let connection: TerminalConnection | null = null;
     const pending: TerminalMessage[] = [];
