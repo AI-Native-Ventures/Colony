@@ -80,15 +80,27 @@ jobs:
               "repos/$GITHUB_REPOSITORY/commits/$PROMOTION_SHA/check-runs?per_page=100" \
               --jq '.check_runs[] | select(.name == "Promotion Gate") | .conclusion'
           )
-          if [ "${#gate_conclusions[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one Promotion Gate on $PROMOTION_SHA; found ${#gate_conclusions[@]}"
+          # One commit can legitimately carry several Promotion Gate records:
+          # a promotion that was closed and reopened, and two open PRs whose
+          # heads are the same develop commit (a promotion and a hotfix racing
+          # to main). Counting records rather than reading them refused
+          # relay-v0.11.12 and again v0.17.5, both with every gate green.
+          #
+          # The security boundary is unchanged: at least one gate must exist,
+          # and every gate on the commit must have concluded success. A single
+          # failed or unfinished gate still refuses publication, so this cannot
+          # be widened by adding a passing run beside a failing one.
+          if [ "${#gate_conclusions[@]}" -eq 0 ]; then
+            echo "::error::No Promotion Gate on $PROMOTION_SHA; refusing publication"
             exit 1
           fi
-          if [ "${gate_conclusions[0]}" != "success" ]; then
-            echo "::error::Promotion Gate concluded '${gate_conclusions[0]}'; refusing publication"
-            exit 1
-          fi
-          echo "Verified one successful Promotion Gate on $PROMOTION_SHA"
+          for conclusion in "${gate_conclusions[@]}"; do
+            if [ "$conclusion" != "success" ]; then
+              echo "::error::A Promotion Gate on $PROMOTION_SHA concluded '$conclusion'; refusing publication"
+              exit 1
+            fi
+          done
+          echo "Verified ${#gate_conclusions[@]} successful Promotion Gate(s) on $PROMOTION_SHA"
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
