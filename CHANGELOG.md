@@ -3,6 +3,7 @@
 ## Unreleased
 
 - fix(desktop): the Model you choose for a teammate is the model that runs; a stale BUZZ_ACP_MODEL saved on an older agent no longer overrides it silently.
+- chore(desktop): the app calls itself Colony everywhere you can read it, instead of the upstream project it was forked from.
 
 ## relay-v0.11.12
 
