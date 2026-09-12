@@ -4,6 +4,8 @@
  * re-exported from there so every existing import keeps working.
  */
 
+import type { RelayEvent } from "./types";
+
 export type ThreadSummary = {
   replyCount: number;
   descendantCount: number;
