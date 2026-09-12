@@ -5,6 +5,7 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { verifyEvent } from "nostr-tools/pure";
 import { expect } from "@playwright/test";
+import { assertCreditsProof, creditsProofQuery } from "./credits-proof.mjs";
 import { waitForAnimations } from "../../tests/helpers/animations.ts";
 
 const OWNER =
@@ -41,6 +42,8 @@ export async function completeFixtureOnboarding({
   page,
   relaunch,
   proxy,
+  relay,
+  provider,
   recoveryPath,
   proofDirectory,
   onProgress = () => {},
@@ -154,16 +157,74 @@ export async function completeFixtureOnboarding({
     "Power reads the real scoped relay catalog before continuing",
   );
   await page
-    .getByRole("button", { name: "Open my Colony", exact: true })
+    .getByRole("button", { name: "Test connection", exact: true })
     .click({ trial: true });
   await screenshot(page, proofDirectory, "joined-power.png");
   await page
-    .getByRole("button", { name: "Open my Colony", exact: true })
+    .getByRole("button", { name: "Test connection", exact: true })
     .click();
+  await expect(
+    page.getByTestId("onboarding-power").getByRole("alert"),
+  ).toBeVisible({ timeout: 130_000 });
+  await expect(
+    page.getByRole("button", { name: "Continue", exact: true }),
+  ).toHaveCount(0);
+  assert.equal(
+    provider.receivedCallCount,
+    0,
+    "Unfunded connection cannot reach the model",
+  );
+  provider.assertHealthy();
+  await screenshot(page, proofDirectory, "joined-zero-credit-block.png");
+  onProgress("zero-credit-connection-blocked");
+  await relay.seedCredits(OWNER);
+  provider.authorizeConnectionTest();
+  await page.getByRole("button", { name: "Retry test", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Continue", exact: true })
+    .click({ timeout: 130_000 });
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await page
     .getByTestId("first-job-suggestion")
     .first()
     .waitFor({ state: "visible", timeout: 90_000 });
+  const probeAgents = await invoke(page, "list_managed_agents");
+  assert.equal(
+    probeAgents.length,
+    1,
+    "Probe provisions only the Chief of Staff",
+  );
+  const stoppedProbe = await invoke(page, "stop_managed_agent", {
+    pubkey: probeAgents[0].pubkey,
+  });
+  assert.equal(
+    stoppedProbe.pid,
+    null,
+    "Stop the probe producer before exact accounting",
+  );
+  provider.assertHealthy();
+  provider.finishConnectionTest();
+  let probeSettlement;
+  await expect
+    .poll(
+      async () => {
+        const snapshot = JSON.parse(
+          await relay.query(creditsProofQuery(OWNER)),
+        );
+        try {
+          probeSettlement = assertCreditsProof(
+            snapshot,
+            provider.probeRequests,
+            "5000000000",
+          );
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 30_000, intervals: [1000] },
+    )
+    .toBe(true);
   onProgress("business-provisioned");
   // Fresh packaged profiles offer optional browser import after completion.
   // Exercise its real defer action; never inspect or import personal cookies.
@@ -254,6 +315,12 @@ export async function completeFixtureOnboarding({
   return {
     page,
     ownerPubkey: OWNER,
+    connectionProbe: {
+      settlement: probeSettlement,
+      calls: provider.probeRequests.length,
+      fundingNanousd: "5000000000",
+      zeroCredit: "blocked before model call",
+    },
     relayUrl,
     channelId,
     rootEventId,

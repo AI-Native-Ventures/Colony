@@ -329,3 +329,5 @@ pub(crate) use snapshot::import::{
 };
 pub use snapshot::{confirm_agent_snapshot_import, preview_agent_snapshot_import};
 pub use snapshot::{encode_agent_snapshot_for_send, export_agent_snapshot};
+
+pub(crate) use snapshot::import::submit_engram_event;

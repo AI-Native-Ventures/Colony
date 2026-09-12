@@ -166,9 +166,6 @@ export function AccountScreen({
             </button>
           </details>
         )}
-        <p className="onb-simple-note">
-          You’ll choose how to power your team after setting up your business.
-        </p>
       </form>
     </FounderLayout>
   );
