@@ -17,7 +17,7 @@ import { seedActiveIdentity, seedFreshFounder } from "../helpers/onboarding";
  *
  * 1. at 1280x720 the primary button's bottom clears the viewport bottom by at
  *    least 24px, and nothing needs scrolling;
- * 2. at 800x500 the story and form keep readable widths side by side
+ * 2. at 800x500 the setup progress and form keep readable widths side by side
  *    without horizontal overflow;
  * 3. when the content is taller than the window the stage scrolls, a bottom
  *    fade says so, and the primary button is reachable.
@@ -84,12 +84,14 @@ async function seedFreshFirstRun(
 async function readLayout(page: Page) {
   return page.evaluate(() => {
     const stage = document.querySelector<HTMLElement>(".onb-stage");
-    const headline = document.querySelector<HTMLElement>(".onb-simple-heading");
+    const progress = document.querySelector<HTMLElement>(
+      'nav[aria-label="Setup progress"]',
+    );
     const panel = document.querySelector<HTMLElement>(".onb-simple-card");
-    if (!stage || !headline || !panel) {
+    if (!stage || !progress || !panel) {
       throw new Error("onboarding canvas is not on screen");
     }
-    const headlineBox = headline.getBoundingClientRect();
+    const progressBox = progress.getBoundingClientRect();
     const panelBox = panel.getBoundingClientRect();
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
@@ -99,11 +101,11 @@ async function readLayout(page: Page) {
       documentWidth: document.documentElement.scrollWidth,
       scrollHeight: stage.scrollHeight,
       clientHeight: stage.clientHeight,
-      headline: {
-        x: headlineBox.x,
-        y: headlineBox.y,
-        width: headlineBox.width,
-        height: headlineBox.height,
+      progress: {
+        x: progressBox.x,
+        y: progressBox.y,
+        width: progressBox.width,
+        height: progressBox.height,
       },
       panel: { x: panelBox.x, y: panelBox.y, width: panelBox.width },
     };
@@ -158,8 +160,8 @@ async function assertColumnsAndScrollsAtMinimumWindow(
   expect(layout.documentWidth).toBe(layout.viewport.width);
   expect(
     layout.panel.x,
-    `${screenName} screen at 800 wide keeps the approved story and form beside each other`,
-  ).toBeGreaterThanOrEqual(layout.headline.x + layout.headline.width);
+    `${screenName} screen at 800 wide keeps the approved setup progress and form beside each other`,
+  ).toBeGreaterThanOrEqual(layout.progress.x + layout.progress.width);
 
   if (layout.scrollHeight > layout.clientHeight + 1) {
     await expect(
