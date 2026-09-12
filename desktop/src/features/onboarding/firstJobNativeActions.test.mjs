@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  createFirstJobBusinessCheck,
   createFirstJobMessagePreparer,
   createFirstJobWorkValidator,
 } from "./firstJobNativeActions.ts";
@@ -128,6 +129,80 @@ for (const step of ["loadTask", "listAgents"]) {
     await assert.rejects(f.validate(), /scope changed/);
   });
 }
+
+const funded = {
+  ok: true,
+  value: { costCentres: [{ kind: "internal", id: "internal-work" }] },
+};
+const quotaExceeded = {
+  ok: false,
+  code: "unavailable",
+  message:
+    "Company records could not be read: rate-limited: quota exceeded; retry in 0s",
+};
+
+function businessFixture(results) {
+  const reads = [];
+  const waits = [];
+  return {
+    reads,
+    waits,
+    check: () =>
+      createFirstJobBusinessCheck({
+        assertCurrent: async () => {},
+        loadCompany: async () => {
+          const result = results[reads.length] ?? quotaExceeded;
+          reads.push(result);
+          return result;
+        },
+        delay: async (ms) => {
+          waits.push(ms);
+        },
+        deadline: () => ({ expired: new Promise(() => {}), cancel() {} }),
+      })(scope),
+  };
+}
+
+test("a rate-limited business read is retried instead of stopping the first job", async () => {
+  const f = businessFixture([quotaExceeded, funded]);
+  assert.equal(await f.check(), null);
+  assert.equal(f.reads.length, 2);
+  assert.deepEqual(f.waits, [150]);
+});
+
+test("an unreadable business setup still alerts once the ladder is exhausted", async () => {
+  const f = businessFixture([]);
+  await assert.rejects(f.check(), /business setup could not be checked/);
+  assert.equal(f.reads.length, 3);
+});
+
+test("a malformed company head is never retried and still alerts", async () => {
+  const f = businessFixture([
+    {
+      ok: false,
+      code: "invalid-event",
+      message: "company head signature is invalid",
+    },
+  ]);
+  await assert.rejects(f.check(), /business setup could not be checked/);
+  assert.equal(f.reads.length, 1);
+});
+
+test("a business the relay does not hold stays a workspace setup message", async () => {
+  const f = businessFixture([
+    { ok: false, code: "missing-head", message: "no company yet" },
+    { ok: false, code: "missing-head", message: "no company yet" },
+    { ok: false, code: "missing-head", message: "no company yet" },
+  ]);
+  assert.match(await f.check(), /workspace setup problem/);
+  assert.equal(f.reads.length, 3);
+});
+
+test("a business without an internal budget is blocked, not retried", async () => {
+  const f = businessFixture([{ ok: true, value: { costCentres: [] } }]);
+  assert.match(await f.check(), /budget for internal work/);
+  assert.equal(f.reads.length, 1);
+});
 
 function messageFixture() {
   let active = true;
