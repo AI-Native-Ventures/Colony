@@ -304,6 +304,24 @@ for (const theme of ["light", "dark"] as const) {
     await surface.screenshot({
       path: testInfo.outputPath(`scout-opening-${theme}.png`),
     });
+
+    const surfaces = page.locator(
+      'section[aria-label="Scout onboarding conversation"]',
+    );
+    await expect(surfaces).toHaveCount(2);
+    await expect(surfaces.nth(0)).toBeVisible();
+    await expect(surfaces.last()).toBeVisible();
+    await surfaces.last().getByTestId("scout-route-existing").click();
+    await expect(
+      surfaces.nth(0).getByText("Is this the business we’re setting up?", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      surfaces.last().getByText("Is this the business we’re setting up?", {
+        exact: true,
+      }),
+    ).toBeVisible();
   });
 }
 

@@ -280,14 +280,17 @@ export function SettingUpStage({
     }
   };
   const isError = state.setup.phase === "error";
+  const isCheckingSavedSetup = state.setup.error === "Checking saved setup…";
   const input = state.setup.input ?? getScoutSetupInput(state);
   return (
     <StageFrame
       ownerMessage={input?.summary.businessOrIdea || "Confirmed understanding"}
       scoutMessage={
         isError
-          ? "Your context could not be saved yet. Your answers are still here."
-          : "I’m saving the context you reviewed so Scout can use it in Welcome."
+          ? "Setup could not finish yet. Your answers are still here."
+          : isCheckingSavedSetup
+            ? "I’m checking the saved setup before reopening Scout."
+            : "I’m saving the context you reviewed so Scout can use it in Welcome."
       }
       state={state}
     >
@@ -295,16 +298,30 @@ export function SettingUpStage({
         description="This may take a moment. You can retry if something gets in the way."
         eyebrow="Saving your context"
         icon={isError ? CircleAlert : LoaderCircle}
-        title={isError ? "Let’s try that again." : "Saving your context"}
+        title={
+          isError
+            ? "Let’s try that again."
+            : isCheckingSavedSetup
+              ? "Checking saved setup"
+              : "Saving your context"
+        }
       >
         <ProgressRow
           detail={
             isError
-              ? state.setup.error || "Your context was not saved."
-              : "Preparing Scout for your next conversation."
+              ? state.setup.error || "Setup could not finish."
+              : isCheckingSavedSetup
+                ? "Checking that Scout can reply in Welcome."
+                : "Preparing Scout for your next conversation."
           }
           icon={isError ? CircleAlert : LoaderCircle}
-          title={isError ? "Your context needs another try" : "Preparing Scout"}
+          title={
+            isError
+              ? "Your context needs another try"
+              : isCheckingSavedSetup
+                ? "Checking Scout can reply"
+                : "Preparing Scout"
+          }
           active={!isError}
         />
         {isError ? (
@@ -313,13 +330,15 @@ export function SettingUpStage({
             role="alert"
           >
             <strong className="font-medium text-foreground">
-              We couldn’t save your context.
+              We couldn’t finish setup yet.
             </strong>{" "}
             Check your connection and try again.
           </p>
         ) : null}
         <OwnerBoundary>
-          Your answers stay here while Scout prepares your Welcome conversation.
+          {isCheckingSavedSetup
+            ? "Your saved context stays here while Colony checks Scout’s Welcome reply."
+            : "Your answers stay here while Scout prepares your Welcome conversation."}
         </OwnerBoundary>
         <Actions>
           {isError ? (
@@ -327,11 +346,13 @@ export function SettingUpStage({
               Retry setup
             </PrimaryAction>
           ) : null}
-          <SecondaryAction
-            onClick={() => onChange({ type: "go-back", stage: "setup" })}
-          >
-            Return to workspace setup
-          </SecondaryAction>
+          {!isCheckingSavedSetup ? (
+            <SecondaryAction
+              onClick={() => onChange({ type: "go-back", stage: "setup" })}
+            >
+              Return to workspace setup
+            </SecondaryAction>
+          ) : null}
         </Actions>
       </InlineCard>
     </StageFrame>
