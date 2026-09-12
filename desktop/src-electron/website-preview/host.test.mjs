@@ -194,15 +194,12 @@ test("a denied child load pushes a recoverable failed state", async () => {
     isMainFrame: false,
   });
   assert.equal(navigation.prevented, true);
-  assert.deepEqual(
-    host.byHandle.get(state.handle).navigationDenials.at(-1),
-    {
-      sequence: 1,
-      url: target,
-      isMainFrame: false,
-      source: "will-frame-navigate",
-    },
-  );
+  assert.deepEqual(host.byHandle.get(state.handle).navigationDenials.at(-1), {
+    sequence: 1,
+    url: target,
+    isMainFrame: false,
+    source: "will-frame-navigate",
+  });
 
   webContents.emit(
     "did-fail-load",

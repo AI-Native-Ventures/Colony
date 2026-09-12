@@ -881,42 +881,48 @@ async function readSignedWebsiteStarts(
   page: Page,
   taskId: string,
 ): Promise<SignedWebsiteEvent[]> {
-  return page.evaluate((input) => {
-    const events =
-      (
-        window as Window & {
-          __BUZZ_E2E_SIGNED_EVENTS__?: SignedWebsiteEvent[];
-        }
-      ).__BUZZ_E2E_SIGNED_EVENTS__ ?? [];
-    return events.filter(
-      (event) =>
-        event.kind === input.kind &&
-        event.tags.some(
-          (tag) => tag[0] === "task" && tag[1] === input.taskId,
-        ),
-    );
-  }, { kind: 40027, taskId });
+  return page.evaluate(
+    (input) => {
+      const events =
+        (
+          window as Window & {
+            __BUZZ_E2E_SIGNED_EVENTS__?: SignedWebsiteEvent[];
+          }
+        ).__BUZZ_E2E_SIGNED_EVENTS__ ?? [];
+      return events.filter(
+        (event) =>
+          event.kind === input.kind &&
+          event.tags.some(
+            (tag) => tag[0] === "task" && tag[1] === input.taskId,
+          ),
+      );
+    },
+    { kind: 40027, taskId },
+  );
 }
 
 async function readAcceptedWebsiteStarts(
   page: Page,
   taskId: string,
 ): Promise<RelayEvent[]> {
-  return page.evaluate((input) => {
-    const events =
-      (
-        window as Window & {
-          __BUZZ_E2E_PUBLISHED_EVENTS__?: RelayEvent[];
-        }
-      ).__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [];
-    return events.filter(
-      (event) =>
-        event.kind === input.kind &&
-        event.tags.some(
-          (tag) => tag[0] === "task" && tag[1] === input.taskId,
-        ),
-    );
-  }, { kind: 40027, taskId });
+  return page.evaluate(
+    (input) => {
+      const events =
+        (
+          window as Window & {
+            __BUZZ_E2E_PUBLISHED_EVENTS__?: RelayEvent[];
+          }
+        ).__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [];
+      return events.filter(
+        (event) =>
+          event.kind === input.kind &&
+          event.tags.some(
+            (tag) => tag[0] === "task" && tag[1] === input.taskId,
+          ),
+      );
+    },
+    { kind: 40027, taskId },
+  );
 }
 
 /**
@@ -1089,14 +1095,17 @@ test("Brief Start recovers from a BeginWork rejection and retries the same job",
   await expect
     .poll(() => readSignedWebsiteStarts(page, job.taskId), {
       timeout: 20_000,
-      message: "Brief Start must sign one BeginWork action before showing its error.",
+      message:
+        "Brief Start must sign one BeginWork action before showing its error.",
     })
     .toHaveLength(1);
   await expect(rootAttachment.getByRole("alert")).toContainText(
     "mock BeginWork rejection",
   );
   await expect(
-    rootAttachment.getByText("Waiting for the job record to confirm the start."),
+    rootAttachment.getByText(
+      "Waiting for the job record to confirm the start.",
+    ),
   ).toHaveCount(0);
   await expect(startButton).toBeEnabled();
 
@@ -1105,7 +1114,9 @@ test("Brief Start recovers from a BeginWork rejection and retries the same job",
     .poll(() => readSignedWebsiteStarts(page, job.taskId), { timeout: 20_000 })
     .toHaveLength(2);
   await expect(
-    rootAttachment.getByText("Waiting for the job record to confirm the start."),
+    rootAttachment.getByText(
+      "Waiting for the job record to confirm the start.",
+    ),
   ).toBeVisible();
   await expect(rootAttachment.getByRole("alert")).toHaveCount(0);
 

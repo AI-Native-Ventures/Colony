@@ -16,8 +16,10 @@ function frameSnapshot(entry) {
             {
               isMainFrame: true,
               url: mainFrame.url,
-              processId: mainFrame.processId ?? mainFrame.frameProcessId ?? null,
-              routingId: mainFrame.routingId ?? mainFrame.frameRoutingId ?? null,
+              processId:
+                mainFrame.processId ?? mainFrame.frameProcessId ?? null,
+              routingId:
+                mainFrame.routingId ?? mainFrame.frameRoutingId ?? null,
             },
           ]
         : [];
@@ -178,8 +180,11 @@ export function navigationEvidence(entry, beforeUrl, targetUrl, observer) {
   );
   const explicitRefusal =
     observer.state.guardCancelled === true || blockedFailure !== undefined;
+  // Chromium can retain a failed target frame in `mainFrame.frames`; a
+  // matching blocked failure takes precedence over that stale frame record.
   const completed =
-    observer.state.completed === true || targetFrames.length > 0;
+    observer.state.completed === true ||
+    (targetFrames.length > 0 && blockedFailure === undefined);
   const recoverableFailure =
     entry.failed === true &&
     typeof entry.lastError === "string" &&

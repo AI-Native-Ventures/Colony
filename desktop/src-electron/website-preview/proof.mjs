@@ -41,10 +41,7 @@ import {
   navigationEvidence,
   observeFrameNavigation,
 } from "./proof-navigation.mjs";
-import {
-  PREVIEW_SCHEME_DESCRIPTOR,
-  parsePreviewUrl,
-} from "./scheme.mjs";
+import { PREVIEW_SCHEME_DESCRIPTOR, parsePreviewUrl } from "./scheme.mjs";
 import { PREVIEW_WRAPPER_FRAME_ID } from "./serving.mjs";
 
 // Same pre-ready registration as the real app: the proof origin must be a
@@ -58,6 +55,12 @@ const PROOF_DIR =
 // Integer fitting can move the CSS height by a fraction of a pixel; width
 // must be exact. A larger gap means the fitted zoom factor is not in effect.
 const MAX_ROUNDING_TOLERANCE_CSS_PX = 2;
+// Chromium reports a fixed CSS size through device-scaled layout as a tiny
+// subpixel fraction on some macOS display configurations. The child frame's
+// viewport remains exact; this bound only admits that representation error on
+// the wrapper's rect and computed style while retaining their raw values in
+// proof.json.
+const MAX_WRAPPER_SUBPIXEL_ERROR_CSS_PX = 0.02;
 
 const FIXTURE_HTML =
   '<!doctype html><html><head><meta charset="utf-8">' +
@@ -272,8 +275,22 @@ async function wrapperFrameMetrics(entry) {
         height: rect.height,
         styleWidth: style.width,
         styleHeight: style.height,
+        styleWidthPx: Number.parseFloat(style.width),
+        styleHeightPx: Number.parseFloat(style.height),
       };
     })()`,
+  );
+}
+
+function hasExpectedWrapperSize(wrapper, width, height) {
+  return (
+    wrapper !== null &&
+    wrapper !== undefined &&
+    wrapper.width === width &&
+    Math.abs(wrapper.height - height) <= MAX_WRAPPER_SUBPIXEL_ERROR_CSS_PX &&
+    wrapper.styleWidthPx === width &&
+    Math.abs(wrapper.styleHeightPx - height) <=
+      MAX_WRAPPER_SUBPIXEL_ERROR_CSS_PX
   );
 }
 
@@ -316,10 +333,7 @@ async function proveGeometry(host, window, fixture) {
     "geometry.desktopCssViewport",
     metrics.width === 1440 &&
       metrics.height === 900 &&
-      desktopWrapper?.width === 1440 &&
-      desktopWrapper?.height === 900 &&
-      desktopWrapper?.styleWidth === "1440px" &&
-      desktopWrapper?.styleHeight === "900px" &&
+      hasExpectedWrapperSize(desktopWrapper, 1440, 900) &&
       desktopMeasuredDelta <= 1 &&
       desktopTolerance <= MAX_ROUNDING_TOLERANCE_CSS_PX,
     `innerWidth=${metrics.width} innerHeight=${metrics.height} expectedHeight=${desktopExpectedCssHeight}`,
@@ -425,10 +439,7 @@ async function proveGeometry(host, window, fixture) {
     "geometry.mobileCssViewport",
     mobileMetrics.width === 390 &&
       mobileMetrics.height === 844 &&
-      mobileWrapper?.width === 390 &&
-      mobileWrapper?.height === 844 &&
-      mobileWrapper?.styleWidth === "390px" &&
-      mobileWrapper?.styleHeight === "844px" &&
+      hasExpectedWrapperSize(mobileWrapper, 390, 844) &&
       mobileMeasuredDelta <= 1 &&
       mobileTolerance <= MAX_ROUNDING_TOLERANCE_CSS_PX,
     `innerWidth=${mobileMetrics.width} innerHeight=${mobileMetrics.height} expectedHeight=${mobileExpectedCssHeight}`,

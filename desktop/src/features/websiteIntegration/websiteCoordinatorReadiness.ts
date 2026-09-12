@@ -218,7 +218,10 @@ export async function ensureWebsiteCoordinatorReady(
         // pair discovers the membership during startup, while an already
         // running pair uses ACP's membership notification/replay path. Waiting
         // for ready would unnecessarily wake a paid model before BeginWork.
-        if (runtime.lifecycle === "listening" || runtime.lifecycle === "ready") {
+        if (
+          runtime.lifecycle === "listening" ||
+          runtime.lifecycle === "ready"
+        ) {
           return;
         }
       }
