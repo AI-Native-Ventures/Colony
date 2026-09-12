@@ -58,6 +58,15 @@ export const PREVIEW_MAX_TOTAL_BYTES = 4 * MAX_TOTAL_BYTES;
 
 const CLIP_STRATEGIES = new Set(["clip", "hide"]);
 
+/**
+ * Select the production strategy for the platform-specific native wrapper.
+ * macOS has a passing host proof for the wrapper's composited clipping path;
+ * other platforms remain fail-closed until they have their own proof.
+ */
+export function resolveProductionClipStrategy(platform = process.platform) {
+  return platform === "darwin" ? "clip" : "hide";
+}
+
 function invalid(code, message, details) {
   return new PreviewHostError(code, message, details);
 }

@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 
-import { PREVIEW_LOADING_RESERVE_BYTES } from "./host.mjs";
+import {
+  PREVIEW_LOADING_RESERVE_BYTES,
+  resolveProductionClipStrategy,
+} from "./host.mjs";
 import { isFinishedArtifactEntrypointFrame } from "./lifecycle.mjs";
 import {
   PREVIEW_CSP,
@@ -28,6 +31,13 @@ function hashToken(text) {
   const digest = createHash("sha256").update(text, "utf8").digest("base64");
   return `'sha256-${digest}'`;
 }
+
+test("production enables the proven wrapper only on macOS", () => {
+  assert.equal(resolveProductionClipStrategy("darwin"), "clip");
+  for (const platform of ["linux", "win32", "freebsd", "android"]) {
+    assert.equal(resolveProductionClipStrategy(platform), "hide");
+  }
+});
 
 test("scheme descriptor is the single pre-ready registration", () => {
   assert.equal(PREVIEW_SCHEME, "colony-preview");

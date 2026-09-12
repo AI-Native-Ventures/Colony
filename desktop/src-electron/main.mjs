@@ -28,7 +28,10 @@ import { shellCommand } from "./shell-commands.mjs";
 import { ManagedBrowser, normalizeRelay } from "./browser/managed-workers.mjs";
 import { runtimePaths } from "./runtime-paths.mjs";
 import { DesktopDeepLinks } from "./deep-links.mjs";
-import { createWebsitePreviewHost } from "./website-preview/host.mjs";
+import {
+  createWebsitePreviewHost,
+  resolveProductionClipStrategy,
+} from "./website-preview/host.mjs";
 import { loadVerifiedArtifact } from "./website-preview/artifacts.mjs";
 import { downloadHandover } from "./website-preview/handover.mjs";
 import { PREVIEW_SCHEME_DESCRIPTOR } from "./website-preview/scheme.mjs";
@@ -170,6 +173,7 @@ async function boot() {
     WebContentsView,
     View,
     session,
+    clipStrategy: resolveProductionClipStrategy(),
   });
   previews.subscribe((state) =>
     send({ type: "website-preview", payload: state }),

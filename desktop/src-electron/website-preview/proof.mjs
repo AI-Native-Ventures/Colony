@@ -792,7 +792,11 @@ async function main() {
       entry.tolerance === 0 &&
       typeof entry.childFrameUrl === "string" &&
       entry.childFrameUrl.startsWith("colony-preview:") &&
-      hasExpectedWrapperSize(entry.wrapperFrame, expectedWidth, expectedHeight) &&
+      hasExpectedWrapperSize(
+        entry.wrapperFrame,
+        expectedWidth,
+        expectedHeight,
+      ) &&
       entry.wrapperBounds !== null &&
       typeof entry.wrapperBounds === "object" &&
       Number.isFinite(entry.wrapperBounds.width) &&

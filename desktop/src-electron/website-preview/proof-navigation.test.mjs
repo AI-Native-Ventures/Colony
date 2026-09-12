@@ -98,12 +98,7 @@ test("a completed target navigation fails even after an earlier blocked record",
     TARGET_URL,
     false,
   );
-  entry.webContents.emit(
-    "did-frame-navigate",
-    {},
-    TARGET_URL,
-    false,
-  );
+  entry.webContents.emit("did-frame-navigate", {}, TARGET_URL, false);
 
   const evidence = classify(entry, observer);
   assert.equal(evidence.explicitRefusal, true);
