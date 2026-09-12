@@ -234,7 +234,11 @@ async function waitForArtifactFrame(entry, path = entry.site.entrypoint) {
   throw new Error(`artifact frame did not load ${path}`);
 }
 
-async function evaluateArtifact(entry, expression, path = entry.site.entrypoint) {
+async function evaluateArtifact(
+  entry,
+  expression,
+  path = entry.site.entrypoint,
+) {
   try {
     const frame = await waitForArtifactFrame(entry, path);
     return await frame.executeJavaScript(expression);
@@ -255,7 +259,7 @@ async function proveGeometry(host, window, fixture) {
   );
   phase("mount");
   const desktopEntry = host.byHandle.get(desktop.handle);
-  const wc = desktopEntry.webContents;
+  const _wc = desktopEntry.webContents;
   const desktopFrame = await waitForArtifactFrame(desktopEntry);
   const metrics = await evaluateArtifact(
     desktopEntry,

@@ -69,13 +69,12 @@ class FakeWebContents {
       } else {
         this.emit("did-finish-load");
         if (url.endsWith("/__colony_preview_wrapper.html")) {
-          const handler = this.previewSession?.protocol?.handlers?.get(
-            "colony-preview",
-          );
+          const handler =
+            this.previewSession?.protocol?.handlers?.get("colony-preview");
           if (handler !== undefined) {
             const response = await handler({ url, method: "GET" });
             const html = await response.text();
-            const childUrl = html.match(/\ssrc=\"([^\"]+)\"/)?.[1];
+            const childUrl = html.match(/\ssrc="([^"]+)"/)?.[1];
             if (childUrl !== undefined) {
               this.mainFrame.frames = [
                 { url: childUrl, processId: 7, routingId: 11 },
@@ -211,7 +210,10 @@ export function createElectron(options = {}) {
     constructor(viewOptions) {
       super();
       this.options = viewOptions;
-      this.webContents = new FakeWebContents(options, viewOptions.session);
+      this.webContents = new FakeWebContents(
+        options,
+        viewOptions.webPreferences?.session,
+      );
       views.push(this);
     }
   }

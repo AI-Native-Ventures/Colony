@@ -269,9 +269,7 @@ test("clip mode isolates the artifact behind a trusted wrapper origin", async ()
   assert.notEqual(entry.token, entry.wrapperToken);
   assert.equal(view.webContents.loaded[0], wrapperUrl);
   const wrapper = await handler({ url: wrapperUrl, method: "GET" });
-  const wrapperBody = Buffer.from(await wrapper.arrayBuffer()).toString(
-    "utf8",
-  );
+  const wrapperBody = Buffer.from(await wrapper.arrayBuffer()).toString("utf8");
   assert.equal(wrapper.status, 200);
   assert.match(wrapperBody, /sandbox="allow-scripts allow-same-origin"/);
   assert.match(wrapperBody, new RegExp(`${artifactBase}/index\\.html`));
@@ -314,12 +312,9 @@ test("clip mode isolates the artifact behind a trusted wrapper origin", async ()
   assert.equal(childWrapper.prevented, true);
 
   let requestOptions;
-  previewSession.webRequest.handler(
-    { url: wrapperUrl },
-    (options) => {
-      requestOptions = options;
-    },
-  );
+  previewSession.webRequest.handler({ url: wrapperUrl }, (options) => {
+    requestOptions = options;
+  });
   assert.deepEqual(requestOptions, { cancel: false });
   previewSession.webRequest.handler(
     { url: `${artifactBase}/index.html` },

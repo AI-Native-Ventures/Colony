@@ -345,9 +345,7 @@ export async function mountEntry(host, entry) {
   }
   entry.token = token;
   entry.wrapperEnabled = wrapperEnabled;
-  entry.wrapperToken = wrapperEnabled
-    ? randomBytes(16).toString("hex")
-    : null;
+  entry.wrapperToken = wrapperEnabled ? randomBytes(16).toString("hex") : null;
   entry.wrapperPath = wrapperEnabled ? PREVIEW_WRAPPER_PATH : null;
   entry.partition = partition;
   entry.previewSession = previewSession;

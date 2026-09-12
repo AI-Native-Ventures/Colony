@@ -40,11 +40,7 @@ function refused(status, message) {
  * True only for the wrapper's one main-frame route or a listed artifact file
  * in the child frame. Both navigation and serving call this exact parser.
  */
-export function isAllowedEntryUrl(
-  entry,
-  rawUrl,
-  { isMainFrame = true } = {},
-) {
+export function isAllowedEntryUrl(entry, rawUrl, { isMainFrame = true } = {}) {
   if (entry.disposed || entry.site === null || entry.paths === null) {
     return false;
   }
@@ -99,14 +95,14 @@ export function previewWrapperDocument({
   const { left, top } = wrapperLayoutValues(layout);
   const source = previewEntryUrl(artifactToken, entrypoint);
   return (
-    "<!doctype html><html><head><meta charset=\"utf-8\"><style>" +
+    '<!doctype html><html><head><meta charset="utf-8"><style>' +
     "html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}" +
     `#${PREVIEW_WRAPPER_FRAME_ID}{position:absolute;display:block;box-sizing:border-box;` +
     `border:0;width:${pixelWidth}px;height:${pixelHeight}px;left:${left}px;top:${top}px}` +
     "</style></head><body>" +
-    `<iframe id=\"${PREVIEW_WRAPPER_FRAME_ID}\" title=\"Website preview\" ` +
-    `sandbox=\"allow-scripts allow-same-origin\" referrerpolicy=\"no-referrer\" ` +
-    `src=\"${escapeAttribute(source)}\"></iframe>` +
+    `<iframe id="${PREVIEW_WRAPPER_FRAME_ID}" title="Website preview" ` +
+    `sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" ` +
+    `src="${escapeAttribute(source)}"></iframe>` +
     "</body></html>"
   );
 }
