@@ -2,6 +2,7 @@ import { companyRepository } from "@/features/company/companyRepository";
 import {
   isTerminalTaskStatus,
   type CompanyParseResult,
+  type CompanyProfile,
   type CompanyTask,
 } from "@/features/company/contracts";
 import { workContextTags } from "@/features/company/workContext";
@@ -17,6 +18,10 @@ import type {
   FirstJobDispatchDependencies,
   FirstJobWork,
 } from "./firstJobDispatch";
+import {
+  readFirstJobCompanyRecord,
+  type FirstJobReadDeadline,
+} from "./firstJobRelayRead";
 import { assertFirstJobScope } from "./firstJobScope";
 import type { FirstJobScope, FirstJobTeam } from "./firstJobStart";
 import {
@@ -28,6 +33,9 @@ import {
   firstJobInstruction,
 } from "./firstJobMessage";
 
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 async function current<T>(
   scope: FirstJobScope,
   operation: () => Promise<T>,
@@ -38,22 +46,45 @@ async function current<T>(
   return result;
 }
 
-/** Tasks need the community's approved setup, including its internal work budget. */
-export async function checkFirstJobBusiness(
-  scope: FirstJobScope,
-): Promise<string | null> {
-  const profile = await current(scope, () =>
-    companyRepository.getActiveCompany(),
-  );
-  if (!profile.ok) {
-    if (profile.code === "missing-head")
-      return "Colony could not find this business’s setup on the server. This is a workspace setup problem, not an approval you missed. Your brief is saved; try again after the workspace connection is repaired.";
-    throw new Error("Your business setup could not be checked. Try again.");
-  }
-  if (!profile.value.costCentres.some((centre) => centre.kind === "internal"))
-    return "Your business setup is missing a budget for internal work. Review the setup with your Chief of Staff, then try again.";
-  return null;
+/**
+ * Tasks need the community's approved setup, including its internal work budget.
+ *
+ * The read is retried on a bounded ladder first: on a saturated relay this
+ * check used to turn a `rate-limited: quota exceeded; retry in 0s` refusal into
+ * "Your business setup could not be checked" and stop the first job before the
+ * owner's approval was ever signed. Both alerts below still appear once the
+ * ladder is exhausted.
+ */
+export function createFirstJobBusinessCheck(deps: {
+  assertCurrent(scope: FirstJobScope): Promise<void>;
+  loadCompany(): Promise<CompanyParseResult<CompanyProfile>>;
+  delay(ms: number): Promise<void>;
+  deadline?: FirstJobReadDeadline;
+}): (scope: FirstJobScope) => Promise<string | null> {
+  return async (scope) => {
+    const profile = await readFirstJobCompanyRecord({
+      read: deps.loadCompany,
+      assertCurrent: () => deps.assertCurrent(scope),
+      delay: deps.delay,
+      deadline: deps.deadline,
+    });
+    if (!profile.ok) {
+      if (profile.code === "missing-head")
+        return "Colony could not find this business’s setup on the server. This is a workspace setup problem, not an approval you missed. Your brief is saved; try again after the workspace connection is repaired.";
+      throw new Error("Your business setup could not be checked. Try again.");
+    }
+    if (!profile.value.costCentres.some((centre) => centre.kind === "internal"))
+      return "Your business setup is missing a budget for internal work. Review the setup with your Chief of Staff, then try again.";
+    return null;
+  };
 }
+
+/** Tasks need the community's approved setup, including its internal work budget. */
+export const checkFirstJobBusiness = createFirstJobBusinessCheck({
+  assertCurrent: assertFirstJobScope,
+  loadCompany: () => companyRepository.getActiveCompany(),
+  delay,
+});
 
 async function resolveFirstJobWork(
   scope: FirstJobScope,
