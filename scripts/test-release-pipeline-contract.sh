@@ -157,7 +157,26 @@ requireContract(promotion.includes("github.base_ref == 'main'"), "dynamic Promot
 requireContract(promotion.includes("if: always()"), "Promotion Gate must run with always() so dependency failures are reported");
 requireContract(promotion.includes("github.base_ref == 'main'"), "Promotion Gate must be limited to main pull requests");
 requireContract(promotion.includes('HEAD_REF: ${{ github.head_ref }}'), "Promotion Gate must inspect the head branch");
-requireContract(promotion.includes('"$HEAD_REF" != "develop"'), "Promotion Gate must reject heads other than develop");
+requireContract(promotion.includes('develop | hotfix/*'), "Promotion Gate must admit develop and hotfix heads");
+requireContract(
+  /\*\)\s*\n\s*fail "Promotions to main must come from/.test(promotion),
+  "Promotion Gate must refuse every head it does not name",
+);
+// The gate and the tagger read the same branch names. If one learns a lane
+// the other does not, a promotion is either refused before it can be tagged
+// or tagged from a head the gate never admitted, so every lane the tagger
+// resolves must appear here.
+// Match the case arm itself, not the failure message beneath it: the message
+// names every lane too, so a looser check passes while the rule is gone.
+const promotionHeadArm = (promotion.match(/^\s*develop \| hotfix\/\*.*$/m) ?? [""])[0];
+requireContract(promotionHeadArm !== "", "Promotion Gate must admit heads in one case arm");
+for (const lane of ["version-bump/", "relay-release/", "chart-release/", "push-chart-release/"]) {
+  requireContract(autoTag.includes(`${lane}*)`), `auto-tag must resolve the '${lane}*' lane`);
+  requireContract(
+    promotionHeadArm.includes(`${lane}*`),
+    `Promotion Gate must admit the '${lane}*' lane the tagger resolves`,
+  );
+}
 requireContract(promotion.includes('true|false)'), "Promotion Gate must reject missing or malformed path relevance");
 for (const output of ["RAW_RUST", "RAW_DESKTOP", "RAW_DESKTOP_RUST"]) {
   requireContract(promotion.includes(`${output}: \${{ needs.changes.outputs.raw-`), `Promotion Gate must receive '${output}' path relevance`);
@@ -256,7 +275,10 @@ expect_mutation_failure \
   "perl -0pi -e \"s/steps\\.filter\\.outputs\\.rust/github.base_ref == 'main' || steps.filter.outputs.rust/\" '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
   "promotion head assertion removed" \
-  "perl -0pi -e 's/^.*\"\\\$HEAD_REF\" != \"develop\".*\\n//m' '$tmp/ci.yml'" "$noop" "$noop"
+  "perl -0pi -e 's/^.*develop \\| hotfix\\/\\*.*\\n//m' '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "promotion head catch-all removed" \
+  "perl -0pi -e 's/^.*fail \"Promotions to main must come from.*\\n//m' '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
   "non-promotion check renamed to the required context" \
   "perl -0pi -e 's/^    name: .*Promotion Gate.*$/    name: Promotion Gate/m' '$tmp/ci.yml'" "$noop" "$noop"
