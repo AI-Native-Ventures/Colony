@@ -14265,14 +14265,26 @@ export function maybeInstallE2eTauriMocks() {
       case "get_agent_config_surface": {
         const configArgs = payload as { pubkey: string };
         if (
-          mockManagedAgents.some((agent) => agent.pubkey === configArgs.pubkey)
+          mockManagedAgents.some(
+            (agent) =>
+              agent.pubkey === configArgs.pubkey &&
+              agent.persona_id === STARTER_PERSONA_IDS.fizz,
+          )
         ) {
+          const surface = buildMockConfigSurface(configArgs.pubkey);
           return {
-            ...buildMockConfigSurface(configArgs.pubkey),
+            ...surface,
             runtimeId: mockGlobalAgentConfig?.preferred_runtime || "buzz-agent",
             normalized: {
-              model: { value: mockGlobalAgentConfig?.model },
-              provider: { value: mockGlobalAgentConfig?.provider },
+              ...surface.normalized,
+              model: {
+                ...(surface.normalized.model as object),
+                value: mockGlobalAgentConfig?.model,
+              },
+              provider: {
+                ...(surface.normalized.provider as object),
+                value: mockGlobalAgentConfig?.provider,
+              },
             },
           };
         }
