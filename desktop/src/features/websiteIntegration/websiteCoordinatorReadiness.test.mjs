@@ -215,3 +215,42 @@ test("a community switch after attachment prevents runtime start", async () => {
   );
   assert.equal(started, false);
 });
+
+test("a community switch while attachment is pending prevents the scoped start", async () => {
+  let activeCommunity = "community-a";
+  let signalAttachmentStarted;
+  const attachmentStarted = new Promise((resolve) => {
+    signalAttachmentStarted = resolve;
+  });
+  let releaseAttachment;
+  const pendingAttachment = new Promise((resolve) => {
+    releaseAttachment = resolve;
+  });
+  let started = false;
+
+  const readiness = ensureWebsiteCoordinatorReady(
+    baseInput({
+      getActiveCommunityId: () => activeCommunity,
+      attachAgent: async () => {
+        signalAttachmentStarted();
+        await pendingAttachment;
+        return {
+          agent: coordinator(),
+          membershipAdded: true,
+          started: false,
+        };
+      },
+      startRuntime: async () => {
+        started = true;
+        return runtime("starting");
+      },
+    }),
+  );
+
+  await attachmentStarted;
+  activeCommunity = "community-b";
+  releaseAttachment();
+
+  await assert.rejects(readiness, /community changed/);
+  assert.equal(started, false);
+});

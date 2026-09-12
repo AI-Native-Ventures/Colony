@@ -8,9 +8,25 @@ import type {
   ManagedAgentRuntimeStatus,
 } from "@/shared/api/types";
 
-export async function startManagedAgent(pubkey: string): Promise<ManagedAgent> {
+export type ManagedAgentStartScope = {
+  /** Owner captured before a Website provider deployment begins. */
+  expectedOwnerPubkey: string;
+  /** Relay captured before a Website provider deployment begins. */
+  expectedRelayUrl: string;
+};
+
+export async function startManagedAgent(
+  pubkey: string,
+  scope?: ManagedAgentStartScope,
+): Promise<ManagedAgent> {
   const response = await invokeTauri<RawManagedAgent>("start_managed_agent", {
     pubkey,
+    ...(scope === undefined
+      ? {}
+      : {
+          expectedOwnerPubkey: scope.expectedOwnerPubkey,
+          expectedRelayUrl: scope.expectedRelayUrl,
+        }),
   });
   return fromRawManagedAgent(response);
 }

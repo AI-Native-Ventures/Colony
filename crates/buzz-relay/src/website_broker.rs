@@ -1585,6 +1585,39 @@ fn map_website_error(error: buzz_core::website::WebsiteError) -> String {
     format!("{}: {error}", error.code())
 }
 
+async fn dispatch_committed(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    committed: &Committed,
+    action_kind: u32,
+) {
+    let relay_pubkey = state.relay_keypair.public_key().to_hex();
+    if let Some(action) = &committed.action {
+        dispatch_persistent_event(
+            tenant,
+            state,
+            action,
+            action_kind,
+            &action.event.pubkey.to_hex(),
+            None,
+        )
+        .await;
+    }
+    if let Some(head) = &committed.head {
+        dispatch_persistent_event(tenant, state, head, KIND_WEBSITE_HEAD, &relay_pubkey, None)
+            .await;
+    }
+    dispatch_persistent_event(
+        tenant,
+        state,
+        &committed.receipt,
+        KIND_WEBSITE_RECEIPT,
+        &relay_pubkey,
+        None,
+    )
+    .await;
+}
+
 #[cfg(test)]
 mod artifact_scope_tests {
     use super::*;
@@ -1637,37 +1670,4 @@ mod artifact_scope_tests {
         .expect("foreign URL is classified before the async tenant lookup");
         assert!(path.is_none());
     }
-}
-
-async fn dispatch_committed(
-    tenant: &TenantContext,
-    state: &Arc<AppState>,
-    committed: &Committed,
-    action_kind: u32,
-) {
-    let relay_pubkey = state.relay_keypair.public_key().to_hex();
-    if let Some(action) = &committed.action {
-        dispatch_persistent_event(
-            tenant,
-            state,
-            action,
-            action_kind,
-            &action.event.pubkey.to_hex(),
-            None,
-        )
-        .await;
-    }
-    if let Some(head) = &committed.head {
-        dispatch_persistent_event(tenant, state, head, KIND_WEBSITE_HEAD, &relay_pubkey, None)
-            .await;
-    }
-    dispatch_persistent_event(
-        tenant,
-        state,
-        &committed.receipt,
-        KIND_WEBSITE_RECEIPT,
-        &relay_pubkey,
-        None,
-    )
-    .await;
 }

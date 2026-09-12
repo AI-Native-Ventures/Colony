@@ -864,3 +864,61 @@ fn validate_managed_agent_deletion_rejects_unforced_remote_agents() {
     );
     assert!(validate_managed_agent_deletion(&record, true).is_ok());
 }
+
+#[test]
+fn scoped_provider_start_requires_the_captured_owner_and_community_record() {
+    use crate::managed_agents::BackendKind;
+
+    let owner = "a".repeat(64);
+    let scope = ManagedAgentStartScope::capture(
+        owner.clone(),
+        "wss://relay.example/".to_string(),
+        &owner,
+        "wss://relay.example",
+    )
+    .expect("the captured Website scope is valid");
+    let mut record = bare_agent_record(None, None, None);
+    record.backend = BackendKind::Provider {
+        id: "provider".to_string(),
+        config: serde_json::json!({}),
+    };
+    record.owner_pubkey = Some(owner.clone());
+    record.relay_url = "wss://relay.example/".to_string();
+
+    assert!(scope.check_record(&record, "wss://relay.example").is_ok());
+
+    record.owner_pubkey = Some("b".repeat(64));
+    assert!(scope.check_record(&record, "wss://relay.example").is_err());
+    record.owner_pubkey = Some(owner);
+    record.relay_url = "wss://other.example".to_string();
+    assert!(scope.check_record(&record, "wss://relay.example").is_err());
+
+    record.relay_url = "ws://relay.example".to_string();
+    assert!(scope.check_record(&record, "wss://relay.example").is_err());
+}
+
+#[test]
+fn scoped_provider_start_rejects_malformed_or_changed_scope() {
+    let owner = "a".repeat(64);
+    assert!(ManagedAgentStartScope::capture(
+        "A".repeat(63),
+        "wss://relay.example".to_string(),
+        &owner,
+        "wss://relay.example",
+    )
+    .is_err());
+    assert!(ManagedAgentStartScope::capture(
+        owner.clone(),
+        "wss://relay.example".to_string(),
+        &"b".repeat(64),
+        "wss://relay.example",
+    )
+    .is_err());
+    assert!(ManagedAgentStartScope::capture(
+        owner,
+        "wss://relay.example".to_string(),
+        &"a".repeat(64),
+        "wss://other.example",
+    )
+    .is_err());
+}

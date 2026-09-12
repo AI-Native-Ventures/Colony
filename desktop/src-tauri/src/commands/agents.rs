@@ -341,6 +341,10 @@ pub(super) async fn start_local_agent_with_preflight(
 ///
 /// Returns Ok(()) on success, Err(message) on failure. Either way the record is
 /// updated and saved before returning.
+// These inputs map directly to the provider boundary and its persisted record;
+// grouping them would obscure which values are signed payload data, provider
+// configuration, cached executable state, and the optional Website scope.
+#[allow(clippy::too_many_arguments)]
 async fn deploy_to_provider(
     app: &AppHandle,
     state: &AppState,
@@ -349,6 +353,7 @@ async fn deploy_to_provider(
     config: &serde_json::Value,
     agent_json: serde_json::Value,
     cached_binary_path: Option<&str>,
+    start_scope: Option<&ManagedAgentStartScope>,
 ) -> Result<(), String> {
     // Resolve via discovered candidates only. Cached path must match BOTH
     // "is a discovered candidate" AND "belongs to this provider_id". A tampered
@@ -370,33 +375,55 @@ async fn deploy_to_provider(
             .await
             .map_err(|e| format!("spawn_blocking failed: {e}"))?;
 
+    // A Website start carries the owner and relay captured before the async
+    // provider call. The provider protocol has no undeploy/compensation
+    // operation, so retain its result under the captured record before
+    // returning a late scope error to the stale caller. This leaves the
+    // backend id available for retry or owner cleanup.
+    let scope_error = start_scope.and_then(|scope| scope.check_current(state).err());
+
     // Persist result under lock.
     let _store_guard = state
         .managed_agents_store_lock
         .lock()
         .map_err(|e| e.to_string())?;
     let mut records = load_managed_agents(app)?;
+    let workspace_relay = relay_ws_url_with_override(state);
     let rec = records
         .iter_mut()
-        .find(|r| r.pubkey == pubkey)
-        .ok_or_else(|| format!("agent {pubkey} not found"))?;
+        .find(|r| {
+            r.pubkey == pubkey
+                && start_scope
+                    .map(|scope| scope.check_record(r, &workspace_relay).is_ok())
+                    .unwrap_or(true)
+        })
+        .ok_or_else(|| {
+            if start_scope.is_some() {
+                format!("agent {pubkey} is not present in the captured account and business")
+            } else {
+                format!("agent {pubkey} not found")
+            }
+        })?;
 
-    match deploy_result {
+    let persist_result = match deploy_result {
         Ok(backend_agent_id) => {
             rec.backend_agent_id = Some(backend_agent_id);
             rec.last_started_at = Some(now_iso());
             rec.updated_at = now_iso();
             rec.last_error = None;
+            Ok(())
         }
         Err(ref e) => {
             rec.last_error = Some(e.clone());
             rec.updated_at = now_iso();
-            save_managed_agents(app, &records)?;
-            return Err(e.clone());
+            Err(e.clone())
         }
-    }
+    };
     save_managed_agents(app, &records)?;
-    Ok(())
+    if let Some(scope_error) = scope_error {
+        return Err(scope_error);
+    }
+    persist_result
 }
 
 mod create;
@@ -404,16 +431,126 @@ pub(crate) use create::{
     create_managed_agent_with_creation_request, create_managed_agent_with_preparation,
 };
 
-/// Data needed for background profile reconciliation after agent start.
+/// The owner and relay a Website provider start must keep for the whole
+/// deployment boundary. Generic agent starts remain legacy and unscoped.
+struct ManagedAgentStartScope {
+    owner_pubkey: String,
+    relay_url: String,
+}
+
+impl ManagedAgentStartScope {
+    fn capture(
+        expected_owner_pubkey: String,
+        expected_relay_url: String,
+        actual_owner_pubkey: &str,
+        actual_relay_url: &str,
+    ) -> Result<Self, String> {
+        let owner_pubkey = expected_owner_pubkey.trim().to_ascii_lowercase();
+        if owner_pubkey.len() != 64
+            || !owner_pubkey
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("A signed-in account is required to start this Website teammate.".into());
+        }
+        let relay_url = buzz_core_pkg::relay::normalize_relay_url(&expected_relay_url)
+            .map_err(|_| "A business connection is required to start this Website teammate.")?;
+        let actual_relay_url = buzz_core_pkg::relay::normalize_relay_url(actual_relay_url)
+            .map_err(|_| "The account or business changed while starting this teammate.")?;
+        if owner_pubkey != actual_owner_pubkey.trim().to_ascii_lowercase()
+            || relay_url != actual_relay_url
+        {
+            return Err(
+                "The account or business changed while starting this teammate. Return to the original business and try again.".into(),
+            );
+        }
+        Ok(Self {
+            owner_pubkey,
+            relay_url,
+        })
+    }
+
+    fn check_current(&self, state: &AppState) -> Result<(), String> {
+        let actual_owner_pubkey = workspace_owner_hex(state)?;
+        let actual_relay_url = relay_ws_url_with_override(state);
+        let actual_relay_url = buzz_core_pkg::relay::normalize_relay_url(&actual_relay_url)
+            .map_err(|_| "The account or business changed while starting this teammate.")?;
+        if self.owner_pubkey != actual_owner_pubkey.trim().to_ascii_lowercase()
+            || self.relay_url != actual_relay_url
+        {
+            return Err(
+                "The account or business changed while starting this teammate. Return to the original business and try again.".into(),
+            );
+        }
+        Ok(())
+    }
+
+    fn check_record(
+        &self,
+        record: &crate::managed_agents::ManagedAgentRecord,
+        workspace_relay: &str,
+    ) -> Result<(), String> {
+        if crate::managed_agents::owner_scope::effective_owner_pubkey(record).as_deref()
+            != Some(self.owner_pubkey.as_str())
+        {
+            return Err("This Website teammate is not approved for the selected account.".into());
+        }
+        let record_relay = crate::relay::effective_agent_relay_url(&record.relay_url, workspace_relay);
+        let record_relay = buzz_core_pkg::relay::normalize_relay_url(&record_relay)
+            .map_err(|_| "This Website teammate is not assigned to the selected business.")?;
+        if record_relay != self.relay_url {
+            return Err("This Website teammate is not assigned to the selected business.".into());
+        }
+        Ok(())
+    }
+}
+
+/// Start one managed agent and reconcile its profile in the background.
+///
+/// Website provider starts may pass the owner and relay captured by setup;
+/// those optional fields are paired and checked before and after deployment.
+/// Existing generic starts omit them and retain their legacy behavior.
 #[tauri::command]
 pub async fn start_managed_agent(
     pubkey: String,
+    expected_owner_pubkey: Option<String>,
+    expected_relay_url: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ManagedAgentSummary, String> {
+    if expected_owner_pubkey.is_some() != expected_relay_url.is_some() {
+        return Err(
+            "Starting a Website teammate requires the original account and business.".into(),
+        );
+    }
+
+    // Workspace apply takes the write side before changing the active relay.
+    // Holding the read side across a scoped provider deployment keeps the
+    // captured business stable; the owner is rechecked at every async
+    // boundary because identity changes use a separate mutex.
+    let _community_guard = if expected_owner_pubkey.is_some() {
+        Some(state.community_operation_lock.read().await)
+    } else {
+        None
+    };
     // Snapshot the workspace owner pubkey for the legacy auth_tag fallback.
     // Read outside the records lock to keep lock ordering simple.
     let owner_hex = workspace_owner_hex(&state)?;
+    let start_scope = match (expected_owner_pubkey, expected_relay_url) {
+        (Some(expected_owner), Some(expected_relay)) => Some(ManagedAgentStartScope::capture(
+            expected_owner,
+            expected_relay,
+            &owner_hex,
+            &relay_ws_url_with_override(&state),
+        )?),
+        (None, None) => None,
+        _ => {
+            return Err(
+                "Starting a Website teammate requires the original account and business."
+                    .into(),
+            )
+        }
+    };
     enum StartTarget {
         Local,
         Provider {
@@ -446,6 +583,18 @@ pub async fn start_managed_agent(
         }
 
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
+        if let Some(scope) = &start_scope {
+            // The scoped path is currently used by Website's provider branch;
+            // local Website pairs use start_managed_agent_runtime, which has
+            // its own owner/relay-fenced command.
+            if record.backend == BackendKind::Local {
+                return Err(
+                    "Website local coordinators must use their pair-scoped runtime start."
+                        .into(),
+                );
+            }
+            scope.check_record(record, &relay_ws_url_with_override(&state))?;
+        }
 
         // An employee Colony provides runs the `buzz` this build ships, and a
         // brief naming a command that binary lacks is broken before it starts:
@@ -482,7 +631,16 @@ pub async fn start_managed_agent(
             StartTarget::Provider {
                 backend: record.backend.clone(),
                 cached_binary_path: record.provider_binary_path.clone(),
-                agent_json: build_deploy_payload(&app, &state, record)?,
+                agent_json: if let Some(scope) = &start_scope {
+                    build_deploy_payload_for_owner(
+                        &app,
+                        &state,
+                        record,
+                        &scope.owner_pubkey,
+                    )?
+                } else {
+                    build_deploy_payload(&app, &state, record)?
+                },
             }
         };
 
@@ -506,6 +664,7 @@ pub async fn start_managed_agent(
                 &config,
                 agent_json,
                 cached_binary_path.as_deref(),
+                start_scope.as_ref(),
             )
             .await?;
 
@@ -536,6 +695,12 @@ pub async fn start_managed_agent(
             "agent {pubkey} has unsupported backend kind: {backend:?}"
         )),
     };
+
+    if result.is_ok() {
+        if let Some(scope) = &start_scope {
+            scope.check_current(&state)?;
+        }
+    }
 
     // ── Profile reconciliation (fire-and-forget) ────────────────────────────
     // On successful start, spawn a background task to ensure the agent's kind:0
@@ -739,7 +904,7 @@ pub async fn delete_managed_agent(
 #[path = "agents_deploy.rs"]
 mod deploy;
 pub(super) mod provider_access;
-use deploy::build_deploy_payload;
+use deploy::{build_deploy_payload, build_deploy_payload_for_owner};
 #[cfg(test)]
 use deploy::{deploy_payload_json, DeployProjections};
 #[cfg(test)]

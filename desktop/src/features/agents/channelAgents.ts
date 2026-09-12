@@ -18,7 +18,10 @@ import {
   addWebsiteTeamMember,
   type WebsiteTeamMembershipScope,
 } from "@/shared/api/tauriWebsiteTeam";
-import { startManagedAgent } from "@/shared/api/tauriManagedAgents";
+import {
+  startManagedAgent,
+  type ManagedAgentStartScope,
+} from "@/shared/api/tauriManagedAgents";
 import type {
   AddChannelMembersInput,
   AddChannelMembersResult,
@@ -147,10 +150,17 @@ type AddChannelMembers = (
   input: AddChannelMembersInput,
 ) => Promise<AddChannelMembersResult>;
 
+type StartManagedAgent = (
+  pubkey: string,
+  scope?: ManagedAgentStartScope,
+) => Promise<ManagedAgent>;
+
 async function attachManagedAgentToChannelWithMembership(
   channelId: string,
   input: AttachManagedAgentToChannelInput,
   addMembers: AddChannelMembers,
+  startAgent: StartManagedAgent = startManagedAgent,
+  startScope?: ManagedAgentStartScope,
 ): Promise<AttachManagedAgentToChannelResult> {
   const role = input.role ?? "bot";
   const ensureRunning = input.ensureRunning ?? true;
@@ -182,22 +192,20 @@ async function attachManagedAgentToChannelWithMembership(
     // Running agents (local or provider) auto-discover new channel membership
     // via the harness's membership notifications — no restart needed. Only
     // not-yet-running agents need a start/deploy call before the first mention
-    // can reach them. For a local agent the status check and the start are both
-    // pair-scoped to the active community: `agent.status` reflects that
-    // community's (agent, relay) pair, and `startManagedAgent` spawns that same
-    // pair — so this ensures the pair the caller is attaching to, never
-    // another community's.
+    // can reach them. Website callers pass their captured owner/relay scope to
+    // provider starts; generic channel callers retain the existing active-
+    // community start behavior.
     const isRemote = input.agent.backend.type === "provider";
     try {
       if (isRemote && input.agent.status !== "deployed") {
-        agent = await startManagedAgent(input.agent.pubkey);
+        agent = await startAgent(input.agent.pubkey, startScope);
         started = true;
       } else if (
         !isRemote &&
         input.agent.status !== "running" &&
         input.agent.status !== "deployed"
       ) {
-        agent = await startManagedAgent(input.agent.pubkey);
+        agent = await startAgent(input.agent.pubkey, startScope);
         started = true;
       }
     } catch (error) {
@@ -262,6 +270,8 @@ export async function attachWebsiteManagedAgentToChannel(
         expectedRelayUrl: scope.expectedRelayUrl,
       });
     },
+    startManagedAgent,
+    scope,
   );
 }
 

@@ -868,6 +868,7 @@ fn block_decision_event(
     .expect("website Block decision signs")
 }
 
+#[allow(clippy::too_many_arguments)] // Test helper mirrors the signed Block action fields.
 async fn send_block_decision(
     client: &mut BuzzTestClient,
     fixture: &Fixture,

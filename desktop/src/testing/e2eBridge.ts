@@ -9823,9 +9823,39 @@ function isRelayMeshManagedAgent(agent: MockManagedAgent): boolean {
 async function handleStartManagedAgent(
   args: {
     pubkey: string;
+    expectedOwnerPubkey?: string;
+    expectedRelayUrl?: string;
   },
   config?: E2eConfig,
 ): Promise<RawManagedAgent> {
+  if (
+    args.expectedOwnerPubkey !== undefined ||
+    args.expectedRelayUrl !== undefined
+  ) {
+    if (
+      args.expectedOwnerPubkey === undefined ||
+      args.expectedRelayUrl === undefined
+    ) {
+      throw new Error(
+        "Starting a Website teammate requires the original account and business.",
+      );
+    }
+    const normalizeRelay = (value: string) =>
+      value.trim().replace(/\/+$/, "").toLowerCase();
+    const activeOwner = normalizePubkey(
+      getActiveIdentity(getConfig())?.pubkey ?? "",
+    );
+    const activeRelay = getRelayWsUrl(getConfig());
+    if (
+      normalizePubkey(args.expectedOwnerPubkey) !== activeOwner ||
+      normalizeRelay(args.expectedRelayUrl) !== normalizeRelay(activeRelay)
+    ) {
+      throw new Error(
+        "The account or business changed while starting the Website coordinator.",
+      );
+    }
+  }
+
   const startError = config?.mock?.startManagedAgentErrors?.shift();
   if (startError) {
     throw new Error(startError);

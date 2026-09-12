@@ -1,4 +1,8 @@
-import type { AcpRuntime, ManagedAgent } from "@/shared/api/types";
+import type {
+  AcpRuntime,
+  AcpRuntimeCatalogEntry,
+  ManagedAgent,
+} from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   getErrorMessage,
@@ -24,7 +28,7 @@ export type ManagedMentionReadinessInput = {
   capturedChannelId: string;
   preparedParticipantPubkeys?: readonly string[];
   preparedManagedAgents?: readonly ManagedAgent[];
-  memberPubkeys: readonly string[];
+  memberPubkeys: ReadonlySet<string>;
   getManagedAgentsByPubkey: () => Promise<Map<string, ManagedAgent>>;
   attachAgentMutation: AsyncMutation<{
     channelId: string;
@@ -35,19 +39,21 @@ export type ManagedMentionReadinessInput = {
 };
 
 export async function loadAvailableMentionRuntimes(
-  data: AcpRuntime[] | undefined,
+  data: AcpRuntimeCatalogEntry[] | undefined,
   isLoading: boolean,
-  refetch: () => Promise<{ data?: AcpRuntime[] }>,
+  refetch: () => Promise<{ data?: AcpRuntimeCatalogEntry[] }>,
 ): Promise<AcpRuntime[]> {
-  const cached = data ?? [];
+  const available = (runtimes: readonly AcpRuntimeCatalogEntry[]) =>
+    runtimes.filter(
+      (runtime): runtime is AcpRuntime =>
+        runtime.availability === "available" &&
+        runtime.command !== null &&
+        runtime.binaryPath !== null,
+    );
+  const cached = available(data ?? []);
   if (cached.length > 0 || !isLoading) return cached;
   const refetched = await refetch();
-  return (refetched.data ?? []).filter(
-    (runtime): runtime is AcpRuntime =>
-      runtime.availability === "available" &&
-      runtime.command !== null &&
-      runtime.binaryPath !== null,
-  );
+  return available(refetched.data ?? []);
 }
 
 /** Ensure known managed mentions are joined and running before send. */

@@ -504,7 +504,13 @@ pub async fn execute_agent_proposal(
             definition_id,
             agent_pubkey,
         }) => {
-            if start_managed_agent(agent_pubkey.clone(), app.clone(), state.clone())
+            if start_managed_agent(
+                agent_pubkey.clone(),
+                None,
+                None,
+                app.clone(),
+                state.clone(),
+            )
                 .await
                 .is_err()
             {

@@ -126,6 +126,21 @@ pub(super) fn build_deploy_payload(
     state: &AppState,
     record: &ManagedAgentRecord,
 ) -> Result<serde_json::Value, String> {
+    let owner_pubkey = super::workspace_owner_hex(state)?;
+    build_deploy_payload_for_owner(app, state, record, &owner_pubkey)
+}
+
+/// Build a provider payload with an owner captured before an async start.
+///
+/// Website setup uses this variant so an identity switch cannot change the
+/// owner embedded in the provider launch descriptor between scope validation
+/// and payload construction. Legacy callers retain [`build_deploy_payload`].
+pub(super) fn build_deploy_payload_for_owner(
+    app: &AppHandle,
+    state: &AppState,
+    record: &ManagedAgentRecord,
+    owner_pubkey: &str,
+) -> Result<serde_json::Value, String> {
     if let Some(err) = crate::managed_agents::spawn_key_refusal(record) {
         return Err(err);
     }
@@ -148,14 +163,13 @@ pub(super) fn build_deploy_payload(
     let descriptor =
         crate::managed_agents::resolve_effective_harness_descriptor(record, &personas, &global)
             .map_err(|error| crate::managed_agents::user_facing_harness_error(&error))?;
-    let owner_pubkey = super::workspace_owner_hex(state)?;
     let launch = build_launch_block(
         record,
         &descriptor,
         &teams,
         effective.system_prompt.value.as_deref(),
         effective.model.value.as_deref(),
-        &owner_pubkey,
+        owner_pubkey,
     );
 
     let effective_parallelism =
