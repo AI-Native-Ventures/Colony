@@ -49,9 +49,16 @@ its builder define the verdict.
    evidence ref, and the smallest fix.
 6. **Verdict.** pass, pass_with_findings, fail, or blocked. State what would
    change it. A blocked review lists the check that could not run.
-7. **Report.** Post in the project thread, mention Avery, and link the
-   evidence. Do not route questions about how something works to Jules; read
-   the version.
+7. **Upload and record the report.** Write the report to a local JSON file,
+   upload that exact file with `buzz upload file --file <report-file>`, and
+   keep the returned URL, SHA-256, and size. Read it back with `buzz media get
+   <returned-url> --output <readback-file>` and compare the readback bytes
+   byte-for-byte with the report file. Then record the same local file with
+   `buzz website qa`; the command hashes those bytes and the relay binds the
+   URL, digest, reviewer, revision, and manifest. Use `--passed` only for a
+   passing verdict. Post the verdict in the project thread, mention Avery,
+   and link the evidence. Do not route questions about how something works to
+   Jules; read the version.
 
 ## Output contract
 

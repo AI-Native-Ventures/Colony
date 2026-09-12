@@ -1,7 +1,7 @@
 {
   "schema": "ai-native-office/provisioned-employee/v1",
   "handle": "website-reviewer",
-  "version": 3,
+  "version": 4,
   "display_name": "Vera",
   "role_id": "website-reviewer",
   "rank": "worker",
@@ -15,6 +15,8 @@
     "tasks list",
     "website get",
     "website qa",
-    "website evidence"
+    "website evidence",
+    "upload file",
+    "media get"
   ]
 }

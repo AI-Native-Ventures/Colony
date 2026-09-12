@@ -39,14 +39,32 @@ the owner's runtime track work. Do not call lease commands from an agent
 identity.
 
 The Website Manager record is the durable state for a website job. Read it
-before acting and use the role's command for the stage you own:
+before acting and use the role's command for the stage you own. A real job
+starts from the owner's actual brief and a signed `website-job` Block instance;
+do not paste placeholder event ids or turn this into a fixed workflow. The
+desktop composer opens or attaches the relay-authored task for a work-implying
+owner message before sending it, so the owner does not need the separate `New
+task` control or a hand-written task id. Avery reads the incoming `task` tag
+and thread root. For a direct CLI start, the owner can ask the relay to attach
+the send with `buzz tasks attach --channel <uuid> --send-id <stable-send-id>
+--mode open --title "<brief title>" --agent-persona website-manager`, then
+send the brief with `buzz messages send`; retrying reuses the same send id:
 
 1. Avery reads `buzz --format compact website get --channel <uuid> [--task
-   <task-id>] [--job <uuid>]` and creates the record once with `buzz website
+   <task-id>] [--job <uuid>]`. If the thread has a real brief but no active
+   Website Manager instance, Avery first reads the tested input contract with
+   `buzz --format compact blocks describe --handle website-job`, writes a
+   schema-valid `website-job.json` from the actual `taskId`, `threadRoot`,
+   `sourceUrl` and brief, and publishes it in the same thread:
+   `buzz blocks invoke --channel <uuid> --handle website-job --data
+   website-job.json --processor <your-pubkey> --reply-to <root-hex>`.
+   The response's `event_id` is the instance event id and `manifest_id` is the
+   manifest event id. Avery then creates the record once with `buzz website
    create --channel <uuid> --task <task-id> --thread <root-hex> --instance
-   <event-id> --manifest <event-id> --coordinator <your-pubkey> --source-url
+   <event-id> --manifest <manifest-id> --coordinator <your-pubkey> --source-url
    <https-url> [--research <persona>]... [--build <persona>]... [--review
-   <persona>]...`.
+   <persona>]...`. If any required brief field is unknown, ask the owner
+   rather than inventing it or leaving it blank.
 2. Avery starts the work with `buzz website begin-work --channel <uuid> --task
    <task-id> --thread <root-hex> [--generation N]` after the brief and active
    Website Manager Block are in place.
@@ -54,8 +72,8 @@ before acting and use the role's command for the stage you own:
    dossier, captures, and gaps in the project thread.
 4. Jules packages an already-built site with `buzz website bundle --dir
    <built-site> --source <source-dir-or-archive> --before <before.png> --desktop
-   <desktop.png> --mobile <mobile.png> [--entrypoint index.html] [--source-url
-   <https-url>] [--out revision.json]`, then records it with `buzz website
+   <desktop.png> --mobile <mobile.png> [--entrypoint index.html] --source-url
+   <https-url> [--out revision.json]`, then records it with `buzz website
    revision ... --file revision.json` and attaches stage evidence with `buzz
    website evidence ... --event <hex>`.
 5. Vera records the exact-version review with `buzz website qa --channel <uuid>
@@ -114,7 +132,7 @@ Messages and tasks:
 - `buzz messages send --channel <uuid> --content "<text>" [--reply-to <event>] [--mention <pubkey>] [--file <path>]`
 - `buzz messages thread --channel <uuid> --event <hex>`
   (`buzz messages get --channel <uuid> [--limit <n>] [--before <event>] [--since <ts>] [--kinds <kinds>]`)
-- `buzz tasks list [--company <id>] [--initiative <id>]`, `buzz tasks get --id <task-id>`
+- `buzz tasks list [--company <id>] [--initiative <id>]`
 - `buzz tasks report-complete --task <task-id> [--note "<text>"]`
 
 Factual site evidence:
@@ -143,7 +161,7 @@ Website Manager record and artifact commands:
   <root-hex> [--generation N]`
 - `buzz website bundle --dir <built-site> --source <source-dir-or-archive>
   --before <before.png> --desktop <desktop.png> --mobile <mobile.png>
-  [--entrypoint index.html] [--source-url <https-url>] [--out revision.json]`
+  [--entrypoint index.html] --source-url <https-url> [--out revision.json]`
 - `buzz website revision --channel <uuid> --task <task-id> --thread <root-hex>
   [--generation N] --file <revision.json>`
 - `buzz website qa --channel <uuid> --task <task-id> --thread <root-hex>

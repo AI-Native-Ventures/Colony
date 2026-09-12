@@ -346,7 +346,7 @@ buzz website handover --channel <uuid> --task <id> --thread <hex> [--generation 
 ```
 buzz website bundle --dir <built-site> --source <editable-source-dir-or-archive> \
     --before <png> --desktop <png> --mobile <png> \
-    [--entrypoint index.html] [--source-url <https-url>] [--out revision.json]
+    [--entrypoint index.html] --source-url <https-url> [--out revision.json]
 ```
 
 The command packages an already-built site; it never runs a build. It walks `--dir`

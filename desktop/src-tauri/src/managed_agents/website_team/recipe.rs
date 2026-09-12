@@ -14,11 +14,11 @@
 
 /// Recipe identity exposed to the UI and recorded in the install journal.
 pub const RECIPE_ID: &str = "website-manager";
-pub const RECIPE_VERSION: &str = "0.1.2";
+pub const RECIPE_VERSION: &str = "0.1.3";
 /// The same version as a monotonic stamp for `ManagedAgentRecord`, whose
 /// `provisioned_version` is numeric because the relay stamps the employees it
 /// mints that way. Bump it with `RECIPE_VERSION`.
-pub const RECIPE_RECORD_VERSION: i64 = 3;
+pub const RECIPE_RECORD_VERSION: i64 = 4;
 
 /// Team slug, used in the per-community team id.
 pub const TEAM_SLUG: &str = "website-manager";
@@ -33,9 +33,10 @@ pub const OUTCOME_SENTENCE: &str =
 /// The example starter prompt the install dialog offers.
 pub const EXAMPLE_PROMPT: &str = "Improve my website";
 
-/// Integration boundary note shown in the install dialog. Deliberately says
-/// the command surface is not documented here yet.
-pub const INTEGRATION_NOTE: &str = "Installing the team is complete when the status shows the team, personas, and agents published. Starting a website job uses the Website Manager job surface; the exact command is documented in docs/website-manager-protocol.md.";
+/// The next owner-facing step shown after the install result. The installed
+/// Avery prompt contains the exact Blocks and Website CLI commands; this note
+/// keeps the desktop surface focused on the action the owner takes next.
+pub const INTEGRATION_NOTE: &str = "Team setup is complete when the status shows the team, personas, and agents published. Next, open the selected channel and ask Avery to improve your website.";
 
 /// Persona ids are the stable NIP-AP `d`-tag slugs. They must satisfy
 /// `^[a-z0-9][a-z0-9_-]{0,63}$` because the relay publishes them as the
@@ -80,11 +81,12 @@ pub const PROVISIONED_HANDLES: &[&str] = &[
 /// Matched exactly against the handles the relay bundles for this pack:
 /// `website-manager` (the recipe id), `website-researcher`,
 /// `website-designer-builder`, and `website-reviewer` (the role slugs). The
-/// four persona ids are accepted too as a defensive spelling of the same
-/// employees. Every entry is this pack's own constant, so no other pack can be
-/// matched by accident and no prefix guess is needed.
+/// persona ids are accepted only by [`provisioned_persona`] as legacy record
+/// identity, not as relay employee handles. Every entry is this pack's own
+/// constant, so no other pack can be matched by accident and no prefix guess
+/// is needed.
 pub fn owns_provisioned_handle(handle: &str) -> bool {
-    provisioned_persona(handle).is_some()
+    PROVISIONED_HANDLES.contains(&handle.trim())
 }
 
 /// Resolve one relay provisioned handle to the persona this recipe owns.

@@ -42,7 +42,7 @@ use super::{
 
 #[path = "install_hierarchy.rs"]
 mod hierarchy;
-use hierarchy::find_scoped_chief_of_staff;
+use hierarchy::{ensure_scoped_chief_of_staff, publish_scoped_chief_of_staff};
 
 static INSTALL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
@@ -116,8 +116,10 @@ async fn install_inner(
     // agent rows so a missing local projection is an incomplete install that
     // can be retried after automatic adoption, rather than a successful team
     // with an unassigned Avery.
-    let chief_of_staff_pubkey = find_scoped_chief_of_staff(
-        &load_managed_agents(ctx.app)?,
+    let chief_of_staff_pubkey = ensure_scoped_chief_of_staff(
+        ctx.app,
+        ctx.state,
+        ctx.scope,
         &ctx.owner,
         &ctx.canonical_relay,
     )?
@@ -125,6 +127,18 @@ async fn install_inner(
         "Your Chief of Staff is not ready yet. Finish setting up your team, then try again."
             .to_string()
     })?;
+    // The repaired owner head must be accepted by the relay before Avery is
+    // created or assigned to it. The normal Phase C flush remains responsible
+    // for the complete team, while this strict coordinate check prevents a
+    // queued or refused rank from producing an apparently-ready hierarchy.
+    publish_scoped_chief_of_staff(
+        ctx.app,
+        ctx.state,
+        ctx.scope,
+        &ctx.owner,
+        &chief_of_staff_pubkey,
+    )
+    .await?;
 
     // Phase A: seed definitions and the community team, retaining their heads
     // into the captured scope. Existing provisioned records are upgraded when

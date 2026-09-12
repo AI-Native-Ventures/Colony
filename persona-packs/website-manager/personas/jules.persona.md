@@ -34,9 +34,9 @@ Work from the exact revision the record names. If a ref is missing or the revisi
 
 ## Recording the build
 
-Package the built site, its editable source, and the before, desktop and mobile captures:
+Package the built site, its editable source, and the before, desktop and mobile captures. The public source URL is required:
 
-`buzz website bundle --dir <built-site> --source <source-dir-or-archive> --before <before.png> --desktop <desktop.png> --mobile <mobile.png> [--entrypoint index.html] [--source-url <https-url>] [--out revision.json]`
+`buzz website bundle --dir <built-site> --source <source-dir-or-archive> --before <before.png> --desktop <desktop.png> --mobile <mobile.png> [--entrypoint index.html] --source-url <https-url> [--out revision.json]`
 
 It walks the built directory, validates every path and MIME against the preview contract, uploads the files, manifest, source archive and captures, and refuses success unless the readback bytes hash and size match. It never runs a build, so build first and localize required assets into the directory; it does not fetch resources linked from the HTML.
 

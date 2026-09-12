@@ -13,6 +13,29 @@ review, and handover without a second tracker.
 - The owner's request and the project channel.
 - The pack instructions (method, handoff path, operating rules).
 
+## Starting from an owner brief
+
+The desktop composer opens or attaches the canonical task for a work-implying
+owner message before it is sent. The owner does not need the separate `New
+task` control or a hand-written task id: mention Avery in the selected channel,
+include the real brief and an `https://` source URL, and let the normal send
+flow add the relay-authored `task` tag and thread context. A greeting or
+presence check alone is conversational and does not open a job.
+
+For a direct CLI start, the owner can ask the relay to attach the send to a
+visible task before sending the brief. Reuse the same `--send-id` on a retry:
+
+```text
+buzz tasks attach --channel <uuid> --send-id <stable-send-id> --mode open \
+  --title "<brief title>" --agent-persona website-manager
+buzz messages send --channel <uuid> --content "@Avery <real brief and URL>"
+```
+
+The relay returns the canonical task id. Avery should read the incoming
+message's `task` tag and thread root first; `buzz tasks list [--company <id>]
+[--initiative <id>]` is the recovery lookup when the tag is not available.
+Never invent a task id, thread root, instance id, or manifest id.
+
 ## Hard rules
 
 - One canonical project thread. Post the brief, every handoff, and every status
@@ -41,6 +64,13 @@ review, and handover without a second tracker.
 5. **Owner review.** Run the owner-review skill. One request per version.
 6. **Handover.** Run the handover skill. Publication stays separate.
 
+Before `website create`, a real brief without an active job must have a
+validated `website-job` Block instance. Read the active manifest with
+`buzz blocks describe --handle website-job`, write its required fields from
+the actual task, thread, source URL and brief, then invoke that Block in the
+same thread. The invocation response supplies `event_id` and `manifest_id`;
+only those returned ids may be passed to `website create`.
+
 After a meaningful stage change, post one status line: stage, refs, next step.
 Never post a step that has not happened, and do not narrate routine replies.
 
@@ -65,7 +95,7 @@ then records the immutable revision:
 ```text
 buzz website bundle --dir <built-site> --source <source-dir-or-archive> \
   --before <before.png> --desktop <desktop.png> --mobile <mobile.png> \
-  [--entrypoint index.html] [--source-url <https-url>] [--out revision.json]
+  [--entrypoint index.html] --source-url <https-url> [--out revision.json]
 buzz website revision --channel <uuid> --task <task-id> --thread <root-hex> \
   [--generation N] --file revision.json
 buzz website evidence --channel <uuid> --task <task-id> --thread <root-hex> \
@@ -79,6 +109,18 @@ required rendered and functional checks passed:
 buzz website qa --channel <uuid> --task <task-id> --thread <root-hex> \
   [--generation N] --revision N [--passed] --report-url <https-url> \
   --report-file <path> [--report-event <hex>]
+```
+
+Upload the report bytes first and keep the returned content-addressed URL,
+digest, and size. Read the upload back before recording the QA action, and
+compare the downloaded bytes with the exact report file; `website qa` hashes
+that same local file and the relay verifies the URL, digest, reviewer, and
+revision binding.
+
+```text
+buzz upload file --file <qa-report.json>
+buzz media get <returned-report-url> --output <qa-report-readback.json>
+# compare <qa-report-readback.json> byte-for-byte with <qa-report.json>
 ```
 
 Avery can freeze the QA-complete revision with `buzz website ready --channel

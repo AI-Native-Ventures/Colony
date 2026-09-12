@@ -15,7 +15,7 @@ skill under `skills/`.
 
 ## Install from the desktop app
 
-In Colony, open **Agents**, choose **New team -> Website Manager**, pick the
+In Colony, open **Agents**, choose **Install Website Manager** in the **Agent teams** section, pick the
 channel this community should use, and run the install. The installer provisions
 the team for the community you are in:
 
@@ -108,7 +108,7 @@ buzz website begin-work --channel <uuid> --task <task-id> --thread <root-hex> \
   [--generation N]
 buzz website bundle --dir <built-site> --source <source-dir-or-archive> \
   --before <before.png> --desktop <desktop.png> --mobile <mobile.png> \
-  [--entrypoint index.html] [--source-url <https-url>] [--out revision.json]
+  [--entrypoint index.html] --source-url <https-url> [--out revision.json]
 buzz website revision --channel <uuid> --task <task-id> --thread <root-hex> \
   [--generation N] --file revision.json
 buzz website qa --channel <uuid> --task <task-id> --thread <root-hex> \
@@ -136,7 +136,9 @@ the JSON consumed by `buzz website revision --file`; it does not run a build or
 fetch resources linked from the HTML. Native preview rendering reads the exact
 verified manifest, so a missing render or capture capability is reported as a
 gap. Managed-agent job leases remain owner-side and are not called by these
-personas.
+personas. `--source-url <https-url>` is required; it is the public source
+reference carried into the immutable revision and must be the exact site URL
+the owner asked the team to improve.
 
 Human-readable delegation still uses mentions in the project thread plus
 `buzz tasks report-complete` for task-bound work. Mention handoff is best-effort

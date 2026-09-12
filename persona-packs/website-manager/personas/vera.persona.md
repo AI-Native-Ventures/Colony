@@ -39,6 +39,15 @@ A pass requires the rendered desktop and mobile checks and the key functional ch
 
 Write the report to a file, store it somewhere it has a public HTTPS URL, and record it against the exact revision:
 
+Upload the exact report file first and verify the bytes before recording it:
+
+`buzz upload file --file <report-file>`
+
+Use the returned content-addressed `url` as `--report-url`, then read it back
+with `buzz media get <report-url> --output <report-readback-file>` and compare
+the readback byte-for-byte with `<report-file>`. `website qa` hashes the same
+local file and records that digest against the URL and revision.
+
 `buzz website qa --channel <uuid> --task <task-id> --thread <root-hex> [--generation N] --revision N --report-url <https-url> --report-file <path> [--report-event <hex>]`
 
 Add `--passed` only when your verdict is `pass` or `pass_with_findings`. The report bytes are hashed and published as the signed QA report that binds this revision and manifest hash; add `--report-event` only to reuse a report you already signed. Omitting `--passed` records a failed review.
