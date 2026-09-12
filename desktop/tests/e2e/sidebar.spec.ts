@@ -98,7 +98,7 @@ test("sidebar rows separate hover, selected, and reorder states", async ({
   await page.mouse.move(600, 100);
   const establishedActiveBackground = await page.evaluate(() => {
     const probe = document.createElement("span");
-    probe.style.backgroundColor = "hsl(var(--sidebar-active))";
+    probe.style.backgroundColor = "hsl(var(--buzz-workspace-raised))";
     document.body.append(probe);
     const background = getComputedStyle(probe).backgroundColor;
     probe.remove();
@@ -128,7 +128,7 @@ test("sidebar rows separate hover, selected, and reorder states", async ({
 
   const establishedHoverBackground = await page.evaluate(() => {
     const probe = document.createElement("span");
-    probe.style.backgroundColor = "hsl(var(--sidebar-accent))";
+    probe.style.backgroundColor = "rgba(0, 0, 0, 0.04)";
     document.body.append(probe);
     const background = getComputedStyle(probe).backgroundColor;
     probe.remove();
@@ -140,21 +140,17 @@ test("sidebar rows separate hover, selected, and reorder states", async ({
     establishedHoverBackground,
   );
 
-  const activeForegroundTokens = await page.evaluate(() => {
-    const root = getComputedStyle(document.documentElement);
-    const sidebar = document.querySelector<HTMLElement>(
-      '[data-testid="app-sidebar"]',
-    );
-    if (!sidebar) return null;
-    return {
-      root: root.getPropertyValue("--sidebar-active-foreground").trim(),
-      sidebar: getComputedStyle(sidebar)
-        .getPropertyValue("--sidebar-active-foreground")
-        .trim(),
-    };
-  });
-  expect(activeForegroundTokens).not.toBeNull();
-  expect(activeForegroundTokens?.sidebar).toBe(activeForegroundTokens?.root);
+  const selectedForeground = await page
+    .getByTestId("app-sidebar")
+    .evaluate((sidebar) => {
+      const probe = document.createElement("span");
+      probe.style.color = "hsl(var(--sidebar-active-foreground))";
+      sidebar.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+  await expect(selectedRow).toHaveCSS("color", selectedForeground);
 
   const selectedBox = await selectedRow.boundingBox();
   expect(selectedBox).not.toBeNull();
@@ -529,7 +525,7 @@ for (const theme of ["buzz", "github-light", "catppuccin-mocha"]) {
   });
 }
 
-test("aligns the sidebar search with the channel title outside the Buzz theme", async ({
+test("keeps search in the Default sidebar after migrating a retired theme", async ({
   page,
 }) => {
   await loadTheme(page, "github-light");
@@ -538,7 +534,7 @@ test("aligns the sidebar search with the channel title outside the Buzz theme", 
   const root = page.locator("html");
   const search = page.getByTestId("open-search");
   const channelTitle = page.getByTestId("chat-title");
-  await expect(root).not.toHaveAttribute("data-buzz-sidebar", "");
+  await expect(root).toHaveAttribute("data-buzz-theme", "buzz");
   await expect(search).toBeVisible();
   await expect(channelTitle).toHaveText("general");
 
@@ -551,9 +547,16 @@ test("aligns the sidebar search with the channel title outside the Buzz theme", 
 
   if (!searchBox || !channelTitleBox) return;
 
-  const searchCenter = searchBox.y + searchBox.height / 2;
-  const channelTitleCenter = channelTitleBox.y + channelTitleBox.height / 2;
-  expect(Math.abs(searchCenter - channelTitleCenter)).toBeLessThanOrEqual(2);
+  const sidebarBox = await page.getByTestId("app-sidebar").boundingBox();
+  expect(sidebarBox).not.toBeNull();
+  if (!sidebarBox) throw new Error("Sidebar geometry missing");
+  expect(searchBox.x).toBeGreaterThanOrEqual(sidebarBox.x);
+  expect(searchBox.x + searchBox.width).toBeLessThanOrEqual(
+    sidebarBox.x + sidebarBox.width,
+  );
+  expect(channelTitleBox.x).toBeGreaterThanOrEqual(
+    sidebarBox.x + sidebarBox.width,
+  );
 });
 
 test("sidebar rail resizes without toggling the sidebar", async ({ page }) => {
