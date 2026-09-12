@@ -26,6 +26,21 @@ function invalid(code, message, details) {
   return new PreviewHostError(code, message, details);
 }
 
+const MAX_NAVIGATION_DENIALS = 32;
+
+function recordNavigationDenial(entry, url, isMainFrame, source) {
+  const sequence = (entry.navigationDenialSequence ?? 0) + 1;
+  entry.navigationDenialSequence = sequence;
+  if (!Array.isArray(entry.navigationDenials)) entry.navigationDenials = [];
+  entry.navigationDenials.push({ sequence, url, isMainFrame, source });
+  if (entry.navigationDenials.length > MAX_NAVIGATION_DENIALS) {
+    entry.navigationDenials.splice(
+      0,
+      entry.navigationDenials.length - MAX_NAVIGATION_DENIALS,
+    );
+  }
+}
+
 function windowDestroyed(window) {
   try {
     return typeof window.isDestroyed === "function" && window.isDestroyed();
@@ -95,6 +110,7 @@ export function configurePreviewWebContents(entry, onLayout, onState) {
   webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   on("will-navigate", (event, url) => {
     if (!isAllowedEntryUrl(entry, url, { isMainFrame: true })) {
+      recordNavigationDenial(entry, url, true, "will-navigate");
       event.preventDefault();
     }
   });
@@ -102,6 +118,7 @@ export function configurePreviewWebContents(entry, onLayout, onState) {
     const booleans = rest.filter((value) => typeof value === "boolean");
     const isMainFrame = booleans.length === 0 ? true : booleans.at(-1);
     if (!isAllowedEntryUrl(entry, url, { isMainFrame })) {
+      recordNavigationDenial(entry, url, isMainFrame, "will-redirect");
       event.preventDefault();
     }
   });
@@ -120,6 +137,7 @@ export function configurePreviewWebContents(entry, onLayout, onState) {
           ? event.isMainFrame
           : true;
     if (!isAllowedEntryUrl(entry, url, { isMainFrame })) {
+      recordNavigationDenial(entry, url, isMainFrame, "will-frame-navigate");
       event.preventDefault();
     }
   });
@@ -136,7 +154,22 @@ export function configurePreviewWebContents(entry, onLayout, onState) {
     onLayout();
   });
   on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
-    if (isMainFrame !== true || code === -3) return;
+    if (code === -3) return;
+    if (isMainFrame !== true) {
+      // A denied child navigation can fail after Chromium has removed the
+      // old frame. The wrapper admits one direct artifact child and the
+      // artifact CSP refuses nested frames, so every non-aborted child load
+      // failure must become a recoverable scoped failure rather than leaving
+      // a blank preview that still looks ready to the renderer.
+      entry.failed = true;
+      entry.lastError =
+        typeof description === "string" && description !== ""
+          ? description
+          : "preview_child_load_failed";
+      onLayout();
+      onState();
+      return;
+    }
     entry.failed = true;
     entry.lastError =
       typeof description === "string" ? description : "load_failed";

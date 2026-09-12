@@ -287,6 +287,8 @@ export class WebsitePreviewHost {
       cspByPath: new Map(),
       inlineScriptsTruncated: false,
       onInlineTruncated: null,
+      navigationDenials: [],
+      navigationDenialSequence: 0,
       cleanup: null,
       promise: null,
     };

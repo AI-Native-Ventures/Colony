@@ -37,7 +37,15 @@ import {
 
 import { createWebsitePreviewHost } from "./host.mjs";
 import { createProofReport } from "./proof-report.mjs";
-import { PREVIEW_SCHEME_DESCRIPTOR, parsePreviewUrl } from "./scheme.mjs";
+import {
+  navigationEvidence,
+  observeFrameNavigation,
+} from "./proof-navigation.mjs";
+import {
+  PREVIEW_SCHEME_DESCRIPTOR,
+  parsePreviewUrl,
+} from "./scheme.mjs";
+import { PREVIEW_WRAPPER_FRAME_ID } from "./serving.mjs";
 
 // Same pre-ready registration as the real app: the proof origin must be a
 // standard secure context for relative paths and navigator APIs to behave
@@ -251,6 +259,24 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function wrapperFrameMetrics(entry) {
+  return evaluate(
+    entry.webContents,
+    `(() => {
+      const frame = document.getElementById(${JSON.stringify(PREVIEW_WRAPPER_FRAME_ID)});
+      if (frame === null) return null;
+      const rect = frame.getBoundingClientRect();
+      const style = getComputedStyle(frame);
+      return {
+        width: rect.width,
+        height: rect.height,
+        styleWidth: style.width,
+        styleHeight: style.height,
+      };
+    })()`,
+  );
+}
+
 async function proveGeometry(host, window, fixture) {
   const desktop = await host.open(
     requestFor(window, fixture, "community-proof", {
@@ -259,7 +285,7 @@ async function proveGeometry(host, window, fixture) {
   );
   phase("mount");
   const desktopEntry = host.byHandle.get(desktop.handle);
-  const _wc = desktopEntry.webContents;
+  const desktopWrapper = await wrapperFrameMetrics(desktopEntry);
   const desktopFrame = await waitForArtifactFrame(desktopEntry);
   const metrics = await evaluateArtifact(
     desktopEntry,
@@ -269,8 +295,7 @@ async function proveGeometry(host, window, fixture) {
   // artifact frame retains the fitted child geometry inside its fixed CSS
   // iframe, which is the viewport this proof must measure.
   const desktopView = desktopEntry.layout.child;
-  const desktopExpectedCssHeight =
-    desktopView.height / (desktopView.width / 1440);
+  const desktopExpectedCssHeight = desktopEntry.pixelHeight;
   const desktopMeasuredDelta = Math.abs(
     metrics.height - desktopExpectedCssHeight,
   );
@@ -278,6 +303,7 @@ async function proveGeometry(host, window, fixture) {
   results.geometry.desktop = {
     ...metrics,
     childFrameUrl: desktopFrame.url,
+    wrapperFrame: desktopWrapper,
     wrapperBounds: {
       width: desktopEntry.view.getBounds().width,
       height: desktopEntry.view.getBounds().height,
@@ -289,6 +315,11 @@ async function proveGeometry(host, window, fixture) {
   check(
     "geometry.desktopCssViewport",
     metrics.width === 1440 &&
+      metrics.height === 900 &&
+      desktopWrapper?.width === 1440 &&
+      desktopWrapper?.height === 900 &&
+      desktopWrapper?.styleWidth === "1440px" &&
+      desktopWrapper?.styleHeight === "900px" &&
       desktopMeasuredDelta <= 1 &&
       desktopTolerance <= MAX_ROUNDING_TOLERANCE_CSS_PX,
     `innerWidth=${metrics.width} innerHeight=${metrics.height} expectedHeight=${desktopExpectedCssHeight}`,
@@ -366,13 +397,14 @@ async function proveGeometry(host, window, fixture) {
     }),
   );
   const mobileEntry = host.byHandle.get(mobile.handle);
+  const mobileWrapper = await wrapperFrameMetrics(mobileEntry);
   const mobileFrame = await waitForArtifactFrame(mobileEntry);
   const mobileMetrics = await evaluateArtifact(
     mobileEntry,
     "({ width: innerWidth, height: innerHeight, narrow: matchMedia('(max-width: 500px)').matches })",
   );
   const mobileView = mobileEntry.layout.child;
-  const mobileExpectedCssHeight = mobileView.height / (mobileView.width / 390);
+  const mobileExpectedCssHeight = mobileEntry.pixelHeight;
   const mobileMeasuredDelta = Math.abs(
     mobileMetrics.height - mobileExpectedCssHeight,
   );
@@ -380,6 +412,7 @@ async function proveGeometry(host, window, fixture) {
   results.geometry.mobile = {
     ...mobileMetrics,
     childFrameUrl: mobileFrame.url,
+    wrapperFrame: mobileWrapper,
     wrapperBounds: {
       width: mobileEntry.view.getBounds().width,
       height: mobileEntry.view.getBounds().height,
@@ -391,6 +424,11 @@ async function proveGeometry(host, window, fixture) {
   check(
     "geometry.mobileCssViewport",
     mobileMetrics.width === 390 &&
+      mobileMetrics.height === 844 &&
+      mobileWrapper?.width === 390 &&
+      mobileWrapper?.height === 844 &&
+      mobileWrapper?.styleWidth === "390px" &&
+      mobileWrapper?.styleHeight === "844px" &&
       mobileMeasuredDelta <= 1 &&
       mobileTolerance <= MAX_ROUNDING_TOLERANCE_CSS_PX,
     `innerWidth=${mobileMetrics.width} innerHeight=${mobileMetrics.height} expectedHeight=${mobileExpectedCssHeight}`,
@@ -408,21 +446,54 @@ async function proveGeometry(host, window, fixture) {
   return { desktop, mobile };
 }
 
-async function proveDenials(host, _fixture, handles) {
-  const entry = host.byHandle.get(handles.desktop.handle);
-  const wc = entry.webContents;
-  const beforeFrame = await waitForArtifactFrame(entry);
-  const before = beforeFrame.url;
+async function retryDesktopPreview(host, window, fixture, handles) {
+  await host.close({ window, handle: handles.desktop.handle });
+  const state = await host.open(
+    requestFor(window, fixture, "community-proof", {
+      bounds: { x: 0, y: 64, width: 900, height: 636 },
+    }),
+  );
+  handles.desktop = state;
+  return host.byHandle.get(state.handle);
+}
+
+async function proveDenials(host, window, fixture, handles) {
+  let entry = host.byHandle.get(handles.desktop.handle);
+  let wc = entry.webContents;
+  let before = (await waitForArtifactFrame(entry)).url;
+  const externalUrl = "https://example.com/";
+  const externalNavigation = observeFrameNavigation(entry, externalUrl);
   await evaluateArtifact(
     entry,
-    "location.href = 'https://example.com/'; 'set'",
+    `location.href = ${JSON.stringify(externalUrl)}; 'set'`,
   );
   await delay(400);
-  const afterExternal = await waitForArtifactFrame(entry);
+  externalNavigation.stop();
+  const externalEvidence = navigationEvidence(
+    entry,
+    before,
+    externalUrl,
+    externalNavigation,
+  );
+  let externalRecovery = { attempted: false, reopenedReady: null };
+  if (
+    !externalEvidence.ok ||
+    externalEvidence.originalFrames.length === 0 ||
+    entry.failed === true
+  ) {
+    entry = await retryDesktopPreview(host, window, fixture, handles);
+    wc = entry.webContents;
+    before = (await waitForArtifactFrame(entry)).url;
+    externalRecovery = {
+      attempted: true,
+      reopenedReady: entry.state === "ready",
+    };
+  }
   check(
     "denial.externalNavigation",
-    afterExternal.url === before,
-    `url=${afterExternal.url}`,
+    externalEvidence.ok &&
+      (!externalRecovery.attempted || externalRecovery.reopenedReady),
+    JSON.stringify({ ...externalEvidence, recovery: externalRecovery }),
   );
 
   const popup = await evaluateArtifact(
@@ -462,18 +533,45 @@ async function proveDenials(host, _fixture, handles) {
     wc,
     "document.documentElement.dataset.colonyPreviewTampered ?? null",
   );
+  const crossEntryNavigation = observeFrameNavigation(entry, otherUrl);
   await evaluateArtifact(
     entry,
     `location.href = ${JSON.stringify(otherUrl)}; 'set'`,
   );
   await delay(400);
-  const afterCrossEntry = await waitForArtifactFrame(entry);
+  crossEntryNavigation.stop();
+  const crossEntryEvidence = navigationEvidence(
+    entry,
+    before,
+    otherUrl,
+    crossEntryNavigation,
+  );
+  let crossEntryRecovery = { attempted: false, reopenedReady: null };
+  if (
+    !crossEntryEvidence.ok ||
+    crossEntryEvidence.originalFrames.length === 0 ||
+    entry.failed === true
+  ) {
+    entry = await retryDesktopPreview(host, window, fixture, handles);
+    wc = entry.webContents;
+    before = (await waitForArtifactFrame(entry)).url;
+    crossEntryRecovery = {
+      attempted: true,
+      reopenedReady: entry.state === "ready",
+    };
+  }
   check(
     "isolation.crossEntryNavigation",
-    afterCrossEntry.url === before &&
+    crossEntryEvidence.ok &&
+      (!crossEntryRecovery.attempted || crossEntryRecovery.reopenedReady) &&
       wrapperBoundary?.accessible === false &&
       wrapperMarker === null,
-    `entry A refused entry B's origin; wrapperBoundary=${JSON.stringify(wrapperBoundary)} marker=${wrapperMarker}`,
+    JSON.stringify({
+      ...crossEntryEvidence,
+      recovery: crossEntryRecovery,
+      wrapperBoundary,
+      wrapperMarker,
+    }),
   );
   const urls = [before, otherUrl].map((value) => new URL(value).hostname);
   check(
@@ -634,7 +732,7 @@ async function main() {
   });
 
   const handles = await proveGeometry(host, window, fixture);
-  await proveDenials(host, fixture, handles);
+  await proveDenials(host, window, fixture, handles);
   await proveLifecycle(window, fixture);
 
   // Clip proof is opt-in: production defaults to the safe `hide` strategy
@@ -683,6 +781,12 @@ async function main() {
       Number.isFinite(entry.tolerance) &&
       typeof entry.childFrameUrl === "string" &&
       entry.childFrameUrl.startsWith("colony-preview:") &&
+      entry.wrapperFrame !== null &&
+      typeof entry.wrapperFrame === "object" &&
+      entry.wrapperFrame.width === expectedWidth &&
+      entry.wrapperFrame.height === entry.expectedCssHeight &&
+      entry.wrapperFrame.styleWidth === `${expectedWidth}px` &&
+      entry.wrapperFrame.styleHeight === `${entry.expectedCssHeight}px` &&
       entry.wrapperBounds !== null &&
       typeof entry.wrapperBounds === "object" &&
       Number.isFinite(entry.wrapperBounds.width) &&

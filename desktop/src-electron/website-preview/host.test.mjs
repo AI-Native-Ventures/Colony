@@ -179,6 +179,51 @@ test("a stopped renderer after ready pushes a scoped failed state", async () => 
   unsubscribe();
 });
 
+test("a denied child load pushes a recoverable failed state", async () => {
+  const { host, world } = createHost({ clipStrategy: "clip" });
+  const states = [];
+  host.subscribe((state) => states.push(state));
+  const window = createWindow();
+  const state = await host.open(requestFor(window));
+  const webContents = world.views[0].webContents;
+  const target = "https://evil.example.com/";
+  const navigation = event();
+
+  webContents.emit("will-frame-navigate", navigation, {
+    url: target,
+    isMainFrame: false,
+  });
+  assert.equal(navigation.prevented, true);
+  assert.deepEqual(
+    host.byHandle.get(state.handle).navigationDenials.at(-1),
+    {
+      sequence: 1,
+      url: target,
+      isMainFrame: false,
+      source: "will-frame-navigate",
+    },
+  );
+
+  webContents.emit(
+    "did-fail-load",
+    {},
+    -30,
+    "ERR_BLOCKED_BY_CSP",
+    target,
+    false,
+  );
+  const failed = states.at(-1);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.visible, false);
+  assert.equal(failed.error, "ERR_BLOCKED_BY_CSP");
+
+  await host.close({ window, handle: state.handle });
+  const retry = await host.open(requestFor(window));
+  assert.equal(retry.status, "ready");
+  assert.notEqual(retry.handle, state.handle);
+  await host.close({ window, handle: retry.handle });
+});
+
 test("the partition protocol serves only verified listed files", async () => {
   const { host, world } = createHost();
   const window = createWindow();
