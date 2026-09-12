@@ -322,6 +322,10 @@ pub struct NewProvisionedEmployee<'a> {
     pub provisioned_handle: &'a str,
     /// The bundled version doing the seeding.
     pub provisioned_version: i32,
+    /// The agent this employee reports to (32 raw bytes), or `None` when the
+    /// role it reports to is unfilled. Seeding resolves this against the
+    /// payroll; see `core_employees::resolve_reporting_line`.
+    pub manager: Option<&'a [u8]>,
 }
 
 /// Seed one provisioned employee.
@@ -341,9 +345,9 @@ pub async fn insert_provisioned_employee(
     let now = Utc::now().timestamp();
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO employees (community_id, pubkey, sealed_key, role_id, display_name, \
-                                rank, provisioned_handle, provisioned_version, status, \
+                                rank, provisioned_handle, provisioned_version, manager, status, \
                                 created_at, updated_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$9) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'active',$10,$10) \
          ON CONFLICT DO NOTHING \
          RETURNING {EMPLOYEE_COLUMNS}"
     )))
@@ -355,6 +359,7 @@ pub async fn insert_provisioned_employee(
     .bind(employee.rank)
     .bind(employee.provisioned_handle)
     .bind(employee.provisioned_version)
+    .bind(employee.manager)
     .bind(now)
     .fetch_optional(pool)
     .await?;
@@ -391,14 +396,37 @@ pub async fn find_provisioned_employee(
 /// The key is deliberately untouched. A bumped version is the same colleague
 /// with an updated brief, so rewriting its pubkey would orphan every message
 /// it has ever sent and every job it has ever done.
+/// Borrowed input for [`update_provisioned_employee`], for the same reason
+/// [`NewProvisionedEmployee`] exists: the update would otherwise take eight
+/// positional arguments, four of them strings, which is a swap waiting to
+/// happen.
+#[derive(Debug, Clone, Copy)]
+pub struct ProvisionedEmployeeUpdate<'a> {
+    /// The bundled entry being updated.
+    pub handle: &'a str,
+    /// The name this employee goes by.
+    pub display_name: &'a str,
+    /// Stable role slug this employee fills.
+    pub role_id: &'a str,
+    /// One of `worker`, `leader`, `executive`.
+    pub rank: &'a str,
+    /// The bundled version doing the update.
+    pub version: i32,
+    /// The agent this employee reports to, or `None` to leave the stored
+    /// line alone.
+    pub manager: Option<&'a [u8]>,
+}
+
+/// Apply a newer bundled version to an already-seeded employee: its display
+/// name, role, rank, reporting line and version, never its identity.
+///
+/// The key is deliberately untouched. A bumped version is the same colleague
+/// with an updated brief, so rewriting its pubkey would orphan every message
+/// it has ever sent and every job it has ever done.
 pub async fn update_provisioned_employee(
     pool: &PgPool,
     community: CommunityId,
-    handle: &str,
-    display_name: &str,
-    role_id: &str,
-    rank: &str,
-    version: i32,
+    update: ProvisionedEmployeeUpdate<'_>,
 ) -> Result<Option<EmployeeRow>> {
     let now = Utc::now().timestamp();
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -407,17 +435,22 @@ pub async fn update_provisioned_employee(
             role_id = $4, \
             rank = $5, \
             provisioned_version = $6, \
+            -- COALESCE, not assignment: a pass that cannot resolve the role
+            -- (unfilled, or held by the wrong rank) must not erase a line an
+            -- earlier pass legitimately set.
+            manager = COALESCE($7, manager), \
             status = 'active', \
-            updated_at = $7 \
+            updated_at = $8 \
          WHERE community_id = $1 AND provisioned_handle = $2 \
          RETURNING {EMPLOYEE_COLUMNS}"
     )))
     .bind(community.as_uuid())
-    .bind(handle)
-    .bind(display_name)
-    .bind(role_id)
-    .bind(rank)
-    .bind(version)
+    .bind(update.handle)
+    .bind(update.display_name)
+    .bind(update.role_id)
+    .bind(update.rank)
+    .bind(update.version)
+    .bind(update.manager)
     .bind(now)
     .fetch_optional(pool)
     .await?;
