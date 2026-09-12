@@ -591,7 +591,7 @@ pub async fn dispatch(cmd: WebsiteCmd, client: &BuzzClient) -> Result<(), CliErr
                 &desktop,
                 &mobile,
                 &entrypoint,
-                source_url.as_deref(),
+                &source_url,
                 out.as_deref(),
             )
             .await

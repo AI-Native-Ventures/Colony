@@ -9,7 +9,7 @@
 //! exact JSON `buzz website revision --file` consumes.
 
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use buzz_core::website::{
@@ -23,8 +23,13 @@ use uuid::Uuid;
 use crate::client::BuzzClient;
 use crate::error::CliError;
 
-/// Authenticated Blossom upload cap for generic (non-image/video) bytes.
-const ARCHIVE_UPLOAD_BUDGET: u64 = 50 * 1024 * 1024;
+/// Source archives are downloaded as one handover artifact, so the archive
+/// must fit the preview host's single-artifact read cap.
+const SOURCE_ARCHIVE_MAX_BYTES: u64 = MAX_FILE_BYTES;
+const TAR_BLOCK_BYTES: u64 = 512;
+const TAR_TRAILER_BYTES: u64 = TAR_BLOCK_BYTES * 2;
+const MAX_SOURCE_FILES: usize = 4096;
+const MAX_SOURCE_DEPTH: usize = 32;
 
 /// Source directories and files that must never enter an archive.
 const FORBIDDEN_SOURCE_ENTRIES: &[&str] = &[
@@ -34,7 +39,7 @@ const FORBIDDEN_SOURCE_ENTRIES: &[&str] = &[
     ".venv",
     "target",
     "__pycache__",
-    ".DS_Store",
+    ".ds_store",
 ];
 
 /// Map one file extension to a preview-manifest MIME.
@@ -274,7 +279,16 @@ fn require_png(path: &str, label: &str) -> Result<Vec<u8>, CliError> {
 /// refused rather than silently dropped.
 fn build_source_archive(source: &Path) -> Result<Vec<u8>, CliError> {
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-    collect_source(source, source, &mut entries)?;
+    let mut source_files = 0_usize;
+    let mut archive_bytes = 0_u64;
+    collect_source(
+        source,
+        source,
+        &mut entries,
+        &mut source_files,
+        &mut archive_bytes,
+        0,
+    )?;
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     if entries.is_empty() {
         return Err(CliError::Usage(
@@ -286,12 +300,12 @@ fn build_source_archive(source: &Path) -> Result<Vec<u8>, CliError> {
         write_tar_entry(&mut archive, &path, &bytes)?;
     }
     archive.extend_from_slice(&[0_u8; 1024]);
-    if archive.len() as u64 > ARCHIVE_UPLOAD_BUDGET {
+    if archive.len() as u64 > SOURCE_ARCHIVE_MAX_BYTES {
         return Err(CliError::Usage(format!(
-            "source archive is {} bytes, which exceeds the {} byte upload budget; \
-             shrink the editable source or pre-archive it and pass --source <archive>",
+            "source archive is {} bytes, which exceeds the {} byte handover limit; \
+             shrink the editable source or pass a smaller archive",
             archive.len(),
-            ARCHIVE_UPLOAD_BUDGET
+            SOURCE_ARCHIVE_MAX_BYTES
         )));
     }
     Ok(archive)
@@ -301,16 +315,30 @@ fn collect_source(
     root: &Path,
     current: &Path,
     entries: &mut Vec<(String, Vec<u8>)>,
+    source_files: &mut usize,
+    archive_bytes: &mut u64,
+    depth: usize,
 ) -> Result<(), CliError> {
+    if depth > MAX_SOURCE_DEPTH {
+        return Err(CliError::Usage(format!(
+            "source directory nesting exceeds the {MAX_SOURCE_DEPTH}-level limit; pass a shallower editable source"
+        )));
+    }
     let list = std::fs::read_dir(current)
         .map_err(|error| CliError::Usage(format!("cannot read {}: {error}", current.display())))?;
     for entry in list {
         let entry =
             entry.map_err(|error| CliError::Usage(format!("directory read failed: {error}")))?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if FORBIDDEN_SOURCE_ENTRIES.contains(&name.as_str()) {
+        let lower_name = name.to_ascii_lowercase();
+        if FORBIDDEN_SOURCE_ENTRIES.contains(&lower_name.as_str()) {
             return Err(CliError::Usage(format!(
                 "refusing {name} in the source archive; remove caches and secrets first"
+            )));
+        }
+        if is_secret_source_entry(&name) {
+            return Err(CliError::Usage(format!(
+                "refusing secret-like source entry {name}; remove credentials/private keys or use a non-secret .example, .sample, or .template file"
             )));
         }
         let path = entry.path();
@@ -323,7 +351,14 @@ fn collect_source(
             )));
         }
         if metadata.is_dir() {
-            collect_source(root, &path, entries)?;
+            collect_source(
+                root,
+                &path,
+                entries,
+                source_files,
+                archive_bytes,
+                depth + 1,
+            )?;
             continue;
         }
         if !metadata.is_file() {
@@ -336,11 +371,146 @@ fn collect_source(
             .replace('\\', "/");
         validate_asset_path(&relative)
             .map_err(|error| CliError::Usage(format!("invalid source path {relative}: {error}")))?;
-        let bytes = std::fs::read(&path)
+        if relative.len() > 100 {
+            return Err(CliError::Usage(format!(
+                "source path is too long for the archive format: {relative}"
+            )));
+        }
+        if *source_files >= MAX_SOURCE_FILES {
+            return Err(CliError::Usage(format!(
+                "source directory contains more than {MAX_SOURCE_FILES} files; remove generated files or pass a smaller source"
+            )));
+        }
+        let metadata_len = metadata.len();
+        let predicted_entry = tar_entry_size(metadata_len).ok_or_else(|| {
+            CliError::Usage(format!("source file is too large to archive: {relative}"))
+        })?;
+        let predicted_total = archive_bytes
+            .checked_add(predicted_entry)
+            .and_then(|size| size.checked_add(TAR_TRAILER_BYTES))
+            .ok_or_else(|| CliError::Usage("source archive is too large".to_owned()))?;
+        if predicted_total > SOURCE_ARCHIVE_MAX_BYTES {
+            return Err(CliError::Usage(format!(
+                "source archive would exceed the {} byte handover limit at {relative}; remove files or pass a smaller source",
+                SOURCE_ARCHIVE_MAX_BYTES
+            )));
+        }
+        let remaining_file_budget = SOURCE_ARCHIVE_MAX_BYTES
+            .saturating_sub(*archive_bytes)
+            .saturating_sub(TAR_TRAILER_BYTES)
+            .saturating_sub(TAR_BLOCK_BYTES);
+        if metadata_len > remaining_file_budget {
+            return Err(CliError::Usage(format!(
+                "source file {relative} is too large for the {} byte handover limit",
+                SOURCE_ARCHIVE_MAX_BYTES
+            )));
+        }
+        let file = std::fs::File::open(&path)
             .map_err(|error| CliError::Usage(format!("cannot read {}: {error}", path.display())))?;
+        let mut bytes = Vec::new();
+        file.take(remaining_file_budget.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| CliError::Usage(format!("cannot read {}: {error}", path.display())))?;
+        if bytes.len() as u64 > remaining_file_budget {
+            return Err(CliError::Usage(format!(
+                "source file {relative} grew beyond the {} byte handover limit while it was being read",
+                SOURCE_ARCHIVE_MAX_BYTES
+            )));
+        }
+        let actual_entry = tar_entry_size(bytes.len() as u64)
+            .ok_or_else(|| CliError::Usage(format!("source file is too large to archive: {relative}")))?;
+        let actual_total = archive_bytes
+            .checked_add(actual_entry)
+            .and_then(|size| size.checked_add(TAR_TRAILER_BYTES))
+            .ok_or_else(|| CliError::Usage("source archive is too large".to_owned()))?;
+        if actual_total > SOURCE_ARCHIVE_MAX_BYTES {
+            return Err(CliError::Usage(format!(
+                "source archive exceeds the {} byte handover limit at {relative}; remove files or pass a smaller source",
+                SOURCE_ARCHIVE_MAX_BYTES
+            )));
+        }
+        *source_files += 1;
+        *archive_bytes = archive_bytes
+            .checked_add(actual_entry)
+            .ok_or_else(|| CliError::Usage("source archive is too large".to_owned()))?;
         entries.push((relative, bytes));
     }
     Ok(())
+}
+
+fn tar_entry_size(file_bytes: u64) -> Option<u64> {
+    let padding = (TAR_BLOCK_BYTES - file_bytes % TAR_BLOCK_BYTES) % TAR_BLOCK_BYTES;
+    TAR_BLOCK_BYTES
+        .checked_add(file_bytes)?
+        .checked_add(padding)
+}
+
+fn read_source_archive(source: &Path) -> Result<Vec<u8>, CliError> {
+    let metadata = match std::fs::metadata(source) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            return Err(CliError::Usage(format!(
+                "--source must be a file or directory: {}",
+                source.display()
+            )))
+        }
+    };
+    if metadata.is_file() {
+        if metadata.len() > SOURCE_ARCHIVE_MAX_BYTES {
+            return Err(CliError::Usage(format!(
+                "source archive is {} bytes, which exceeds the {} byte handover limit",
+                metadata.len(),
+                SOURCE_ARCHIVE_MAX_BYTES
+            )));
+        }
+        let file = std::fs::File::open(source).map_err(|error| {
+            CliError::Usage(format!("cannot read {}: {error}", source.display()))
+        })?;
+        let mut bytes = Vec::new();
+        file.take(SOURCE_ARCHIVE_MAX_BYTES.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| {
+                CliError::Usage(format!("cannot read {}: {error}", source.display()))
+            })?;
+        if bytes.len() as u64 > SOURCE_ARCHIVE_MAX_BYTES {
+            return Err(CliError::Usage(format!(
+                "source archive grew beyond the {} byte handover limit while it was being read",
+                SOURCE_ARCHIVE_MAX_BYTES
+            )));
+        }
+        return Ok(bytes);
+    }
+    if metadata.is_dir() {
+        return build_source_archive(source);
+    }
+    Err(CliError::Usage(format!(
+        "--source must be a file or directory: {}",
+        source.display()
+    )))
+}
+
+fn is_secret_source_entry(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let is_example = [".example", ".sample", ".template"]
+        .iter()
+        .any(|suffix| lower.ends_with(suffix));
+    if lower == ".env" || (lower.starts_with(".env.") && !is_example) {
+        return true;
+    }
+    let private_key_name = matches!(
+        lower.as_str(),
+        "id_rsa"
+            | "id_dsa"
+            | "id_ecdsa"
+            | "id_ed25519"
+            | "private_key"
+            | "private-key"
+            | "privatekey"
+    );
+    let private_key_extension = [".pem", ".p12", ".pfx", ".key"]
+        .iter()
+        .any(|suffix| lower.ends_with(suffix));
+    (private_key_name || private_key_extension) && !is_example
 }
 
 fn write_tar_entry(archive: &mut Vec<u8>, path: &str, bytes: &[u8]) -> Result<(), CliError> {
@@ -380,13 +550,11 @@ pub async fn run(
     desktop: &str,
     mobile: &str,
     entrypoint: &str,
-    source_url: Option<&str>,
+    source_url: &str,
     out: Option<&str>,
 ) -> Result<(), CliError> {
-    if let Some(source_url) = source_url {
-        validate_public_url(source_url)
-            .map_err(|error| CliError::Usage(format!("invalid --source-url: {error}")))?;
-    }
+    require_source_url(source_url)?;
+    let archive_bytes = read_source_archive(Path::new(source))?;
     let built = collect_built_site(Path::new(dir))?;
     if !built.iter().any(|file| file.relative == entrypoint) {
         return Err(CliError::Usage(format!(
@@ -450,25 +618,6 @@ pub async fn run(
         .map_err(|error| CliError::Usage(format!("manifest failed core validation: {error}")))?;
     let manifest_ref = upload_verified(client, &final_manifest, ".json").await?;
 
-    let archive_bytes = match std::fs::metadata(source) {
-        Ok(metadata) if metadata.is_file() => {
-            if metadata.len() > ARCHIVE_UPLOAD_BUDGET {
-                return Err(CliError::Usage(format!(
-                    "source archive is {} bytes, which exceeds the {} byte upload budget",
-                    metadata.len(),
-                    ARCHIVE_UPLOAD_BUDGET
-                )));
-            }
-            std::fs::read(source)
-                .map_err(|error| CliError::Usage(format!("cannot read {source}: {error}")))?
-        }
-        Ok(metadata) if metadata.is_dir() => build_source_archive(Path::new(source))?,
-        _ => {
-            return Err(CliError::Usage(format!(
-                "--source must be a file or directory: {source}"
-            )))
-        }
-    };
     let archive_ref = upload_verified(client, &archive_bytes, ".tar").await?;
 
     let result = serde_json::json!({
@@ -491,6 +640,17 @@ pub async fn run(
     Ok(())
 }
 
+fn require_source_url(source_url: &str) -> Result<(), CliError> {
+    if source_url.trim().is_empty() {
+        return Err(CliError::Usage(
+            "--source-url is required so the revision can be verified against the public site"
+                .to_owned(),
+        ));
+    }
+    validate_public_url(source_url)
+        .map_err(|error| CliError::Usage(format!("invalid --source-url: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +661,41 @@ mod tests {
             std::fs::create_dir_all(parent).expect("create parent");
         }
         std::fs::write(path, bytes).expect("write file");
+    }
+
+    #[test]
+    fn source_url_is_required_for_revision_bundle() {
+        let error = require_source_url(" ").expect_err("missing source URL must fail");
+        assert!(error.to_string().contains("--source-url is required"));
+        require_source_url("https://cdn.colony.test/site/index.html").expect("valid source URL");
+    }
+
+    #[test]
+    fn cli_bundle_requires_source_url() {
+        use clap::Parser;
+
+        let args = [
+            "buzz",
+            "website",
+            "bundle",
+            "--dir",
+            "site",
+            "--source",
+            "source",
+            "--before",
+            "before.png",
+            "--desktop",
+            "desktop.png",
+            "--mobile",
+            "mobile.png",
+        ];
+        assert!(crate::Cli::try_parse_from(args).is_err());
+        assert!(crate::Cli::try_parse_from([
+            args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+            args[9], args[10], args[11], args[12], "--source-url",
+            "https://cdn.colony.test/site/index.html",
+        ])
+        .is_ok());
     }
 
     #[test]
@@ -589,6 +784,27 @@ mod tests {
         write(&cache.path().join("node_modules/pkg/index.js"), b"1");
         let error = build_source_archive(cache.path()).expect_err("cache must fail");
         assert!(error.to_string().contains("node_modules"));
+    }
+
+    #[test]
+    fn source_archive_rejects_secret_variants_but_keeps_examples() {
+        let temp = TempDir::new().expect("tempdir");
+        write(&temp.path().join(".env.example"), b"PUBLIC_SITE=true");
+        write(&temp.path().join("docs/config.sample"), b"PUBLIC_SITE=true");
+        write(&temp.path().join(".env.production"), b"PROVIDER_KEY=secret");
+        let error = build_source_archive(temp.path()).expect_err("environment variant must fail");
+        assert!(error.to_string().contains(".env.production"), "{error}");
+
+        let safe = TempDir::new().expect("tempdir");
+        write(&safe.path().join(".env.example"), b"PUBLIC_SITE=true");
+        write(&safe.path().join("docs/config.sample"), b"PUBLIC_SITE=true");
+        write(&safe.path().join("README.md"), b"public source");
+        assert!(build_source_archive(safe.path()).is_ok());
+
+        let key = TempDir::new().expect("tempdir");
+        write(&key.path().join("id_ed25519"), b"private key");
+        let error = build_source_archive(key.path()).expect_err("private key must fail");
+        assert!(error.to_string().contains("id_ed25519"), "{error}");
     }
 
     #[test]

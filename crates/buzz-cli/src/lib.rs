@@ -2059,9 +2059,9 @@ pub enum WebsiteCmd {
         /// Manifest entrypoint path
         #[arg(long, default_value = "index.html")]
         entrypoint: String,
-        /// Public HTTPS source reference passthrough
+        /// Public HTTPS source reference passthrough (required by the revision contract)
         #[arg(long = "source-url")]
-        source_url: Option<String>,
+        source_url: String,
         /// Write the JSON payload to this path as well as stdout
         #[arg(long)]
         out: Option<String>,
