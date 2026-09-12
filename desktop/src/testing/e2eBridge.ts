@@ -70,6 +70,7 @@ import {
   KIND_AGENT_OBSERVER_FRAME,
   KIND_BLOCK_ACTION,
   KIND_BLOCK_RECEIPT,
+  KIND_WEBSITE_ACTION,
   KIND_CHANNEL_THREAD_SUMMARY,
   KIND_CHANNEL_WINDOW_BOUNDS,
   KIND_DM_VISIBILITY,
@@ -300,6 +301,8 @@ type E2eConfig = {
     >;
     /** Reject successive kind-40010 publications, then resume. */
     blockActionPublishErrors?: string[];
+    /** Reject successive kind-40027 website BeginWork publications, then resume. */
+    websiteActionPublishErrors?: string[];
     /** Delay kind-40010 relay acknowledgements after live delivery. */
     blockActionPublishDelayMs?: number;
     /** Outcomes for successive trusted local Agent Proposal executions. */
@@ -11468,6 +11471,14 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["OK", event.id, false, blockActionError]);
       return;
     }
+    const websiteActionError =
+      event.kind === KIND_WEBSITE_ACTION
+        ? getConfig()?.mock?.websiteActionPublishErrors?.shift()
+        : null;
+    if (websiteActionError) {
+      sendWsText(socket.handler, ["OK", event.id, false, websiteActionError]);
+      return;
+    }
 
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
@@ -12708,12 +12719,13 @@ export function maybeInstallE2eTauriMocks() {
         const isLocked =
           !mockIdentityLockedCleared &&
           activeConfig?.mock?.identityLocked === true;
-        if (identity) {
+        const activeIdentity = getActiveIdentity(activeConfig);
+        if (activeIdentity) {
           return {
-            pubkey: identity.pubkey,
-            display_name: identity.username,
-            lost: false,
-            locked: false,
+            pubkey: activeIdentity.pubkey,
+            display_name: activeIdentity.username,
+            lost: isLost,
+            locked: isLocked,
           };
         }
 
@@ -14851,16 +14863,17 @@ export function maybeInstallE2eTauriMocks() {
           signedAction: JSON.stringify(action),
         };
       }
-      case "sign_event":
+      case "sign_event": {
         window.__BUZZ_E2E_SIGNED_EVENTS__?.push({
           content: (payload as { content: string }).content,
           createdAt: (payload as { createdAt?: number }).createdAt,
           kind: (payload as { kind: number }).kind,
           tags: (payload as { tags: string[][] }).tags,
         });
-        if (identity) {
+        const signingIdentity = getActiveIdentity(activeConfig);
+        if (signingIdentity) {
           return JSON.stringify(
-            await signWithIdentity(identity, {
+            await signWithIdentity(signingIdentity, {
               kind: (payload as { kind: number }).kind,
               content: (payload as { content: string }).content,
               createdAt: (payload as { createdAt?: number }).createdAt,
@@ -14878,6 +14891,7 @@ export function maybeInstallE2eTauriMocks() {
             (payload as { createdAt?: number }).createdAt,
           ),
         );
+      }
       case "nip44_encrypt_to_self":
         return (payload as { plaintext: string }).plaintext;
       case "nip44_decrypt_from_self":

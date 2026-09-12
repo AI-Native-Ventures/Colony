@@ -11,8 +11,11 @@
 
 import * as React from "react";
 
-import { useCommunities } from "@/features/communities/useCommunities";
+import { attachManagedAgentToChannel } from "@/features/agents/channelAgents";
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { useAgentRoleTitles } from "@/features/agents/useKnownAgentPubkeys";
+import { loadActiveCommunityId } from "@/features/communities/communityStorage";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -23,6 +26,7 @@ import { WebsiteJobCard } from "@/features/website/JobCard";
 import { WebsiteReview } from "@/features/website/WebsiteReview";
 import { WebsiteWorking } from "@/features/website/WebsiteWorking";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { getIdentity } from "@/shared/api/tauriIdentity";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import type {
   WebsiteBriefView,
@@ -56,6 +60,7 @@ import {
 import { useWebsiteStageTeam } from "./websiteStageTeam";
 import type { WebsiteHead } from "./websiteHeads";
 import { dispatchWebsiteStart } from "./websiteStartDispatch";
+import { ensureWebsiteCoordinatorReady } from "./websiteCoordinatorReadiness";
 import { submitWebsiteBeginWork } from "./websiteTransport";
 import { WebsiteThreadBody } from "./WebsiteThreadBody";
 
@@ -66,6 +71,7 @@ function useWebsiteAttachmentContext(input: {
 }) {
   const { activeCommunity } = useCommunities();
   const communityId = activeCommunity?.id ?? null;
+  const relayUrl = activeCommunity?.relayUrl ?? null;
   const relaySelf = useRelaySelfQuery(Boolean(communityId)).data ?? null;
   const heads = useWebsiteHeads({
     communityId,
@@ -84,21 +90,46 @@ function useWebsiteAttachmentContext(input: {
       ) ?? null
     );
   }, [heads, input.channelId, input.message.id, surface]);
-  return { communityId, head, surface };
+  return { communityId, head, relayUrl, surface };
 }
 
 function WebsiteRootAttachment({
   communityId,
+  relayUrl,
   head,
   profiles: profilesProp,
   currentPubkey,
 }: {
   communityId: string;
+  relayUrl: string;
   head: WebsiteHead;
   profiles: UserProfileLookup | undefined;
   currentPubkey?: string;
 }) {
   const record = head.record;
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const ensureCoordinatorReady = React.useCallback(
+    () =>
+      ensureWebsiteCoordinatorReady({
+        attachAgent: attachManagedAgentToChannel,
+        communityId,
+        getActiveCommunityId: loadActiveCommunityId,
+        channelId: head.channelId,
+        coordinatorPubkey: head.coordinatorPubkey,
+        ownerPubkey: head.ownerPubkey,
+        relayUrl,
+        loadManagedAgents: async () =>
+          (await managedAgentsQuery.refetch()).data ?? [],
+      }),
+    [
+      communityId,
+      head.channelId,
+      head.coordinatorPubkey,
+      head.ownerPubkey,
+      managedAgentsQuery.refetch,
+      relayUrl,
+    ],
+  );
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const getClipBounds = useAttachmentClipBounds(rootRef);
   const progress = React.useMemo(() => deriveWebsiteProgress(record), [record]);
@@ -176,9 +207,25 @@ function WebsiteRootAttachment({
           taskId: head.taskId,
           channel: head.channelId,
         },
-        () => submitWebsiteBeginWork(communityId, head),
+        async () => {
+          await ensureCoordinatorReady();
+          const identity = await getIdentity();
+          if (
+            loadActiveCommunityId() !== communityId ||
+            normalizePubkey(identity.pubkey) !==
+              normalizePubkey(head.ownerPubkey) ||
+            identity.locked ||
+            identity.lost ||
+            identity.resetFailed
+          ) {
+            throw new Error(
+              "The account or community changed while preparing this website start. Refresh and try again.",
+            );
+          }
+          await submitWebsiteBeginWork(communityId, head);
+        },
       ),
-    [communityId, head],
+    [communityId, ensureCoordinatorReady, head],
   );
   const showApprovalSummary =
     record.status === "approved" || record.status === "handedOver";
@@ -261,7 +308,7 @@ function WebsiteAttachmentInner({
   message,
   profiles,
 }: WebsiteMessageAttachmentProps) {
-  const { communityId, head, surface } = useWebsiteAttachmentContext({
+  const { communityId, head, relayUrl, surface } = useWebsiteAttachmentContext({
     channelId: channelId ?? null,
     layoutVariant,
     message,
@@ -271,7 +318,7 @@ function WebsiteAttachmentInner({
     () => isWebsiteCompositeRendered(message.id),
     () => false,
   );
-  if (!communityId || !head) return null;
+  if (!communityId || !head || !relayUrl) return null;
   if (surface === "channel") {
     return (
       <WebsiteRootAttachment
@@ -279,6 +326,7 @@ function WebsiteAttachmentInner({
         currentPubkey={currentPubkey}
         head={head}
         profiles={profiles}
+        relayUrl={relayUrl}
       />
     );
   }

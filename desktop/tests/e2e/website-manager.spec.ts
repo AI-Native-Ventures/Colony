@@ -195,6 +195,12 @@ type JobDescriptor = {
   head: RelayEvent;
 };
 
+type SignedWebsiteEvent = {
+  content: string;
+  kind: number;
+  tags: string[][];
+};
+
 type ThreadReply = {
   pubkey: string;
   content: string;
@@ -871,6 +877,48 @@ async function seedJob(
   };
 }
 
+async function readSignedWebsiteStarts(
+  page: Page,
+  taskId: string,
+): Promise<SignedWebsiteEvent[]> {
+  return page.evaluate((input) => {
+    const events =
+      (
+        window as Window & {
+          __BUZZ_E2E_SIGNED_EVENTS__?: SignedWebsiteEvent[];
+        }
+      ).__BUZZ_E2E_SIGNED_EVENTS__ ?? [];
+    return events.filter(
+      (event) =>
+        event.kind === input.kind &&
+        event.tags.some(
+          (tag) => tag[0] === "task" && tag[1] === input.taskId,
+        ),
+    );
+  }, { kind: 40027, taskId });
+}
+
+async function readAcceptedWebsiteStarts(
+  page: Page,
+  taskId: string,
+): Promise<RelayEvent[]> {
+  return page.evaluate((input) => {
+    const events =
+      (
+        window as Window & {
+          __BUZZ_E2E_PUBLISHED_EVENTS__?: RelayEvent[];
+        }
+      ).__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [];
+    return events.filter(
+      (event) =>
+        event.kind === input.kind &&
+        event.tags.some(
+          (tag) => tag[0] === "task" && tag[1] === input.taskId,
+        ),
+    );
+  }, { kind: 40027, taskId });
+}
+
 /**
  * Open the right thread through the app's own reply affordance. The hash-only
  * route did not open the panel for these mock-seeded roots; the summary click
@@ -1015,6 +1063,56 @@ test("mocked Brief state renders the brief and start action", async ({
     rootAttachment.getByRole("button", { name: "Start redesign" }),
   ).toBeVisible();
   await captureBothWidths(page, "brief", [rootAttachment, threadAttachment]);
+});
+
+test("Brief Start recovers from a BeginWork rejection and retries the same job", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
+  await installFixtureLoader(page);
+  await installMockBridge(page, {
+    activeIdentityInDefaultChannels: true,
+    relaySelf: OWNER_PUBKEY,
+    ...mockWebsiteTeam(),
+    websiteActionPublishErrors: ["mock BeginWork rejection"],
+  });
+  await openChannel(page, CHANNEL);
+  const { job } = await seedJob(page, "brief");
+  const rootAttachment = page.getByTestId("website-root-attachment").first();
+  await expect(rootAttachment).toBeVisible();
+
+  const startButton = rootAttachment.getByRole("button", {
+    name: "Start redesign",
+  });
+  await startButton.click();
+
+  await expect
+    .poll(() => readSignedWebsiteStarts(page, job.taskId), {
+      timeout: 20_000,
+      message: "Brief Start must sign one BeginWork action before showing its error.",
+    })
+    .toHaveLength(1);
+  await expect(rootAttachment.getByRole("alert")).toContainText(
+    "mock BeginWork rejection",
+  );
+  await expect(
+    rootAttachment.getByText("Waiting for the job record to confirm the start."),
+  ).toHaveCount(0);
+  await expect(startButton).toBeEnabled();
+
+  await rootAttachment.getByRole("button", { name: "Try again" }).click();
+  await expect
+    .poll(() => readSignedWebsiteStarts(page, job.taskId), { timeout: 20_000 })
+    .toHaveLength(2);
+  await expect(
+    rootAttachment.getByText("Waiting for the job record to confirm the start."),
+  ).toBeVisible();
+  await expect(rootAttachment.getByRole("alert")).toHaveCount(0);
+
+  const signedStarts = await readSignedWebsiteStarts(page, job.taskId);
+  expect(signedStarts[1]?.content).toBe(signedStarts[0]?.content);
+  expect(signedStarts[1]?.tags).toEqual(signedStarts[0]?.tags);
+  expect(await readAcceptedWebsiteStarts(page, job.taskId)).toHaveLength(1);
 });
 
 test("mocked Working state shows stages and earlier-version inspection", async ({

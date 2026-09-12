@@ -231,6 +231,8 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   >;
   /** Reject successive kind-40010 publications, then resume. */
   blockActionPublishErrors?: string[];
+  /** Reject successive kind-40027 website BeginWork publications, then resume. */
+  websiteActionPublishErrors?: string[];
   /** Delay kind-40010 relay acknowledgements after live delivery. */
   blockActionPublishDelayMs?: number;
   /** Outcomes for successive trusted local Agent Proposal executions. */

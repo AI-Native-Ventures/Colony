@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use super::agent_env::{build_buzz_agent_provider_defaults, idle_pool_sleep_env};
 
@@ -9,7 +9,7 @@ use crate::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
         spawn_key_refusal, CredentialMode, KnownAcpRuntime, ManagedAgentPairRuntime,
-        ManagedAgentProcess, ManagedAgentRecord, ManagedAgentRuntimeKey, ManagedAgentSummary,
+        ManagedAgentRecord, ManagedAgentRuntimeKey, ManagedAgentSummary,
     },
     util::now_iso,
 };
