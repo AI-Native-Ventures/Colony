@@ -96,8 +96,8 @@ fn validate_scope_pair(
     }
     let expected_relay_url = buzz_core_pkg::relay::normalize_relay_url(expected_relay_url)
         .map_err(|_| "A business connection is required to add Website teammates.")?;
-    let actual_relay_url = buzz_core_pkg::relay::normalize_relay_url(actual_relay_url)
-        .map_err(|_| SCOPE_ERROR)?;
+    let actual_relay_url =
+        buzz_core_pkg::relay::normalize_relay_url(actual_relay_url).map_err(|_| SCOPE_ERROR)?;
     if expected_owner_pubkey != actual_owner_pubkey.trim().to_ascii_lowercase()
         || expected_relay_url != actual_relay_url
     {
@@ -138,11 +138,8 @@ pub async fn add_website_team_member(
     // takes the write side before replacing the active relay, so this keeps
     // every member event in one captured community while HTTP is in flight.
     let _community_guard = state.community_operation_lock.read().await;
-    let scope = WebsiteMembershipScope::capture(
-        &state,
-        &expected_owner_pubkey,
-        &expected_relay_url,
-    )?;
+    let scope =
+        WebsiteMembershipScope::capture(&state, &expected_owner_pubkey, &expected_relay_url)?;
     scope.check_current(&state)?;
 
     let mut added = Vec::new();
@@ -155,14 +152,7 @@ pub async fn add_website_team_member(
         }
     };
 
-    match submit_event_at_with_keys(
-        builder,
-        &state,
-        &scope.api_base_url,
-        &scope.signer,
-    )
-    .await
-    {
+    match submit_event_at_with_keys(builder, &state, &scope.api_base_url, &scope.signer).await {
         Ok(_) => added.push(pubkey),
         Err(error) => errors.push(serde_json::json!({"pubkey": pubkey, "error": error})),
     }
@@ -196,8 +186,18 @@ mod tests {
         let owner = owner();
         let other_owner = "b".repeat(64);
         let cases: [(&str, &str, &str, &str); 4] = [
-            ("short", "wss://relay.example", owner.as_str(), "wss://relay.example"),
-            (owner.as_str(), "not a relay", owner.as_str(), "wss://relay.example"),
+            (
+                "short",
+                "wss://relay.example",
+                owner.as_str(),
+                "wss://relay.example",
+            ),
+            (
+                owner.as_str(),
+                "not a relay",
+                owner.as_str(),
+                "wss://relay.example",
+            ),
             (
                 owner.as_str(),
                 "wss://relay.example",
@@ -212,13 +212,9 @@ mod tests {
             ),
         ];
         for (expected_owner, expected_relay, actual_owner, actual_relay) in cases {
-            let error = validate_scope_pair(
-                expected_owner,
-                expected_relay,
-                actual_owner,
-                actual_relay,
-            )
-            .expect_err("crossed or malformed scope must fail");
+            let error =
+                validate_scope_pair(expected_owner, expected_relay, actual_owner, actual_relay)
+                    .expect_err("crossed or malformed scope must fail");
             assert!(!error.is_empty());
         }
     }

@@ -36,12 +36,9 @@ import {
   buildOutgoingMessage,
   type ImetaMedia,
 } from "@/features/messages/lib/imetaMediaMarkdown";
-import {
-  adoptProvisionedEmployees,
-  invokeTauri,
-} from "@/shared/api/tauri";
+import { adoptProvisionedEmployees, invokeTauri } from "@/shared/api/tauri";
 import { useComposerNewTask } from "./useComposerNewTask";
-import type { AcpRuntime, ManagedAgent } from "@/shared/api/types";
+import type { ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import {
   attachOutgoingWorkContext,
@@ -62,9 +59,7 @@ import {
   loadAvailableMentionRuntimes,
   loadManagedAgentsByPubkey,
 } from "./managedMentionReadiness";
-import {
-  reconcileProvisionedMentionedAgents as reconcileProvisionedMentionedAgentsForSend,
-} from "./provisionedMentionReconciliation";
+import { reconcileProvisionedMentionedAgents as reconcileProvisionedMentionedAgentsForSend } from "./provisionedMentionReconciliation";
 
 export function useMentionSendFlow({
   channelId,
@@ -184,7 +179,6 @@ export function useMentionSendFlow({
       });
     },
     [
-      communityIdRef,
       communityOwnersQuery.data,
       communityOwnersQuery.refetch,
       employeeHeadsQuery.data,
@@ -403,12 +397,11 @@ export function useMentionSendFlow({
         }
         const normalizedMentionPubkeys =
           uniqueNormalizedPubkeys(mentionPubkeys);
-        const provisionedAgentError =
-          await reconcileProvisionedMentionedAgents(
-            normalizedMentionPubkeys,
-            managedAgentsByPubkey,
-            draft.preparedManagedAgents ?? [],
-          );
+        const provisionedAgentError = await reconcileProvisionedMentionedAgents(
+          normalizedMentionPubkeys,
+          managedAgentsByPubkey,
+          draft.preparedManagedAgents ?? [],
+        );
         if (!isMountedRef.current) {
           persistPreflightDraft();
           return;

@@ -1,8 +1,5 @@
 import { invokeTauri } from "@/shared/api/tauri";
-import type {
-  AddChannelMembersResult,
-  ChannelRole,
-} from "@/shared/api/types";
+import type { AddChannelMembersResult, ChannelRole } from "@/shared/api/types";
 
 /**
  * Safe recipe metadata and install result for the bundled Website Manager

@@ -26,9 +26,7 @@ import {
   WebsiteTeamInstallDialog,
   type WebsiteTeamOpenChannelRequest,
 } from "@/features/websiteTeam";
-import {
-  loadActiveCommunityId,
-} from "@/features/communities/communityStorage";
+import { loadActiveCommunityId } from "@/features/communities/communityStorage";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
   loadDraftEntry,
@@ -122,7 +120,7 @@ export function AgentsView() {
         mentionRefs,
       );
       const savedDraft = loadDraftEntry(request.channelId);
-      if (!savedDraft || !savedDraft.content.includes(request.draftContent)) {
+      if (!savedDraft?.content.includes(request.draftContent)) {
         return false;
       }
       setIsWebsiteTeamInstallOpen(false);

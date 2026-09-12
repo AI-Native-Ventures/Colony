@@ -57,9 +57,7 @@ export function useWebsiteTeamInstallStatusQuery(enabled: boolean) {
     queryKey: ["website-team-install-status", communityId],
     queryFn: getWebsiteTeamInstallStatus,
     enabled:
-      enabled &&
-      communityId !== "" &&
-      loadActiveCommunityId() === communityId,
+      enabled && communityId !== "" && loadActiveCommunityId() === communityId,
     retry: false,
   });
 }
@@ -148,10 +146,7 @@ export function useWebsiteTeamInstallMutation() {
       // storage is empty. Setup must fail closed in that state instead of
       // attaching the result to a captured fallback after logout or a switch.
       const expectedCommunityId = loadActiveCommunityId();
-      if (
-        !expectedCommunityId ||
-        activeCommunity?.id !== expectedCommunityId
-      ) {
+      if (!expectedCommunityId || activeCommunity?.id !== expectedCommunityId) {
         throw new Error(
           "Choose an active community before installing the Website Manager team.",
         );

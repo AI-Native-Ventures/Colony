@@ -16,9 +16,7 @@ export async function loadManagedAgentsByPubkey(
   refetch: () => Promise<{ data?: ManagedAgent[] }>,
 ): Promise<Map<string, ManagedAgent>> {
   const agents = data ?? (await refetch()).data ?? [];
-  return new Map(
-    agents.map((agent) => [normalizePubkey(agent.pubkey), agent]),
-  );
+  return new Map(agents.map((agent) => [normalizePubkey(agent.pubkey), agent]));
 }
 
 export type ManagedMentionReadinessInput = {

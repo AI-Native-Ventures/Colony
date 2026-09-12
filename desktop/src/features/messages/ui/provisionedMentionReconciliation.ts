@@ -111,8 +111,9 @@ export async function reconcileProvisionedMentionedAgents({
   adopt = adoptProvisionedEmployees,
   scopeStillCurrent,
 }: ProvisionedMentionReconciliationInput): Promise<string | null> {
-  const missingMentionedPubkeys = [...new Set(mentionPubkeys.map(normalizePubkey))]
-    .filter((pubkey) => !managedAgentsByPubkey.has(pubkey));
+  const missingMentionedPubkeys = [
+    ...new Set(mentionPubkeys.map(normalizePubkey)),
+  ].filter((pubkey) => !managedAgentsByPubkey.has(pubkey));
   if (missingMentionedPubkeys.length === 0) return null;
   if (!scopeStillCurrent()) {
     return "The community changed while preparing the mentioned teammate. Refresh and try again.";

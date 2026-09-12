@@ -1354,9 +1354,7 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         .expect("duplicate prefix was asserted above");
     let replay_message: serde_json::Value =
         serde_json::from_str(replay_body).unwrap_or_else(|error| {
-            panic!(
-                "replay result JSON after duplicate prefix: {error}; body={replay_body}"
-            )
+            panic!("replay result JSON after duplicate prefix: {error}; body={replay_body}")
         });
     assert_eq!(
         replay_message["action_event_id"].as_str(),

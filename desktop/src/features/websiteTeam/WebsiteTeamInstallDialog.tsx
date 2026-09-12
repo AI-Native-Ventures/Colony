@@ -41,7 +41,7 @@ type WebsiteTeamInstallDialogProps = {
   onOpenChange: (open: boolean) => void;
   onOpenChannel?: (
     request: WebsiteTeamOpenChannelRequest,
-  ) => void | Promise<boolean>;
+  ) => undefined | Promise<boolean>;
   onOpenCompanySettings?: () => void;
   onInstalled?: (
     result: InstallWebsiteTeamResult,

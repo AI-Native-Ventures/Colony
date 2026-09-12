@@ -14,14 +14,17 @@ test("cached provisioned identity is adopted when partial metadata refresh fails
     preparedManagedAgents: [],
     getCachedMetadata: () => ({
       employeeHeads: new Map([
-        [AVERY, {
-          pubkey: AVERY,
-          role: "website-manager",
-          name: "Avery",
-          rank: "executive",
-          manager: null,
-          provisioned: "website-manager",
-        }],
+        [
+          AVERY,
+          {
+            pubkey: AVERY,
+            role: "website-manager",
+            name: "Avery",
+            rank: "executive",
+            manager: null,
+            provisioned: "website-manager",
+          },
+        ],
       ]),
       managedHeads: [],
       ownerPubkeys: new Set(),
@@ -29,12 +32,17 @@ test("cached provisioned identity is adopted when partial metadata refresh fails
     refreshMetadata: async () => {
       throw new Error("the other role heads are temporarily unavailable");
     },
-    refreshManagedAgents: async () => [
-      { pubkey: AVERY, name: "Avery" },
-    ],
+    refreshManagedAgents: async () => [{ pubkey: AVERY, name: "Avery" }],
     adopt: async () => {
       adoptCalls += 1;
-      return [{ outcome: "adopted", handle: "website-manager", name: "Avery", pubkey: AVERY }];
+      return [
+        {
+          outcome: "adopted",
+          handle: "website-manager",
+          name: "Avery",
+          pubkey: AVERY,
+        },
+      ];
     },
     scopeStillCurrent: () => true,
   });

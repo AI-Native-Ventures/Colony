@@ -1067,9 +1067,7 @@ test("Agents exposes the Website Manager setup entry point", async ({
   await expect(dialog.getByLabel("What should they do?")).toHaveValue(
     "Improve my website",
   );
-  await expect(
-    dialog.getByTestId("website-team-install-submit"),
-  ).toBeEnabled();
+  await expect(dialog.getByTestId("website-team-install-submit")).toBeEnabled();
 });
 
 test("mocked Brief state renders the brief and start action", async ({

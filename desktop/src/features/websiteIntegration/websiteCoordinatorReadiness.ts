@@ -32,10 +32,7 @@ const READY_TIMEOUT =
 export class WebsiteCoordinatorReadinessError extends Error {
   readonly attachment: AttachManagedAgentToChannelResult;
 
-  constructor(
-    message: string,
-    attachment: AttachManagedAgentToChannelResult,
-  ) {
+  constructor(message: string, attachment: AttachManagedAgentToChannelResult) {
     super(message);
     this.name = "WebsiteCoordinatorReadinessError";
     this.attachment = attachment;

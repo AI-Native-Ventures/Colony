@@ -41,7 +41,11 @@ export type InstallAssessment = {
 };
 
 const EXPECTED_WEBSITE_PERSONAS = [
-  { slug: "avery", personaId: "website-manager-avery", roleId: "website-manager" },
+  {
+    slug: "avery",
+    personaId: "website-manager-avery",
+    roleId: "website-manager",
+  },
   {
     slug: "ren",
     personaId: "website-manager-ren",
@@ -98,9 +102,10 @@ function publicationStatuses(result: InstallWebsiteTeamResult): string[] {
 function websiteInstallIntegrityError(
   result: InstallWebsiteTeamResult,
 ): string | null {
-  const expectedById = new Map<string, (typeof EXPECTED_WEBSITE_PERSONAS)[number]>(
-    EXPECTED_WEBSITE_PERSONAS.map((persona) => [persona.personaId, persona]),
-  );
+  const expectedById = new Map<
+    string,
+    (typeof EXPECTED_WEBSITE_PERSONAS)[number]
+  >(EXPECTED_WEBSITE_PERSONAS.map((persona) => [persona.personaId, persona]));
   const personaIds = new Set<string>();
   const agentPubkeys = new Set<string>();
   if (result.personas.length !== EXPECTED_WEBSITE_PERSONAS.length) {
@@ -142,10 +147,7 @@ function websiteInstallIntegrityError(
   }
   for (const entry of result.publication.agents) {
     const pubkey = entry.id.trim().toLowerCase();
-    if (
-      !agentPubkeys.has(pubkey) ||
-      publishedAgentPubkeys.has(pubkey)
-    ) {
+    if (!agentPubkeys.has(pubkey) || publishedAgentPubkeys.has(pubkey)) {
       return "The four Website agent publications could not be matched.";
     }
     publishedAgentPubkeys.add(pubkey);
@@ -196,9 +198,7 @@ export function assessInstall(
       reasons.push(integrityError);
     }
     if (missingAgents > 0) {
-      reasons.push(
-        `${missingAgents} of the four agents are missing`,
-      );
+      reasons.push(`${missingAgents} of the four agents are missing`);
     }
     if (failedSkills.length > 0) {
       reasons.push(
@@ -316,7 +316,10 @@ export function starterPromptFor(
 }
 
 /** Build the editable first brief placed into the selected channel's draft. */
-export function buildWebsiteStarterDraft(prompt: string, seedUrl: string): string {
+export function buildWebsiteStarterDraft(
+  prompt: string,
+  seedUrl: string,
+): string {
   const trimmedPrompt = prompt.trim() || "Improve my website";
   const addressedPrompt = /^@avery\b/i.test(trimmedPrompt)
     ? trimmedPrompt
