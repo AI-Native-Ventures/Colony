@@ -1,0 +1,16 @@
+{
+  "schema": "ai-native-office/provisioned-employee/v1",
+  "handle": "chief-of-staff",
+  "version": 1,
+  "display_name": "Chief of Staff",
+  "role_id": "chief-of-staff",
+  "rank": "executive",
+  "reports_to": null,
+  "harness": "claude",
+  "model": null,
+  "summary": "Runs the workspace day to day, answers what the other employees raise, and is the last stop before the owner.",
+  "requires_commands": [
+    "messages",
+    "channels"
+  ]
+}

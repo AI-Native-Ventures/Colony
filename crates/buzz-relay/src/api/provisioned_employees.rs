@@ -238,6 +238,7 @@ mod tests {
     use super::is_authorized_human_key_recipient;
     use crate::router::build_router;
     use crate::state::AppState;
+    use buzz_core::kind::{KIND_EMPLOYEE, KIND_MANAGED_AGENT};
 
     const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz"; // sadscan:disable np.postgres.1 -- local test-only credentials
     /// A fixed test KEK, hex-encoded (32 bytes for AES-256).
@@ -393,6 +394,199 @@ mod tests {
         crate::core_employees::ensure_core_employees(state, community)
             .await
             .expect("seeding succeeds");
+    }
+
+    /// Every stored event of `kind` at `d_tag`, newest first.
+    async fn events_of_kind(
+        db: &buzz_db::Db,
+        community: buzz_core::CommunityId,
+        kind: u32,
+        d_tag: &str,
+    ) -> Vec<nostr::Event> {
+        db.query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![kind as i32]),
+            d_tag: Some(d_tag.to_owned()),
+            global_only: true,
+            limit: Some(10),
+            ..buzz_db::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query events")
+        .into_iter()
+        .map(|stored| stored.event)
+        .collect()
+    }
+
+    fn tag_value(event: &nostr::Event, name: &str) -> Option<String> {
+        event
+            .tags
+            .iter()
+            .find(|tag| tag.kind().to_string() == name)
+            .and_then(|tag| tag.content().map(str::to_owned))
+    }
+
+    /// The pubkey of the employee seeded under `handle`, and the manager it
+    /// reports to, straight from the row.
+    async fn seeded_line(
+        db: &buzz_db::Db,
+        community: buzz_core::CommunityId,
+        handle: &str,
+    ) -> (Vec<u8>, Option<Vec<u8>>) {
+        let row = db
+            .find_provisioned_employee(community, handle)
+            .await
+            .expect("query the seeded employee")
+            .unwrap_or_else(|| panic!("{handle} is seeded"));
+        (row.pubkey, row.manager)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn sales_is_seeded_reporting_to_the_provisioned_chief_of_staff() {
+        let host = format!("cos-line-{}.test", Uuid::new_v4());
+        let (state, db, pool) = release_test_state(&host).await;
+        let community = crate::tenant::bind_community(&db, &host)
+            .await
+            .expect("bind community")
+            .community();
+        let owner = Keys::generate();
+        add_member(&pool, community, &owner, "owner").await;
+        seed(&state, community).await;
+
+        let (chief, chief_manager) = seeded_line(&db, community, "chief-of-staff").await;
+        let (sales, sales_manager) = seeded_line(&db, community, "sales").await;
+
+        assert_eq!(
+            sales_manager.as_deref(),
+            Some(chief.as_slice()),
+            "Sales must report to the provisioned Chief of Staff"
+        );
+        assert_eq!(
+            chief_manager, None,
+            "the Chief of Staff is the top of the chart and reports to nobody"
+        );
+
+        // The tag is what the org chart and direct_reports read; the column is
+        // what agent_manager reads. Both, or the chart shows a line the gate
+        // does not believe.
+        let heads = events_of_kind(&db, community, KIND_EMPLOYEE, &hex::encode(&sales)).await;
+        assert_eq!(
+            tag_value(heads.first().expect("an employee head"), "manager").as_deref(),
+            Some(hex::encode(&chief).as_str()),
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn an_already_seeded_workspace_gets_its_reporting_line_on_a_later_pass() {
+        // Every workspace seeded before this shipped is in exactly this state:
+        // rows present, reporting line absent. The next relay start must heal
+        // it rather than needing a hand.
+        let host = format!("cos-heal-{}.test", Uuid::new_v4());
+        let (state, db, pool) = release_test_state(&host).await;
+        let community = crate::tenant::bind_community(&db, &host)
+            .await
+            .expect("bind community")
+            .community();
+        let owner = Keys::generate();
+        add_member(&pool, community, &owner, "owner").await;
+        seed(&state, community).await;
+
+        // Rewind to the shipped state: rows at an older version, no line.
+        sqlx::query(
+            "UPDATE employees SET manager = NULL, provisioned_version = 1 \
+             WHERE community_id = $1 AND provisioned_handle IS NOT NULL",
+        )
+        .bind(community.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("rewind the seeded rows");
+        assert_eq!(seeded_line(&db, community, "sales").await.1, None);
+
+        seed(&state, community).await;
+
+        let (chief, _) = seeded_line(&db, community, "chief-of-staff").await;
+        assert_eq!(
+            seeded_line(&db, community, "sales").await.1.as_deref(),
+            Some(chief.as_slice()),
+            "a later pass must attach the reporting line"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn the_chief_of_staff_stands_down_where_a_workspace_agent_holds_the_role() {
+        // Six production workspaces had an owner-created agent holding this
+        // role. Seeding ours beside it would put two executives in one
+        // workspace, and unique_executive_in_roster answers None when more
+        // than one qualifies, so the workspace that had a working escalation
+        // target would end up with none.
+        let host = format!("cos-standdown-{}.test", Uuid::new_v4());
+        let (state, db, pool) = release_test_state(&host).await;
+        let community = crate::tenant::bind_community(&db, &host)
+            .await
+            .expect("bind community")
+            .community();
+        let owner = Keys::generate();
+        add_member(&pool, community, &owner, "owner").await;
+
+        let scout = Keys::generate();
+        let head = EventBuilder::new(
+            Kind::Custom(KIND_MANAGED_AGENT as u16),
+            serde_json::json!({"name": "Scout", "role_id": "chief-of-staff"}).to_string(),
+        )
+        .tags(vec![
+            Tag::parse(["d", &scout.public_key().to_hex()]).expect("d tag")
+        ])
+        .sign_with_keys(&owner)
+        .expect("sign the workspace's own head");
+        db.insert_event(community, &head, None)
+            .await
+            .expect("store the workspace's head");
+
+        seed(&state, community).await;
+
+        assert!(
+            db.find_provisioned_employee(community, "chief-of-staff")
+                .await
+                .expect("query")
+                .is_none(),
+            "ours must stand down where the workspace already filled the role"
+        );
+
+        // Sales still seeds, and is honestly unassigned rather than pointed at
+        // a head the relay cannot rank.
+        assert_eq!(
+            seeded_line(&db, community, "sales").await.1,
+            None,
+            "Sales must stay unassigned rather than attach to an unrankable head"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn a_head_the_employee_signed_itself_never_stands_the_seed_down() {
+        // Our own definitions carry role_id and are signed by the employee, so
+        // an "is this role taken" check that ignored authorship would make
+        // Sales stand down against itself and never be maintained again.
+        let host = format!("cos-self-{}.test", Uuid::new_v4());
+        let (state, db, pool) = release_test_state(&host).await;
+        let community = crate::tenant::bind_community(&db, &host)
+            .await
+            .expect("bind community")
+            .community();
+        let owner = Keys::generate();
+        add_member(&pool, community, &owner, "owner").await;
+        seed(&state, community).await;
+
+        let before = seeded_line(&db, community, "sales").await.0;
+        // A second pass reads our own published definition back.
+        seed(&state, community).await;
+        assert_eq!(
+            seeded_line(&db, community, "sales").await.0,
+            before,
+            "our own definition must not read as the role being taken"
+        );
     }
 
     #[tokio::test]

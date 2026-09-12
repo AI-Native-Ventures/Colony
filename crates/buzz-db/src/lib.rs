@@ -6213,22 +6213,9 @@ impl Db {
     pub async fn update_provisioned_employee(
         &self,
         community: CommunityId,
-        handle: &str,
-        display_name: &str,
-        role_id: &str,
-        rank: &str,
-        version: i32,
+        update: employees::ProvisionedEmployeeUpdate<'_>,
     ) -> Result<Option<employees::EmployeeRow>> {
-        employees::update_provisioned_employee(
-            &self.pool,
-            community,
-            handle,
-            display_name,
-            role_id,
-            rank,
-            version,
-        )
-        .await
+        employees::update_provisioned_employee(&self.pool, community, update).await
     }
 
     /// File a job. `None` when this filing already produced one
