@@ -1358,7 +1358,11 @@ mod tests {
 
         for (handle, display_name, role_id) in [
             ("website-researcher", "Ren", "website-researcher"),
-            ("website-designer-builder", "Jules", "website-designer-builder"),
+            (
+                "website-designer-builder",
+                "Jules",
+                "website-designer-builder",
+            ),
             ("website-reviewer", "Vera", "website-reviewer"),
         ] {
             let worker = by_handle(handle);

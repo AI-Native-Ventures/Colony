@@ -39,13 +39,15 @@ pub(super) fn find_scoped_chief_of_staff(
             .as_deref()
             .is_some_and(|role_id| role_id.trim().eq_ignore_ascii_case(CHIEF_OF_STAFF));
         let has_conflicting_provenance = (provisioned_is_chief
-            && record.role_id.as_deref().is_some_and(|role_id| {
-                !role_id.trim().eq_ignore_ascii_case(CHIEF_OF_STAFF)
-            }))
+            && record
+                .role_id
+                .as_deref()
+                .is_some_and(|role_id| !role_id.trim().eq_ignore_ascii_case(CHIEF_OF_STAFF)))
             || (role_is_chief
-                && record.provisioned.as_deref().is_some_and(|handle| {
-                    !handle.trim().eq_ignore_ascii_case(CHIEF_OF_STAFF)
-                }));
+                && record
+                    .provisioned
+                    .as_deref()
+                    .is_some_and(|handle| !handle.trim().eq_ignore_ascii_case(CHIEF_OF_STAFF)));
         if has_conflicting_provenance {
             return Err(
                 "your team has conflicting Chief of Staff records; review the existing team before installing the Website Manager team"

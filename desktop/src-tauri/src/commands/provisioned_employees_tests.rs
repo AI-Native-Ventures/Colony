@@ -103,12 +103,10 @@ fn existing_adoption_repairs_missing_hierarchy_without_touching_power_or_identit
         ..Default::default()
     };
 
-    assert!(merge_provisioned_hierarchy(
-        &mut record,
-        &definition,
-        "2026-02-01T00:00:00Z"
-    )
-    .expect("missing canonical fields should be repairable"));
+    assert!(
+        merge_provisioned_hierarchy(&mut record, &definition, "2026-02-01T00:00:00Z")
+            .expect("missing canonical fields should be repairable")
+    );
     assert_eq!(record.tier.as_deref(), Some("worker"));
     assert_eq!(record.manager.as_deref(), Some(manager.as_str()));
     assert_eq!(record.private_key_nsec, "nsec1existing");
@@ -186,13 +184,9 @@ fn role_collision_is_scoped_and_refuses_a_second_local_identity() {
         relay_url: "wss://relay.example/".to_owned(),
         ..Default::default()
     };
-    let error = reject_scoped_role_collision(
-        &[same_scope],
-        &definition,
-        "wss://relay.example",
-        &owner,
-    )
-    .expect_err("a second identity must not be minted for one scoped role");
+    let error =
+        reject_scoped_role_collision(&[same_scope], &definition, "wss://relay.example", &owner)
+            .expect_err("a second identity must not be minted for one scoped role");
     assert!(error.contains("conflicting team member"), "{error}");
 
     let matching_identity = ManagedAgentRecord {
