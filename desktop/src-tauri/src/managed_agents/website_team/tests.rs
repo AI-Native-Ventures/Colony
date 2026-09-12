@@ -9,7 +9,8 @@ use super::provisioning::{
     apply_recipe_to_agent, apply_recipe_to_definition, apply_recipe_to_team,
 };
 use super::recipe::{
-    persona_body, RecipePersona, PERSONAS, RECIPE_ID, RECIPE_VERSION, TEAM_DESCRIPTION,
+    persona_body, RecipePersona, PERSONAS, RECIPE_ID, RECIPE_RECORD_VERSION, RECIPE_VERSION,
+    TEAM_DESCRIPTION,
 };
 use super::{agent_request_id, recipe_view, team_id_for_relay};
 use crate::managed_agents::{AgentDefinition, ManagedAgentRecord, TeamRecord};
@@ -330,7 +331,7 @@ fn agent_upgrade_refreshes_tier_and_preserves_user_fields() {
         working_dir: Some("/tmp/work".to_string()),
         tier: Some("leader".to_string()),
         provisioned: Some(RECIPE_ID.to_string()),
-        provisioned_version: Some("0.0.1".to_string()),
+        provisioned_version: Some(0),
         ..Default::default()
     };
 
@@ -343,10 +344,10 @@ fn agent_upgrade_refreshes_tier_and_preserves_user_fields() {
 
     assert!(changed);
     assert!(upgrade.upgraded);
-    assert_eq!(upgrade.from.as_deref(), Some("0.0.1"));
+    assert!(upgrade.upgraded);
     assert_eq!(record.tier.as_deref(), Some("worker"));
     assert!(record.is_builtin);
-    assert_eq!(record.provisioned_version.as_deref(), Some(RECIPE_VERSION));
+    assert_eq!(record.provisioned_version, Some(RECIPE_RECORD_VERSION));
     // User-owned fields are never rewritten.
     assert_eq!(record.name, "My Ren");
     assert_eq!(record.model.as_deref(), Some("user-model"));

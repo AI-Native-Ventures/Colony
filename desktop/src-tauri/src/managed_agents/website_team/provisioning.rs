@@ -171,5 +171,13 @@ pub(super) fn apply_recipe_to_agent(
         record.updated_at = now.to_string();
     }
 
-    (changed, upgrade_summary(&previous, version_changed))
+    (
+        changed,
+        // The record's stamp is a number, so report the recipe version the
+        // definition and journal carry rather than re-deriving it here.
+        upgrade_summary(
+            &previous.map(|_| RECIPE_VERSION.to_string()),
+            version_changed,
+        ),
+    )
 }

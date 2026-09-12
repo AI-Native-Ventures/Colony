@@ -190,6 +190,9 @@ impl ManagedAgentRecord {
     pub fn to_definition_view(&self) -> Option<AgentDefinition> {
         let slug = self.slug.clone()?;
         Some(AgentDefinition {
+            // The record stamps a number; the recipe version lives on the
+            // definition, and this compatibility view has no source for it.
+            provisioned_version: None,
             id: slug,
             role_id: self.role_id.clone(),
             role_title: self.role_title.clone(),
