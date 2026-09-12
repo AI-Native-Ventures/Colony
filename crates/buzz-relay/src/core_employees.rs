@@ -654,7 +654,7 @@ async fn seed_one(
                 community = %community,
                 handle = %employee.handle,
                 role = %employee.role_id,
-                pubkey = %hex::encode(&holder.pubkey),
+                pubkey = %hex::encode(holder.pubkey),
                 head = %holder.event_id,
                 "the role is held by an owner-published agent; no provisioned employee was seeded for it"
             );
@@ -853,7 +853,7 @@ async fn resolve_role_holder(
     }
     candidates
         .managed_agents
-        .sort_by_key(|holder| holder.pubkey.clone());
+        .sort_by_key(|holder| holder.pubkey);
 
     let Some(holder) = choose_role_holder(&candidates) else {
         return Ok(None);

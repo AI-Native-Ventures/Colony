@@ -302,15 +302,11 @@ mod tests {
     }
 
     #[test]
-    fn provisioned_handles_match_both_spellings_and_nothing_else() {
-        // The relay may bundle an employee under its persona id or its role
-        // slug; both are this pack's constants.
+    fn provisioned_handles_match_the_bundle_and_nothing_else() {
+        // Exactly the handles the relay bundles for this pack. A persona id is
+        // a definition id, never an employee handle, so it must not match.
         for handle in [
             RECIPE_ID,
-            AVERY_PERSONA_ID,
-            REN_PERSONA_ID,
-            JULES_PERSONA_ID,
-            VERA_PERSONA_ID,
             "website-researcher",
             "website-designer-builder",
             "website-reviewer",
@@ -329,6 +325,10 @@ mod tests {
             "website",
             "website-manager-sam",
             "website-managerX",
+            AVERY_PERSONA_ID,
+            REN_PERSONA_ID,
+            JULES_PERSONA_ID,
+            VERA_PERSONA_ID,
         ] {
             assert!(!owns_provisioned_handle(other), "{other} must not match");
         }
