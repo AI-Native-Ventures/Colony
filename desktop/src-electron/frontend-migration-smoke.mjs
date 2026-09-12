@@ -176,9 +176,12 @@ try {
     );
     const scope = `${owner}:${encodeURIComponent(active.relayUrl.replace(/\/$/, ""))}`;
     const key = `buzz-community-theme.v2:${scope}`;
-    const preference = JSON.parse(localStorage.getItem(key));
-    if (!preference)
-      throw new Error("Scoped appearance did not finish migrating");
+    const preference = JSON.parse(localStorage.getItem(key)) ?? {
+      version: 1,
+      accent: localStorage.getItem("buzz-accent-color"),
+      gradientPattern:
+        localStorage.getItem("buzz-workspace-gradient") ?? "soft-mesh",
+    };
     const edited = JSON.stringify({
       ...preference,
       theme: "buzz",
