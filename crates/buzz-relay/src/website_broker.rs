@@ -42,6 +42,7 @@ use buzz_db::website_jobs::{
 use chrono::Utc;
 use nostr::{Event, PublicKey};
 use sqlx::{Postgres, Transaction};
+use url::Url;
 use uuid::Uuid;
 
 use crate::blocks::ActionEnvelope;
@@ -70,6 +71,109 @@ pub const WEBSITE_REQUEST_REPLAY: &str = "website request replay carries a diffe
 pub const WEBSITE_ARTIFACT_REQUIRED: &str = "website artifact bytes are required";
 /// A fetched artifact did not hash to its declared digest.
 pub const WEBSITE_ARTIFACT_MISMATCH: &str = "website artifact hash mismatch";
+/// A website artifact could not be read under the current tenant and actor.
+pub const WEBSITE_ARTIFACT_UNAVAILABLE: &str = "website artifact unavailable";
+
+/// Resolve a canonical same-tenant Blossom path from a website artifact URL.
+///
+/// `Ok(None)` means the URL is an external public artifact and must continue
+/// through [`crate::website_fetch`]. `Some` is returned only for the current
+/// tenant's exact media origin; the caller then reads it through the tenant
+/// sidecar gate rather than making an unauthenticated HTTP request. A media
+/// URL on the current tenant with credentials, query, fragment, or a mismatched
+/// origin is rejected instead of falling through to the public fetcher.
+fn canonical_tenant_media_path(
+    config_relay_url: &str,
+    tenant: &TenantContext,
+    raw_url: &str,
+) -> Result<Option<String>, String> {
+    let parsed = Url::parse(raw_url).map_err(|_| WEBSITE_ARTIFACT_UNAVAILABLE.to_owned())?;
+    let Some(path) = parsed.path().strip_prefix("/media/") else {
+        return Ok(None);
+    };
+
+    let authority = buzz_core::tenant::relay_url_authority(raw_url);
+    if authority != tenant.host() {
+        return Ok(None);
+    }
+    let expected_origin = Url::parse(&crate::api::media::media_base_url_for_tenant(
+        config_relay_url,
+        tenant.host(),
+    ))
+    .map_err(|_| WEBSITE_ARTIFACT_UNAVAILABLE.to_owned())?
+    .origin();
+    if parsed.origin() != expected_origin
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || path.is_empty()
+        || path.contains('/')
+    {
+        return Err(WEBSITE_ARTIFACT_UNAVAILABLE.to_owned());
+    }
+    Ok(Some(path.to_owned()))
+}
+
+/// Fetch one website artifact, using the tenant-scoped storage path for the
+/// relay's own Blossom objects and the existing pinned public fetcher for all
+/// other URLs. The actor is captured explicitly so the media authorization
+/// check remains tied to the signed action across every await.
+async fn fetch_website_artifact(
+    state: &Arc<AppState>,
+    tenant: &TenantContext,
+    actor: &PublicKey,
+    raw_url: &str,
+) -> Result<Vec<u8>, String> {
+    if let Some(path) = canonical_tenant_media_path(&state.config.relay_url, tenant, raw_url)? {
+        match crate::api::relay_members::check_relay_membership(
+            state,
+            tenant.community(),
+            actor.as_bytes(),
+            None,
+        )
+        .await
+        .map_err(|_| WEBSITE_ARTIFACT_UNAVAILABLE.to_owned())?
+        {
+            crate::api::relay_members::MembershipDecision::Denied => {
+                return Err(WEBSITE_ARTIFACT_UNAVAILABLE.to_owned());
+            }
+            crate::api::relay_members::MembershipDecision::OpenRelay
+            | crate::api::relay_members::MembershipDecision::Member
+            | crate::api::relay_members::MembershipDecision::ViaOwner(_) => {}
+        }
+        return crate::api::media::read_blob_bytes_for_tenant(
+            state,
+            tenant,
+            &path,
+            buzz_core::website::MAX_MANIFEST_BYTES as u64,
+        )
+        .await
+        .map_err(|_| WEBSITE_ARTIFACT_UNAVAILABLE.to_owned());
+    }
+
+    // A media-shaped URL for another mapped tenant must never fall through to
+    // the public fetcher. Unknown public hosts remain on that fetcher's
+    // existing safety path, but a server-resolved tenant mismatch is a hard
+    // authorization failure (including a same-community alias, which is not
+    // the canonical host bound to this action).
+    if let Ok(parsed) = Url::parse(raw_url) {
+        if parsed.path().strip_prefix("/media/").is_some() {
+            let authority = buzz_core::tenant::relay_url_authority(raw_url);
+            if !authority.is_empty()
+                && crate::tenant::bind_community(&state.db, &authority)
+                    .await
+                    .is_ok()
+            {
+                return Err(WEBSITE_ARTIFACT_UNAVAILABLE.to_owned());
+            }
+        }
+    }
+
+    // Do not attach tenant credentials to external artifacts. The existing
+    // fetcher retains its public-host DNS, redirect, and byte-budget checks.
+    crate::website_fetch::fetch_bounded_bytes(raw_url).await
+}
 
 /// The durable result of one brokered website action.
 #[derive(Debug)]
@@ -135,9 +239,13 @@ pub async fn handle_website_action(
     }
     preflight_action(state, tenant, &action).await?;
 
+    // Keep the actor identity independent of any later database/storage
+    // awaits. The signed action has already passed the authority preflight;
+    // the same key is used for the tenant-scoped media gate below.
+    let actor = action.actor.clone();
     let manifest = match &action.op {
         WebsiteActionOp::AddRevision { manifest, .. } => {
-            Some(crate::website_fetch::fetch_bounded_bytes(&manifest.url).await?)
+            Some(fetch_website_artifact(state, tenant, &actor, &manifest.url).await?)
         }
         WebsiteActionOp::Handover {
             approved_revision,
@@ -151,6 +259,7 @@ pub async fn handle_website_action(
                 &action.thread_root,
                 *approved_revision,
                 approved_manifest_sha256,
+                &actor,
             )
             .await?,
         ),
@@ -158,7 +267,7 @@ pub async fn handle_website_action(
     };
     let qa_report = match &action.op {
         WebsiteActionOp::RecordQa { report, .. } => {
-            Some(crate::website_fetch::fetch_bounded_bytes(&report.url).await?)
+            Some(fetch_website_artifact(state, tenant, &actor, &report.url).await?)
         }
         _ => None,
     };
@@ -1453,6 +1562,7 @@ async fn fetch_current_manifest(
     thread_root: &str,
     approved_revision: u32,
     approved_manifest_sha256: &str,
+    actor: &PublicKey,
 ) -> Result<Vec<u8>, String> {
     let job_id = WebsiteAction::derive_job_id(*tenant.community().as_uuid(), task_id, thread_root);
     let job = get_website_job(state.db.pool(), tenant.community(), job_id)
@@ -1468,11 +1578,65 @@ async fn fetch_current_manifest(
     if revision.preview.sha256 != approved_manifest_sha256 {
         return Err(WEBSITE_ARTIFACT_MISMATCH.to_owned());
     }
-    crate::website_fetch::fetch_bounded_bytes(&revision.preview.url).await
+    fetch_website_artifact(state, tenant, actor, &revision.preview.url).await
 }
 
 fn map_website_error(error: buzz_core::website::WebsiteError) -> String {
     format!("{}: {error}", error.code())
+}
+
+#[cfg(test)]
+mod artifact_scope_tests {
+    use super::*;
+
+    const RELAY: &str = "wss://relay.example.com";
+    const HASH: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+    fn tenant() -> TenantContext {
+        TenantContext::resolved(
+            buzz_core::CommunityId::from_uuid(Uuid::from_u128(1)),
+            "relay.example.com",
+        )
+    }
+
+    #[test]
+    fn canonical_same_tenant_media_url_returns_only_the_object_path() {
+        let path = canonical_tenant_media_path(
+            RELAY,
+            &tenant(),
+            &format!("https://relay.example.com/media/{HASH}.html"),
+        )
+        .expect("canonical URL should be accepted");
+        let expected = format!("{HASH}.html");
+        assert_eq!(path.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn canonical_media_url_rejects_query_credentials_and_wrong_origin() {
+        for url in [
+            format!("https://relay.example.com/media/{HASH}.html?download=1"),
+            format!("https://user:pass@relay.example.com/media/{HASH}.html"),
+            format!("https://relay.example.com/media/{HASH}.html#fragment"),
+            format!("http://relay.example.com/media/{HASH}.html"),
+        ] {
+            assert_eq!(
+                canonical_tenant_media_path(RELAY, &tenant(), &url),
+                Err(WEBSITE_ARTIFACT_UNAVAILABLE.to_owned()),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn another_tenant_media_origin_remains_external_for_public_fetch_policy() {
+        let path = canonical_tenant_media_path(
+            RELAY,
+            &tenant(),
+            &format!("https://other.example.com/media/{HASH}.html"),
+        )
+        .expect("foreign URL is classified before the async tenant lookup");
+        assert!(path.is_none());
+    }
 }
 
 async fn dispatch_committed(

@@ -44,11 +44,13 @@ export {
 export {
   ABORT_CODE,
   buildHttpsRequestOptions,
+  createAuthorizedDependencies,
   createDefaultDependencies,
   DEFAULT_DEADLINE_MS,
   DEFAULT_MAX_REDIRECTS,
   DEFAULT_TIMEOUT_MS,
   fetchBoundBytes,
+  isCanonicalRelayMediaUrl,
   MAX_DEADLINE_MS,
   MAX_MAX_REDIRECTS,
   MAX_TIMEOUT_MS,

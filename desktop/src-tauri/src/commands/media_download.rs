@@ -1,11 +1,10 @@
-use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::app_state::AppState;
 use crate::commands::clipboard::with_clipboard;
 use crate::commands::export_util::save_bytes_with_dialog;
-use crate::commands::media::{detect_and_validate_mime, mint_media_get_auth, sanitize_filename};
+use crate::commands::media::{detect_and_validate_mime, sanitize_filename};
 use crate::commands::{
     personas::{
         parse_snapshot_payload_from_bytes, MAX_SNAPSHOT_JSON_BYTES, MAX_SNAPSHOT_PNG_BYTES,
@@ -15,13 +14,13 @@ use crate::commands::{
         decode_team_snapshot_from_bytes, MAX_TEAM_SNAPSHOT_JSON_BYTES, MAX_TEAM_SNAPSHOT_PNG_BYTES,
     },
 };
-use crate::relay::{classify_request_error, relay_api_base_url_with_override, relay_error_message};
+use super::media_fetch::fetch_blob_bytes_with_cap;
+#[cfg(test)]
+use super::media_fetch::redirect_refusal_error;
+use crate::relay::relay_api_base_url_with_override;
 
 /// Maximum download size: 50 MiB. Prevents OOM from oversized responses.
 const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
-
-/// Download request timeout.
-const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Validate that a URL is a legitimate relay media URL.
 ///
@@ -29,7 +28,7 @@ const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60)
 /// - URL scheme is `https` (or `http` for localhost dev)
 /// - URL origin matches the relay base URL
 /// - URL path matches `/media/{hash}.{ext}`
-fn validate_download_url(url: &str, relay_base: &str) -> Result<(), String> {
+pub(crate) fn validate_download_url(url: &str, relay_base: &str) -> Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|_| "invalid URL".to_string())?;
     let base = url::Url::parse(relay_base).map_err(|_| "invalid relay base URL".to_string())?;
 
@@ -256,82 +255,6 @@ pub async fn copy_text_to_clipboard(
 /// validating the URL origin and for any content-type checks on the result.
 async fn fetch_blob_bytes(url: &str, state: &State<'_, AppState>) -> Result<Vec<u8>, String> {
     fetch_blob_bytes_with_cap(url, state, MAX_DOWNLOAD_BYTES).await
-}
-
-/// The command-facing error for a media-fetch response status, or `None` if
-/// the status is success and the body should be read.
-///
-/// A no-redirect client surfaces a relay 3xx as a redirection status rather
-/// than following it; that is reported explicitly as a redirect (not a bare
-/// "relay returned 302") so the failure is actionable and cannot be mistaken
-/// for an ordinary relay error — following it would forward the minted media
-/// auth header across origins. Pulled out of `fetch_blob_bytes_with_cap` so
-/// the redirect-refusal message is unit-testable without a Tauri `State`.
-fn redirect_refusal_error(status: reqwest::StatusCode) -> Option<String> {
-    status.is_redirection().then(|| {
-        format!(
-            "media fetch refused: relay returned a {status} redirect, which is \
-             not followed for authenticated downloads (redirect-hop SSRF guard)"
-        )
-    })
-}
-
-/// Core streaming fetcher with a caller-supplied byte cap.
-async fn fetch_blob_bytes_with_cap(
-    url: &str,
-    state: &State<'_, AppState>,
-    cap: u64,
-) -> Result<Vec<u8>, String> {
-    // Fetch bytes via the no-redirect media client (goes through the VPN tunnel).
-    // A no-redirect client keeps the minted media auth token from being
-    // forwarded across origins by a relay-issued 3xx (redirect-hop SSRF); a
-    // 3xx is returned verbatim and rejected by the `is_success` check below.
-    #[cfg(feature = "onboarding-fixture")]
-    crate::relay::validate_fixture_url(url)?;
-    let mut req = state.media_fetch_client.get(url).timeout(DOWNLOAD_TIMEOUT);
-
-    // Every caller pre-validates `url` against the relay origin via
-    // `validate_download_url`, satisfying the mint_media_get_auth safety
-    // contract (the token never leaves the relay origin).
-    let relay_base = relay_api_base_url_with_override(state);
-    if let Some(auth) = mint_media_get_auth(state, &relay_base) {
-        req = req.header("authorization", auth);
-    }
-
-    let resp = req.send().await.map_err(|e| classify_request_error(&e))?;
-
-    if let Some(err) = redirect_refusal_error(resp.status()) {
-        return Err(err);
-    }
-
-    if !resp.status().is_success() {
-        return Err(relay_error_message(resp).await);
-    }
-
-    // Check Content-Length header upfront if present.
-    if let Some(content_length) = resp.content_length() {
-        if content_length > cap {
-            return Err(format!(
-                "file too large ({} MiB, max {} MiB)",
-                content_length / (1024 * 1024),
-                cap / (1024 * 1024)
-            ));
-        }
-    }
-
-    // Stream the response with a running byte count to enforce the size cap
-    // even when Content-Length is missing or dishonest.
-    let mut bytes = Vec::new();
-    let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| classify_request_error(&e))?;
-        if bytes.len() as u64 + chunk.len() as u64 > cap {
-            return Err(format!("file too large (max {} MiB)", cap / (1024 * 1024)));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-
-    Ok(bytes)
 }
 
 /// The snapshot file format inferred from the sanitized filename suffix.

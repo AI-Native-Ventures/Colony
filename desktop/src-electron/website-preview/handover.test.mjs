@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { MAX_FILE_BYTES, sha256Hex } from "./artifact.mjs";
+import {
+  createAuthorizedDependencies,
+  MAX_FILE_BYTES,
+  sha256Hex,
+} from "./artifact.mjs";
 import { HANDOVER_STAGING_PREFIX, downloadHandover } from "./handover.mjs";
 
 const PUBLIC_ADDRESS = "93.184.216.34";
@@ -169,6 +173,42 @@ test("downloadHandover stages then links verified bytes without overwrite", asyn
   );
   assert.equal(fake.calls.link.length, 2);
   assert.equal(world.calls.length, 2);
+});
+
+test("downloads a private Blossom source archive through the authorized reader", async () => {
+  const body = Buffer.from("verified source archive");
+  const url =
+    "https://relay.example.com/media/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789.zip";
+  const calls = [];
+  const dependencies = createAuthorizedDependencies({
+    relayOrigin: "https://relay.example.com",
+    dependencies: {
+      async lookup() {
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      async open() {
+        throw new Error("private source archive must not use public transport");
+      },
+    },
+    fetchMediaBytes: async (artifactUrl) => {
+      calls.push(artifactUrl);
+      return { bytes: body, contentType: "application/zip" };
+    },
+  });
+  const root = "/chosen/root";
+  const fake = createFakeFileSystem(root);
+
+  const result = await downloadHandover({
+    window: null,
+    items: [item("source/site.zip", url, body)],
+    chooseDirectory: async () => root,
+    dependencies,
+    fileSystem: fake.fs,
+  });
+
+  assert.equal(result.complete, true);
+  assert.deepEqual(calls, [url]);
+  assert.deepEqual(fake.files.get(`${root}/source/site.zip`), body);
 });
 
 test("a declared size that is not exact fails before finalizing", async () => {

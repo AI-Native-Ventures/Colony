@@ -44,11 +44,13 @@ pub(crate) mod media;
 mod media_animated;
 mod media_audio;
 mod media_download;
+pub(crate) mod media_fetch;
 mod media_gif;
 mod media_raw;
 mod media_snapshot_png;
 mod media_transcode;
 mod media_upload_progress;
+pub(crate) mod website_artifact;
 #[cfg(feature = "mesh-llm")]
 pub(crate) mod mesh_llm;
 #[cfg(feature = "mesh-llm")]

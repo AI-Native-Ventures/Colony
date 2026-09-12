@@ -368,6 +368,154 @@ export function createDefaultDependencies() {
   });
 }
 
+const MEDIA_HASH_PATTERN = /^[0-9a-f]{64}$/;
+const MEDIA_EXTENSION_PATTERN = /^[a-z0-9]{1,8}$/;
+
+function parseCanonicalRelayOrigin(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new PreviewArtifactError(
+      "invalid_dependencies",
+      "relayOrigin must be an absolute relay origin",
+    );
+  }
+  if (
+    !["https:", "http:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.origin !== value
+  ) {
+    throw new PreviewArtifactError(
+      "invalid_dependencies",
+      "relayOrigin must be a credential-free origin",
+    );
+  }
+  return parsed;
+}
+
+function isCanonicalMediaPath(pathname) {
+  const value = pathname.startsWith("/media/")
+    ? pathname.slice("/media/".length)
+    : null;
+  if (value === null || value === "" || value.includes("/")) return false;
+  const parts = value.split(".");
+  if (!MEDIA_HASH_PATTERN.test(parts[0] ?? "")) return false;
+  if (parts.length === 1) return true;
+  if (parts.length === 2) return MEDIA_EXTENSION_PATTERN.test(parts[1]);
+  return parts.length === 3 && parts[1] === "thumb" && parts[2] === "jpg";
+}
+
+/**
+ * Recognize the only URLs eligible for a host-mediated authenticated read.
+ *
+ * Both the original ref and the current hop must be the exact same canonical
+ * URL. Requiring equality keeps a redirect from receiving the media auth
+ * callback, even when the redirect stays on the relay origin.
+ */
+export function isCanonicalRelayMediaUrl({ initialUrl, url, relayOrigin } = {}) {
+  if (typeof initialUrl !== "string" || typeof url !== "string") return false;
+  let initial;
+  let current;
+  try {
+    initial = new URL(initialUrl);
+    current = new URL(url);
+  } catch {
+    return false;
+  }
+  return (
+    initial.href === current.href &&
+    initial.origin === relayOrigin &&
+    current.origin === relayOrigin &&
+    !initial.username &&
+    !initial.password &&
+    !initial.search &&
+    !initial.hash &&
+    !current.username &&
+    !current.password &&
+    !current.search &&
+    !current.hash &&
+    isCanonicalMediaPath(initial.pathname) &&
+    isCanonicalMediaPath(current.pathname)
+  );
+}
+
+function decodeAuthorizedBytes(value) {
+  const body = value?.bytes ?? value;
+  if (Buffer.isBuffer(body)) return Buffer.from(body);
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  }
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  throw new PreviewArtifactError(
+    "authorized_media_failed",
+    "the native media reader returned no bytes",
+  );
+}
+
+/**
+ * Compose the public pinned transport with one host-mediated relay-media read.
+ *
+ * `fetchMediaBytes` is deliberately a narrow callback supplied by Electron's
+ * trusted main process. The returned transport never receives or stores a
+ * bearer token, and `openAuthorized` refuses every URL except an exact,
+ * credential-free first-hop canonical media URL.
+ */
+export function createAuthorizedDependencies({
+  relayOrigin,
+  fetchMediaBytes,
+  dependencies,
+} = {}) {
+  const origin = parseCanonicalRelayOrigin(relayOrigin);
+  if (typeof fetchMediaBytes !== "function") {
+    throw new PreviewArtifactError(
+      "invalid_dependencies",
+      "fetchMediaBytes must be a function",
+    );
+  }
+  const base = resolveDependencies(dependencies);
+  const isAuthorized = ({ initialUrl, url } = {}) =>
+    isCanonicalRelayMediaUrl({
+      initialUrl,
+      url,
+      relayOrigin: origin.origin,
+    });
+  const openAuthorized = async (request) => {
+    if (!isAuthorized({ initialUrl: request?.url, url: request?.url })) {
+      throw new PreviewArtifactError(
+        "unauthorized_media",
+        "the URL is not an authorized relay media artifact",
+      );
+    }
+    throwIfAborted(request?.signal);
+    const value = await fetchMediaBytes(request.url, request.signal);
+    throwIfAborted(request?.signal);
+    const bytes = decodeAuthorizedBytes(value);
+    const contentType =
+      typeof value?.contentType === "string" ? value.contentType : null;
+    return {
+      statusCode: 200,
+      headers: {
+        ...(contentType ? { "content-type": contentType } : {}),
+        "content-length": String(bytes.byteLength),
+      },
+      destroy() {},
+      body: (async function* () {
+        yield bytes;
+      })(),
+    };
+  };
+  return Object.freeze({
+    lookup: base.lookup,
+    open: base.open,
+    isAuthorized,
+    openAuthorized,
+  });
+}
+
 /**
  * Resolve the transport to use. `undefined` selects the real network; anything
  * else must explicitly provide both `lookup` and `open`, so tests can never
@@ -532,9 +680,15 @@ export async function fetchBoundBytes(rawUrl, options) {
 
         let response;
         try {
+          const open =
+            typeof dependencies.openAuthorized === "function" &&
+            typeof dependencies.isAuthorized === "function" &&
+            dependencies.isAuthorized({ initialUrl: rawUrl, url: url.href })
+              ? dependencies.openAuthorized
+              : dependencies.open;
           response = await awaitWithSignal(
             Promise.resolve(
-              dependencies.open({
+              open({
                 url: url.href,
                 hostname,
                 address,

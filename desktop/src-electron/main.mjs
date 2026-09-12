@@ -33,7 +33,16 @@ import {
   resolveProductionClipStrategy,
 } from "./website-preview/host.mjs";
 import { loadVerifiedArtifact } from "./website-preview/artifacts.mjs";
+import {
+  createAuthorizedDependencies,
+  loadWebsitePreview,
+} from "./website-preview/artifact.mjs";
 import { downloadHandover } from "./website-preview/handover.mjs";
+import {
+  awaitNativeArtifact,
+  decodeNativeArtifactBytes,
+  nativeWebsiteArtifactArgs,
+} from "./website-preview/native.mjs";
 import { PREVIEW_SCHEME_DESCRIPTOR } from "./website-preview/scheme.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -167,12 +176,21 @@ async function boot() {
     if (!window.isDestroyed()) window.webContents.send("colony:event", message);
   };
   let businessContext = null;
+  let businessGeneration = 0;
   // Isolated website previews. The host owns its own ephemeral session per
   // preview and never touches the application session or its cookies.
   const previews = createWebsitePreviewHost({
     WebContentsView,
     View,
     session,
+    loadPreview: async ({ manifestRef, signal }) => {
+      const guard = {
+        context: businessContext,
+        generation: businessGeneration,
+      };
+      const dependencies = await websiteDependenciesFor(guard);
+      return loadWebsitePreview({ manifestRef, signal, dependencies });
+    },
     clipStrategy: resolveProductionClipStrategy(),
   });
   previews.subscribe((state) =>
@@ -183,7 +201,6 @@ async function boot() {
   // app cleanup rotates the generation and aborts the in-flight requests, so
   // a late artifact read or handover write can never land under the next
   // business.
-  let businessGeneration = 0;
   let businessAbort = new AbortController();
   const invalidatePreviews = () => {
     businessGeneration += 1;
@@ -210,6 +227,74 @@ async function boot() {
       throw new Error("The business context changed during the request");
     }
   };
+
+  function relayHttpOrigin(relay) {
+    let parsed;
+    try {
+      parsed = new URL(relay);
+    } catch {
+      throw new Error("The business relay is invalid");
+    }
+    if (
+      !["ws:", "wss:"].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.hash
+    ) {
+      throw new Error("The business relay is invalid");
+    }
+    parsed.protocol = parsed.protocol === "wss:" ? "https:" : "http:";
+    return parsed.origin;
+  }
+
+  async function captureWebsiteScope(guard) {
+    assertSameBusiness(guard);
+    const identity = await rendererHost.request("invoke", {
+      command: "get_identity",
+      args: {},
+    });
+    assertSameBusiness(guard);
+    if (
+      typeof identity?.pubkey !== "string" ||
+      !/^[a-f0-9]{64}$/i.test(identity.pubkey)
+    ) {
+      throw new Error("The active identity is unavailable for this artifact");
+    }
+    return Object.freeze({
+      ownerPubkey: identity.pubkey.toLowerCase(),
+      relay: guard.context.relay,
+    });
+  }
+
+  async function websiteDependenciesFor(guard) {
+    assertSameBusiness(guard);
+    if (!guard.context?.relay) return undefined;
+    const scope = await captureWebsiteScope(guard);
+    const relayOrigin = relayHttpOrigin(scope.relay);
+    const fetchMediaBytes = async (url, signal) => {
+      assertSameBusiness(guard);
+      const pending = rendererHost.request("invoke", {
+        command: "fetch_website_artifact_bytes",
+        args: nativeWebsiteArtifactArgs({
+          url,
+          ownerPubkey: scope.ownerPubkey,
+          relay: scope.relay,
+        }),
+      });
+      const raw = await awaitNativeArtifact(
+        pending,
+        signal ?? businessAbort.signal,
+      );
+      const bytes = decodeNativeArtifactBytes(raw);
+      assertSameBusiness(guard);
+      return { bytes };
+    };
+    return createAuthorizedDependencies({
+      relayOrigin,
+      fetchMediaBytes,
+    });
+  }
+
   resources.add(() => {
     const previous = businessAbort;
     businessAbort = new AbortController();
@@ -434,8 +519,10 @@ async function boot() {
         return previews.close({ ...payload, window });
       }
       if (type === "website-artifact:load") {
+        const dependencies = await websiteDependenciesFor(guard);
         const artifact = await loadVerifiedArtifact({
           ref: payload.manifest,
+          dependencies,
           signal: businessAbort.signal,
         });
         assertSameBusiness(guard);
@@ -447,9 +534,11 @@ async function boot() {
         };
       }
       if (type === "website-handover:download") {
+        const dependencies = await websiteDependenciesFor(guard);
         const result = await downloadHandover({
           window,
           items: payload.items,
+          dependencies,
           signal: businessAbort.signal,
           assertCurrent: () => assertSameBusiness(guard),
           chooseDirectory: async (owner) => {

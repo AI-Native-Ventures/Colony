@@ -639,6 +639,46 @@ pub async fn get_blob(
     serve_blob_for_tenant(&state, &media_auth.tenant, &sha256_ext, &req_headers).await
 }
 
+/// Resolve the sidecar-authorized MIME type for one media path.
+///
+/// This is shared by the HTTP responder and the Website Manager's internal
+/// reader so both paths keep the same tenant sidecar gate and extension check.
+async fn content_type_for_tenant_blob(
+    state: &AppState,
+    tenant: &TenantContext,
+    sha256_ext: &str,
+) -> Result<String, MediaError> {
+    if sha256_ext.ends_with(".thumb.jpg") {
+        let parent_hash = sha256_ext.strip_suffix(".thumb.jpg").unwrap_or(sha256_ext);
+        let _ = state
+            .media_storage
+            .read_sidecar_mime(tenant, parent_hash)
+            .await
+            .ok_or(MediaError::NotFound)?;
+        return Ok("image/jpeg".to_string());
+    }
+
+    // For explicit paths (hash.ext), verify the requested extension matches
+    // the sidecar's canonical extension — sidecar is authoritative.
+    let sidecar_mime = state
+        .media_storage
+        .read_sidecar_mime(tenant, sha256_ext)
+        .await
+        .ok_or(MediaError::NotFound)?;
+    if sha256_ext.contains('.') {
+        let requested_ext = sha256_ext.rsplit('.').next().unwrap_or("");
+        let sidecar = state
+            .media_storage
+            .get_sidecar(tenant, sha256_ext.split('.').next().unwrap_or(sha256_ext))
+            .await
+            .map_err(|_| MediaError::NotFound)?;
+        if requested_ext != sidecar.ext {
+            return Err(MediaError::NotFound);
+        }
+    }
+    Ok(sidecar_mime)
+}
+
 /// Serve a validated blob from an already-authorized tenant context.
 ///
 /// This is the common byte-serving mechanism for Blossom reads and narrowly
@@ -654,35 +694,7 @@ pub(crate) async fn serve_blob_for_tenant(
     let cache_control = blob_cache_control();
 
     // Sidecar gate FIRST — reject before any blob I/O. Storage is not authoritative.
-    let content_type = if sha256_ext.ends_with(".thumb.jpg") {
-        let parent_hash = sha256_ext.strip_suffix(".thumb.jpg").unwrap_or(sha256_ext);
-        let _ = state
-            .media_storage
-            .read_sidecar_mime(tenant, parent_hash)
-            .await
-            .ok_or(MediaError::NotFound)?;
-        "image/jpeg".to_string()
-    } else {
-        // For explicit paths (hash.ext), verify the requested extension matches
-        // the sidecar's canonical extension — sidecar is authoritative.
-        let sidecar_mime = state
-            .media_storage
-            .read_sidecar_mime(tenant, sha256_ext)
-            .await
-            .ok_or(MediaError::NotFound)?;
-        if sha256_ext.contains('.') {
-            let requested_ext = sha256_ext.rsplit('.').next().unwrap_or("");
-            let sidecar = state
-                .media_storage
-                .get_sidecar(tenant, sha256_ext.split('.').next().unwrap_or(sha256_ext))
-                .await
-                .map_err(|_| MediaError::NotFound)?;
-            if requested_ext != sidecar.ext {
-                return Err(MediaError::NotFound);
-            }
-        }
-        sidecar_mime
-    };
+    let content_type = content_type_for_tenant_blob(state, tenant, sha256_ext).await?;
 
     // Images and video render inline; generic files force download. This is the
     // primary defence for non-previewable types — combined with `nosniff` and
@@ -834,33 +846,7 @@ pub async fn head_blob(
     let cache_control = blob_cache_control();
 
     // Sidecar gate FIRST — reject before any blob I/O.
-    let content_type = if sha256_ext.ends_with(".thumb.jpg") {
-        let parent_hash = sha256_ext.strip_suffix(".thumb.jpg").unwrap_or(&sha256_ext);
-        let _ = state
-            .media_storage
-            .read_sidecar_mime(&tenant, parent_hash)
-            .await
-            .ok_or(MediaError::NotFound)?;
-        "image/jpeg".to_string()
-    } else {
-        let sidecar_mime = state
-            .media_storage
-            .read_sidecar_mime(&tenant, &sha256_ext)
-            .await
-            .ok_or(MediaError::NotFound)?;
-        if sha256_ext.contains('.') {
-            let requested_ext = sha256_ext.rsplit('.').next().unwrap_or("");
-            let sidecar = state
-                .media_storage
-                .get_sidecar(&tenant, sha256_ext.split('.').next().unwrap_or(&sha256_ext))
-                .await
-                .map_err(|_| MediaError::NotFound)?;
-            if requested_ext != sidecar.ext {
-                return Err(MediaError::NotFound);
-            }
-        }
-        sidecar_mime
-    };
+    let content_type = content_type_for_tenant_blob(&state, &tenant, &sha256_ext).await?;
 
     let key = resolve_s3_key(&state.media_storage, &tenant, &sha256_ext).await?;
     match state.media_storage.head_with_metadata(&key).await? {
@@ -879,6 +865,44 @@ pub async fn head_blob(
         }
         None => Ok(StatusCode::NOT_FOUND.into_response()),
     }
+}
+
+/// Read a sidecar-authorized blob for an internal Website Manager action.
+///
+/// The tenant is resolved by the caller's request/event path and is never
+/// derived from the URL. The sidecar and canonical extension checks are the
+/// same checks used by the public media responder. The object is bounded before
+/// and after the read so an internal caller cannot turn this helper into an
+/// unbounded storage download.
+pub(crate) async fn read_blob_bytes_for_tenant(
+    state: &AppState,
+    tenant: &TenantContext,
+    sha256_ext: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>, MediaError> {
+    validate_media_path(sha256_ext)?;
+    let _content_type = content_type_for_tenant_blob(state, tenant, sha256_ext).await?;
+    let key = resolve_s3_key(&state.media_storage, tenant, sha256_ext).await?;
+    let size = state
+        .media_storage
+        .head_with_metadata(&key)
+        .await?
+        .ok_or(MediaError::NotFound)?
+        .size;
+    if size > max_bytes {
+        return Err(MediaError::FileTooLarge {
+            size,
+            max: max_bytes,
+        });
+    }
+    let bytes = state.media_storage.get(&key).await?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(MediaError::FileTooLarge {
+            size: bytes.len() as u64,
+            max: max_bytes,
+        });
+    }
+    Ok(bytes)
 }
 
 /// Resolve the S3 key from a URL path segment.

@@ -3,7 +3,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 
 import {
+  createAuthorizedDependencies,
   fetchBoundBytes,
+  isCanonicalRelayMediaUrl,
   loadWebsitePreview,
   MAX_DEADLINE_MS,
   MAX_MAX_REDIRECTS,
@@ -14,6 +16,9 @@ import {
 
 const PUBLIC_ADDRESS = "93.184.216.34";
 const MANIFEST_URL = "https://cdn.example.com/site/manifest.json";
+const RELAY_ORIGIN = "https://relay.example.com";
+const MEDIA_HASH =
+  "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 function bytes(value) {
   return Buffer.from(value, "utf8");
@@ -432,4 +437,123 @@ test("keeps timeout, abort, and dependency failures in their own codes", async (
     }),
     "request_failed",
   );
+});
+
+test("uses the host-mediated reader only for an exact relay media artifact", async () => {
+  const mediaUrl = `${RELAY_ORIGIN}/media/${MEDIA_HASH}.html`;
+  const body = bytes("<html>approved</html>");
+  const world = createWorld({
+    addresses: {
+      [new URL(RELAY_ORIGIN).hostname]: [
+        { address: PUBLIC_ADDRESS, family: 4 },
+      ],
+    },
+  });
+  world.routes.set(mediaUrl, () => reply({ chunks: [bytes("public path")] }));
+  const authorizedCalls = [];
+  const dependencies = createAuthorizedDependencies({
+    relayOrigin: RELAY_ORIGIN,
+    dependencies: world.dependencies,
+    fetchMediaBytes: async (url, signal) => {
+      authorizedCalls.push({ url, signal });
+      return body;
+    },
+  });
+
+  assert.equal(
+    isCanonicalRelayMediaUrl({
+      initialUrl: mediaUrl,
+      url: mediaUrl,
+      relayOrigin: RELAY_ORIGIN,
+    }),
+    true,
+  );
+  const result = await fetchBoundBytes(mediaUrl, {
+    dependencies,
+    maxBytes: 1024,
+  });
+  assert.deepEqual(result.bytes, body);
+  assert.equal(authorizedCalls.length, 1);
+  assert.equal(authorizedCalls[0].url, mediaUrl);
+  assert.equal(world.openCalls.length, 0);
+});
+
+test("keeps external artifacts on the public transport and never calls native auth", async () => {
+  const world = createWorld();
+  const body = bytes("external");
+  world.routes.set(MANIFEST_URL, () => reply({ chunks: [body] }));
+  let authorizedCalls = 0;
+  const dependencies = createAuthorizedDependencies({
+    relayOrigin: RELAY_ORIGIN,
+    dependencies: world.dependencies,
+    fetchMediaBytes: async () => {
+      authorizedCalls += 1;
+      return body;
+    },
+  });
+
+  const result = await fetchBoundBytes(MANIFEST_URL, {
+    dependencies,
+    maxBytes: 1024,
+  });
+  assert.deepEqual(result.bytes, body);
+  assert.equal(authorizedCalls, 0);
+  assert.equal(world.openCalls.length, 1);
+});
+
+test("does not authorize relay media after an external redirect or a media redirect", async () => {
+  const secondMediaUrl = `${RELAY_ORIGIN}/media/${MEDIA_HASH}.json`;
+  const firstMediaUrl = `${RELAY_ORIGIN}/media/${MEDIA_HASH}.html`;
+  const externalStart = "https://cdn.example.com/site/start";
+  const externalBody = bytes("external redirect body");
+  const mediaBody = bytes("media redirect body");
+  const world = createWorld({
+    addresses: {
+      "cdn.example.com": [{ address: PUBLIC_ADDRESS, family: 4 }],
+      "relay.example.com": [{ address: PUBLIC_ADDRESS, family: 4 }],
+    },
+  });
+  world.routes.set(externalStart, () =>
+    reply({ status: 302, headers: { location: firstMediaUrl } }),
+  );
+  world.routes.set(firstMediaUrl, () =>
+    reply({ status: 302, headers: { location: secondMediaUrl } }),
+  );
+  world.routes.set(secondMediaUrl, () => reply({ chunks: [mediaBody] }));
+  const authorizedUrls = [];
+  const dependencies = createAuthorizedDependencies({
+    relayOrigin: RELAY_ORIGIN,
+    dependencies: world.dependencies,
+    fetchMediaBytes: async (url) => {
+      authorizedUrls.push(url);
+      return externalBody;
+    },
+  });
+
+  const result = await fetchBoundBytes(externalStart, {
+    dependencies,
+    maxBytes: 1024,
+  });
+  assert.deepEqual(result.bytes, mediaBody);
+  assert.deepEqual(authorizedUrls, []);
+  assert.equal(world.openCalls.length, 3);
+});
+
+test("rejects credentials, query, and fragment media refs from the authorized path", () => {
+  const variants = [
+    `${RELAY_ORIGIN}/media/${MEDIA_HASH}.html?download=1`,
+    `${RELAY_ORIGIN}/media/${MEDIA_HASH}.html#preview`,
+    `https://user:pass@relay.example.com/media/${MEDIA_HASH}.html`,
+  ];
+  for (const url of variants) {
+    assert.equal(
+      isCanonicalRelayMediaUrl({
+        initialUrl: url,
+        url,
+        relayOrigin: RELAY_ORIGIN,
+      }),
+      false,
+      url,
+    );
+  }
 });

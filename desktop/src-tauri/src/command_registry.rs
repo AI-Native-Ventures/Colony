@@ -159,6 +159,7 @@ macro_rules! app_invoke_handler {
             save_png_data_url,
             download_file,
             fetch_media_bytes,
+            commands::website_artifact::fetch_website_artifact_bytes,
             copy_image_to_clipboard,
             copy_text_to_clipboard,
             fetch_snapshot_bytes,

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   buildHttpsRequestOptions,
+  createAuthorizedDependencies,
   isPrivateAddress,
   loadWebsitePreview,
   MAX_FILE_BYTES,
@@ -18,6 +19,9 @@ import { PreviewArtifactError } from "./errors.mjs";
 const PUBLIC_ADDRESS = "93.184.216.34";
 const OTHER_ADDRESS = "93.184.216.35";
 const MANIFEST_URL = "https://cdn.example.com/site/manifest.json";
+const RELAY_ORIGIN = "https://relay.example.com";
+const MEDIA_HASH =
+  "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 const VECTORS_PATH = fileURLToPath(
   new URL(
     "../../../crates/buzz-core/testdata/website/preview_manifest_vectors.json",
@@ -166,6 +170,52 @@ test("loads and verifies an immutable preview", async () => {
     assert.equal(call.address, PUBLIC_ADDRESS);
     assert.equal(call.signal?.aborted, false);
   }
+});
+
+test("loads a private Blossom manifest and files through the authorized host reader", async () => {
+  const html = bytes("<!doctype html><title>private preview</title>");
+  const css = bytes("body { color: #147d70 }");
+  const manifestUrl = `${RELAY_ORIGIN}/media/${MEDIA_HASH}.json`;
+  const indexUrl = `${RELAY_ORIGIN}/media/${MEDIA_HASH}.html`;
+  const styleUrl = `${RELAY_ORIGIN}/media/${MEDIA_HASH}.css`;
+  const index = fileEntry("index.html", html, { url: indexUrl });
+  const style = fileEntry("assets/app.css", css, {
+    url: styleUrl,
+    mime: "text/css",
+  });
+  const manifest = manifestBytes([index, style]);
+  const bodies = new Map([
+    [manifestUrl, manifest],
+    [indexUrl, html],
+    [styleUrl, css],
+  ]);
+  const world = createWorld({
+    addresses: {
+      "relay.example.com": [{ address: PUBLIC_ADDRESS, family: 4 }],
+    },
+  });
+  const authorizedCalls = [];
+  const dependencies = createAuthorizedDependencies({
+    relayOrigin: RELAY_ORIGIN,
+    dependencies: world.dependencies,
+    fetchMediaBytes: async (url) => {
+      authorizedCalls.push(url);
+      const body = bodies.get(url);
+      if (body === undefined) throw new Error("unexpected private artifact");
+      return { bytes: body };
+    },
+  });
+
+  const site = await loadWebsitePreview({
+    manifestRef: { url: manifestUrl, sha256: sha256Hex(manifest) },
+    dependencies,
+  });
+
+  assert.equal(site.entrypointFile.url, indexUrl);
+  assert.deepEqual(site.getFile("index.html").bytes, html);
+  assert.deepEqual(site.getFile("assets/app.css").bytes, css);
+  assert.deepEqual(authorizedCalls, [manifestUrl, indexUrl, styleUrl]);
+  assert.equal(world.calls.length, 0);
 });
 
 test("rejects a manifest whose raw bytes do not match the ref", async () => {
