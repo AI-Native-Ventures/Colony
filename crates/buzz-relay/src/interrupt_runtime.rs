@@ -943,18 +943,68 @@ type RoleRanks = std::collections::HashMap<String, AgentTier>;
 /// Only ACTIVE employees, for the same reason `interrupt_gate::agent_tier`
 /// scopes its role lookup that way: this grants a rank to a *different*
 /// pubkey through a role, so a vacated role must stop conferring anything.
-async fn active_role_ranks(tenant: &TenantContext, state: &AppState) -> Result<RoleRanks, String> {
+/// The active payroll, in the two shapes the escalation path reads it.
+///
+/// One database read answers both questions, because both come from the same
+/// rows and asking twice invites the two answers to drift.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Payroll {
+    /// `role_id` -> rank, as [`head_rank`] resolves a head's claimed role.
+    role_ranks: RoleRanks,
+    /// The employee holding the executive office, when the payroll names one
+    /// that may hold it. See [`executive_on_payroll`].
+    executive: Option<PublicKey>,
+}
+
+/// Which employee holds the executive office, read from the payroll alone.
+///
+/// A provisioned executive wins outright. Colony provides the Chief of Staff
+/// and holds that office in every workspace, so an agent the workspace
+/// created no longer ranks as the executive; it keeps its record and its
+/// name, it simply stops holding the role.
+///
+/// Otherwise the existing never-guess rule applies unchanged: exactly one
+/// executive employee resolves, and two or more resolve to nobody rather than
+/// to whichever the scan happened to reach first.
+fn executive_on_payroll(employees: &[buzz_db::employees::EmployeeRow]) -> Option<PublicKey> {
+    let executives: Vec<&buzz_db::employees::EmployeeRow> = employees
+        .iter()
+        .filter(|employee| AgentTier::parse(&employee.rank) == Some(AgentTier::Executive))
+        .collect();
+
+    let provisioned: Vec<&&buzz_db::employees::EmployeeRow> = executives
+        .iter()
+        .filter(|employee| employee.provisioned_handle.is_some())
+        .collect();
+    let chosen = match (provisioned.len(), executives.len()) {
+        (1, _) => provisioned[0],
+        // Two provisioned executives cannot happen (one handle each, and the
+        // active-role index admits one holder per role), so this is a
+        // corrupt payroll rather than an ambiguity to resolve: answer
+        // nobody, as the never-guess rule does everywhere else.
+        (0, 1) => executives[0],
+        _ => return None,
+    };
+    PublicKey::from_slice(&chosen.pubkey).ok()
+}
+
+async fn active_payroll(tenant: &TenantContext, state: &AppState) -> Result<Payroll, String> {
     let employees = state
         .db
         .list_active_employees(tenant.community())
         .await
         .map_err(|error| format!("database error reading the payroll: {error}"))?;
-    Ok(employees
+    let executive = executive_on_payroll(&employees);
+    let role_ranks = employees
         .into_iter()
         .filter_map(|employee| {
             AgentTier::parse(&employee.rank).map(|rank| (employee.role_id, rank))
         })
-        .collect())
+        .collect();
+    Ok(Payroll {
+        role_ranks,
+        executive,
+    })
 }
 
 /// Resolve the community's unique executive from an already-fetched
@@ -983,6 +1033,108 @@ async fn active_role_ranks(tenant: &TenantContext, state: &AppState) -> Result<R
 /// point 3 (never guess), unchanged. Pure (no I/O) so a caller looping over
 /// many candidates in the same community can call it repeatedly against ONE
 /// fetched roster instead of re-querying.
+#[cfg(test)]
+mod executive_precedence_tests {
+    use super::*;
+    use buzz_db::employees::EmployeeRow;
+
+    fn employee(rank: &str, role: &str, provisioned: Option<&str>) -> EmployeeRow {
+        EmployeeRow {
+            pubkey: nostr::Keys::generate().public_key().to_bytes().to_vec(),
+            sealed_key: vec![0; 32],
+            role_id: role.to_owned(),
+            display_name: role.to_owned(),
+            rank: rank.to_owned(),
+            hired_by: None,
+            hire_event: None,
+            manager: None,
+            provisioned_handle: provisioned.map(str::to_owned),
+            provisioned_version: provisioned.map(|_| 1),
+            status: "active".to_owned(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_provisioned_executive_wins_outright() {
+        // Colony holds the office. An executive the workspace hired under a
+        // different role does not take it back.
+        let rows = vec![
+            employee("executive", "founder-agent", None),
+            employee("executive", "chief-of-staff", Some("chief-of-staff")),
+        ];
+        let resolved = executive_on_payroll(&rows).expect("a provisioned executive resolves");
+        assert_eq!(resolved.to_bytes().to_vec(), rows[1].pubkey);
+    }
+
+    #[test]
+    fn one_hired_executive_still_resolves_when_none_is_provisioned() {
+        // The behaviour before any of this existed, unchanged.
+        let rows = vec![employee("executive", "founder-agent", None)];
+        let resolved = executive_on_payroll(&rows).expect("a lone executive resolves");
+        assert_eq!(resolved.to_bytes().to_vec(), rows[0].pubkey);
+    }
+
+    #[test]
+    fn two_hired_executives_resolve_to_nobody() {
+        // Never guess, unchanged.
+        let rows = vec![
+            employee("executive", "founder-agent", None),
+            employee("executive", "chief-scientist", None),
+        ];
+        assert!(executive_on_payroll(&rows).is_none());
+    }
+
+    #[test]
+    fn a_payroll_with_no_executive_falls_through() {
+        let rows = vec![employee("leader", "sales", Some("sales"))];
+        assert!(executive_on_payroll(&rows).is_none());
+    }
+
+    #[test]
+    fn the_payroll_answers_before_the_roster_and_a_head_cannot_outrank_it() {
+        // The roster names an executive; the payroll names a provisioned one.
+        // The payroll wins, which is the whole of "ours holds the office".
+        let scout = nostr::Keys::generate().public_key();
+        let roster: ManagedAgentRoster = vec![(
+            scout.to_hex(),
+            serde_json::json!({"role_id": "chief-of-staff", "tier": "executive"}),
+        )];
+
+        let rows = vec![employee(
+            "executive",
+            "chief-of-staff",
+            Some("chief-of-staff"),
+        )];
+        let payroll = Payroll {
+            role_ranks: RoleRanks::new(),
+            executive: executive_on_payroll(&rows),
+        };
+        let resolved = unique_executive_in_roster(&roster, &payroll)
+            .expect("resolution succeeds")
+            .expect("the provisioned executive resolves");
+        assert_eq!(resolved.to_bytes().to_vec(), rows[0].pubkey);
+        assert_ne!(resolved, scout, "an owner-authored head must not win");
+    }
+
+    #[test]
+    fn with_no_provisioned_executive_the_roster_still_answers() {
+        // Everything that worked before this change keeps working: a
+        // workspace with only an owner-authored executive resolves to it.
+        let scout = nostr::Keys::generate().public_key();
+        let roster: ManagedAgentRoster = vec![(
+            scout.to_hex(),
+            serde_json::json!({"role_id": "chief-of-staff", "tier": "executive"}),
+        )];
+        let payroll = Payroll::default();
+        let resolved = unique_executive_in_roster(&roster, &payroll)
+            .expect("resolution succeeds")
+            .expect("the roster executive resolves");
+        assert_eq!(resolved, scout);
+    }
+}
+
 /// The rank an owner-authored managed-agent head confers.
 ///
 /// The role the head names, resolved against the active payroll, then the
@@ -1013,8 +1165,25 @@ fn head_rank(content: &serde_json::Value, role_ranks: &RoleRanks) -> Option<Agen
 
 fn unique_executive_in_roster(
     roster: &ManagedAgentRoster,
-    role_ranks: &RoleRanks,
+    payroll: &Payroll,
 ) -> Result<Option<PublicKey>, String> {
+    // The payroll answers first, for the reason `agent_tier` reads an
+    // employees row before any event: a row is written by the relay, a head
+    // is client-writable, and where both speak the stronger record wins. This
+    // is that same ordering applied to a resolver written before employees
+    // could hold a role, not a special case bolted onto it.
+    //
+    // It is also the only way a provisioned employee can be found here at
+    // all. This roster is built from heads authored by a CURRENT community
+    // owner, and a provisioned employee signs its own definition with the
+    // employee key precisely so that self-authorship proves the relay minted
+    // it. It is therefore invisible to the scan below, by design, and would
+    // stay invisible however long the scan looked.
+    if let Some(executive) = payroll.executive {
+        return Ok(Some(executive));
+    }
+
+    let role_ranks = &payroll.role_ranks;
     let mut executives: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     for (d_tag, content) in roster {
         if head_rank(content, role_ranks) != Some(AgentTier::Executive) {
@@ -1057,8 +1226,8 @@ pub(crate) async fn find_unique_executive(
     state: &AppState,
 ) -> Result<Option<PublicKey>, String> {
     let roster = fetch_owner_authored_managed_agent_roster(tenant, state, MAX_ROSTER_HEADS).await?;
-    let role_ranks = active_role_ranks(tenant, state).await?;
-    unique_executive_in_roster(&roster, &role_ranks)
+    let payroll = active_payroll(tenant, state).await?;
+    unique_executive_in_roster(&roster, &payroll)
 }
 
 /// An owner-authored team roster (kind [`KIND_TEAM`]): `(d_tag, content)`
@@ -1226,13 +1395,14 @@ pub async fn resolve_owner_mention_route(
             // One payroll read serves both rungs: the team lead's rank and,
             // failing that, the executive's. Fetched before the team-lead
             // scan rather than after it, because that scan needs it now too.
-            let role_ranks = active_role_ranks(tenant, state).await?;
-            if let Some(lead) = team_lead_in_rosters(&heads, &teams, &role_ranks, actor)? {
+            let payroll = active_payroll(tenant, state).await?;
+            let role_ranks = &payroll.role_ranks;
+            if let Some(lead) = team_lead_in_rosters(&heads, &teams, role_ranks, actor)? {
                 return Ok(OwnerMentionRoute::Route(lead));
             }
             // Fallback rung: the unique executive, resolved from the roster
             // already fetched for the team-lead scan (no second round trip).
-            let Some(executive) = unique_executive_in_roster(&heads, &role_ranks)? else {
+            let Some(executive) = unique_executive_in_roster(&heads, &payroll)? else {
                 return Err(format!(
                     "worker {} has no unique team lead or community executive \
                      to route to (never guessing)",
@@ -1375,7 +1545,7 @@ pub async fn run_stall_tick(
     // The trust rule itself is untouched -- see
     // `fetch_owner_authored_managed_agent_roster`'s doc comment -- this only
     // avoids redundantly re-deriving the SAME answer within one pass.
-    let mut role_ranks_cache: std::collections::HashMap<CommunityId, RoleRanks> =
+    let mut role_ranks_cache: std::collections::HashMap<CommunityId, Payroll> =
         std::collections::HashMap::new();
     let mut roster_cache: std::collections::HashMap<CommunityId, ManagedAgentRoster> =
         std::collections::HashMap::new();
@@ -1425,7 +1595,7 @@ async fn process_stall_candidate(
     now_secs: i64,
     stall_after_secs: i64,
     roster_cache: &mut std::collections::HashMap<CommunityId, ManagedAgentRoster>,
-    role_ranks_cache: &mut std::collections::HashMap<CommunityId, RoleRanks>,
+    role_ranks_cache: &mut std::collections::HashMap<CommunityId, Payroll>,
 ) -> Result<bool, String> {
     let task: CompanyTask = match serde_json::from_str(&candidate.content) {
         Ok(task) => task,
@@ -1481,9 +1651,9 @@ async fn process_stall_candidate(
     if let std::collections::hash_map::Entry::Vacant(entry) =
         role_ranks_cache.entry(candidate.community_id)
     {
-        entry.insert(active_role_ranks(&tenant, state).await?);
+        entry.insert(active_payroll(&tenant, state).await?);
     }
-    let role_ranks = role_ranks_cache
+    let payroll = role_ranks_cache
         .get(&candidate.community_id)
         .expect("just inserted or already present");
 
@@ -1580,7 +1750,7 @@ async fn process_stall_candidate(
 
     let audience = match persona_pubkey_in_roster(roster, &task.qa_persona_id)? {
         Some(pubkey) => pubkey,
-        None => match unique_executive_in_roster(roster, role_ranks)? {
+        None => match unique_executive_in_roster(roster, payroll)? {
             Some(pubkey) => pubkey,
             None => {
                 // Design point 2/3: a brand-new community (no appointed
