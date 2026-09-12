@@ -224,8 +224,13 @@ requireContract(autoTag.includes("checks: read"), "auto-tag must have check-run 
 requireContract(autoTag.includes("Verify Promotion Gate"), "auto-tag must verify the promotion gate before tagging");
 requireContract(autoTag.includes("github.event.pull_request.head.sha"), "auto-tag must verify the reviewed promotion head SHA");
 requireContract(autoTag.includes('select(.name == "Promotion Gate")'), "auto-tag must filter the exact Promotion Gate name");
-requireContract(autoTag.includes('${#gate_conclusions[@]}" -ne 1'), "auto-tag must require exactly one Promotion Gate result");
-requireContract(autoTag.includes('gate_conclusions[0]}" != "success"'), "auto-tag must require Promotion Gate success");
+// A commit can carry several Promotion Gate records: a promotion closed and
+// reopened, or two PRs to main sharing one develop head. Requiring exactly one
+// blocked relay-v0.11.12 and v0.17.5 with every gate green, so the contract now
+// pins the two properties that actually matter rather than the record count.
+requireContract(autoTag.includes('${#gate_conclusions[@]}" -eq 0'), "auto-tag must require at least one Promotion Gate result");
+requireContract(autoTag.includes('for conclusion in "${gate_conclusions[@]}"'), "auto-tag must inspect every Promotion Gate result, not only the first");
+requireContract(autoTag.includes('"$conclusion" != "success"'), "auto-tag must require Promotion Gate success");
 requireContract(autoTag.indexOf("Verify Promotion Gate") < autoTag.indexOf("Resolve release lane and version"), "auto-tag must verify before resolving or creating release tags");
 
 requireContract(fly.includes("Verify live relay readiness and version"), "Fly deploy must expose a distinct live-proof step");
