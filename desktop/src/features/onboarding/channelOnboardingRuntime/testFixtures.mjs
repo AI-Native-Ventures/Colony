@@ -79,9 +79,7 @@ export const currentProfile = Object.freeze({
   website: "https://old-acme.example",
   summary: "Old profile context",
   businessType: "service",
-  services: [
-    { id: "repairs", name: "Repairs", description: "Repair work" },
-  ],
+  services: [{ id: "repairs", name: "Repairs", description: "Repair work" }],
   customerSegments: ["local customers"],
   costCentres: [
     { id: "repairs", name: "Repairs", kind: "service", serviceId: "repairs" },
@@ -117,7 +115,10 @@ export function signCompanyAction(profile, requestId = approvalRequestId) {
   );
 }
 
-export function signedAcknowledgement(input = setupInput, requestId = approvalRequestId) {
+export function signedAcknowledgement(
+  input = setupInput,
+  requestId = approvalRequestId,
+) {
   return finalizeEvent(
     {
       kind: 9,

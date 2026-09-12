@@ -2,6 +2,7 @@ import * as React from "react";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useCommunities } from "@/features/communities/useCommunities";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -166,6 +167,7 @@ export function ScoutOnboardingMessage({
   onConfirm,
   className,
 }: ScoutOnboardingMessageProps) {
+  const { goChannel } = useAppNavigation();
   const { activeCommunity } = useCommunities();
   const identity = useIdentityQuery().data;
   const relayUrl = activeCommunity?.relayUrl;
@@ -198,6 +200,15 @@ export function ScoutOnboardingMessage({
     rootEvent,
     rootQuery.data,
   ]);
+  const continueInWelcome = React.useCallback(() => {
+    if (onContinueInWelcome) {
+      onContinueInWelcome();
+      return;
+    }
+    const welcomeChannelId = verified?.scope.channelId;
+    if (!welcomeChannelId) return;
+    void goChannel(welcomeChannelId, { replace: true });
+  }, [goChannel, onContinueInWelcome, verified?.scope.channelId]);
 
   if (!verified) return children;
   return (
@@ -207,7 +218,7 @@ export function ScoutOnboardingMessage({
         className={className}
         initialState={initialState}
         onConfirm={onConfirm}
-        onContinueInWelcome={onContinueInWelcome}
+        onContinueInWelcome={continueInWelcome}
         rootEvent={verified.rootEvent}
         rootPayload={verified.payload}
         runtime={runtime}

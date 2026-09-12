@@ -5,7 +5,6 @@ import { finalizeEvent } from "nostr-tools/pure";
 import { createChannelOnboardingRuntime } from "./channelOnboardingRuntime.ts";
 import {
   approvalRequestId,
-  appliedReceipt,
   clone,
   currentProfile,
   expectedHeadEventId,
@@ -20,7 +19,6 @@ import {
   signedReply,
   runtimeStatus,
   secondApprovalRequestId,
-  signupRequestId,
 } from "./channelOnboardingRuntime/testFixtures.mjs";
 import { WELCOME_TEAM_ID } from "./welcomeGuide.ts";
 
@@ -71,7 +69,10 @@ function signedCompanyAction(profile, requestId) {
   );
 }
 
-function successfulProof(acknowledgementEventId, requestId = approvalRequestId) {
+function successfulProof(
+  acknowledgementEventId,
+  requestId = approvalRequestId,
+) {
   const reply = signedReply(acknowledgementEventId);
   return {
     proofId: `scout-setup:${acknowledgementEventId}:${reply.id}`,
@@ -113,7 +114,8 @@ function dependenciesFor(store, options = {}) {
     submitCompanyAction: async (signed) => {
       submissions.push(signed);
       submitCount += 1;
-      if (options.submitOutcome) return options.submitOutcome(signed, submitCount);
+      if (options.submitOutcome)
+        return options.submitOutcome(signed, submitCount);
       if (submitCount === 1) {
         return {
           status: "no-receipt",
@@ -145,7 +147,8 @@ function dependenciesFor(store, options = {}) {
     },
     startRuntime: async (pubkey, relay, owner) => {
       starts.push([pubkey, relay, owner]);
-      if (options.startRuntime) return options.startRuntime(pubkey, relay, owner);
+      if (options.startRuntime)
+        return options.startRuntime(pubkey, relay, owner);
       return runtimeStatus();
     },
     deliverAcknowledgement: async (input) => {
@@ -212,7 +215,7 @@ test("approval stores and retries the same signed profile action after an uncert
 test("a changed snapshot gets a new approval action after a completed setup", async () => {
   const store = memoryStore();
   const f = dependenciesFor(store, {
-    submitOutcome: (signed, count) => ({
+    submitOutcome: (_signed, count) => ({
       status: "applied",
       receiptEventId: `${"d".repeat(63)}${count}`,
       headEventId: "e".repeat(64),
@@ -227,8 +230,14 @@ test("a changed snapshot gets a new approval action after a completed setup", as
 
   assert.notEqual(first.proofId, second.proofId);
   assert.equal(f.actions.length, 2);
-  assert.equal(JSON.parse(f.actions[0].content).payload.record.summary, setupInput.setupDescription);
-  assert.equal(JSON.parse(f.actions[1].content).payload.record.summary, changed.setupDescription);
+  assert.equal(
+    JSON.parse(f.actions[0].content).payload.record.summary,
+    setupInput.setupDescription,
+  );
+  assert.equal(
+    JSON.parse(f.actions[1].content).payload.record.summary,
+    changed.setupDescription,
+  );
   assert.equal(store.get().approvalRequestId, secondApprovalRequestId);
 });
 
@@ -256,7 +265,10 @@ test("stale owner is checked before signing or submission", async () => {
     if (checks > 1) throw new Error("owner changed");
   };
   const runtime = createChannelOnboardingRuntime(scope, f.deps);
-  await assert.rejects(runtime.approve(setupInput, approvalRequestId), /owner changed/);
+  await assert.rejects(
+    runtime.approve(setupInput, approvalRequestId),
+    /owner changed/,
+  );
   assert.equal(f.actions.length, 0);
   assert.equal(f.submissions.length, 0);
   assert.equal(store.get(), null);
@@ -286,7 +298,7 @@ test("an invalid signed root fails the approval gate without setup side effects"
 test("a forged saved proof cannot restore ready or run a new runtime", async () => {
   const store = memoryStore();
   const f = dependenciesFor(store, {
-    submitOutcome: (signed) => ({
+    submitOutcome: (_signed) => ({
       status: "applied",
       receiptEventId: "d".repeat(64),
       headEventId: "e".repeat(64),

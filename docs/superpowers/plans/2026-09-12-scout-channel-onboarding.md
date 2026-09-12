@@ -1,136 +1,69 @@
-# Scout Channel Onboarding Implementation Plan
+# Scout Channel Onboarding Implementation Record
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status:** The pure state, inline view, signed-root mount, and host integration are implemented in the onboarding worktree. Runtime and storage provide the real signed setup boundary. GitHub browser/native checks are still pending in PR766.
 
-**Goal:** Add a reusable, inline Scout onboarding view and serializable reducer that guides an owner through exactly three starting routes, confirms an editable understanding, and delegates the final setup write to an I/O callback.
+## Outcome
 
-**Architecture:** Keep all onboarding facts and transitions in a pure reducer under `desktop/src/features/onboarding/channelOnboarding/state.ts`. The React view is controlled by that state and dispatches explicit actions; it owns only the render loop and an opaque request id for the setup callback. `onApproveSetup` receives a route-scoped, owner-confirmed input and must return a durable setup proof before the reducer can enter `ready`. Relay, channel, owner identity, signed records, and persistence are supplied by the caller.
+Scout opens as an inline fragment inside the existing Welcome message and thread. The first question has exactly three choices: start a new business, help with an existing business, or decide what to start. Each route keeps its own answers, preserves intentional blanks, reuses known signup context, and ends at an editable understanding. Setup is shown only after explicit owner confirmation and becomes ready only from a proof returned by the runtime.
 
-**Tech Stack:** React 19, TypeScript, Tailwind utility classes, existing `Button`, `Input`, `Textarea`, `Card`, `cn`, and `lucide-react`; Node’s focused test runner with the repo’s TypeScript test loader.
+The pure state does not know the owner, relay, channel, root event, storage, or runtime. The host supplies that scope and seeds `ScoutSignupContext` from the signed root payload (or accepts an explicit context override). An explicit `websiteState: "none"` survives serialization so the existing route does not ask for a website again.
 
----
+## Public API
 
-### Task 1: Define the serializable contract and reducer
+The stable state barrel is `desktop/src/features/onboarding/channelOnboarding/index.ts`, which exports the types, initializer, reducer, selectors, and serialization helpers. The main contracts are:
 
-**Files:**
-- Create: `desktop/src/features/onboarding/channelOnboarding/types.ts`
-- Create: `desktop/src/features/onboarding/channelOnboarding/state.ts`
-- Test: `desktop/src/features/onboarding/channelOnboarding/state.test.mjs`
+- `createInitialScoutOnboardingState({ signupContext? })` creates an arrival state without I/O.
+- `scoutOnboardingReducer(state, action)` applies typed owner actions immutably. `ScoutOnboardingDispatch` is the `onChange` callback consumed by the view.
+- `serializeScoutOnboardingState` and `deserializeScoutOnboardingState` round-trip JSON-safe drafts, including exact edited blanks.
+- `getScoutOnboardingSummary(state)` returns the complete route summary, including priority, unknowns, location, website, and `websiteState`.
+- `getScoutSetupInput(state)` returns a frozen, owner-confirmed setup snapshot or `null`.
+- `ScoutChannelOnboarding` accepts `state`, `onChange`, optional `onConfirm`, `onApproveSetup(input, requestId)`, optional `onRetry` with the same snapshot contract, and `onContinueInWelcome`.
 
-- [ ] **Step 1: Write focused reducer tests for the three routes and persistence.**
+`ScoutOnboardingHost` adds the scoped runtime boundary. Its `scope` contains owner pubkey, relay URL, channel id, thread root id, and signup request id. It accepts optional `rootPayload`, `signupContext`, `initialState`, runtime dependencies, or a supplied runtime. It creates the default runtime, persists the draft, synchronizes same-window and cross-window mounts, blocks actions when storage/runtime access fails, and remounts when the full scope changes.
 
-  Cover one meaningful path for each route, including optional blanks, route switching without answer leakage, and reload-safe round-tripping:
+The host reuses a durable `approvalRequestId` only when the saved setup input is an exact snapshot match. A changed snapshot receives a new UUID. A retry keeps the same request identity and signed records so an uncertain write cannot be duplicated.
 
-  ```js
-  test("new route keeps a deliberately blank optional answer", () => {
-    let state = createInitialScoutOnboardingState({
-      signupContext: { ownerName: "Ari" },
-    });
-    state = scoutOnboardingReducer(state, { type: "select-route", route: "new" });
-    state = scoutOnboardingReducer(state, {
-      type: "set-new-answer",
-      field: "description",
-      value: "",
-    });
-    assert.equal(state.routes.new.description, "");
-    assert.equal(deserializeScoutOnboardingState(serializeScoutOnboardingState(state)).routes.new.description, "");
-  });
+`ScoutOnboardingMessage` verifies the current owner, active relay, Welcome channel, root kind, thread shape, payload, and signature. It accepts an exact `rootEvent` adapter value or fetches `getEventById(message.id)` using a relay-and-event query key. `MessageRow` mounts it for the verified root in both the timeline and thread; ordinary message Markdown remains the fallback while the signed root is loading. When no explicit continuation callback is supplied, its verified channel scope drives the existing `goChannel(channelId, { replace: true })` navigation, which returns to Welcome and closes the thread query.
 
-  test("switching routes preserves isolated drafts and invalidates confirmation", () => {
-    let state = completeNewRoute();
-    state = scoutOnboardingReducer(state, { type: "confirm-understanding" });
-    assert.equal(state.understanding.status, "confirmed");
-    state = scoutOnboardingReducer(state, { type: "select-route", route: "deciding" });
-    assert.equal(state.routes.new.category, "local-services");
-    assert.deepEqual(state.routes.deciding.skills, []);
-    assert.equal(state.understanding.status, "draft");
-  });
+## Implemented modules
 
-  test("failed setup can retry and stale completion is ignored", () => {
-    let state = completeExistingRoute();
-    state = scoutOnboardingReducer(state, { type: "confirm-understanding" });
-    state = scoutOnboardingReducer(state, { type: "approve-setup-started", requestId: "r1" });
-    state = scoutOnboardingReducer(state, { type: "approve-setup-failed", requestId: "r1", error: "Relay unavailable" });
-    assert.equal(state.setup.phase, "error");
-    state = scoutOnboardingReducer(state, { type: "approve-setup-started", requestId: "r2" });
-    state = scoutOnboardingReducer(state, { type: "approve-setup-succeeded", requestId: "r1", proof: proof("r1") });
-    assert.equal(state.setup.phase, "saving");
-    state = scoutOnboardingReducer(state, { type: "approve-setup-succeeded", requestId: "r2", proof: proof("r2") });
-    assert.equal(state.setup.phase, "ready");
-  });
-  ```
+Pure state is split by responsibility:
 
-- [ ] **Step 2: Run only the new test before implementation and observe the expected missing-export failure.**
+- `channelOnboarding/types.ts`, `constants.ts`, `initialState.ts`, `reducer.ts`, `selectors.ts`, and `serialization.ts`.
+- `channelOnboarding/state.ts` and `channelOnboarding/index.ts` are stable barrels.
 
-  Run `cd desktop && node --import ./test-loader.mjs --experimental-strip-types --test src/features/onboarding/channelOnboarding/state.test.mjs`.
+The route view is split into `ScoutChannelOnboarding.tsx`, `ArrivalStage.tsx`, `NewRouteStages.tsx`, `ExistingRouteStages.tsx`, `DecidingRouteStages.tsx`, `UnderstandingStage.tsx`, `SetupStages.tsx`, and `shared.tsx`.
 
-- [ ] **Step 3: Add typed route drafts, actions, setup proof, and serialization boundaries.**
+The integration boundary is `channelOnboardingHost.tsx` and `ui/ScoutOnboardingMessage.tsx`. Signed setup I/O is implemented behind `channelOnboardingSetup.ts`, `channelOnboardingStorage.ts`, `channelOnboardingRuntime.ts`, and the runtime `attempt`, `acknowledgement`, and `reply` modules. The runtime exposes `reconcileSavedProof(input)` for read-only ready-state recovery after reload.
 
-  `types.ts` defines the exact public unions and callback payload. All persisted fields are JSON values: strings retain `""`, arrays contain only known skill ids, and setup request ids are opaque strings. `state.ts` exposes `createInitialScoutOnboardingState`, `scoutOnboardingReducer`, `serializeScoutOnboardingState`, `deserializeScoutOnboardingState`, `getScoutOnboardingSummary`, `getScoutSetupInput`, and `isScoutRouteComplete`.
+## Completed checkpoints
 
-- [ ] **Step 4: Implement immutable transitions and stale-result guards.**
+- [x] All three routes, optional personal notes, exact blanks, seeded owner/business/site facts, explicit no-site state, and route-isolated drafts.
+- [x] New-route category validation, including required words for `other`; idea stage and relevant priority.
+- [x] Existing-route business confirmation, supplied-site reuse, changed-site editing, and no-site choice.
+- [x] Decide-route multi-select skills, direction including “Still exploring,” priority, and no site field.
+- [x] Editable understanding, explicit confirmation, minimal Scout-only Welcome/thread setup proposal, and proof-gated ready state.
+- [x] Immutable reducer transitions, changed-answer invalidation, stale async completion rejection, interrupted-saving retry state, and invalid-ready-proof rejection.
+- [x] Scoped host lifecycle, storage-error blocking, same-window/cross-window draft synchronization, signed-root owner guard, and dual timeline/thread mount assertion.
+- [x] Cached ready state automatically enters “Checking saved setup” and calls read-only `runtime.reconcileSavedProof`; successful verification restores ready without an approval or manual retry.
 
-  Route selection resets the visible stage and clears global confirmation/setup state while preserving each route draft. Editing any confirmed understanding field returns the state to the editable understanding and clears setup proof. `approve-setup-succeeded` and `approve-setup-failed` apply only when their request id equals the currently saving request id; stale completions return the prior state object.
+## Verification boundary
 
-- [ ] **Step 5: Run the focused tests and inspect the serialized fixture.**
+The following focused checks were run in the onboarding worktree:
 
-  Run the command from Step 2. Expected: all route, blank-value, branch-switch, failure/retry, stale-completion, and round-trip tests pass.
+```text
+node --import ./test-loader.mjs --experimental-strip-types --test \
+  src/features/onboarding/channelOnboarding/state.test.mjs \
+  src/features/onboarding/channelOnboardingHost.test.mjs
+15 passed, 0 failed
 
-### Task 2: Build the inline Scout channel view
+node desktop/scripts/check-file-sizes.mjs
+passed
 
-**Files:**
-- Create: `desktop/src/features/onboarding/channelOnboarding/ScoutChannelOnboarding.tsx`
-- Create: `desktop/src/features/onboarding/channelOnboarding/index.ts`
+git diff --check
+passed
+```
 
-- [ ] **Step 1: Add a controlled component API that keeps I/O outside the view.**
+A scoped strict TypeScript program covering Host, ScoutOnboardingMessage, MessageRow, setup, runtime, and runtime submodules reported `relevantDiagnostics=0`. It also surfaced 30 existing diagnostics outside this graph (CSS/Vite asset and declaration issues); no full project typecheck was run. Targeted Biome checks passed, with one pre-existing non-null assertion warning in the E2E fixture spec.
 
-  The component accepts `state`, `dispatch`, `signupContext`, `onApproveSetup`, and `onContinueInWelcome`. `onApproveSetup` is called only from the explicit “Approve this workspace setup” button, with `getScoutSetupInput(state)` and the request id. A successful returned proof dispatches `approve-setup-succeeded`; a rejected promise dispatches `approve-setup-failed`. No effect starts setup, no timer changes state, and no visual navigation marks the workspace ready.
-
-- [ ] **Step 2: Render the approved conversation fragment inline.**
-
-  Render dated message/thread content, Scout and owner bubbles, and the current onboarding block. The parent already supplies the application shell, sidebar, channel header, and `#welcome` thread, so this component must not duplicate any of them. Keep the fragment self-contained so the parent can place it inside the existing Welcome message/thread. Use `aria-labelledby`, labels, `aria-current`, `aria-pressed`, `aria-live`, keyboard-operable buttons, and visible focus styles. Never include design-review controls, sample business data, fake timers, or ad-hoc HTML strings.
-
-- [ ] **Step 3: Implement the exact route questions and progression.**
-
-  Arrival offers only “Start a new business”, “Help with my existing business”, and “Help me decide what to start”. New asks for category, optional short description, optional owner note, idea stage (`idea`, `preparing`, `testing`), and a relevant priority. Existing confirms seeded business/site context, asks for a site only when absent or changed, permits “I don’t have one”, and asks the current priority. Decide allows multiple skills/experience/interests, then a direction including “Still exploring”, followed by a priority. Optional personal notes remain optional and no decide route asks for a site.
-
-- [ ] **Step 4: Render editable understanding, minimal setup proposal, saving/error/ready states.**
-
-  The understanding block exposes person, business/idea, priority, and route-specific unknowns; its “This looks right” control requires a complete route and explicit confirmation. The setup block describes Scout-only guidance in the existing Welcome context and future work in threads, with no extra hires or job. Saving shows callback-driven progress; error preserves the draft and offers retry; ready displays the proof-backed context and an orientation for continuing in `#welcome`.
-
-- [ ] **Step 5: Apply current theme tokens and responsive behavior.**
-
-  Use `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border-border`, and `text-primary` tokens with rem-safe stock text classes. Keep the editorial spacing, quiet lavender accent, soft borders, and single-column small-screen layout from the approved reference while allowing the host app to provide the shell and height.
-
-### Task 3: Export and verify the module boundary
-
-**Files:**
-- Modify: `desktop/src/features/onboarding/channelOnboarding/index.ts`
-
-- [ ] **Step 1: Export only the reusable public surface.**
-
-  Export the state types, reducer helpers, summary/setup selectors, and `ScoutChannelOnboarding`. Do not export internal option arrays or host-specific relay/storage details.
-
-- [ ] **Step 2: Run focused state tests again and inspect the diff.**
-
-  Run `cd desktop && node --import ./test-loader.mjs --experimental-strip-types --test src/features/onboarding/channelOnboarding/state.test.mjs` and `git diff --check`. Do not run `just ci`, a desktop build, Rust compilation, app launch, or full test suites for this bounded module task.
-
-- [ ] **Step 3: Report the exact API and proof boundary to the orchestrator.**
-
-  Include the new file paths, focused test command/result, reducer request-id guard, and the fact that durable signed setup I/O remains the parent/architecture agent’s responsibility.
-
----
-
-## Self-review checklist
-
-- [ ] All three arrival choices are present and route drafts remain isolated.
-- [ ] Signup owner/business/site context is seeded; existing route does not re-ask known facts.
-- [ ] New route has category, short description, idea stage, and relevant priority.
-- [ ] Existing route has confirmation, optional/changable website, explicit no-site path, and priority.
-- [ ] Decide route has selectable skills/interests, “Still exploring”, and no site field.
-- [ ] Optional personal notes and blank edits persist exactly.
-- [ ] Understanding requires explicit confirmation before setup.
-- [ ] Setup proposal is Scout-only, Welcome/context scoped, thread-oriented, and contains no extra hire/job.
-- [ ] Setup readiness comes only from callback proof; errors retry and stale completions are ignored.
-- [ ] State is serializable and has no owner/relay/channel/root or I/O singleton.
-- [ ] UI has no render-triggered actions, fake timers, design controls, or copied sample data.
+Local CI, desktop builds, Rust compilation, app launch, and browser/native E2E were intentionally not run. PR766’s GitHub checks are the remaining browser/native proof boundary.

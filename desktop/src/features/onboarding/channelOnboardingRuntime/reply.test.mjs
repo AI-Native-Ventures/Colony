@@ -5,7 +5,6 @@ import { createScoutReplyVerifier } from "./reply.ts";
 import {
   approvalRequestId,
   ownerPubkey,
-  rootEvent,
   scope,
   scoutPubkey,
   setupInput,
@@ -43,26 +42,13 @@ function verifierFixture({ includeReply = true, timeoutMs = 500 } = {}) {
   const acknowledgement = signedAcknowledgement();
   const reply = signedReply(acknowledgement.id);
   const frames = [
-    proofFrame(
-      "turn_completed",
-      "turn-1",
-      3,
-      "2026-09-12T10:00:03.000Z",
-    ),
-    proofFrame(
-      "acp_read",
-      "turn-1",
-      2,
-      "2026-09-12T10:00:02.000Z",
-      { result: { stopReason: "end_turn" } },
-    ),
-    proofFrame(
-      "turn_started",
-      "turn-1",
-      1,
-      "2026-09-12T10:00:01.000Z",
-      { triggeringEventIds: [acknowledgement.id] },
-    ),
+    proofFrame("turn_completed", "turn-1", 3, "2026-09-12T10:00:03.000Z"),
+    proofFrame("acp_read", "turn-1", 2, "2026-09-12T10:00:02.000Z", {
+      result: { stopReason: "end_turn" },
+    }),
+    proofFrame("turn_started", "turn-1", 1, "2026-09-12T10:00:01.000Z", {
+      triggeringEventIds: [acknowledgement.id],
+    }),
   ];
   const decoded = new Map([
     ["observer-newest", { kind: "batch", payload: { events: frames } }],

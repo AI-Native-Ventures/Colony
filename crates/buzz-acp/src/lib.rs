@@ -5250,7 +5250,8 @@ mod company_onboarding_prompt_tests {
         assert!(PROMPT.contains("confirm that Scout understands"));
         assert!(PROMPT.contains("existing **Welcome** channel and thread"));
         assert!(PROMPT.contains("**Scout only** as the default starting teammate"));
-        assert!(PROMPT.contains("normal Colony channels\nand threads"));
+        let normalized_prompt = PROMPT.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(normalized_prompt.contains("normal Colony channels and threads"));
         assert!(PROMPT.contains("Setup approval authorizes this minimal workspace handoff only"));
         assert!(PROMPT.contains("does not\napprove a business job"));
         assert!(PROMPT.contains("extra teammate"));

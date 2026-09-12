@@ -2,12 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { finalizeEvent } from "nostr-tools/pure";
 
-import {
-  createScoutAcknowledgementDelivery,
-} from "./acknowledgement.ts";
+import { createScoutAcknowledgementDelivery } from "./acknowledgement.ts";
 import {
   ownerSecret,
-  rootEvent,
   scope,
   scoutPubkey,
   setupInput,
@@ -96,10 +93,7 @@ test("an uncertain acknowledgement retries the same signed event and then marks 
   const result = await f.deliver({ ...input, existing: pending });
   assert.equal(result.published, true);
   assert.equal(f.published.length, 2);
-  assert.equal(
-    JSON.stringify(f.published[0]),
-    JSON.stringify(f.published[1]),
-  );
+  assert.equal(JSON.stringify(f.published[0]), JSON.stringify(f.published[1]));
   assert.equal(f.after.at(-1)?.published, true);
   assert.equal(f.after.at(-1)?.eventId, pending.eventId);
 
@@ -124,7 +118,11 @@ test("a saved acknowledgement with a changed snapshot cannot be republished", as
 });
 
 test("an unconfirmed custom clock or current-account check prevents publication", async () => {
-  const f = fixture({ assertCurrent: () => { throw new Error("owner changed"); } });
+  const f = fixture({
+    assertCurrent: () => {
+      throw new Error("owner changed");
+    },
+  });
   await assert.rejects(f.deliver(input), /owner changed/);
   assert.equal(f.published.length, 0);
 });
