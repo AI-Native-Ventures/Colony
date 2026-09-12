@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## relay-v0.11.12
+
+- feat(relay): Colony now provisions employees. A bundled registry seeds one employee per workspace at startup and at provisioning, with its own sealed key, and the relay refuses every attempt to archive, retire, rank, rename or re-prompt it, so an employee we provide cannot be edited or deleted by anyone but us.
+- feat(relay): a provisioned employee is given what it needs to work: workspace membership and an active `discovery.run` grant, reconciled on every seeding pass so workspaces seeded earlier heal on the next start.
+- feat(relay): an authenticated, audited endpoint releases a provisioned employee's runtime key to a community owner or admin, so the machine running that employee can sign as it. Every release is recorded before the key is returned.
+- feat(relay): the bundled `@outreach-email` composite, the decision card an employee draws one outreach email on, with the approval hash bound to its exact recipient, subject and body.
+
+
 ## v0.17.4
 
 - fix(desktop): pass the owner's account name to Claude teammates, so the login on this Mac is actually found. 0.17.3 reached the CLI but reported a signed-out account, because the coordinator is spawned with a cleared environment and the keychain item is keyed on that name.
