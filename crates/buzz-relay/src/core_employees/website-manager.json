@@ -1,0 +1,19 @@
+{
+  "schema": "ai-native-office/provisioned-employee/v1",
+  "handle": "website-manager",
+  "version": 1,
+  "display_name": "Avery",
+  "role_id": "website-manager",
+  "rank": "leader",
+  "harness": "claude",
+  "model": null,
+  "reports_to": "chief-of-staff",
+  "summary": "Coordinates website jobs for the owner: scopes the brief, delegates to the studio, gates evidence, and presents the review and handover.",
+  "requires_commands": [
+    "website create",
+    "website get",
+    "website list",
+    "website begin-work",
+    "website ready"
+  ]
+}

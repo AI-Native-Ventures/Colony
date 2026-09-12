@@ -42,9 +42,9 @@ pub use install::{install_status, install_website_team};
 pub use journal::WebsiteTeamJournalEntry;
 pub use recipe::{
     EXAMPLE_PROMPT, INTEGRATION_NOTE, OUTCOME_SENTENCE, PERSONAS, RECIPE_ID, RECIPE_VERSION,
-    SKILLS, TEAM_NAME, TEAM_SLUG,
+    SKILLS, TEAM_NAME, TEAM_SLUG, owns_provisioned_handle,
 };
-pub use skills::InstalledWebsiteSkill;
+pub use skills::{install_recipe_skills, InstalledWebsiteSkill};
 
 use serde::{Deserialize, Serialize};
 

@@ -4,7 +4,6 @@ import {
   consumePendingSnapshotImport,
   subscribeSnapshotImport,
 } from "@/features/agents/openSnapshotImportFromUrlEvent";
-import { WebsiteTeamInstallDialog } from "@/features/websiteTeam";
 import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
 import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { AgentDefaultsDialog } from "./AgentDefaultsDialog";
@@ -52,7 +51,6 @@ export function AgentsView() {
   const fullAiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const compactActionsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const [isAiDefaultsOpen, setIsAiDefaultsOpen] = React.useState(false);
-  const [isWebsiteTeamOpen, setIsWebsiteTeamOpen] = React.useState(false);
   function openUnifiedCatalog() {
     personas.prepareCreate();
     personas.openCatalog();
@@ -289,7 +287,6 @@ export function AgentsView() {
               onEdit={teamActions.openEditDialog}
               onAddToChannel={teamActions.setTeamToAddToChannel}
               onShare={teamActions.openShare}
-              onInstallWebsiteManager={() => setIsWebsiteTeamOpen(true)}
               onImport={() => {
                 teamImportInputRef.current?.click();
               }}
@@ -306,11 +303,6 @@ export function AgentsView() {
         onOpenChange={setAiDefaultsDialogOpen}
         open={isAiDefaultsOpen}
         returnFocusRef={aiDefaultsTriggerRef}
-      />
-
-      <WebsiteTeamInstallDialog
-        onOpenChange={setIsWebsiteTeamOpen}
-        open={isWebsiteTeamOpen}
       />
 
       {agents.agentToAddToChannel ? (

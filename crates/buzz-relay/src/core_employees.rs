@@ -15,8 +15,9 @@
 //! refusal points in [`crate::handlers::ingest`],
 //! [`crate::handlers::identity_archive`] and [`crate::employee_broker`] turn
 //! away every user path that would archive, retire, rename or re-prompt one.
-//! Employees a workspace creates for itself stay entirely editable; nothing
-//! here touches them.
+//! An employee a workspace creates for a role Colony does not bundle stays
+//! entirely its own; one it created for a bundled role is adopted and becomes
+//! Colony-maintained from then on.
 //!
 //! Two properties this module is built around:
 //!
@@ -24,9 +25,12 @@
 //!   and an employee that could not be seeded is a missing colleague, not a
 //!   dead workspace. A relay with no employee key-encryption key configured
 //!   simply has no provisioned employees, logged once per start.
-//! - **Seeding never displaces a user's own employee.** The insert leans on
-//!   the same unique indexes the hire path does, so a workspace that already
-//!   employs somebody in the role keeps them and the seed settles as a no-op.
+//! - **Seeding never mints a second identity for a role.** A workspace that
+//!   already employs somebody in a bundled role has that employee adopted:
+//!   the same pubkey, now carrying the bundled handle, brief, name and rank,
+//!   so the workspace gets every later improvement with no user action. An
+//!   employee a workspace creates for a role Colony does not bundle stays
+//!   entirely its own.
 
 use anyhow::Context;
 use buzz_core::interrupt::AgentTier;
@@ -43,11 +47,43 @@ use crate::state::AppState;
 /// The prompt lives in its own file rather than inside the JSON because it is
 /// prose that gets edited often and reviewed on its own terms. A manifest and
 /// its prompt are bound together here, at the one place both are compiled in.
-const CORE_EMPLOYEE_ASSETS: [(&str, &str, &str); 1] = [(
-    "sales.json",
-    include_str!("core_employees/sales.json"),
-    include_str!("core_employees/sales-prompt.md"),
-)];
+///
+/// Order is the bundle's own order, not the seeding order: reporting lines are
+/// validated and sorted by [`core_employee_manifests`] before anything is
+/// seeded, so a manager is always inserted before the employees that report to
+/// it regardless of where the tuple sits in this list.
+const CORE_EMPLOYEE_ASSETS: [(&str, &str, &str); 6] = [
+    (
+        "sales.json",
+        include_str!("core_employees/sales.json"),
+        include_str!("core_employees/sales-prompt.md"),
+    ),
+    (
+        "chief-of-staff.json",
+        include_str!("core_employees/chief-of-staff.json"),
+        include_str!("core_employees/chief-of-staff-prompt.md"),
+    ),
+    (
+        "website-manager.json",
+        include_str!("core_employees/website-manager.json"),
+        include_str!("core_employees/website-manager-prompt.md"),
+    ),
+    (
+        "website-researcher.json",
+        include_str!("core_employees/website-researcher.json"),
+        include_str!("core_employees/website-researcher-prompt.md"),
+    ),
+    (
+        "website-designer-builder.json",
+        include_str!("core_employees/website-designer-builder.json"),
+        include_str!("core_employees/website-designer-builder-prompt.md"),
+    ),
+    (
+        "website-reviewer.json",
+        include_str!("core_employees/website-reviewer.json"),
+        include_str!("core_employees/website-reviewer-prompt.md"),
+    ),
+];
 
 /// The schema string every bundled manifest declares, so a file from some
 /// other part of the product cannot be read as an employee by accident.
@@ -69,6 +105,11 @@ pub struct ProvisionedEmployee {
     pub role_id: String,
     /// One of `worker`, `leader`, `executive`.
     pub rank: String,
+    /// The bundled `handle` of the employee this one reports to. Absent means
+    /// top of the chart. Validated at load: the named handle must be bundled,
+    /// and the graph must be acyclic.
+    #[serde(default)]
+    pub reports_to: Option<String>,
     /// The agent harness that runs it, by catalog id (`claude`, `codex`, ...).
     pub harness: String,
     /// The model to pin, or `None` to let the harness choose.
@@ -77,7 +118,8 @@ pub struct ProvisionedEmployee {
     /// One line describing what this employee does, shown wherever it is
     /// introduced.
     pub summary: String,
-    /// Top-level `buzz` subcommands this employee's brief tells it to use.
+    /// The `buzz` commands this employee's brief tells it to use: a top-level
+    /// subcommand (`messages`), or a command path under one (`website get`).
     ///
     /// An employee runs the `buzz` that ships inside the installed app, and a
     /// brief naming a command that binary does not have is broken on arrival:
@@ -164,7 +206,93 @@ pub fn core_employee_manifests() -> anyhow::Result<Vec<ProvisionedEmployee>> {
         anyhow::bail!("two bundled employee manifests share a handle");
     }
 
-    Ok(parsed)
+    let mut roles: Vec<&str> = parsed.iter().map(|entry| entry.role_id.as_str()).collect();
+    roles.sort_unstable();
+    let unique_roles = roles.len();
+    roles.dedup();
+    if roles.len() != unique_roles {
+        anyhow::bail!(
+            "two bundled employee manifests share a role; a workspace can employ one agent per role"
+        );
+    }
+
+    validate_reporting_lines(&parsed)?;
+    sort_by_reporting_line(parsed)
+}
+
+/// Check every `reports_to` against the bundle: the named handle must exist,
+/// and no employee may sit in its own reporting chain.
+///
+/// Both are bundle bugs that must stop the whole seed rather than one entry.
+/// A `reports_to` that names nothing would otherwise seed its employee into
+/// the Unassigned tray while every check stayed green; a cycle would leave the
+/// topological sort with no first employee to place.
+fn validate_reporting_lines(employees: &[ProvisionedEmployee]) -> anyhow::Result<()> {
+    let handles: Vec<&str> = employees
+        .iter()
+        .map(|employee| employee.handle.as_str())
+        .collect();
+
+    for employee in employees {
+        let Some(manager) = employee.reports_to.as_deref() else {
+            continue;
+        };
+        if manager.trim().is_empty() {
+            anyhow::bail!(
+                "bundled employee manifest for `{}` names an empty reports_to",
+                employee.handle
+            );
+        }
+        if !handles.contains(&manager) {
+            anyhow::bail!(
+                "bundled employee manifest for `{}` reports to `{manager}`, which is not a bundled handle",
+                employee.handle
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Order the bundle so a manager is seeded before the employees that report to
+/// it: the topological order of the `reports_to` graph, stable within a rank
+/// of independent employees.
+///
+/// [`validate_reporting_lines`] already proved every name resolves, so the
+/// only way to stall here is a cycle, which is refused with the handles still
+/// waiting. Kahn's algorithm in bundle order: each pass places every employee
+/// whose manager is already placed, so the website manager lands immediately
+/// after the chief of staff and the workers after the manager.
+fn sort_by_reporting_line(
+    mut remaining: Vec<ProvisionedEmployee>,
+) -> anyhow::Result<Vec<ProvisionedEmployee>> {
+    let mut ordered: Vec<ProvisionedEmployee> = Vec::with_capacity(remaining.len());
+    while !remaining.is_empty() {
+        let before = remaining.len();
+        let mut index = 0;
+        while index < remaining.len() {
+            let placed = match remaining[index].reports_to.as_deref() {
+                None => true,
+                Some(manager) => ordered.iter().any(|employee| employee.handle == manager),
+            };
+            if placed {
+                ordered.push(remaining.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        if remaining.len() == before {
+            let stuck: Vec<&str> = remaining
+                .iter()
+                .map(|employee| employee.handle.as_str())
+                .collect();
+            anyhow::bail!(
+                "bundled employee reporting lines have a cycle among: {}",
+                stuck.join(", ")
+            );
+        }
+    }
+    Ok(ordered)
 }
 
 /// What seeding one employee did, so the caller can log a line that says which.
@@ -172,19 +300,21 @@ pub fn core_employee_manifests() -> anyhow::Result<Vec<ProvisionedEmployee>> {
 pub enum SeedOutcome {
     /// A new identity was minted and its records published.
     Seeded,
+    /// The workspace already employed somebody in this role, so that employee
+    /// was adopted into the bundle: the same pubkey, now carrying the bundled
+    /// handle and config.
+    Adopted,
     /// A newer bundled version replaced what was already seeded.
     Updated,
     /// The bundled version is already the seeded one. Nothing was written.
     Unchanged,
-    /// A user's own employee already holds this role, so the seed stood down.
-    RoleTaken,
 }
 
 /// Ensure every bundled employee exists for one community.
 ///
-/// Returns how many rows were written or updated. An employee that could not
-/// be seeded is logged and skipped: one bad entry must not stop the rest, and
-/// the next relay start tries again.
+/// Returns how many rows were written: seeded, adopted, or updated. An
+/// employee that could not be seeded is logged and skipped: one bad entry must
+/// not stop the rest, and the next relay start tries again.
 pub async fn ensure_core_employees(
     state: &AppState,
     community: CommunityId,
@@ -205,10 +335,23 @@ pub async fn ensure_core_employees(
 
     let mut written = 0usize;
     for employee in &manifests {
-        match seed_one(state, community, employee).await {
+        match seed_one(state, community, &manifests, employee).await {
             Ok(SeedOutcome::Seeded) => {
                 written += 1;
                 info!(community = %community, handle = %employee.handle, "provisioned employee seeded");
+            }
+            Ok(SeedOutcome::Adopted) => {
+                written += 1;
+                // Deliberately a warning: the owner's own agent just took
+                // Colony's brief, and the owner reading a relay log needs to
+                // find out why without knowing this module exists.
+                warn!(
+                    community = %community,
+                    handle = %employee.handle,
+                    role = %employee.role_id,
+                    version = employee.version,
+                    "a workspace employee already held this role; it was adopted into the bundled employee and now carries its brief, name and rank"
+                );
             }
             Ok(SeedOutcome::Updated) => {
                 written += 1;
@@ -220,14 +363,6 @@ pub async fn ensure_core_employees(
                 );
             }
             Ok(SeedOutcome::Unchanged) => {}
-            Ok(SeedOutcome::RoleTaken) => {
-                warn!(
-                    community = %community,
-                    handle = %employee.handle,
-                    role = %employee.role_id,
-                    "a workspace employee already holds this role; the provisioned employee was not seeded"
-                );
-            }
             Err(error) => {
                 warn!(
                     community = %community,
@@ -359,10 +494,20 @@ pub async fn ensure_core_employees_for_all_communities(state: &AppState) -> anyh
     Ok(written)
 }
 
-/// Seed, update, or leave alone one bundled employee in one community.
+/// Seed, update, adopt, or leave alone one bundled employee in one community.
+///
+/// Three outcomes, in order:
+///
+/// 1. an already-seeded row is updated when the bundle moved (or its manager
+///    edge is missing), so a settled workspace writes nothing;
+/// 2. a role already filled by the workspace's own employee is adopted: the
+///    same pubkey, the bundle's brief, name and rank stamped on it, and the
+///    bundled handle recorded so later versions keep updating it;
+/// 3. otherwise a fresh identity is minted and seeded.
 async fn seed_one(
     state: &AppState,
     community: CommunityId,
+    manifests: &[ProvisionedEmployee],
     employee: &ProvisionedEmployee,
 ) -> anyhow::Result<SeedOutcome> {
     let sealer = state
@@ -370,13 +515,24 @@ async fn seed_one(
         .as_ref()
         .context("no employee key-encryption key is configured")?;
 
+    let manager = resolve_manager(state, community, manifests, employee).await?;
+
     if let Some(existing) = state
         .db
         .find_provisioned_employee(community, &employee.handle)
         .await
         .context("failed to look up an already-seeded employee")?
     {
-        if existing.provisioned_version.unwrap_or(0) >= employee.version {
+        let version_current = existing.provisioned_version.unwrap_or(0) >= employee.version;
+        // A manager that resolves now but is missing from the row heals even
+        // when the version has not moved: that state is how an employee whose
+        // manager's own seeding failed on an earlier pass converges without a
+        // bundle bump. A bundle that names no manager owns no manager edge, so
+        // `None` never forces a write.
+        let manager_current = manager
+            .as_deref()
+            .is_none_or(|resolved| existing.manager.as_deref() == Some(resolved));
+        if version_current && manager_current {
             return Ok(SeedOutcome::Unchanged);
         }
 
@@ -388,6 +544,7 @@ async fn seed_one(
                 &employee.display_name,
                 &employee.role_id,
                 &employee.rank,
+                manager.as_deref(),
                 employee.version,
             )
             .await
@@ -395,8 +552,47 @@ async fn seed_one(
             .context("the seeded employee vanished while being updated")?;
 
         let keys = open_keys(sealer, community, &updated.pubkey, &updated.sealed_key)?;
-        publish_records(state, community, employee, &keys).await;
+        // The row the write produced is the authority, not the bundle
+        // resolution: when the bundle names no manager the update left an
+        // existing one in place, and the head must carry that same edge.
+        publish_records(state, community, employee, updated.manager.as_deref(), &keys).await;
         return Ok(SeedOutcome::Updated);
+    }
+
+    // Nothing seeded under this handle. If the role is already filled, the
+    // holder is this employee's counterpart in this workspace: adopt it rather
+    // than minting a second identity for one role. The holder keeps its key,
+    // its history and every thread it has spoken in; what changes is that the
+    // bundle now owns its brief.
+    if let Some(holder) = role_holder(state, community, employee).await? {
+        let adopted = state
+            .db
+            .adopt_provisioned_employee(
+                community,
+                &holder.pubkey,
+                &employee.handle,
+                employee.version,
+                &employee.display_name,
+                &employee.role_id,
+                &employee.rank,
+                manager.as_deref(),
+            )
+            .await
+            .context("failed to adopt the workspace employee holding this role")?;
+
+        if let Some(adopted) = adopted {
+            let keys = open_keys(sealer, community, &adopted.pubkey, &adopted.sealed_key)?;
+            // As in the update path: publish the row's own manager, so a
+            // reporting line the workspace had before adoption survives on
+            // both the row and the head.
+            publish_records(state, community, employee, adopted.manager.as_deref(), &keys).await;
+            return Ok(SeedOutcome::Adopted);
+        }
+
+        // The row moved between the lookup and the update: it retired, or a
+        // concurrent pass adopted it first. Nothing is wrong; the next start
+        // reconciles from whatever state this pass left behind.
+        return Ok(SeedOutcome::Unchanged);
     }
 
     // Mint independently of the relay's own keypair, for the same reason
@@ -420,6 +616,7 @@ async fn seed_one(
                 role_id: &employee.role_id,
                 display_name: &employee.display_name,
                 rank: &employee.rank,
+                manager: manager.as_deref(),
                 provisioned_handle: &employee.handle,
                 provisioned_version: employee.version,
             },
@@ -427,16 +624,124 @@ async fn seed_one(
         .await
         .context("failed to record the provisioned employee")?;
 
-    // `None` means a unique index refused the row. The handle index is
-    // handled above, so reaching here means a workspace employee already
-    // holds the role. The minted key is simply dropped: it was never
-    // published, so nothing refers to it.
-    if inserted.is_none() {
-        return Ok(SeedOutcome::RoleTaken);
+    // `None` means a unique index refused the row after both lookups above,
+    // so a concurrent seed or hire won a race this pass cannot see. The
+    // minted key is simply dropped: it was never published, so nothing refers
+    // to it, and the next pass observes the winner.
+    let Some(inserted) = inserted else {
+        return Ok(SeedOutcome::Unchanged);
+    };
+
+    publish_records(state, community, employee, inserted.manager.as_deref(), &keys).await;
+    Ok(SeedOutcome::Seeded)
+}
+
+/// The workspace employee that currently fills `employee`'s role, if any.
+///
+/// The active-role unique index admits one holder, but the read is a list
+/// ordered by pubkey so a legacy or damaged pair still resolves the same way
+/// every pass: the lowest pubkey, with a warning naming the collision.
+///
+/// A holder already provisioned under another handle is not adoptable and
+/// cannot be seeded over, because the role index would refuse the insert. That
+/// state can only come from a bundle with two entries for one role, which
+/// [`core_employee_manifests`] refuses before seeding starts; here it is
+/// logged and skipped rather than escalated.
+async fn role_holder(
+    state: &AppState,
+    community: CommunityId,
+    employee: &ProvisionedEmployee,
+) -> anyhow::Result<Option<buzz_db::employees::EmployeeRow>> {
+    let holders = state
+        .db
+        .list_active_employees_by_role(community, &employee.role_id)
+        .await
+        .with_context(|| format!("failed to look up who holds role `{}`", employee.role_id))?;
+
+    let Some((first, rest)) = holders.split_first() else {
+        return Ok(None);
+    };
+    if !rest.is_empty() {
+        warn!(
+            community = %community,
+            handle = %employee.handle,
+            role = %employee.role_id,
+            pubkey = %hex::encode(&first.pubkey),
+            "several active employees hold this role; using the lowest pubkey"
+        );
+    }
+    if first.provisioned_handle.is_some() {
+        warn!(
+            community = %community,
+            handle = %employee.handle,
+            role = %employee.role_id,
+            "the role is already held by a different provisioned employee; not seeding this one"
+        );
+        return Ok(None);
+    }
+    Ok(Some(first.clone()))
+}
+
+/// The pubkey `employee` should report to, resolved the way the org chart
+/// resolves a role: a provisioned employee carrying the named handle wins,
+/// and otherwise whoever fills that handle's `role_id` in this community is
+/// the manager. That second step is what makes an adopted workspace employee
+/// (an existing Chief of Staff, say) the manager of the employees reporting to
+/// that role.
+///
+/// A missing manager is logged and seeded as no manager rather than failing
+/// the pass: the manager's own seeding may have failed, and a later pass heals
+/// the edge through the ordinary update path.
+async fn resolve_manager(
+    state: &AppState,
+    community: CommunityId,
+    manifests: &[ProvisionedEmployee],
+    employee: &ProvisionedEmployee,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    let Some(manager_handle) = employee.reports_to.as_deref() else {
+        return Ok(None);
+    };
+
+    if let Some(seeded) = state
+        .db
+        .find_provisioned_employee(community, manager_handle)
+        .await
+        .with_context(|| format!("failed to look up the manager `{manager_handle}`"))?
+    {
+        return Ok(Some(seeded.pubkey));
     }
 
-    publish_records(state, community, employee, &keys).await;
-    Ok(SeedOutcome::Seeded)
+    let role_id = manifests
+        .iter()
+        .find(|entry| entry.handle == manager_handle)
+        .map(|entry| entry.role_id.as_str())
+        .expect("every reports_to names a bundled handle, checked at load");
+    let holders = state
+        .db
+        .list_active_employees_by_role(community, role_id)
+        .await
+        .with_context(|| format!("failed to look up who holds role `{role_id}`"))?;
+
+    let Some((first, rest)) = holders.split_first() else {
+        warn!(
+            community = %community,
+            handle = %employee.handle,
+            manager = manager_handle,
+            role = role_id,
+            "the manager for this provisioned employee is not in place yet; seeding without one"
+        );
+        return Ok(None);
+    };
+    if !rest.is_empty() {
+        warn!(
+            community = %community,
+            handle = %employee.handle,
+            manager = manager_handle,
+            role = role_id,
+            "several active employees hold the manager's role; using the lowest pubkey"
+        );
+    }
+    Ok(Some(first.pubkey.clone()))
 }
 
 /// Re-derive a seeded employee's signing keys from its sealed column.
@@ -509,6 +814,11 @@ async fn next_created_at(
 /// Publish the three records that make a seeded employee visible: its profile,
 /// its employee head, and its agent definition.
 ///
+/// `manager` is the manager pubkey (32 raw bytes) the published head must
+/// carry. Callers pass the manager the ROW holds after the write, not the
+/// bundle's resolution alone: a bundle that names no manager leaves an
+/// existing reporting line in place, and the head must carry that same edge.
+///
 /// Relay-authored writes bypass ingest, so this stores each event directly.
 /// Failures are logged rather than returned, exactly as the hire path treats
 /// its heads: the durable record of employment is the row, and a lost head is
@@ -517,10 +827,11 @@ async fn publish_records(
     state: &AppState,
     community: CommunityId,
     employee: &ProvisionedEmployee,
+    manager: Option<&[u8]>,
     keys: &Keys,
 ) {
     let created_at = next_created_at(state, community, keys).await;
-    for event in build_records(employee, keys, created_at) {
+    for event in build_records(employee, manager, keys, created_at) {
         match event {
             Ok(event) => {
                 if let Err(error) = state.db.insert_event(community, &event, None).await {
@@ -552,13 +863,14 @@ async fn publish_records(
 /// database.
 pub fn build_records(
     employee: &ProvisionedEmployee,
+    manager: Option<&[u8]>,
     keys: &Keys,
     created_at: nostr::Timestamp,
 ) -> Vec<anyhow::Result<Event>> {
     vec![
         build_profile(employee, keys, created_at),
-        build_employee_head(employee, keys, created_at),
-        build_agent_definition(employee, keys, created_at),
+        build_employee_head(employee, manager, keys, created_at),
+        build_agent_definition(employee, manager, keys, created_at),
     ]
 }
 
@@ -588,19 +900,27 @@ fn build_profile(
 /// No `hired-by` and no `e`: no owner hired it and no request authorised it.
 /// Readers treat both as optional already, because an employee head is
 /// identified by its `d` tag and carries its authority in `rank`.
+///
+/// The `manager` tag is the event-side copy of the row's `manager` column.
+/// `interrupt_gate::agent_manager` trusts the row, and the org chart reads the
+/// tag, so both must carry the same edge or the two surfaces disagree.
 fn build_employee_head(
     employee: &ProvisionedEmployee,
+    manager: Option<&[u8]>,
     keys: &Keys,
     created_at: nostr::Timestamp,
 ) -> anyhow::Result<Event> {
-    let tags = vec![
+    let mut tags = vec![
         Tag::parse(["d", &keys.public_key().to_hex()])?,
         Tag::parse(["role", &employee.role_id])?,
         Tag::parse(["name", &employee.display_name])?,
         Tag::parse(["rank", &employee.rank])?,
-        Tag::parse(["provisioned", &employee.handle])?,
-        Tag::parse(["version", &employee.version.to_string()])?,
     ];
+    if let Some(manager) = manager {
+        tags.push(Tag::parse(["manager", &hex::encode(manager)])?);
+    }
+    tags.push(Tag::parse(["provisioned", &employee.handle])?);
+    tags.push(Tag::parse(["version", &employee.version.to_string()])?);
     Ok(EventBuilder::new(Kind::Custom(KIND_EMPLOYEE as u16), "")
         .tags(tags)
         .custom_created_at(created_at)
@@ -613,9 +933,11 @@ fn build_employee_head(
 ///
 /// This head is relay-side provenance only. Rank and reporting line still
 /// resolve exactly as they do today, from the `employees` row and from
-/// owner-authored heads; nothing here changes that read path.
+/// owner-authored heads; the `manager` tag is the definition-side copy of the
+/// same edge, matching what an owner-authored head carries.
 fn build_agent_definition(
     employee: &ProvisionedEmployee,
+    manager: Option<&[u8]>,
     keys: &Keys,
     created_at: nostr::Timestamp,
 ) -> anyhow::Result<Event> {
@@ -633,14 +955,17 @@ fn build_agent_definition(
     })
     .to_string();
 
-    let tags = vec![
+    let mut tags = vec![
         Tag::parse(["d", &keys.public_key().to_hex()])?,
         Tag::parse(["role", &employee.role_id])?,
         Tag::parse(["name", &employee.display_name])?,
         Tag::parse(["rank", &employee.rank])?,
-        Tag::parse(["provisioned", &employee.handle])?,
-        Tag::parse(["version", &employee.version.to_string()])?,
     ];
+    if let Some(manager) = manager {
+        tags.push(Tag::parse(["manager", &hex::encode(manager)])?);
+    }
+    tags.push(Tag::parse(["provisioned", &employee.handle])?);
+    tags.push(Tag::parse(["version", &employee.version.to_string()])?);
     Ok(
         EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content)
             .tags(tags)
@@ -669,6 +994,7 @@ mod tests {
         assert_eq!(sales.display_name, "Sales");
         assert_eq!(sales.version, 2);
         assert_eq!(sales.tier(), Some(AgentTier::Leader));
+        assert!(sales.reports_to.is_none(), "sales sits at the top of the chart");
         assert!(sales.prompt.contains("outreach"));
         assert_eq!(
             sales.requires_commands,
@@ -681,11 +1007,79 @@ mod tests {
     }
 
     #[test]
+    fn the_website_team_is_bundled_with_its_reporting_lines() {
+        let manifests = core_employee_manifests().expect("bundled employees must be valid");
+        let by_handle = |handle: &str| {
+            manifests
+                .iter()
+                .find(|entry| entry.handle == handle)
+                .unwrap_or_else(|| panic!("{handle} is bundled"))
+        };
+
+        let chief = by_handle("chief-of-staff");
+        assert_eq!(chief.display_name, "Chief of Staff");
+        assert_eq!(chief.role_id, "chief-of-staff");
+        assert_eq!(chief.tier(), Some(AgentTier::Executive));
+        assert!(chief.reports_to.is_none(), "the chief sits at the top");
+        assert_eq!(chief.version, 1);
+        assert_eq!(chief.requires_commands, vec!["asks".to_owned(), "decisions".to_owned()]);
+
+        let avery = by_handle("website-manager");
+        assert_eq!(avery.display_name, "Avery");
+        assert_eq!(avery.role_id, "website-manager");
+        assert_eq!(avery.tier(), Some(AgentTier::Leader));
+        assert_eq!(avery.reports_to.as_deref(), Some("chief-of-staff"));
+        assert_eq!(
+            avery.requires_commands,
+            vec![
+                "website create".to_owned(),
+                "website get".to_owned(),
+                "website list".to_owned(),
+                "website begin-work".to_owned(),
+                "website ready".to_owned(),
+            ]
+        );
+
+        for (handle, display_name, role_id) in [
+            ("website-researcher", "Ren", "website-research"),
+            ("website-designer-builder", "Jules", "designer-builder"),
+            ("website-reviewer", "Vera", "independent-reviewer"),
+        ] {
+            let worker = by_handle(handle);
+            assert_eq!(worker.display_name, display_name);
+            assert_eq!(worker.role_id, role_id);
+            assert_eq!(worker.tier(), Some(AgentTier::Worker));
+            assert_eq!(worker.reports_to.as_deref(), Some("website-manager"));
+            assert_eq!(worker.version, 1);
+        }
+    }
+
+    #[test]
+    fn a_manager_is_always_ordered_before_its_reports() {
+        let manifests = core_employee_manifests().expect("bundled employees must be valid");
+        let position = |handle: &str| {
+            manifests
+                .iter()
+                .position(|entry| entry.handle == handle)
+                .unwrap_or_else(|| panic!("{handle} is bundled"))
+        };
+        for employee in &manifests {
+            if let Some(manager) = employee.reports_to.as_deref() {
+                assert!(
+                    position(manager) < position(&employee.handle),
+                    "{} must be seeded after {manager}",
+                    employee.handle
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_records_carry_the_provisioned_tag_and_the_prompt() {
         let manifests = core_employee_manifests().expect("bundled employees must be valid");
         let sales = &manifests[0];
         let keys = Keys::generate();
-        let records: Vec<Event> = build_records(sales, &keys, nostr::Timestamp::now())
+        let records: Vec<Event> = build_records(sales, None, &keys, nostr::Timestamp::now())
             .into_iter()
             .map(|event| event.expect("records must build"))
             .collect();
@@ -696,9 +1090,11 @@ mod tests {
             .expect("an employee head is published");
         assert_eq!(tag_value(head, "provisioned").as_deref(), Some("sales"));
         assert_eq!(tag_value(head, "rank").as_deref(), Some("leader"));
-        // No owner hired it, so neither hire tag is present.
+        // No owner hired it, so neither hire tag is present, and no manager
+        // was resolved, so no manager tag is either.
         assert!(tag_value(head, "hired-by").is_none());
         assert!(tag_value(head, "e").is_none());
+        assert!(tag_value(head, "manager").is_none());
 
         let definition = records
             .iter()
@@ -728,6 +1124,86 @@ mod tests {
         for event in &records {
             assert_eq!(event.pubkey, keys.public_key());
         }
+    }
+
+    #[test]
+    fn the_employee_head_carries_the_manager_it_was_resolved_to() {
+        let manifests = core_employee_manifests().expect("bundled employees must be valid");
+        let avery = manifests
+            .iter()
+            .find(|entry| entry.handle == "website-manager")
+            .expect("the website manager is bundled");
+        let manager = Keys::generate();
+        let keys = Keys::generate();
+        let manager_bytes = manager.public_key().to_bytes();
+        let manager_hex = manager.public_key().to_hex();
+        let created_at = nostr::Timestamp::now();
+
+        let records: Vec<Event> = build_records(avery, Some(&manager_bytes), &keys, created_at)
+            .into_iter()
+            .map(|event| event.expect("records must build"))
+            .collect();
+        let head = records
+            .iter()
+            .find(|event| event.kind.as_u16() as u32 == KIND_EMPLOYEE)
+            .expect("an employee head is published");
+        assert_eq!(tag_value(head, "manager").as_deref(), Some(manager_hex.as_str()));
+        let definition = records
+            .iter()
+            .find(|event| event.kind.as_u16() as u32 == KIND_MANAGED_AGENT)
+            .expect("an agent definition is published");
+        assert_eq!(
+            tag_value(definition, "manager").as_deref(),
+            Some(manager_hex.as_str())
+        );
+    }
+
+    /// One manifest with only the fields a reporting-line test reads, so the
+    /// validation and ordering helpers can be exercised without the bundle.
+    fn manifest(handle: &str, reports_to: Option<&str>) -> ProvisionedEmployee {
+        ProvisionedEmployee {
+            schema: EMPLOYEE_SCHEMA.to_owned(),
+            handle: handle.to_owned(),
+            version: 1,
+            display_name: handle.to_owned(),
+            role_id: handle.to_owned(),
+            rank: "worker".to_owned(),
+            reports_to: reports_to.map(str::to_owned),
+            harness: "claude".to_owned(),
+            model: None,
+            summary: "test".to_owned(),
+            requires_commands: Vec::new(),
+            prompt: "test".to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_unknown_reports_to_is_refused() {
+        let error = validate_reporting_lines(&[manifest("a", Some("nobody"))])
+            .expect_err("an unknown manager must be refused");
+        assert!(error.to_string().contains("nobody"));
+    }
+
+    #[test]
+    fn a_reporting_line_cycle_is_refused() {
+        let cycle = vec![manifest("a", Some("b")), manifest("b", Some("a"))];
+        let error = sort_by_reporting_line(cycle).expect_err("a cycle must be refused");
+        assert!(error.to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn reports_are_ordered_after_their_manager() {
+        let lines = vec![
+            manifest("worker", Some("leader")),
+            manifest("leader", Some("executive")),
+            manifest("executive", None),
+        ];
+        let ordered = sort_by_reporting_line(lines).expect("acyclic reporting lines sort");
+        let handles: Vec<&str> = ordered
+            .iter()
+            .map(|employee| employee.handle.as_str())
+            .collect();
+        assert_eq!(handles, vec!["executive", "leader", "worker"]);
     }
 
     fn tag_value(event: &Event, name: &str) -> Option<String> {

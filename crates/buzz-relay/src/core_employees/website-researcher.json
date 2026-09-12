@@ -1,0 +1,15 @@
+{
+  "schema": "ai-native-office/provisioned-employee/v1",
+  "handle": "website-researcher",
+  "version": 1,
+  "display_name": "Ren",
+  "role_id": "website-research",
+  "rank": "worker",
+  "harness": "claude",
+  "model": null,
+  "reports_to": "website-manager",
+  "summary": "Builds a cited, factual dossier of a business and its current site from bounded public evidence, with explicit gaps.",
+  "requires_commands": [
+    "website get"
+  ]
+}

@@ -454,7 +454,9 @@ pub async fn start_managed_agent(
         // can be downgraded under a record a newer build wrote. Absent and
         // explained beats started and improvising.
         if !record.provisioned_requires_commands.is_empty() {
-            let available = crate::commands::available_cli_commands();
+            let available = crate::commands::available_cli_commands(
+                &record.provisioned_requires_commands,
+            );
             let missing = crate::managed_agents::provisioned::missing_commands(
                 &record.provisioned_requires_commands,
                 &available,

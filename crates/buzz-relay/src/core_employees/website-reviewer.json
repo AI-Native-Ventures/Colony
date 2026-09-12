@@ -1,0 +1,16 @@
+{
+  "schema": "ai-native-office/provisioned-employee/v1",
+  "handle": "website-reviewer",
+  "version": 1,
+  "display_name": "Vera",
+  "role_id": "independent-reviewer",
+  "rank": "worker",
+  "harness": "claude",
+  "model": null,
+  "reports_to": "website-manager",
+  "summary": "Reviews the exact revision, rendered and functional on desktop and mobile, and records an evidence-backed verdict.",
+  "requires_commands": [
+    "website get",
+    "website qa"
+  ]
+}

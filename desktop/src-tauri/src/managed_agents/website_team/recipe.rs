@@ -59,6 +59,35 @@ pub const REN_PERSONA_ID: &str = "website-manager-ren";
 pub const JULES_PERSONA_ID: &str = "website-manager-jules";
 pub const VERA_PERSONA_ID: &str = "website-manager-vera";
 
+/// The provisioned handles the relay bundles for this pack: the four agent
+/// identities plus the recipe id itself.
+///
+/// Matched exactly, never by prefix. The relay names each bundled employee
+/// after one of this pack's own identifiers, so a future pack whose name
+/// merely starts with the same prefix can never inherit these runbooks.
+pub const PROVISIONED_HANDLES: &[&str] = &[
+    RECIPE_ID,
+    AVERY_PERSONA_ID,
+    REN_PERSONA_ID,
+    JULES_PERSONA_ID,
+    VERA_PERSONA_ID,
+];
+
+/// Whether a provisioned handle names an employee this pack provides.
+///
+/// Matched exactly against the handles the relay bundles for this pack:
+/// `website-manager` (the recipe id), `website-researcher`,
+/// `website-designer-builder`, and `website-reviewer` (the role slugs). The
+/// four persona ids are accepted too as a defensive spelling of the same
+/// employees. Every entry is this pack's own constant, so no other pack can be
+/// matched by accident and no prefix guess is needed.
+pub fn owns_provisioned_handle(handle: &str) -> bool {
+    let handle = handle.trim();
+    !handle.is_empty()
+        && (PROVISIONED_HANDLES.contains(&handle)
+            || PERSONAS.iter().any(|persona| persona.role_id == handle))
+}
+
 pub const PERSONAS: &[RecipePersona] = &[
     RecipePersona {
         slug: "avery",
@@ -268,6 +297,33 @@ mod tests {
         let body = persona_body(PERSONAS[0].persona_md);
         assert!(body.starts_with("You are Avery"), "{body}");
         assert!(!body.contains("display_name:"), "{body}");
+    }
+
+    #[test]
+    fn provisioned_handles_match_both_spellings_and_nothing_else() {
+        // The relay may bundle an employee under its persona id or its role
+        // slug; both are this pack's constants.
+        for handle in [
+            RECIPE_ID,
+            AVERY_PERSONA_ID,
+            REN_PERSONA_ID,
+            JULES_PERSONA_ID,
+            VERA_PERSONA_ID,
+            "website-researcher",
+            "website-designer-builder",
+            "website-reviewer",
+        ] {
+            assert!(owns_provisioned_handle(handle), "{handle} must match");
+            assert!(
+                owns_provisioned_handle(&format!(" {handle} ")),
+                "{handle} must match with surrounding space"
+            );
+        }
+        // Exact match: a prefix rule would hand these runbooks to a future
+        // pack, and an empty handle matches nothing.
+        for other in ["", "sales", "website", "website-manager-sam", "website-managerX"] {
+            assert!(!owns_provisioned_handle(other), "{other} must not match");
+        }
     }
 
     #[test]

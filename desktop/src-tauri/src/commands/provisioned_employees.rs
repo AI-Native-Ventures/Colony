@@ -7,6 +7,10 @@
 //! build's CLI cannot serve, lives in
 //! [`crate::managed_agents::provisioned`]; this module is the wiring.
 //!
+//! An employee whose handle belongs to one of this build's packs also gets
+//! that pack's runbooks placed in the shared agent workspace it will run
+//! from, so the skills are simply there before anyone starts it.
+//!
 //! Adoption is idempotent and safe to call on every community init. A record
 //! already holding the current bundled version is left alone, so the cost of
 //! calling it again is one relay query.
@@ -25,6 +29,9 @@ use crate::managed_agents::{
     storage::{load_managed_agents, save_managed_agents},
     ManagedAgentRecord, DEFAULT_ACP_COMMAND,
 };
+use crate::managed_agents::website_team::{
+    install_recipe_skills, owns_provisioned_handle, InstalledWebsiteSkill,
+};
 use buzz_core_pkg::kind::{KIND_EMPLOYEE, KIND_MANAGED_AGENT};
 
 /// What adoption did for one employee, so the caller can say which.
@@ -36,9 +43,23 @@ pub enum AdoptionOutcome {
         handle: String,
         name: String,
         pubkey: String,
+        /// Per-skill failures from placing this build's pack runbooks in the
+        /// workspace. Empty when this handle is not one of our packs, or when
+        /// every skill landed. Never a reason the adoption itself failed.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        skill_failures: Vec<InstalledWebsiteSkill>,
     },
     /// The record already holds this bundled version. Nothing was written.
-    Unchanged { handle: String, pubkey: String },
+    Unchanged {
+        handle: String,
+        pubkey: String,
+        /// Per-skill failures from placing this build's pack runbooks in the
+        /// workspace, same shape as the `Adopted` arm. Present even on an
+        /// unchanged employee so an app update can add runbooks that were
+        /// never installed, without rewriting the employee.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        skill_failures: Vec<InstalledWebsiteSkill>,
+    },
     /// The brief names a command this build's `buzz` does not have. The
     /// employee is deliberately absent rather than started and improvising.
     Refused { handle: String, reason: String },
@@ -58,6 +79,11 @@ const MAX_HEADS: usize = 200;
 /// Never fails as a whole for one employee's sake: each entry reports its own
 /// outcome, because an owner with two provisioned employees should not lose
 /// the working one to the broken one.
+///
+/// An employee whose handle belongs to one of this build's packs also gets
+/// that pack's runbooks placed in the shared agent workspace it will run from.
+/// A skill that cannot be written is reported per skill on the outcome and
+/// never fails the employee's adoption.
 #[tauri::command]
 pub async fn adopt_provisioned_employees(
     app: AppHandle,
@@ -79,12 +105,20 @@ pub async fn adopt_provisioned_employees(
         return Ok(Vec::new());
     }
 
-    let available = available_cli_commands();
+    let required: Vec<String> = definitions
+        .iter()
+        .flat_map(|definition| definition.requires_commands.iter().cloned())
+        .collect();
+    let available = available_cli_commands(&required);
     let owner_hex = signer.public_key().to_hex();
     let mut outcomes = Vec::with_capacity(definitions.len());
+    // Placed lazily, once, on the first pack-owned employee that is adopted or
+    // confirmed: the four share one workspace, so four passes over the same
+    // six files would do the same work four times.
+    let mut pack_skill_failures: Option<Vec<InstalledWebsiteSkill>> = None;
 
     for definition in definitions {
-        match adopt_one(
+        let mut outcome = match adopt_one(
             &app,
             &state,
             &signer,
@@ -96,15 +130,53 @@ pub async fn adopt_provisioned_employees(
         )
         .await
         {
-            Ok(outcome) => outcomes.push(outcome),
-            Err(reason) => outcomes.push(AdoptionOutcome::Failed {
+            Ok(outcome) => outcome,
+            Err(reason) => AdoptionOutcome::Failed {
                 handle: definition.handle.clone(),
                 reason,
-            }),
+            },
+        };
+
+        if owns_provisioned_handle(&definition.handle) {
+            if let AdoptionOutcome::Adopted { skill_failures, .. }
+            | AdoptionOutcome::Unchanged { skill_failures, .. } = &mut outcome
+            {
+                let failures = pack_skill_failures.get_or_insert_with(install_pack_skills);
+                skill_failures.extend(failures.iter().cloned());
+            }
         }
+        outcomes.push(outcome);
     }
 
     Ok(outcomes)
+}
+
+/// Put this build's pack runbooks in the workspace these employees run from.
+///
+/// Idempotent and edit-preserving: a file the owner edited is never
+/// overwritten, a file this app last wrote is upgraded when the bundled
+/// version changes, and an already-current file is left alone. Only failures
+/// are returned, so a caller can surface a per-skill problem without treating
+/// it as a failed adoption.
+fn install_pack_skills() -> Vec<InstalledWebsiteSkill> {
+    let Some(root) = crate::managed_agents::nest_dir() else {
+        return vec![InstalledWebsiteSkill {
+            name: "website-manager".to_owned(),
+            path: String::new(),
+            status: "failed".to_owned(),
+            detail: Some("the agent workspace could not be resolved".to_owned()),
+        }];
+    };
+    install_pack_skills_at(&root)
+}
+
+/// [`install_pack_skills`] against an explicit root, so the placement is
+/// testable without a nest.
+fn install_pack_skills_at(root: &std::path::Path) -> Vec<InstalledWebsiteSkill> {
+    install_recipe_skills(root)
+        .into_iter()
+        .filter(|skill| skill.status == "failed")
+        .collect()
 }
 
 /// Adopt one employee: decide whether anything is needed, refuse a brief this
@@ -128,6 +200,7 @@ async fn adopt_one(
         return Ok(AdoptionOutcome::Unchanged {
             handle: definition.handle.clone(),
             pubkey: definition.pubkey.clone(),
+            skill_failures: Vec::new(),
         });
     }
 
@@ -152,6 +225,7 @@ async fn adopt_one(
         handle: definition.handle.clone(),
         name: definition.name.clone(),
         pubkey: definition.pubkey.clone(),
+        skill_failures: Vec::new(),
     })
 }
 
@@ -260,16 +334,55 @@ fn record_for(
     }
 }
 
-/// The top-level subcommands the `buzz` this build ships actually has.
+/// The subcommands the `buzz` this build ships actually has, for the commands
+/// `required` names.
 ///
-/// An empty set means the CLI could not be found or asked, which reads as
-/// "no commands available" and therefore refuses every brief that requires
-/// one. That is the safe direction: absent beats started and improvising.
-pub(crate) fn available_cli_commands() -> BTreeSet<String> {
+/// `buzz --help` only advertises top-level commands, and a brief may name a
+/// two-level path (`website create`). Every group a brief reaches into is
+/// asked for its own help once, so the check reflects this binary's real
+/// surface instead of reading every subcommand as present. An empty set means
+/// the CLI could not be found or asked, which reads as "no commands
+/// available" and therefore refuses every brief that requires one. That is
+/// the safe direction: absent beats started and improvising.
+pub(crate) fn available_cli_commands(required: &[String]) -> BTreeSet<String> {
     let Some(path) = crate::managed_agents::resolve_command("buzz") else {
         return BTreeSet::new();
     };
-    let Ok(output) = std::process::Command::new(path).arg("--help").output() else {
+    let mut commands = parse_help(&path, None);
+    for group in required_groups(&commands, required) {
+        for subcommand in parse_help(&path, Some(group.as_str())) {
+            commands.insert(format!("{group} {subcommand}"));
+        }
+    }
+    commands
+}
+
+/// The command groups a brief reaches into that this build actually has.
+///
+/// A group the binary does not advertise is left out rather than probed, so
+/// the required command stays missing and the refusal names it.
+fn required_groups(available: &BTreeSet<String>, required: &[String]) -> BTreeSet<String> {
+    let mut groups = BTreeSet::new();
+    for command in required {
+        let mut parts = command.split_whitespace();
+        let (Some(group), Some(_subcommand)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let group = group.to_ascii_lowercase();
+        if available.contains(&group) {
+            groups.insert(group);
+        }
+    }
+    groups
+}
+
+/// Ask one `buzz` command for its help text and parse its subcommands.
+fn parse_help(path: &std::path::Path, group: Option<&str>) -> BTreeSet<String> {
+    let mut command = std::process::Command::new(path);
+    if let Some(group) = group {
+        command.arg(group);
+    }
+    let Ok(output) = command.arg("--help").output() else {
         return BTreeSet::new();
     };
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -339,5 +452,76 @@ mod tests {
             &"b".repeat(64),
         );
         assert_eq!(record.agent_command, "not-a-harness");
+    }
+
+    #[test]
+    fn skill_failures_ride_the_outcome_and_an_empty_list_stays_off_the_wire() {
+        let adopted = AdoptionOutcome::Adopted {
+            handle: "sales".to_owned(),
+            name: "Sales".to_owned(),
+            pubkey: "a".repeat(64),
+            skill_failures: Vec::new(),
+        };
+        let json = serde_json::to_value(&adopted).expect("outcome serializes");
+        assert!(json.get("skill_failures").is_none());
+
+        let failed = AdoptionOutcome::Adopted {
+            handle: "website-manager".to_owned(),
+            name: "Avery".to_owned(),
+            pubkey: "a".repeat(64),
+            skill_failures: vec![InstalledWebsiteSkill {
+                name: "website-research".to_owned(),
+                path: "/tmp/website-research/SKILL.md".to_owned(),
+                status: "failed".to_owned(),
+                detail: Some("create dir: permission denied".to_owned()),
+            }],
+        };
+        let json = serde_json::to_value(&failed).expect("outcome serializes");
+        assert_eq!(json["outcome"], "adopted");
+        assert_eq!(json["skill_failures"][0]["name"], "website-research");
+        assert_eq!(json["skill_failures"][0]["status"], "failed");
+        assert_eq!(
+            json["skill_failures"][0]["detail"],
+            "create dir: permission denied"
+        );
+    }
+
+    #[test]
+    fn only_groups_this_build_advertises_are_probed_for_subcommands() {
+        let available: BTreeSet<String> = ["website", "messages"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let required = vec![
+            "website create".to_owned(),
+            "messages".to_owned(),
+            "sales outreach".to_owned(),
+        ];
+        let groups = required_groups(&available, &required);
+        assert_eq!(groups, ["website".to_owned()].into_iter().collect());
+    }
+
+    #[test]
+    fn pack_skills_land_in_the_workspace_and_a_user_edit_survives() {
+        let root = tempfile::tempdir().expect("tempdir");
+        assert!(
+            install_pack_skills_at(root.path()).is_empty(),
+            "the first pass lands every skill without a failure"
+        );
+        let skill = root
+            .path()
+            .join(".agents/skills/website-research/SKILL.md");
+        assert!(skill.exists(), "the runbook is written to the workspace");
+
+        std::fs::write(&skill, "my edited runbook").expect("write user edit");
+        assert!(
+            install_pack_skills_at(root.path()).is_empty(),
+            "a preserved edit is not a failure"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&skill).expect("read back"),
+            "my edited runbook",
+            "a user's edit is never overwritten"
+        );
     }
 }

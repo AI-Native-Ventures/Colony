@@ -11,9 +11,9 @@
 //! - **Seeding settles.** A second run must write nothing and must not mint a
 //!   second identity, or every relay restart would give a workspace another
 //!   Sales.
-//! - **A workspace's own employees are untouched.** A user employee that
-//!   happens to be named Sales keeps its name, keeps its editability, and is
-//!   never displaced by the seed.
+//! - **A role is filled once.** A workspace employee already holding a
+//!   bundled role is adopted rather than duplicated: same key, bundled config,
+//!   and later version bumps keep updating that same row.
 
 use buzz_auth::Scope;
 use buzz_core::kind::{
@@ -195,19 +195,21 @@ async fn seeding_creates_the_sales_employee_once_and_settles_on_a_re_run() {
     let community_id = community(&pool).await;
     let state = state(db.clone(), &pool).await;
 
+    // Read from the manifest rather than pinned here: a bundled entry or
+    // version bump is an ordinary event, and a test that hardcodes today's
+    // numbers turns every future bundle change into a failure that says
+    // nothing.
+    let bundled = core_employee_manifests().expect("bundled employees are valid");
+
     let first = ensure_core_employees(&state, community_id)
         .await
         .expect("seeding succeeds");
-    assert_eq!(first, 1, "the first run seeds exactly the bundled employee");
+    assert_eq!(first, bundled.len(), "the first run seeds exactly the bundled employees");
 
     let row = seeded_sales(&db, community_id).await;
     assert_eq!(row.display_name, "Sales");
     assert_eq!(row.role_id, "sales");
     assert_eq!(row.rank, "leader");
-    // Read from the manifest rather than pinned here: a bundled version bump
-    // is an ordinary event, and a test that hardcodes today's number turns
-    // every future bump into a failure that says nothing.
-    let bundled = core_employee_manifests().expect("bundled employees are valid");
     let sales_version = bundled
         .iter()
         .find(|entry| entry.handle == "sales")
@@ -218,6 +220,39 @@ async fn seeding_creates_the_sales_employee_once_and_settles_on_a_re_run() {
     // No owner hired it and no request authorised it.
     assert!(row.hired_by.is_none());
     assert!(row.hire_event.is_none());
+
+    // The reporting line arrives with the row: Avery reports to the seeded
+    // chief of staff, resolved through the role holder rather than by seeding
+    // a second identity for the role. The head carries the same edge the row
+    // does, so the org chart and the interrupt gate agree.
+    let chief = db
+        .find_provisioned_employee(community_id, "chief-of-staff")
+        .await
+        .expect("query the seeded chief of staff")
+        .expect("the chief of staff is seeded");
+    let avery = db
+        .find_provisioned_employee(community_id, "website-manager")
+        .await
+        .expect("query the seeded website manager")
+        .expect("the website manager is seeded");
+    assert_eq!(
+        avery.manager.as_deref(),
+        Some(chief.pubkey.as_slice()),
+        "the website manager reports to the chief of staff"
+    );
+    let avery_hex = nostr::PublicKey::from_slice(&avery.pubkey)
+        .expect("a stored employee pubkey is valid")
+        .to_hex();
+    let chief_hex = nostr::PublicKey::from_slice(&chief.pubkey)
+        .expect("a stored employee pubkey is valid")
+        .to_hex();
+    let avery_heads = events_of_kind(&db, community_id, KIND_EMPLOYEE, &avery_hex).await;
+    assert_eq!(avery_heads.len(), 1, "one employee head is published");
+    assert_eq!(
+        tag_value(&avery_heads[0], "manager").as_deref(),
+        Some(chief_hex.as_str()),
+        "the head names the same manager the row holds"
+    );
 
     let pubkey_hex = sales_keys_from(&row).to_hex();
     let heads = events_of_kind(&db, community_id, KIND_EMPLOYEE, &pubkey_hex).await;
@@ -525,7 +560,7 @@ async fn a_user_agent_named_sales_is_untouched_by_seeding_and_stays_editable() {
 
 #[tokio::test]
 #[ignore = "requires Postgres"]
-async fn a_workspace_employee_already_in_the_role_is_not_displaced() {
+async fn a_workspace_employee_already_in_the_role_is_adopted_into_the_bundle() {
     let (db, pool) = setup().await;
     let community_id = community(&pool).await;
     let state = state(db.clone(), &pool).await;
@@ -533,8 +568,11 @@ async fn a_workspace_employee_already_in_the_role_is_not_displaced() {
     let owner = Keys::generate();
     add_owner(&pool, community_id, &owner.public_key().to_hex()).await;
 
-    // A real hire holding the `sales` role before Colony ever seeded one.
+    // A real hire holding the `sales` role before Colony ever seeded one. It
+    // already has a manager, which the sales bundle does not specify: adoption
+    // must leave that reporting line in place on both the row and the head.
     let theirs = Keys::generate();
+    let their_manager = Keys::generate();
     let sealer =
         buzz_relay::employee_key::EmployeeKeySealer::from_hex(TEST_KEK_HEX).expect("KEK parses");
     let secret: [u8; 32] = theirs.secret_key().to_secret_bytes();
@@ -552,31 +590,91 @@ async fn a_workspace_employee_already_in_the_role_is_not_displaced() {
             rank: "worker",
             hired_by: &owner.public_key().to_bytes(),
             hire_event: &pubkey_bytes,
-            manager: None,
+            manager: Some(&their_manager.public_key().to_bytes()),
         },
     )
     .await
     .expect("insert the workspace's own employee")
     .expect("the row inserts");
 
+    let bundled = core_employee_manifests().expect("bundled employees are valid");
+    let sales_version = bundled
+        .iter()
+        .find(|entry| entry.handle == "sales")
+        .expect("sales is bundled")
+        .version;
     let written = ensure_core_employees(&state, community_id)
         .await
         .expect("seeding still succeeds");
-    assert_eq!(written, 0, "the seed stands down rather than displacing");
-
-    let theirs_row = db
-        .find_employee(community_id, &pubkey_bytes)
-        .await
-        .expect("query their employee")
-        .expect("their employee is still there");
-    assert_eq!(theirs_row.display_name, "Their Sales");
-    assert_eq!(theirs_row.status, "active");
-    assert!(theirs_row.provisioned_handle.is_none());
-    assert!(
-        db.find_provisioned_employee(community_id, "sales")
-            .await
-            .expect("query the seeded employee")
-            .is_none(),
-        "nothing was seeded over the workspace's own employee"
+    assert_eq!(
+        written, bundled.len(),
+        "the existing role holder is adopted and the rest of the bundle seeds"
     );
+
+    // Identity survives; provenance and config move to the bundle. The row is
+    // now the handle `sales`, not a second colleague beside it.
+    let adopted = db
+        .find_provisioned_employee(community_id, "sales")
+        .await
+        .expect("query the seeded employee")
+        .expect("the workspace's employee is now the seeded sales employee");
+    assert_eq!(
+        adopted.pubkey, pubkey_bytes,
+        "adoption keeps the same key, so its history and threads survive"
+    );
+    assert_eq!(adopted.display_name, "Sales", "the bundle owns the name");
+    assert_eq!(adopted.rank, "leader", "the bundle owns the rank");
+    assert_eq!(adopted.status, "active");
+    assert_eq!(adopted.provisioned_version, Some(sales_version));
+    assert_eq!(
+        adopted.manager.as_deref(), Some(their_manager.public_key().to_bytes().as_slice()),
+        "a reporting line the sales bundle does not specify survives adoption"
+    );
+    // The head must agree with the row: the preserved manager is republished.
+    let adopted_hex = sales_keys_from(&adopted).to_hex();
+    let adopted_heads = events_of_kind(&db, community_id, KIND_EMPLOYEE, &adopted_hex).await;
+    assert_eq!(
+        tag_value(&adopted_heads[0], "manager").as_deref(),
+        Some(their_manager.public_key().to_hex().as_str()),
+        "the republished head carries the row's manager"
+    );
+    // The ordinary hire provenance is kept: the owner did hire this row.
+    assert_eq!(adopted.hired_by.as_deref(), Some(owner.public_key().to_bytes().as_slice()));
+
+    // The adopted row rides the ordinary version path from here on. Ageing it
+    // stands in for a newer bundle shipping: the next pass must re-apply the
+    // bundle to the SAME identity, with no user action.
+    sqlx::query(
+        "UPDATE employees SET provisioned_version = 0, display_name = 'Stale' \
+         WHERE community_id = $1 AND provisioned_handle = 'sales'",
+    )
+    .bind(community_id.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("age the adopted row");
+    let updated = ensure_core_employees(&state, community_id)
+        .await
+        .expect("re-seeding an aged adopted row succeeds");
+    assert_eq!(updated, 1, "only the aged adopted row moves");
+    let healed = db
+        .find_provisioned_employee(community_id, "sales")
+        .await
+        .expect("query the adopted employee")
+        .expect("the adopted employee remains");
+    assert_eq!(healed.pubkey, pubkey_bytes, "the later version keeps the identity");
+    assert_eq!(healed.display_name, "Sales", "the later version re-applies the name");
+    assert_eq!(healed.provisioned_version, Some(sales_version));
+
+    // A user's managed agent with the same name is a different concept and is
+    // still not an employee row (covered by its own test); here we only need
+    // the previous no-displacement claim replaced: nothing was minted beside
+    // the adopted identity.
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM employees WHERE community_id = $1 AND role_id = 'sales'",
+    )
+    .bind(community_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count sales rows");
+    assert_eq!(rows, 1, "one employee per role, adopted rather than duplicated");
 }
