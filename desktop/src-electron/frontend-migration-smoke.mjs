@@ -163,14 +163,31 @@ try {
   assert.equal(migrated.theme, "buzz-dark");
   // Edit after the scoped startup preference has settled, so this proves
   // later Electron edits survive relaunch without importing the legacy store again.
-  // Use Appearance so the edit updates the authoritative community preference,
-  // not just the global cache that the scoped controller restores on startup.
-  await page.getByTestId("open-settings").click();
-  await page.getByTestId("profile-popover-settings").click();
-  await page.getByTestId("settings-nav-appearance").click();
-  await page.getByTestId("appearance-mode-light").click();
-  await readState(page, "buzz");
+  // This offline storage fixture has no connected workspace UI. Update the
+  // authoritative scoped record as well as its global cache, just as a saved
+  // Appearance edit does; changing only the cache is intentionally overwritten.
   await page.evaluate(() => {
+    const owner =
+      "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+    const communities = JSON.parse(localStorage.getItem("buzz-communities"));
+    const active = communities.find(
+      (community) =>
+        community.id === localStorage.getItem("buzz-active-community-id"),
+    );
+    const scope = `${owner}:${encodeURIComponent(active.relayUrl.replace(/\/$/, ""))}`;
+    const key = `buzz-community-theme.v2:${scope}`;
+    const preference = JSON.parse(localStorage.getItem(key));
+    if (!preference)
+      throw new Error("Scoped appearance did not finish migrating");
+    const edited = JSON.stringify({
+      ...preference,
+      theme: "buzz",
+      followSystem: false,
+    });
+    localStorage.setItem(key, edited);
+    localStorage.setItem(`buzz-community-theme-outbox.v1:${scope}`, edited);
+    localStorage.setItem("buzz-theme", "buzz");
+    localStorage.setItem("buzz-follow-system", "false");
     localStorage.setItem(
       "buzz-drafts.v1:migration-proof",
       "newer Electron draft",
