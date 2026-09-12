@@ -242,7 +242,7 @@ pub async fn handle_website_action(
     // Keep the actor identity independent of any later database/storage
     // awaits. The signed action has already passed the authority preflight;
     // the same key is used for the tenant-scoped media gate below.
-    let actor = action.actor.clone();
+    let actor = action.actor;
     let manifest = match &action.op {
         WebsiteActionOp::AddRevision { manifest, .. } => {
             Some(fetch_website_artifact(state, tenant, &actor, &manifest.url).await?)
