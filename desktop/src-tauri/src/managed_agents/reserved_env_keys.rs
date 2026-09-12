@@ -24,7 +24,8 @@
 /// This list is deliberately narrow — it only covers keys with security
 /// implications. Behavior knobs (GOOSE_MODE, BUZZ_ACP_SYSTEM_PROMPT, …) remain freely
 /// overridable; those have dedicated UI fields but power users may want
-/// to bypass them. BUZZ_ACP_MODEL and BUZZ_ACP_PROVIDER are the exception among
+/// to bypass them. BUZZ_ACP_MODEL, BUZZ_ACP_PROVIDER and
+/// BUZZ_ACP_REASONING_EFFORT are the exception among
 /// behavior knobs: they are not reserved (no security weight, so saving one is
 /// not rejected) but they ARE config-owned and stripped at spawn. See
 /// `CONFIG_OWNED_MODEL_ENV_KEYS` in `env_vars.rs`.

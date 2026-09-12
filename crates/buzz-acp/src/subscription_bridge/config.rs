@@ -13,6 +13,16 @@ pub(crate) struct Config {
     pub profile: PathBuf,
     pub workspace: PathBuf,
     pub model: String,
+    /// The reasoning effort the owner chose for this model, as the provider named
+    /// it. Absent means the vendor's own default decides, which is what these
+    /// teammates did before the Power screen could choose one.
+    ///
+    /// Never trusted on its own: each provider transport checks the effort
+    /// against the catalog the vendor itself advertises for `model` and refuses a
+    /// value that model does not support, rather than passing it on and letting a
+    /// teammate run at an effort nobody chose.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     /// Only native-approved MCP processes, each already wrapped in Seatbelt.
     pub mcp_servers: Value,
     /// Present only when the vendor CLI has to run as the owner rather than in
@@ -75,6 +85,21 @@ impl Config {
             || !self.vendor_binary.is_absolute()
         {
             bail!("A supported provider and selected model are required");
+        }
+        // An effort reaches the vendor as a CLI argument and a JSON turn
+        // parameter, so only the shape every provider actually advertises
+        // (`low` … `ultra`) is accepted this far. Blank is refused rather than
+        // silently treated as "default": desktop omits the field entirely for
+        // that, so a present-but-empty value means something went wrong upstream.
+        if let Some(effort) = &self.reasoning_effort {
+            if effort.is_empty()
+                || effort.len() > 32
+                || !effort
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+            {
+                bail!("Choose a reasoning effort in Power setup");
+            }
         }
         let profile = self
             .profile
@@ -200,6 +225,7 @@ mod tests {
             profile,
             workspace,
             model: "synthetic-model".into(),
+            reasoning_effort: None,
             mcp_servers: serde_json::json!({"colony_work":{"command":"/usr/bin/sandbox-exec","args":["-p","synthetic-policy","/synthetic/tool"],"env":{}}}),
             host_login: None,
         }
@@ -378,6 +404,27 @@ mod tests {
         }
         assert_eq!(environment.get("USER").map(String::as_str), Some("owner"));
         assert!(!environment.contains_key("CLAUDE_CONFIG_DIR"));
+    }
+
+    #[test]
+    fn an_effort_is_optional_but_must_be_a_single_advertised_name() {
+        let root = tempfile::tempdir().unwrap();
+        let config = fixture(root.path());
+        assert!(config.validate().is_ok(), "absent means the vendor default");
+        let accepted: Config = serde_json::from_value(serde_json::json!({
+            "runtime":"claude","vendor_binary":"/synthetic/vendor","profile":config.profile.clone(),
+            "workspace":config.workspace.clone(),"model":"synthetic-model","reasoning_effort":"xhigh",
+            "mcp_servers":config.mcp_servers.clone()
+        }))
+        .unwrap();
+        assert_eq!(accepted.reasoning_effort.as_deref(), Some("xhigh"));
+        assert!(accepted.validate().is_ok());
+        let too_long = "m".repeat(33);
+        for rejected in ["", " max", "max high", "max;rm -rf /", too_long.as_str()] {
+            let mut invalid = config.clone();
+            invalid.reasoning_effort = Some(rejected.to_string());
+            assert!(invalid.validate().is_err(), "{rejected:?}");
+        }
     }
 
     #[test]

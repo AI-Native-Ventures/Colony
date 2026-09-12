@@ -8,6 +8,7 @@ fn config() -> Config {
         profile: PathBuf::from("/synthetic/private/subscription"),
         workspace: PathBuf::from("/synthetic/workspace"),
         model: "fixture-model".into(),
+        reasoning_effort: None,
         mcp_servers: json!({"colony_work":{
             "command":"/usr/bin/sandbox-exec",
             "args":["-f","/synthetic/native.sb","/synthetic/tool"],
@@ -74,6 +75,24 @@ fn every_turn_resets_policy_and_rejects_file_image_and_other_host_inputs() {
         assert!(turn_parameters(&config, "fixture-thread", vec![input]).is_err());
     }
     assert!(turn_parameters(&config, "fixture-thread", Vec::new()).is_err());
+}
+
+#[test]
+fn the_chosen_effort_rides_the_turn_and_never_the_thread() {
+    let mut config = config();
+    let text = vec![json!({"type":"text","text":"Do the work."})];
+    let turn = turn_parameters(&config, "fixture-thread", text.clone()).expect("text turn");
+    assert!(
+        turn.get("effort").is_none(),
+        "no chosen effort leaves the vendor's own default in place"
+    );
+    config.reasoning_effort = Some("max".into());
+    let turn = turn_parameters(&config, "fixture-thread", text).expect("text turn");
+    assert_eq!(turn["effort"], json!("max"));
+    // TurnStartParams carries `effort`; ThreadStartParams has no such property,
+    // so an effort sent at thread/start would be dropped without a word.
+    let thread = thread_parameters(&config, "Owner-approved instructions").expect("thread");
+    assert!(thread.get("effort").is_none());
 }
 
 #[test]

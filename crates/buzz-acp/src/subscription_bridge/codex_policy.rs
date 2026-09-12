@@ -164,9 +164,19 @@ pub(super) fn turn_parameters(config: &Config, thread: &str, content: Vec<Value>
         .into_iter()
         .map(|block| json!({"type":"text","text":block["text"]}))
         .collect();
-    Ok(json!({"threadId":thread,"input":input,"environments":[],
+    let mut parameters = json!({"threadId":thread,"input":input,"environments":[],
         "cwd":config.profile,"model":config.model,"approvalPolicy":"never",
-        "approvalsReviewer":"user","sandboxPolicy":{"type":"readOnly","networkAccess":false}}))
+        "approvalsReviewer":"user","sandboxPolicy":{"type":"readOnly","networkAccess":false}});
+    // `effort` is a turn parameter, not a thread one: the app-server's own schema
+    // carries it on TurnStartParams ("Override the reasoning effort for this turn
+    // and subsequent turns") and has no such property on ThreadStartParams, so
+    // sending it at thread/start would be silently ignored. Omitted when the owner
+    // left the vendor's default in place; `Codex::require_model` has already
+    // refused an effort this model does not advertise.
+    if let Some(effort) = &config.reasoning_effort {
+        parameters["effort"] = json!(effort);
+    }
+    Ok(parameters)
 }
 
 pub(super) fn validate_thread(config: &Config, response: &Value) -> Result<String> {

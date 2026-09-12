@@ -9,6 +9,18 @@ use crate::managed_agents::{
     AgentDefinition, ManagedAgentRecord,
 };
 
+/// The effort a config actually spawns with: blank and absent both mean the
+/// vendor's default, so one must never read as a change into the other. Normalized
+/// on the way to disk too (`normalize_global_config_fields`), but `required` also
+/// sees a config straight off IPC.
+fn chosen_effort(config: &GlobalAgentConfig) -> Option<&str> {
+    config
+        .reasoning_effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+}
+
 pub(super) fn running_power_differs(
     record: &ManagedAgentRecord,
     personas: &[AgentDefinition],
@@ -66,7 +78,13 @@ pub(super) fn required(
     let selection_changed = before.command != after.command
         || before.args != after.args
         || resolve_effective_model_provider_pair(record, personas, old)
-            != resolve_effective_model_provider_pair(record, personas, new);
+            != resolve_effective_model_provider_pair(record, personas, new)
+        // The reasoning effort changes what the vendor process is told to do, so
+        // a running teammate has to adopt it exactly as it adopts a new model.
+        // Compared on the global fields directly because that is the only tier
+        // that carries one (see `GlobalAgentConfig::reasoning_effort`); a
+        // per-agent picker would have to resolve it per record here instead.
+        || chosen_effort(old) != chosen_effort(new);
     let env_changed = before.env != after.env;
     let mode_changed = old.credential_mode != new.credential_mode;
     let mode_restart = mode_changed
@@ -270,6 +288,48 @@ mod tests {
             assert!(required(&record, &personas, &old, &new, false));
         }
         assert!(required(&record, &personas, &old, &old, true), "retrying a prior failed adoption must retire its remaining real credit lease even if disk already says BYOK");
+    }
+
+    #[test]
+    fn an_effort_only_change_still_makes_a_running_teammate_adopt_it() {
+        let record = ManagedAgentRecord {
+            persona_id: Some("builtin:fizz".into()),
+            ..Default::default()
+        };
+        let personas = vec![crate::managed_agents::built_in_persona_definition(
+            "builtin:fizz",
+            "synthetic-time",
+        )
+        .unwrap()];
+        let old = GlobalAgentConfig {
+            preferred_runtime: Some("claude".into()),
+            model: Some("opus".into()),
+            ..Default::default()
+        };
+        let harder = GlobalAgentConfig {
+            reasoning_effort: Some("max".into()),
+            ..old.clone()
+        };
+        assert_eq!(old.env_vars, harder.env_vars, "only the effort differs");
+        assert!(required(&record, &personas, &old, &harder, false));
+        assert!(required(&record, &personas, &harder, &old, false));
+        // Blank and absent both mean the vendor's default, and surrounding space
+        // is not a new choice, so neither reads as drift.
+        assert_eq!(
+            chosen_effort(&GlobalAgentConfig {
+                reasoning_effort: Some("  max  ".into()),
+                ..harder.clone()
+            }),
+            chosen_effort(&harder)
+        );
+        assert_eq!(
+            chosen_effort(&GlobalAgentConfig {
+                reasoning_effort: Some("   ".into()),
+                ..old.clone()
+            }),
+            chosen_effort(&old)
+        );
+        assert_eq!(chosen_effort(&old), None);
     }
 
     #[test]

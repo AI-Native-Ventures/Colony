@@ -250,6 +250,19 @@ mod tests {
                 id: "structured-model".into(),
                 label: "Structured".into(),
                 is_default: true,
+                // Shaped like a Codex catalog entry: advertised efforts plus the
+                // default the provider names for that model.
+                efforts: vec![
+                    SubscriptionModelEffort {
+                        effort: "medium".into(),
+                        description: Some("Balanced".into()),
+                    },
+                    SubscriptionModelEffort {
+                        effort: "max".into(),
+                        description: Some("Hardest problems".into()),
+                    },
+                ],
+                default_effort: Some("medium".into()),
             }],
             ..Default::default()
         };
@@ -268,6 +281,10 @@ mod tests {
                 id: "offered-model".into(),
                 label: "Offered".into(),
                 is_default: true,
+                // A model with no effort axis at all, like Claude's Haiku entry.
+                // Readiness is about the account and the model, never the effort.
+                efforts: vec![],
+                default_effort: None,
             }],
             ..Default::default()
         };
@@ -295,6 +312,12 @@ mod tests {
                 id: "offered-model".into(),
                 label: "Offered".into(),
                 is_default: true,
+                // Shaped like a Claude entry: levels advertised, no default named.
+                efforts: vec![SubscriptionModelEffort {
+                    effort: "high".into(),
+                    description: None,
+                }],
+                default_effort: None,
             }],
             windows: vec![AccountUsageWindow {
                 id: "weekly".into(),
