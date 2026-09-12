@@ -976,6 +976,15 @@ export type GlobalAgentConfig = {
   model: string | null;
   /** Preferred ACP runtime for agents without a persona-specific runtime. */
   preferred_runtime: string | null;
+  /**
+   * Reasoning effort for the chosen model, named exactly as the provider named
+   * it. Absent or null means the vendor's own default decides.
+   *
+   * Optional because the field is `#[serde(default)]` on the Rust side and a
+   * config written before the Power screen had a Reasoning picker simply has no
+   * key. Only ever a value the provider advertised for the selected model.
+   */
+  reasoning_effort?: string | null;
 };
 
 /**

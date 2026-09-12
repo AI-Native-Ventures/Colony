@@ -33,6 +33,15 @@ pub struct EffectiveAgentConfig {
     pub model: ResolvedField<String>,
     pub provider: ResolvedField<String>,
     pub system_prompt: ResolvedField<String>,
+    /// The reasoning effort the resolved model runs at, or `None` for the
+    /// vendor's own default.
+    ///
+    /// Always `ConfigSource::Global`: the Power screen is the only picker and it
+    /// writes the global defaults, so there is no definition or instance tier to
+    /// inherit from. Should a per-agent picker ever land, this field is where it
+    /// joins the chain, and `spawn_snapshot` has to start carrying it so the
+    /// restart badge can see an effort-only edit.
+    pub reasoning_effort: ResolvedField<String>,
 }
 
 impl EffectiveAgentConfig {
@@ -174,6 +183,14 @@ pub fn resolve_effective_harness_command_or_legacy(
         .unwrap_or_else(|_| super::record_agent_command(record, definitions))
 }
 
+/// The global reasoning effort, which is the only tier that carries one.
+fn global_reasoning_effort(global: &GlobalAgentConfig) -> ResolvedField<String> {
+    ResolvedField {
+        value: non_blank(global.reasoning_effort.as_deref()).map(str::to_owned),
+        source: ConfigSource::Global,
+    }
+}
+
 fn resolve_linked(
     definition: &AgentDefinition,
     global: &GlobalAgentConfig,
@@ -213,6 +230,7 @@ fn resolve_linked(
         model,
         provider,
         system_prompt,
+        reasoning_effort: global_reasoning_effort(global),
     }
 }
 
@@ -331,6 +349,7 @@ fn resolve_definition_less(
         model,
         provider,
         system_prompt,
+        reasoning_effort: global_reasoning_effort(global),
     };
 
     // Legacy mesh compatibility. A record with an explicit `provider` has

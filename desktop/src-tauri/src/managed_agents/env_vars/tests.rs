@@ -535,10 +535,11 @@ fn record_with(
 }
 
 #[test]
-fn config_owned_predicate_covers_both_keys_case_insensitively() {
-    assert_eq!(CONFIG_OWNED_MODEL_ENV_KEYS.len(), 2);
+fn config_owned_predicate_covers_every_routing_key_case_insensitively() {
+    assert_eq!(CONFIG_OWNED_MODEL_ENV_KEYS.len(), 3);
     assert!(is_config_owned_model_env_key("BUZZ_ACP_MODEL"));
     assert!(is_config_owned_model_env_key("buzz_acp_provider"));
+    assert!(is_config_owned_model_env_key("buzz_acp_reasoning_effort"));
     // Adjacent keys that must keep working.
     assert!(!is_config_owned_model_env_key("BUZZ_AGENT_MODEL"));
     assert!(!is_config_owned_model_env_key("BUZZ_ACP_SYSTEM_PROMPT"));
@@ -551,16 +552,21 @@ fn merged_env_strips_config_owned_model_keys_and_keeps_the_rest() {
     let agent = map(&[
         ("BUZZ_ACP_MODEL", "metered/grok-4.5"),
         ("BUZZ_ACP_PROVIDER", "xai"),
+        ("BUZZ_ACP_REASONING_EFFORT", "max"),
         ("BUZZ_METER_OPENAI_PROVIDER", "xai"),
         ("ANTHROPIC_API_KEY", "sk-keep-me"),
     ]);
     let merged = merged_user_env(&BTreeMap::new(), &agent);
     assert!(!merged.contains_key("BUZZ_ACP_MODEL"));
     assert!(!merged.contains_key("BUZZ_ACP_PROVIDER"));
+    assert!(
+        !merged.contains_key("BUZZ_ACP_REASONING_EFFORT"),
+        "a saved effort must never outrank the one the owner picked"
+    );
     assert_eq!(
         merged.get("BUZZ_METER_OPENAI_PROVIDER").map(String::as_str),
         Some("xai"),
-        "BUZZ_METER_* is untouched: only the two routing keys change behaviour"
+        "BUZZ_METER_* is untouched: only the routing keys change behaviour"
     );
     assert_eq!(
         merged.get("ANTHROPIC_API_KEY").map(String::as_str),
@@ -576,6 +582,29 @@ fn merged_env_strips_config_owned_model_keys_from_persona_layer() {
     let persona = map(&[("buzz_acp_model", "metered/grok-4.5")]);
     let merged = merged_user_env(&persona, &BTreeMap::new());
     assert!(merged.is_empty());
+}
+
+#[test]
+fn a_saved_effort_env_var_does_not_reach_the_spawned_command() {
+    // Same ordering trap as the model below: the structured value is written
+    // first and the layered user env last. A record cannot carry an effort of
+    // its own, so the only way one gets here is a hand-set override, and it must
+    // lose to the effort the Power screen resolved.
+    let record = record_with(None, None, &[("BUZZ_ACP_REASONING_EFFORT", "ultra")]);
+    let effective = crate::managed_agents::readiness::resolve_effective_agent_env(
+        &record,
+        &[],
+        None,
+        &crate::managed_agents::GlobalAgentConfig::default(),
+    );
+    let mut command = std::process::Command::new("buzz-acp");
+    command.env("BUZZ_ACP_REASONING_EFFORT", "medium");
+    apply_user_env(&mut command, &effective.env);
+    let effort = command
+        .get_envs()
+        .find(|(key, _)| key.to_string_lossy() == "BUZZ_ACP_REASONING_EFFORT")
+        .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()));
+    assert_eq!(effort.as_deref(), Some("medium"));
 }
 
 #[test]

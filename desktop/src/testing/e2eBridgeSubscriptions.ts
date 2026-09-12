@@ -80,6 +80,14 @@ export const MOCK_SUBSCRIPTION_CONNECTIONS: SubscriptionConnection[] = [
           id: "claude-test-model",
           label: "Claude test model",
           isDefault: true,
+          // Shaped like Claude's own answer: it advertises the levels a model
+          // accepts and never names the one it would have used.
+          efforts: [
+            { effort: "low", description: null },
+            { effort: "high", description: null },
+            { effort: "max", description: null },
+          ],
+          defaultEffort: null,
         },
       ],
     },

@@ -258,12 +258,14 @@ export function PowerScreen({
                 scope={scope.data}
                 selectedRuntimeId={draft.preferred_runtime}
                 selectedModel={draft.model}
+                selectedEffort={draft.reasoning_effort}
                 disabled={busy}
-                onSelect={(runtimeId, model) => {
+                onSelect={(runtimeId, model, reasoningEffort) => {
                   setValid(false);
                   setDraft({
                     ...configForPowerLane(draft, "subscription", runtimeId),
                     model,
+                    reasoning_effort: reasoningEffort,
                   });
                 }}
                 onValidityChange={setValid}

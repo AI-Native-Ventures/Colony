@@ -46,15 +46,16 @@ pub(crate) fn is_derived_provider_model_key(key: &str) -> bool {
         .any(|k| k.eq_ignore_ascii_case(key))
 }
 
-/// The two universal model/provider routing keys the spawn path writes from the
-/// resolved agent configuration (`effective_cfg.model` / `.provider`), and which
-/// a user `env_vars` entry must therefore never shadow.
+/// The universal model/provider/effort routing keys the spawn path writes from
+/// the resolved agent configuration (`effective_cfg.model`, `.provider`,
+/// `.reasoning_effort`), and which a user `env_vars` entry must therefore never
+/// shadow.
 ///
 /// Unlike [`RESERVED_ENV_KEYS`] these carry no security weight, so save-time
 /// validation still accepts them: they are simply not a second place where a
 /// model can be chosen. They are stripped from the user env layers
-/// ([`merged_user_env`]) and migrated off records on load
-/// ([`migrate_config_owned_model_env`]).
+/// ([`merged_user_env`]), and the two with a structured record field are also
+/// migrated off records on load ([`migrate_config_owned_model_env`]).
 ///
 /// Measured symptom that made this necessary: an agent whose Edit dialog showed
 /// harness "Claude Code" and model `opus[1m]` launched with
@@ -68,7 +69,17 @@ pub(crate) fn is_derived_provider_model_key(key: &str) -> bool {
 /// here: they are handled at pack-import time by
 /// [`DERIVED_PROVIDER_MODEL_ENV_KEYS`], and the config bridge still reads them
 /// as a real env tier.
-pub(crate) const CONFIG_OWNED_MODEL_ENV_KEYS: &[&str] = &["BUZZ_ACP_MODEL", "BUZZ_ACP_PROVIDER"];
+///
+/// `BUZZ_ACP_REASONING_EFFORT` joined this list when the Power screen gained its
+/// Reasoning picker. It has no per-record structured field to be migrated onto
+/// (the effort lives only in the global config), so
+/// [`migrate_config_owned_model_env`] leaves it alone and the spawn-time strip
+/// below is what stops a hand-set copy from overriding the picker.
+pub(crate) const CONFIG_OWNED_MODEL_ENV_KEYS: &[&str] = &[
+    "BUZZ_ACP_MODEL",
+    "BUZZ_ACP_PROVIDER",
+    "BUZZ_ACP_REASONING_EFFORT",
+];
 
 /// Returns `true` when `key` is one of [`CONFIG_OWNED_MODEL_ENV_KEYS`].
 ///

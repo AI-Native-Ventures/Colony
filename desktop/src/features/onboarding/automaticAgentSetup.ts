@@ -229,11 +229,16 @@ export async function ensureBuiltInFounderConfig(
       (entry) => entry.runtimeId === currentRuntime.id,
     );
     if (
-      subscriptionConnectionReady(connection, current.model, Date.now() / 1000)
+      subscriptionConnectionReady(
+        connection,
+        current.model,
+        Date.now() / 1000,
+        current.reasoning_effort,
+      )
     )
       return;
     throw new Error(
-      "Connect your subscription and choose an available model for this business in Power setup before starting your team.",
+      "Connect your subscription and choose an available model and reasoning level for this business in Power setup before starting your team.",
     );
   }
   if (resolveAgentReadiness(runtimes, current, "preferred").ready) return;

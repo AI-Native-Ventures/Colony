@@ -17,6 +17,7 @@ pub(super) fn run() -> Result<()> {
         workspace: profile.clone(),
         profile,
         model: String::new(),
+        reasoning_effort: None,
         mcp_servers: json!({}),
         // A credential-free probe never runs against the owner's own login.
         host_login: None,

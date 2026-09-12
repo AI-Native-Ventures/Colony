@@ -745,6 +745,7 @@ fn spawn_agent_child_inner(
     let effective_prompt = effective_cfg.system_prompt.value;
     let effective_model = effective_cfg.model.value;
     let effective_provider = effective_cfg.provider.value;
+    let effective_effort = effective_cfg.reasoning_effort.value;
 
     if let Some(prompt) = &effective_prompt {
         command.env("BUZZ_ACP_SYSTEM_PROMPT", prompt);
@@ -772,6 +773,16 @@ fn spawn_agent_child_inner(
         command.env("BUZZ_ACP_PROVIDER", provider);
     } else {
         command.env_remove("BUZZ_ACP_PROVIDER");
+    }
+    // The reasoning effort rides its own universal key beside the model, and is
+    // config-owned for the same reason (`CONFIG_OWNED_MODEL_ENV_KEYS`): a copy
+    // left in a saved `env_vars` must never decide how hard a teammate thinks.
+    // Absent means the vendor's own default, which is what ran before the Power
+    // screen could choose one.
+    if let Some(effort) = effective_effort.as_deref() {
+        command.env("BUZZ_ACP_REASONING_EFFORT", effort);
+    } else {
+        command.env_remove("BUZZ_ACP_REASONING_EFFORT");
     }
     // Session title for the harness to pass out-of-band on `session/new`. The
     // adapter names the session after it; it never reaches the prompt, so this
