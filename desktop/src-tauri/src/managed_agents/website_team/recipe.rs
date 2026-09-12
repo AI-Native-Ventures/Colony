@@ -1,5 +1,5 @@
-//! The bundled Website Manager recipe: the trusted, compile-time source the
-//! installer seeds from.
+//! The bundled Website Manager recipe: the trusted, compile-time source used
+//! for installation and recipe-version upgrades.
 //!
 //! Everything here is embedded from `persona-packs/website-manager/` at build
 //! time. The pack directory remains the single source of truth (and stays
@@ -14,11 +14,11 @@
 
 /// Recipe identity exposed to the UI and recorded in the install journal.
 pub const RECIPE_ID: &str = "website-manager";
-pub const RECIPE_VERSION: &str = "0.1.1";
+pub const RECIPE_VERSION: &str = "0.1.2";
 /// The same version as a monotonic stamp for `ManagedAgentRecord`, whose
 /// `provisioned_version` is numeric because the relay stamps the employees it
 /// mints that way. Bump it with `RECIPE_VERSION`.
-pub const RECIPE_RECORD_VERSION: i64 = 2;
+pub const RECIPE_RECORD_VERSION: i64 = 3;
 
 /// Team slug, used in the per-community team id.
 pub const TEAM_SLUG: &str = "website-manager";

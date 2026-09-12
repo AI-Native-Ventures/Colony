@@ -1,7 +1,7 @@
 {
   "schema": "ai-native-office/provisioned-employee/v1",
   "handle": "website-researcher",
-  "version": 2,
+  "version": 3,
   "display_name": "Ren",
   "role_id": "website-researcher",
   "rank": "worker",
