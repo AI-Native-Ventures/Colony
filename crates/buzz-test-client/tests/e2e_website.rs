@@ -1459,12 +1459,15 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         event_by_id(&mut reviewer_client, &report_2).await.is_some(),
         "a reviewer may file a new task report after the prior website revision was reopened"
     );
-    let task_head =
-        await_task_head(&mut reviewer_client, &fixture.task_id, &fixture.personas.review).await;
+    let task_head = await_task_head(
+        &mut reviewer_client,
+        &fixture.task_id,
+        &fixture.personas.review,
+    )
+    .await;
     let task = parse_task_event(&task_head).expect("current task head parses");
     assert!(
-        task.reported_complete_by
-            .contains(&fixture.personas.review),
+        task.reported_complete_by.contains(&fixture.personas.review),
         "the active task retains the revision 2 reviewer report before RecordQa"
     );
     tokio::time::sleep(Duration::from_millis(1_100)).await;
@@ -1711,7 +1714,10 @@ async fn duplicate_coordinator_request_changes_preserves_current_task_report() {
     let ready_1 = update_action(&fixture, &fixture.coordinator, 4, WebsiteActionOp::Ready);
     let ready_1_ok = send_action(&mut coordinator_client, &fixture.coordinator, &ready_1).await;
     let (_, review) = website_head_from_response(&mut coordinator_client, &ready_1_ok).await;
-    assert_eq!(review.status, buzz_core::website::WebsiteStatus::ReadyForReview);
+    assert_eq!(
+        review.status,
+        buzz_core::website::WebsiteStatus::ReadyForReview
+    );
 
     let request_note = "Revise the mobile hero while retaining the approved wordmark.";
     let first_request = update_action(
@@ -1724,10 +1730,17 @@ async fn duplicate_coordinator_request_changes_preserves_current_task_report() {
             note: request_note.to_owned(),
         },
     );
-    let first_request_ok =
-        send_action(&mut coordinator_client, &fixture.coordinator, &first_request).await;
+    let first_request_ok = send_action(
+        &mut coordinator_client,
+        &fixture.coordinator,
+        &first_request,
+    )
+    .await;
     let (_, review) = website_head_from_response(&mut coordinator_client, &first_request_ok).await;
-    assert_eq!(review.status, buzz_core::website::WebsiteStatus::ChangesRequested);
+    assert_eq!(
+        review.status,
+        buzz_core::website::WebsiteStatus::ChangesRequested
+    );
     assert_eq!(job_row_generation(&fixture.task_id).await, Some(6));
 
     let add_revision_2 = add_revision_action(&fixture, &builder, 6, 2);
@@ -1749,12 +1762,15 @@ async fn duplicate_coordinator_request_changes_preserves_current_task_report() {
         event_by_id(&mut reviewer_client, &report_2).await.is_some(),
         "the current revision's task report is stored before the duplicate decision"
     );
-    let task_head =
-        await_task_head(&mut reviewer_client, &fixture.task_id, &fixture.personas.review).await;
+    let task_head = await_task_head(
+        &mut reviewer_client,
+        &fixture.task_id,
+        &fixture.personas.review,
+    )
+    .await;
     let task = parse_task_event(&task_head).expect("current task head parses");
     assert!(
-        task.reported_complete_by
-            .contains(&fixture.personas.review),
+        task.reported_complete_by.contains(&fixture.personas.review),
         "the active task records the revision 2 reviewer report"
     );
 
@@ -1775,8 +1791,12 @@ async fn duplicate_coordinator_request_changes_preserves_current_task_report() {
         first_request.request_id, duplicate_request.request_id,
         "the semantic retry uses a fresh transport request UUID"
     );
-    let duplicate_ok =
-        send_action(&mut coordinator_client, &fixture.coordinator, &duplicate_request).await;
+    let duplicate_ok = send_action(
+        &mut coordinator_client,
+        &fixture.coordinator,
+        &duplicate_request,
+    )
+    .await;
     assert!(
         duplicate_ok.accepted,
         "a semantic request-changes retry is answered: {}",
@@ -1802,12 +1822,15 @@ async fn duplicate_coordinator_request_changes_preserves_current_task_report() {
         Some(7),
         "a semantic duplicate does not advance the active revision"
     );
-    let task_head =
-        await_task_head(&mut reviewer_client, &fixture.task_id, &fixture.personas.review).await;
+    let task_head = await_task_head(
+        &mut reviewer_client,
+        &fixture.task_id,
+        &fixture.personas.review,
+    )
+    .await;
     let task = parse_task_event(&task_head).expect("current task head parses");
     assert!(
-        task.reported_complete_by
-            .contains(&fixture.personas.review),
+        task.reported_complete_by.contains(&fixture.personas.review),
         "a semantic duplicate must preserve the current task report"
     );
 }
