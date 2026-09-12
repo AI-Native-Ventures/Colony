@@ -12,6 +12,7 @@ import {
 } from "@/shared/constants/kinds";
 import {
   createFirstJobBusinessContext,
+  createFirstJobBusinessHeadLoader,
   firstJobBusinessRequestId,
   isFirstJobBusinessAttempt,
   isUnconfiguredFirstJobBusiness,
@@ -432,4 +433,71 @@ test("the business action request claim is stable and scoped to every root bound
       await firstJobBusinessRequestId({ ...scope, ...patch }),
       first,
     );
+});
+
+const patientDeadline = () => ({ expired: new Promise(() => {}), cancel() {} });
+
+function headLoaderFixture(results) {
+  const reads = [];
+  const waits = [];
+  return {
+    reads,
+    waits,
+    load: () =>
+      createFirstJobBusinessHeadLoader({
+        assertCurrent: async () => {},
+        loadHead: async () => {
+          const result = results[reads.length] ?? {
+            ok: false,
+            code: "unavailable",
+            message:
+              "Company records could not be read: rate-limited: quota exceeded; retry in 0s",
+          };
+          reads.push(result);
+          return result;
+        },
+        delay: async (ms) => {
+          waits.push(ms);
+        },
+        deadline: patientDeadline,
+      })(),
+  };
+}
+
+const readHead = {
+  ok: true,
+  value: { profile: initialProfile, headEventId: "a".repeat(64) },
+};
+
+test("a slow relay read of the company head is retried before it becomes an alert", async () => {
+  const f = headLoaderFixture([
+    {
+      ok: false,
+      code: "unavailable",
+      message: "Timed out while loading channel history.",
+    },
+    readHead,
+  ]);
+  assert.deepEqual(await f.load(), readHead.value);
+  assert.equal(f.reads.length, 2);
+  assert.deepEqual(f.waits, [150]);
+});
+
+test("a company head that stays unreadable still raises the saved-setup alert", async () => {
+  const f = headLoaderFixture([]);
+  await assert.rejects(f.load(), /company profile could not be read/);
+  assert.equal(f.reads.length, 3);
+});
+
+test("a company head the relay answered with a bad signature is not retried", async () => {
+  const f = headLoaderFixture([
+    {
+      ok: false,
+      code: "invalid-event",
+      message: "company head signature is invalid",
+    },
+  ]);
+  await assert.rejects(f.load(), /company profile could not be read/);
+  assert.equal(f.reads.length, 1);
+  assert.deepEqual(f.waits, []);
 });

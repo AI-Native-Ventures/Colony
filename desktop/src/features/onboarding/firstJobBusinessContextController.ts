@@ -2,6 +2,7 @@ import { verifyEvent } from "nostr-tools/pure";
 import {
   canonicalCompanyJson,
   COMMUNITY_PROFILE_ID,
+  type CompanyParseResult,
   type CompanyProfile,
 } from "@/features/company/contracts";
 import type {
@@ -13,6 +14,10 @@ import {
   KIND_COMPANY_ACTION,
   KIND_COMPANY_PROFILE,
 } from "@/shared/constants/kinds";
+import {
+  readFirstJobCompanyRecord,
+  type FirstJobReadDeadline,
+} from "./firstJobRelayRead";
 import {
   canStartFirstJobSuggestion,
   firstJobSuggestionTag,
@@ -111,6 +116,34 @@ export type FirstJobBusinessHead = {
   profile: CompanyProfile;
   headEventId: string;
 };
+
+/**
+ * Load the company head this update reads and writes, tolerating a busy relay.
+ *
+ * The alert stays exactly as loud as it was: it is raised once the bounded
+ * retry ladder is exhausted, so a genuinely unreadable or malformed head still
+ * stops the setup.
+ */
+export function createFirstJobBusinessHeadLoader(deps: {
+  assertCurrent(): Promise<void>;
+  loadHead(): Promise<CompanyParseResult<FirstJobBusinessHead>>;
+  delay(ms: number): Promise<void>;
+  deadline?: FirstJobReadDeadline;
+}): () => Promise<FirstJobBusinessHead> {
+  return async () => {
+    const result = await readFirstJobCompanyRecord({
+      read: deps.loadHead,
+      assertCurrent: deps.assertCurrent,
+      delay: deps.delay,
+      deadline: deps.deadline,
+    });
+    if (!result.ok)
+      throw new Error(
+        "Your company profile could not be read. Your setup is saved; try again.",
+      );
+    return result.value;
+  };
+}
 /** One signed public action, retained before it can reach the relay. */
 export type FirstJobBusinessAttempt = {
   payload: FirstJobSuggestion;

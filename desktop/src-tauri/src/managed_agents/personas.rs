@@ -56,9 +56,14 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
         role_title: Some("Chief of Staff"),
         avatar_url: Some(SCOUT_AVATAR),
         system_prompt: FIZZ_SYSTEM_PROMPT,
+        // Eighteen calm, elemental single words, matching the abstract
+        // register of the starter-team art. The bee-era pool this replaced
+        // (nectar, pollen, hive, forage plants, and the literal word Buzz) is
+        // kept in LEGACY_STARTER_DEFAULTS so an install still holding it is
+        // upgraded instead of keeping a teammate called Buzz or Hive.
         name_pool: &[
-            "Nectar", "Comet", "Bramble", "Clover", "Pollen", "Amber", "Daisy", "Mason", "Thistle",
-            "Waxwing", "Hive", "Meadow", "Juniper", "Aster", "Sage", "Willow", "Orchard", "Buzz",
+            "Atlas", "Basalt", "Cinder", "Delta", "Flint", "Glint", "Halo", "Indigo", "Lumen",
+            "Mesa", "Onyx", "Prism", "Ridge", "Slate", "Tide", "Tundra", "Verge", "Zephyr",
         ],
         model: None,
         runtime: None,
@@ -115,6 +120,14 @@ struct LegacyStarterDefault {
     name_pool: &'static [&'static str],
 }
 
+/// The beehive name pool the Scout persona shipped with. Listed here so an
+/// install that never edited it is upgraded to the current pool; an owner who
+/// changed a single entry keeps their own list.
+const LEGACY_SCOUT_BEE_NAME_POOL: &[&str] = &[
+    "Nectar", "Comet", "Bramble", "Clover", "Pollen", "Amber", "Daisy", "Mason", "Thistle",
+    "Waxwing", "Hive", "Meadow", "Juniper", "Aster", "Sage", "Willow", "Orchard", "Buzz",
+];
+
 const LEGACY_STARTER_DEFAULTS: &[LegacyStarterDefault] = &[
     LegacyStarterDefault {
         id: "builtin:fizz",
@@ -123,7 +136,7 @@ const LEGACY_STARTER_DEFAULTS: &[LegacyStarterDefault] = &[
         // block in merge_personas, which also covers older generations.
         system_prompt: None,
         avatar_url: LEGACY_FIZZ_BEE_AVATAR,
-        name_pool: &[],
+        name_pool: LEGACY_SCOUT_BEE_NAME_POOL,
     },
     LegacyStarterDefault {
         id: "builtin:honey",
