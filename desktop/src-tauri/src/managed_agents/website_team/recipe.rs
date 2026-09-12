@@ -98,8 +98,7 @@ pub fn provisioned_persona(handle: &str) -> Option<&'static RecipePersona> {
         return None;
     }
     PERSONAS.iter().find(|persona| {
-        (PROVISIONED_HANDLES.contains(&handle)
-            && (persona.role_id == handle || persona.persona_id == handle))
+        (PROVISIONED_HANDLES.contains(&handle) && persona.role_id == handle)
             || persona.persona_id == handle
             || (persona.persona_id == AVERY_PERSONA_ID && handle == RECIPE_ID)
     })

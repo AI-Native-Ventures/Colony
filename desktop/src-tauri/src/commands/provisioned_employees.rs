@@ -35,6 +35,10 @@ use crate::managed_agents::{
 };
 use buzz_core_pkg::kind::{KIND_EMPLOYEE, KIND_MANAGED_AGENT};
 
+#[path = "provisioned_employees_helpers.rs"]
+mod adoption_helpers;
+use adoption_helpers::{merge_provisioned_hierarchy, reject_scoped_role_collision};
+
 /// What adoption did for one employee, so the caller can say which.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -224,6 +228,10 @@ async fn adopt_one(
                     .to_owned(),
             );
         }
+        // Check the role even when this identity's bundle version is current:
+        // a second local record may have claimed the same role since the last
+        // adoption pass, and returning early here must not bless that split.
+        reject_scoped_role_collision(&existing, definition, relay_ws, owner_hex)?;
         if record.provisioned_version.unwrap_or(-1) >= definition.version {
             let mut records = existing;
             let mut record = records[index].clone();
@@ -248,6 +256,8 @@ async fn adopt_one(
             reason: missing_commands_message(&definition.name, &missing),
         });
     }
+
+    reject_scoped_role_collision(&existing, definition, relay_ws, owner_hex)?;
 
     // A stale local adoption keeps its custody and every user-owned setting.
     // Only the provisioned metadata and missing canonical defaults are
@@ -287,6 +297,7 @@ async fn adopt_one(
                 .to_owned(),
         );
     }
+    reject_scoped_role_collision(&records, definition, relay_ws, owner_hex)?;
     if let Some(index) = reloaded_matches.first().copied() {
         let existing = &records[index];
         let scope_matches = existing
@@ -445,7 +456,9 @@ fn merge_existing_record(
             )?;
         }
     }
-    changed |= merge_definition_into_record(record, definition, &crate::util::now_iso());
+    let now = crate::util::now_iso();
+    changed |= merge_provisioned_hierarchy(record, definition, &now)?;
+    changed |= merge_definition_into_record(record, definition, &now);
     Ok(changed)
 }
 
@@ -534,11 +547,14 @@ fn record_for(
         .and_then(|runtime| runtime.commands.first().copied())
         .unwrap_or(definition.harness.as_str())
         .to_owned();
+    let inherits_global_power = website_persona.is_some() || definition.handle == "chief-of-staff";
 
     ManagedAgentRecord {
         provisioned: Some(definition.handle.clone()),
         provisioned_version: Some(definition.version),
         provisioned_requires_commands: definition.requires_commands.clone(),
+        tier: definition.tier.clone(),
+        manager: definition.manager.clone(),
         pubkey: definition.pubkey.clone(),
         name: definition.name.clone(),
         // Adoption can run before the bundled persona definitions have been
@@ -554,11 +570,10 @@ fn record_for(
         owner_pubkey: Some(owner_hex.to_owned()),
         acp_command: DEFAULT_ACP_COMMAND.to_owned(),
         agent_command: agent_command.clone(),
-        // Website personas inherit the owner's Power runtime once their
-        // bundled definition is linked. Other provisioned employees retain
-        // the historical direct harness pin until they have an equivalent
-        // linked definition.
-        agent_command_override: (!website_persona.is_some()).then_some(agent_command),
+        // Website personas and the Chief of Staff inherit the owner's Power
+        // runtime. Other provisioned employees retain the historical direct
+        // harness pin until they have an equivalent linked definition.
+        agent_command_override: (!inherits_global_power).then_some(agent_command),
         system_prompt: (!definition.system_prompt.is_empty())
             .then(|| definition.system_prompt.clone()),
         model: definition.model.clone(),
@@ -626,313 +641,5 @@ fn parse_help(path: &std::path::Path, group: Option<&str>) -> BTreeSet<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn definition() -> ProvisionedDefinition {
-        ProvisionedDefinition {
-            pubkey: "a".repeat(64),
-            handle: "sales".to_owned(),
-            version: 2,
-            name: "Sales".to_owned(),
-            role_id: "sales".to_owned(),
-            harness: "claude".to_owned(),
-            model: None,
-            system_prompt: "You are Sales.".to_owned(),
-            requires_commands: vec!["outreach".to_owned()],
-        }
-    }
-
-    #[test]
-    fn the_record_carries_the_definition_rather_than_local_choices() {
-        let record = record_for(
-            &definition(),
-            "nsec1test",
-            "wss://relay.example",
-            &"b".repeat(64),
-        );
-        assert_eq!(record.provisioned.as_deref(), Some("sales"));
-        assert_eq!(record.provisioned_version, Some(2));
-        assert_eq!(record.provisioned_requires_commands, vec!["outreach"]);
-        assert_eq!(record.pubkey, "a".repeat(64));
-        assert_eq!(record.name, "Sales");
-        assert_eq!(record.system_prompt.as_deref(), Some("You are Sales."));
-        assert_eq!(record.relay_url, "wss://relay.example");
-        assert_eq!(
-            record.owner_pubkey.as_deref(),
-            Some("b".repeat(64).as_str())
-        );
-        assert_eq!(record.acp_command, DEFAULT_ACP_COMMAND);
-        // The harness id resolves to the command that actually runs it, and
-        // is pinned per instance so a persona edit cannot silently move a
-        // provisioned employee onto another harness.
-        assert!(!record.agent_command.is_empty());
-        assert_eq!(
-            record.agent_command_override.as_deref(),
-            Some(record.agent_command.as_str())
-        );
-    }
-
-    #[test]
-    fn stale_website_adoption_refreshes_bundle_metadata_without_replacing_user_state() {
-        let website = ProvisionedDefinition {
-            pubkey: "c".repeat(64),
-            handle: "website-manager".to_owned(),
-            version: 2,
-            name: "Avery".to_owned(),
-            role_id: "website-manager".to_owned(),
-            harness: "claude".to_owned(),
-            model: Some("bundle-model-must-not-replace".to_owned()),
-            system_prompt: "bundled prompt".to_owned(),
-            requires_commands: vec!["website create".to_owned()],
-        };
-        let mut record = ManagedAgentRecord {
-            provisioned: Some("website-manager".to_owned()),
-            provisioned_version: Some(1),
-            provisioned_requires_commands: vec!["old command".to_owned()],
-            pubkey: website.pubkey.clone(),
-            name: "Owner's Avery".to_owned(),
-            persona_id: Some("website-manager-avery".to_owned()),
-            private_key_nsec: "nsec1existing".to_owned(),
-            agent_command: "owner-command".to_owned(),
-            agent_command_override: Some("owner-power-pin".to_owned()),
-            agent_args: vec!["--owner-arg".to_owned()],
-            system_prompt: Some("old bundled prompt".to_owned()),
-            model: Some("owner-model".to_owned()),
-            provider: Some("owner-provider".to_owned()),
-            runtime: Some("owner-runtime".to_owned()),
-            env_vars: std::collections::BTreeMap::from([(
-                "OWNER_SETTING".to_owned(),
-                "keep".to_owned(),
-            )]),
-            working_dir: Some("/owner/worktree".to_owned()),
-            ..Default::default()
-        };
-
-        assert!(merge_definition_into_record(
-            &mut record,
-            &website,
-            "2026-02-01T00:00:00Z"
-        ));
-        assert_eq!(record.provisioned.as_deref(), Some("website-manager"));
-        assert_eq!(record.provisioned_version, Some(2));
-        assert_eq!(
-            record.provisioned_requires_commands,
-            vec!["website create".to_owned()]
-        );
-        assert_eq!(record.name, "Owner's Avery");
-        assert_eq!(record.private_key_nsec, "nsec1existing");
-        assert_eq!(record.agent_command, "owner-command");
-        assert_eq!(
-            record.agent_command_override.as_deref(),
-            Some("owner-power-pin")
-        );
-        assert_eq!(record.agent_args, vec!["--owner-arg".to_owned()]);
-        assert_eq!(record.system_prompt.as_deref(), Some("bundled prompt"));
-        assert_eq!(record.model.as_deref(), Some("owner-model"));
-        assert_eq!(record.provider.as_deref(), Some("owner-provider"));
-        assert_eq!(record.runtime.as_deref(), Some("owner-runtime"));
-        assert_eq!(
-            record.env_vars.get("OWNER_SETTING").map(String::as_str),
-            Some("keep")
-        );
-        assert_eq!(record.working_dir.as_deref(), Some("/owner/worktree"));
-    }
-
-    #[test]
-    fn an_older_relay_definition_never_downgrades_a_newer_local_bundle() {
-        let older_definition = ProvisionedDefinition {
-            pubkey: "d".repeat(64),
-            handle: "website-manager".to_owned(),
-            version: 1,
-            name: "Avery".to_owned(),
-            role_id: "old-role".to_owned(),
-            harness: "claude".to_owned(),
-            model: Some("old-bundle-model".to_owned()),
-            system_prompt: "old bundled prompt".to_owned(),
-            requires_commands: vec!["old command".to_owned()],
-        };
-        let mut record = ManagedAgentRecord {
-            provisioned: Some("website-manager".to_owned()),
-            provisioned_version: Some(2),
-            provisioned_requires_commands: vec!["new command".to_owned()],
-            pubkey: older_definition.pubkey.clone(),
-            name: "Owner's Avery".to_owned(),
-            role_id: Some("new-role".to_owned()),
-            private_key_nsec: "nsec1existing".to_owned(),
-            agent_command: "owner-command".to_owned(),
-            agent_command_override: Some("owner-power-pin".to_owned()),
-            system_prompt: Some("new bundled prompt".to_owned()),
-            ..Default::default()
-        };
-
-        assert!(!merge_definition_into_record(
-            &mut record,
-            &older_definition,
-            "2026-02-01T00:00:00Z"
-        ));
-        assert_eq!(record.provisioned_version, Some(2));
-        assert_eq!(
-            record.provisioned_requires_commands,
-            vec!["new command".to_owned()]
-        );
-        assert_eq!(record.role_id.as_deref(), Some("new-role"));
-        assert_eq!(record.system_prompt.as_deref(), Some("new bundled prompt"));
-        assert_eq!(record.private_key_nsec, "nsec1existing");
-        assert_eq!(
-            record.agent_command_override.as_deref(),
-            Some("owner-power-pin")
-        );
-    }
-
-    #[test]
-    fn same_version_merge_repairs_metadata_without_replacing_owned_prompt() {
-        let definition = ProvisionedDefinition {
-            pubkey: "e".repeat(64),
-            handle: "website-manager".to_owned(),
-            version: 2,
-            name: "Avery".to_owned(),
-            role_id: "bundled-role".to_owned(),
-            harness: "claude".to_owned(),
-            model: None,
-            system_prompt: "bundled prompt".to_owned(),
-            requires_commands: vec!["new command".to_owned()],
-        };
-        let mut record = ManagedAgentRecord {
-            provisioned: Some("website-manager".to_owned()),
-            provisioned_version: Some(2),
-            provisioned_requires_commands: vec!["stale metadata".to_owned()],
-            pubkey: definition.pubkey.clone(),
-            role_id: Some("owner-role".to_owned()),
-            system_prompt: Some("owner prompt".to_owned()),
-            ..Default::default()
-        };
-
-        assert!(merge_definition_into_record(
-            &mut record,
-            &definition,
-            "2026-02-01T00:00:00Z"
-        ));
-        assert_eq!(record.provisioned_version, Some(2));
-        assert_eq!(
-            record.provisioned_requires_commands,
-            vec!["new command".to_owned()]
-        );
-        assert_eq!(record.role_id.as_deref(), Some("owner-role"));
-        assert_eq!(record.system_prompt.as_deref(), Some("owner prompt"));
-    }
-
-    #[test]
-    fn website_adoption_carries_scope_identity_without_orphaning_persona() {
-        let website = ProvisionedDefinition {
-            pubkey: "c".repeat(64),
-            handle: "website-manager".to_owned(),
-            version: 1,
-            name: "Avery".to_owned(),
-            role_id: "website-manager".to_owned(),
-            harness: "claude".to_owned(),
-            model: None,
-            system_prompt: "You are Avery.".to_owned(),
-            requires_commands: vec!["website create".to_owned()],
-        };
-        let owner = "d".repeat(64);
-        let relay = "wss://relay.example";
-        let team_id = team_id_for_relay(relay).expect("website team id");
-        let request_id = agent_request_id(&owner, relay, "website-manager-avery");
-        let record = record_for(&website, "nsec1test", relay, &owner);
-
-        assert_eq!(record.pubkey, website.pubkey);
-        // The command can run before the installer seeds the local bundled
-        // definition. The install pass links this field after seeding it.
-        assert_eq!(record.persona_id, None);
-        assert_eq!(record.team_id.as_deref(), Some(team_id.as_str()));
-        assert_eq!(
-            record.creation_request_id.as_deref(),
-            Some(request_id.as_str())
-        );
-        assert_eq!(record.agent_command_override, None);
-        assert_eq!(record.private_key_nsec, "nsec1test");
-    }
-
-    #[test]
-    fn an_unknown_harness_falls_back_to_its_own_name() {
-        let mut unknown = definition();
-        unknown.harness = "not-a-harness".to_owned();
-        let record = record_for(
-            &unknown,
-            "nsec1test",
-            "wss://relay.example",
-            &"b".repeat(64),
-        );
-        assert_eq!(record.agent_command, "not-a-harness");
-    }
-
-    #[test]
-    fn skill_failures_ride_the_outcome_and_an_empty_list_stays_off_the_wire() {
-        let adopted = AdoptionOutcome::Adopted {
-            handle: "sales".to_owned(),
-            name: "Sales".to_owned(),
-            pubkey: "a".repeat(64),
-            skill_failures: Vec::new(),
-        };
-        let json = serde_json::to_value(&adopted).expect("outcome serializes");
-        assert!(json.get("skill_failures").is_none());
-
-        let failed = AdoptionOutcome::Adopted {
-            handle: "website-manager".to_owned(),
-            name: "Avery".to_owned(),
-            pubkey: "a".repeat(64),
-            skill_failures: vec![InstalledWebsiteSkill {
-                name: "website-research".to_owned(),
-                path: "/tmp/website-research/SKILL.md".to_owned(),
-                status: "failed".to_owned(),
-                detail: Some("create dir: permission denied".to_owned()),
-            }],
-        };
-        let json = serde_json::to_value(&failed).expect("outcome serializes");
-        assert_eq!(json["outcome"], "adopted");
-        assert_eq!(json["skill_failures"][0]["name"], "website-research");
-        assert_eq!(json["skill_failures"][0]["status"], "failed");
-        assert_eq!(
-            json["skill_failures"][0]["detail"],
-            "create dir: permission denied"
-        );
-    }
-
-    #[test]
-    fn only_groups_this_build_advertises_are_probed_for_subcommands() {
-        let available: BTreeSet<String> = ["website", "messages"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect();
-        let required = vec![
-            "website create".to_owned(),
-            "messages".to_owned(),
-            "sales outreach".to_owned(),
-        ];
-        let groups = required_groups(&available, &required);
-        assert_eq!(groups, ["website".to_owned()].into_iter().collect());
-    }
-
-    #[test]
-    fn pack_skills_land_in_the_workspace_and_a_user_edit_survives() {
-        let root = tempfile::tempdir().expect("tempdir");
-        assert!(
-            install_pack_skills_at(root.path()).is_empty(),
-            "the first pass lands every skill without a failure"
-        );
-        let skill = root.path().join(".agents/skills/website-research/SKILL.md");
-        assert!(skill.exists(), "the runbook is written to the workspace");
-
-        std::fs::write(&skill, "my edited runbook").expect("write user edit");
-        assert!(
-            install_pack_skills_at(root.path()).is_empty(),
-            "a preserved edit is not a failure"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&skill).expect("read back"),
-            "my edited runbook",
-            "a user's edit is never overwritten"
-        );
-    }
-}
+#[path = "provisioned_employees_tests.rs"]
+mod tests;

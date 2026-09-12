@@ -40,6 +40,10 @@ use super::{
     PUBLICATION_QUEUED,
 };
 
+#[path = "install_hierarchy.rs"]
+mod hierarchy;
+use hierarchy::find_scoped_chief_of_staff;
+
 static INSTALL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// Immutable scope captured before any async work. Every write goes through
@@ -107,6 +111,21 @@ async fn install_inner(
 
     let mut notes: Vec<String> = Vec::new();
 
+    // The relay's role-holder resolver must settle the Chief of Staff before
+    // the Website team can be installed. Do this before seeding any team or
+    // agent rows so a missing local projection is an incomplete install that
+    // can be retried after automatic adoption, rather than a successful team
+    // with an unassigned Avery.
+    let chief_of_staff_pubkey = find_scoped_chief_of_staff(
+        &load_managed_agents(ctx.app)?,
+        &ctx.owner,
+        &ctx.canonical_relay,
+    )?
+    .ok_or_else(|| {
+        "Your Chief of Staff is not ready yet. Finish setting up your team, then try again."
+            .to_string()
+    })?;
+
     // Phase A: seed definitions and the community team, retaining their heads
     // into the captured scope. Existing provisioned records are upgraded when
     // their recorded version is behind this recipe.
@@ -116,8 +135,9 @@ async fn install_inner(
     // Phase A2: write the skills into the agent workspace.
     let skills = install_skills(&mut notes);
 
-    // Phase B: one managed agent per persona, in order, so Avery's pubkey is
-    // known before the workers get their manager.
+    // Phase B: one managed agent per persona, in order. Avery reports to the
+    // exact current Chief of Staff already held in this owner/community
+    // scope; workers report to the Avery record created or reused below.
     let mut agents: Vec<ManagedAgentRecord> = Vec::with_capacity(PERSONAS.len());
     let mut installed_personas: Vec<InstalledWebsitePersona> = Vec::with_capacity(PERSONAS.len());
     let mut avery_pubkey: Option<String> = None;
@@ -132,7 +152,7 @@ async fn install_inner(
         }
         let request_id = agent_request_id(&ctx.owner, &ctx.relay_url, persona.persona_id);
         let manager_pubkey = if persona.persona_id == AVERY_PERSONA_ID {
-            None
+            Some(chief_of_staff_pubkey.as_str())
         } else {
             avery_pubkey.as_deref()
         };
@@ -914,3 +934,7 @@ fn retain_team_at(scope: &RetentionScope, team: &TeamRecord) -> Result<(), Strin
         },
     )
 }
+
+#[cfg(test)]
+#[path = "install_tests.rs"]
+mod tests;

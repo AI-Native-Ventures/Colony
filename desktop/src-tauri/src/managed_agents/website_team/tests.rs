@@ -495,7 +495,8 @@ fn adopted_website_record_rejects_crossed_identity_fields() {
         ..Default::default()
     };
 
-    let cases: [(&str, fn(&mut ManagedAgentRecord)); 4] = [
+    type Mutator = fn(&mut ManagedAgentRecord);
+    let cases: [(&str, Mutator); 4] = [
         ("persona", |record: &mut ManagedAgentRecord| {
             record.persona_id = Some(PERSONAS[0].persona_id.to_string());
         }),
@@ -532,8 +533,10 @@ fn a_linked_website_record_follows_global_power_after_pin_clear() {
         agent_command_override: None,
         ..Default::default()
     };
-    let mut global = GlobalAgentConfig::default();
-    global.preferred_runtime = Some("codex".to_string());
+    let global = GlobalAgentConfig {
+        preferred_runtime: Some("codex".to_string()),
+        ..Default::default()
+    };
     let definitions = vec![definition];
 
     let runtime = resolve_effective_runtime_id(&record, &definitions, &global)

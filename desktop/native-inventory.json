@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 525,
-    "tauri_coupled": 214,
-    "portable": 311,
+    "rust_total": 529,
+    "tauri_coupled": 215,
+    "portable": 314,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -183,6 +183,7 @@
       "src-tauri/src/managed_agents/teams_tests.rs",
       "src-tauri/src/managed_agents/website_team/adoption.rs",
       "src-tauri/src/managed_agents/website_team/install.rs",
+      "src-tauri/src/managed_agents/website_team/install_hierarchy.rs",
       "src-tauri/src/managed_agents/website_team/journal.rs",
       "src-tauri/src/managed_agents/website_team/recipe.rs",
       "src-tauri/src/managed_agents/website_team/tests.rs",
@@ -305,6 +306,8 @@
       "src-tauri/src/commands/project_git_merge_error.rs",
       "src-tauri/src/commands/project_git_push.rs",
       "src-tauri/src/commands/project_repo_paths.rs",
+      "src-tauri/src/commands/provisioned_employees_helpers.rs",
+      "src-tauri/src/commands/provisioned_employees_tests.rs",
       "src-tauri/src/commands/reconnect_hook_config.rs",
       "src-tauri/src/commands/team_snapshot/tests.rs",
       "src-tauri/src/commands/workflows_tests.rs",
@@ -487,6 +490,7 @@
       "src-tauri/src/managed_agents/types/requests.rs",
       "src-tauri/src/managed_agents/types/respond_to.rs",
       "src-tauri/src/managed_agents/types/tests.rs",
+      "src-tauri/src/managed_agents/website_team/install_tests.rs",
       "src-tauri/src/managed_agents/website_team/mod.rs",
       "src-tauri/src/managed_agents/website_team/provisioning.rs",
       "src-tauri/src/managed_agents/website_team/skills.rs",

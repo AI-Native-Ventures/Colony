@@ -60,6 +60,16 @@ pub struct ProvisionedDefinition {
     pub name: String,
     /// The role slug it fills.
     pub role_id: String,
+    /// The signed interrupt hierarchy tier, when the definition carries one.
+    ///
+    /// Older relay definitions may not include this field. That absence is
+    /// retained as absence: adoption must never guess a tier from a role or
+    /// from a local record.
+    pub tier: Option<String>,
+    /// The signed pubkey of this employee's manager, when one is declared on
+    /// the definition. Invalid or ambiguous manager tags make the definition
+    /// untrusted rather than turning them into an unassigned employee.
+    pub manager: Option<String>,
     /// The agent harness that runs it, by catalog id.
     pub harness: String,
     /// The model to pin, or `None` to let the harness choose.
@@ -111,6 +121,29 @@ fn is_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Read the optional manager tag without treating a malformed claim as an
+/// absent one.
+///
+/// `Some(None)` means the event has no manager tag. `None` means a manager tag
+/// was present but had no valid, unique 64-character hex value, or that more
+/// than one manager tag was present. The caller drops the whole definition in
+/// that case, preserving the signed-definition trust boundary.
+fn optional_manager_tag(event: &Event) -> Option<Option<String>> {
+    let mut values = event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind().to_string() == "manager")
+        .map(|tag| tag.content());
+    match (values.next(), values.next()) {
+        (None, None) => Some(None),
+        (Some(Some(value)), None) => {
+            let value = value.trim().to_ascii_lowercase();
+            is_hex64(&value).then_some(Some(value))
+        }
+        _ => None,
+    }
+}
+
 /// Parse one kind-30177 event into a definition, if it is one.
 ///
 /// Returns `None` for anything malformed rather than failing the whole read:
@@ -137,6 +170,17 @@ fn parse_definition(event: &Event) -> Option<ProvisionedDefinition> {
             .trim()
             .to_owned()
     };
+    let tier = match content.get("tier") {
+        None => None,
+        Some(value) => {
+            let tier = value.as_str()?.trim();
+            if !matches!(tier, "worker" | "leader" | "executive") {
+                return None;
+            }
+            Some(tier.to_owned())
+        }
+    };
+    let manager = optional_manager_tag(event)?;
 
     Some(ProvisionedDefinition {
         pubkey,
@@ -147,6 +191,8 @@ fn parse_definition(event: &Event) -> Option<ProvisionedDefinition> {
             .unwrap_or(0),
         name: text("name"),
         role_id: text("role_id"),
+        tier,
+        manager,
         harness: text("harness"),
         model: content
             .get("model")
@@ -353,10 +399,14 @@ mod tests {
     use nostr::{EventBuilder, Keys, Kind, Tag};
 
     fn definition_content(handle: &str) -> String {
+        definition_content_with_tier(handle, "leader")
+    }
+
+    fn definition_content_with_tier(handle: &str, tier: &str) -> String {
         serde_json::json!({
             "name": "Sales",
             "role_id": "sales",
-            "tier": "leader",
+            "tier": tier,
             "harness": "claude",
             "model": null,
             "system_prompt": "You are Sales.",
@@ -409,12 +459,97 @@ mod tests {
         assert_eq!(found[0].name, "Sales");
         assert_eq!(found[0].harness, "claude");
         assert_eq!(found[0].version, 2);
+        assert_eq!(found[0].tier.as_deref(), Some("leader"));
+        assert_eq!(found[0].manager, None);
         assert_eq!(found[0].system_prompt, "You are Sales.");
         assert_eq!(
             found[0].requires_commands,
             vec!["discovery", "messages", "outreach"]
         );
         assert_eq!(found[0].model, None);
+    }
+
+    #[test]
+    fn a_signed_definition_carries_its_manager_without_guessing() {
+        let employee = Keys::generate();
+        let manager = "f".repeat(64);
+        let event = EventBuilder::new(
+            Kind::Custom(KIND_MANAGED_AGENT as u16),
+            definition_content("website-manager"),
+        )
+        .tags(vec![
+            Tag::parse(["d", &employee.public_key().to_hex()]).expect("d tag"),
+            Tag::parse(["provisioned", "website-manager"]).expect("provisioned tag"),
+            Tag::parse(["manager", &manager]).expect("manager tag"),
+        ])
+        .sign_with_keys(&employee)
+        .expect("sign definition");
+
+        let found = trusted_provisioned_definitions(&[
+            event,
+            employee_head(&employee, Some("website-manager")),
+        ]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].tier.as_deref(), Some("leader"));
+        assert_eq!(found[0].manager.as_deref(), Some(manager.as_str()));
+    }
+
+    #[test]
+    fn an_ambiguous_or_malformed_manager_claim_is_not_trusted() {
+        let employee = Keys::generate();
+        let base_tags = || {
+            vec![
+                Tag::parse(["d", &employee.public_key().to_hex()]).expect("d tag"),
+                Tag::parse(["provisioned", "website-manager"]).expect("provisioned tag"),
+            ]
+        };
+        let malformed = EventBuilder::new(
+            Kind::Custom(KIND_MANAGED_AGENT as u16),
+            definition_content("website-manager"),
+        )
+        .tags({
+            let mut tags = base_tags();
+            tags.push(Tag::parse(["manager", "not-a-pubkey"]).expect("manager tag"));
+            tags
+        })
+        .sign_with_keys(&employee)
+        .expect("sign malformed definition");
+        assert!(trusted_provisioned_definitions(&[
+            malformed,
+            employee_head(&employee, Some("website-manager")),
+        ])
+        .is_empty());
+
+        let duplicate = EventBuilder::new(
+            Kind::Custom(KIND_MANAGED_AGENT as u16),
+            definition_content("website-manager"),
+        )
+        .tags({
+            let mut tags = base_tags();
+            tags.push(Tag::parse(["manager", &"a".repeat(64)]).expect("manager tag"));
+            tags.push(Tag::parse(["manager", &"b".repeat(64)]).expect("manager tag"));
+            tags
+        })
+        .sign_with_keys(&employee)
+        .expect("sign ambiguous definition");
+        assert!(trusted_provisioned_definitions(&[
+            duplicate,
+            employee_head(&employee, Some("website-manager")),
+        ])
+        .is_empty());
+
+        let invalid_tier = EventBuilder::new(
+            Kind::Custom(KIND_MANAGED_AGENT as u16),
+            definition_content_with_tier("website-manager", "director"),
+        )
+        .tags(base_tags())
+        .sign_with_keys(&employee)
+        .expect("sign invalid tier definition");
+        assert!(trusted_provisioned_definitions(&[
+            invalid_tier,
+            employee_head(&employee, Some("website-manager")),
+        ])
+        .is_empty());
     }
 
     #[test]

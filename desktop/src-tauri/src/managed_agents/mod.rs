@@ -81,7 +81,6 @@ pub use parallelism::{acp_agents_value, effective_parallelism, harness_max_paral
 pub use personas::*;
 #[cfg(windows)]
 pub use process_lifecycle::*;
-pub(crate) use provisioned::*;
 pub(crate) use readiness::{
     agent_readiness, resolve_effective_agent_env, resolve_effective_harness_descriptor,
     AgentReadiness, Requirement,
