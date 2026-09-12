@@ -180,7 +180,7 @@ const SCREEN_HUE: Record<string, HueName> = {
   "brain:colony": "green",
   history: "blue",
   credits: "violet",
-  invite: "blue",
+  invite: "pink",
 };
 
 export function canvasFor(
