@@ -1775,18 +1775,23 @@ mod base_prompt_tests {
         );
     }
 
-    /// Agents wrote posts, captions and replies as if every reader already
-    /// knew the product and its vocabulary. The rule has to be stated in
-    /// the prompt, not left for the model to infer from "plain words".
+    /// Agents wrote captions, prospect emails and pages as if the audience
+    /// already knew the business: abstract copy that only reads to someone
+    /// familiar with "us". The rule has to name the audience of the
+    /// deliverable, not the person who asked for it.
     #[test]
-    fn the_prompt_tells_agents_to_decide_who_is_reading() {
+    fn the_prompt_tells_agents_to_write_for_an_audience_that_never_heard_of_us() {
         assert!(
-            BASE_PROMPT.contains("### Decide who is reading before you write"),
-            "the base prompt must carry the reader rule"
+            BASE_PROMPT.contains("### Write for the audience, who has never heard of us"),
+            "the base prompt must carry the audience rule"
         );
         assert!(
-            BASE_PROMPT.contains("write as if they know none of it"),
-            "the base prompt must default to a reader who knows nothing"
+            BASE_PROMPT.contains("the person who asked is not the reader"),
+            "the base prompt must separate the asker from the audience"
+        );
+        assert!(
+            BASE_PROMPT.contains("Never write as if the reader already knows us"),
+            "the base prompt must forbid copy that assumes familiarity"
         );
     }
 }

@@ -2,12 +2,18 @@
 
 ## Unreleased
 
+- feat(onboarding): show four clear setup steps, require a successful agent reply before entry, and let owners review memories from selected local AI history.
+
 - fix(onboarding): retry a slow or rate-limited relay read during first-job approval instead of failing the setup.
 - feat(desktop): pick the reasoning effort for a subscription teammate, with each model's own options and its own default read from the provider.
 - fix(desktop): the Model you choose for a teammate is the model that runs; a stale BUZZ_ACP_MODEL saved on an older agent no longer overrides it silently.
 - chore(desktop): the app calls itself Colony everywhere you can read it, instead of the upstream project it was forked from.
 - chore(desktop): the menu-bar icon is Colony's ant, and the native layer calls the product Colony where you can read it.
 - chore(desktop): rename the last Buzz references in native messages, and replace the beehive teammate name pool.
+
+## relay-v0.11.14
+
+- feat(relay): Colony now provides a Chief of Staff, and every provisioned employee reports to it from the moment it is seeded, so an owner never has to place one on the org chart. This repairs an existing ladder rather than adding a new one: promotion to an executive resolves the role against the payroll, the payroll had no chief of staff in any workspace, and leader-to-executive escalation was therefore dead in sixteen of seventeen production workspaces. Where a workspace already created its own agent holding that role, Colony stands down and leaves the owner's arrangement alone.
 
 ## relay-v0.11.13
 

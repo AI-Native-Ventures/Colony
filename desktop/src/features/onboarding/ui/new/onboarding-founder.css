@@ -636,3 +636,200 @@
   color: var(--onb-founder-text);
   font: inherit;
 }
+
+/* Approved four-stage founder flow, September 12. */
+@layer components {
+  .onb-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .onb-brand > svg {
+    width: 2.2rem;
+    height: 1.7rem;
+  }
+  .onb-founder-intro {
+    grid-template-columns: minmax(10rem, 15rem) minmax(0, 37.5rem);
+    justify-content: center;
+    align-items: safe center;
+    gap: 3.25rem;
+  }
+  .onb-founder-story {
+    padding: 0;
+    align-self: safe center;
+  }
+  .onb-simple-card {
+    align-self: safe center;
+  }
+  .onb-progress {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 1.25rem;
+  }
+  .onb-progress li {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: #5d5469;
+    font-size: 0.9375rem;
+  }
+  .onb-progress li[aria-current] {
+    color: #171717;
+    font-weight: 650;
+  }
+  .onb-progress-number {
+    width: 1.75rem;
+    height: 1.75rem;
+    border: 1px solid #847491;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 0.8125rem;
+    flex-shrink: 0;
+  }
+  .onb-progress li[aria-current] .onb-progress-number,
+  .onb-progress li[data-complete="true"] .onb-progress-number {
+    color: white;
+    background: #26212d;
+    border-color: #26212d;
+  }
+  .onb-simple[data-founder-step="history"] {
+    --onb-brand-field: linear-gradient(130deg, #b9dfd0, #c8d9ef 70%, #e5e5f4);
+    --onb-brand-strip: linear-gradient(100deg, #b9dfd0, #c8d9ef);
+  }
+  .onb-founder-ant {
+    opacity: 0.28;
+  }
+  .onb-founder-ant:nth-child(1) {
+    left: 3%;
+    top: 26%;
+  }
+  .onb-founder-ant:nth-child(2) {
+    left: 6%;
+    top: auto;
+    bottom: 9%;
+  }
+  .onb-founder-ant:nth-child(3) {
+    left: auto;
+    right: 3%;
+    top: 10%;
+  }
+  .onb-founder-ant:nth-child(4) {
+    left: auto;
+    right: 5%;
+    top: auto;
+    bottom: 6%;
+  }
+  .onb-history-sources {
+    display: grid;
+    gap: 0.75rem;
+  }
+  .onb-history-source {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--onb-founder-line);
+    border-radius: 0.625rem;
+  }
+  .onb-history-source img {
+    width: 1.75rem;
+    height: 1.75rem;
+    object-fit: contain;
+  }
+  .onb-history-source small {
+    display: block;
+    color: var(--onb-founder-muted);
+  }
+  .onb-history-source input {
+    accent-color: #292330;
+  }
+  .onb-memory-draft {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--onb-founder-line);
+  }
+  .onb-memory-draft textarea {
+    width: 100%;
+    min-height: 5rem;
+    padding: 0.75rem;
+    background: var(--onb-founder-input);
+    border: 1px solid var(--onb-founder-line);
+    border-radius: 0.5rem;
+  }
+  .onb-response {
+    padding: 1rem;
+    border: 1px solid var(--onb-founder-line);
+    border-radius: 0.75rem;
+    display: grid;
+    gap: 0.75rem;
+  }
+  @media (max-width: 1099px) {
+    .onb-founder-ants {
+      display: none;
+    }
+  }
+  @media (max-width: 670px) {
+    .onb-founder-intro {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 1.5rem;
+      padding: 1.5rem;
+    }
+    .onb-progress {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .onb-progress li {
+      flex-direction: column;
+      text-align: center;
+      gap: 0.4rem;
+      font-size: 0.6875rem;
+      flex: 1;
+    }
+  }
+}
+
+@layer components {
+  .onb-history-brands {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+  .onb-history-brands .onb-history-source {
+    border: 0;
+    padding: 0;
+    flex-direction: column;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+  }
+  @media (max-width: 670px) {
+    .onb-founder-intro {
+      display: grid;
+    }
+    .onb-founder-story {
+      width: 100%;
+    }
+  }
+}
+@layer components {
+  @media (min-width: 760px) {
+    .onb-power-lanes {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.5rem;
+    }
+    .onb-power-lanes > button {
+      padding: 0.75rem;
+    }
+    .onb-power-lanes > button > span {
+      font-size: 0.75rem;
+    }
+  }
+  .onb-simple-link:has(input[type="file"]):focus-within {
+    outline: 2px solid currentColor;
+    outline-offset: 4px;
+  }
+}

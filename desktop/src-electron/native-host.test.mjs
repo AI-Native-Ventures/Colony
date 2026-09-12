@@ -4,12 +4,16 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { NativeHost, nativeRequestTimeout } from "./native-host.mjs";
 
-test("only the bounded native updater commands receive transfer time", () => {
+test("bounded native transfers and reviewed memory saves receive operation time", () => {
   assert.equal(
     nativeRequestTimeout("invoke", "electron_download_update", 60_000),
     16 * 60_000,
   );
   assert.equal(nativeRequestTimeout("invoke", "sign_out", 60_000), 60_000);
+  assert.equal(
+    nativeRequestTimeout("invoke", "save_onboarding_memories", 60_000),
+    300_000,
+  );
   assert.equal(
     nativeRequestTimeout("emit", "electron_download_update", 60_000),
     60_000,

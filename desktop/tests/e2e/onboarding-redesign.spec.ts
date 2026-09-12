@@ -116,7 +116,7 @@ test("power offers all three choices and saves the selected defaults", async ({
   ).toHaveAttribute("aria-pressed", "true");
   await expect(power.getByLabel(/API Key/)).toHaveCount(0);
   await expect(
-    power.getByRole("button", { name: "Open my Colony" }),
+    power.getByRole("button", { name: "Test connection" }),
   ).toBeEnabled();
 
   await power.getByRole("button", { name: /^Subscriptions/ }).click();
@@ -140,7 +140,7 @@ test("power offers all three choices and saves the selected defaults", async ({
   await expect(power).toContainText("Max 20x");
   await expect(power).toContainText("65% left");
   await expect(
-    power.getByRole("button", { name: "Open my Colony" }),
+    power.getByRole("button", { name: "Test connection" }),
   ).toBeEnabled();
   await waitForAnimations(page);
   await page.screenshot({
@@ -148,7 +148,7 @@ test("power offers all three choices and saves the selected defaults", async ({
     fullPage: true,
   });
   await power
-    .getByRole("button", { name: "Open my Colony" })
+    .getByRole("button", { name: "Test connection" })
     .scrollIntoViewIfNeeded();
   await waitForAnimations(page);
   await page.screenshot({
@@ -158,7 +158,7 @@ test("power offers all three choices and saves the selected defaults", async ({
   await power.getByRole("button", { name: /^OpenRouter free models/ }).click();
   await expect(page.getByTestId("openrouter-connect-button")).toBeVisible();
   await expect(
-    power.getByRole("button", { name: "Open my Colony" }),
+    power.getByRole("button", { name: "Test connection" }),
   ).toBeDisabled();
   await expect(power).toContainText("50 requests a day");
   await expect(power).toContainText("$10");
@@ -169,9 +169,11 @@ test("power offers all three choices and saves the selected defaults", async ({
 
   await power.getByRole("button", { name: /^Colony Credits/ }).click();
   await expect(
-    power.getByRole("button", { name: "Open my Colony" }),
+    power.getByRole("button", { name: "Test connection" }),
   ).toBeEnabled();
-  await power.getByRole("button", { name: "Open my Colony" }).click();
+  await power.getByRole("button", { name: "Test connection" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
   const saved = await page.evaluate(async () => {
     const config = await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
@@ -206,7 +208,7 @@ test("a saved subscription cannot bypass its business connection through the gen
     },
   });
   const power = page.getByTestId("onboarding-power");
-  const complete = power.getByRole("button", { name: "Open my Colony" });
+  const complete = power.getByRole("button", { name: "Test connection" });
   await expect(power.getByTestId("subscription-power-fields")).toBeVisible();
   await expect(
     power.getByRole("button", { name: "Keep my current setup" }),
@@ -237,7 +239,7 @@ test("legacy Credits keeps its funding choice until the owner updates the connec
   };
   await reachPower(page, { globalAgentConfig: legacyConfig });
   const power = page.getByTestId("onboarding-power");
-  const complete = power.getByRole("button", { name: "Open my Colony" });
+  const complete = power.getByRole("button", { name: "Test connection" });
   await expect(
     power.getByRole("button", { name: /^Colony Credits/ }),
   ).toHaveAttribute("aria-pressed", "true");
@@ -259,6 +261,8 @@ test("legacy Credits keeps its funding choice until the owner updates the connec
   // Updating the draft is explicit; it still does not save before completion.
   expect(await readSavedConfig()).toEqual(legacyConfig);
   await complete.click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
   expect(await readSavedConfig()).toMatchObject({
     credential_mode: "colony_credits",
@@ -303,7 +307,7 @@ test("subscription account retry recovers detection but an unsupported Electron 
   const power = page.getByTestId("onboarding-power");
   await power.getByRole("button", { name: /^Subscriptions/ }).click();
   await expect(power).toContainText("We could not check your subscriptions");
-  const complete = power.getByRole("button", { name: "Open my Colony" });
+  const complete = power.getByRole("button", { name: "Test connection" });
   await expect(complete).toBeDisabled();
   await power.getByRole("button", { name: "Check again", exact: true }).click();
   await power.getByRole("button", { name: /^Claude · Max 20x/ }).click();
@@ -377,7 +381,7 @@ for (const provider of ["anthropic", "openrouter"] as const) {
       },
     });
     const power = page.getByTestId("onboarding-power");
-    const complete = power.getByRole("button", { name: "Open my Colony" });
+    const complete = power.getByRole("button", { name: "Test connection" });
     await expect(power).toContainText(
       "Your existing provider settings are preserved",
     );
@@ -388,6 +392,10 @@ for (const provider of ["anthropic", "openrouter"] as const) {
     await continueFounderBusiness(page);
     await expect(complete).toBeEnabled();
     await complete.click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Skip for now", exact: true })
+      .click();
     await expect(page.getByTestId("app-top-chrome")).toBeVisible();
     const saved = await page.evaluate(() =>
       window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_global_agent_config"),
@@ -413,7 +421,7 @@ test("Credits failure blocks completion and offers a retry without claiming zero
   const power = page.getByTestId("onboarding-power");
   await expect(power).toContainText("Colony Credits is unavailable");
   await expect(
-    power.getByRole("button", { name: "Open my Colony" }),
+    power.getByRole("button", { name: "Test connection" }),
   ).toBeDisabled();
   await expect(power).not.toContainText("$0.00 available");
   await page.evaluate(() =>
@@ -421,7 +429,7 @@ test("Credits failure blocks completion and offers a retry without claiming zero
   );
   await power.getByRole("button", { name: "Check again", exact: true }).click();
   await expect(
-    power.getByRole("button", { name: "Open my Colony" }),
+    power.getByRole("button", { name: "Test connection" }),
   ).toBeEnabled();
 });
 
@@ -552,7 +560,7 @@ test("account and business retain readable opaque forms and brand at narrow widt
   });
   await continueFounderBusiness(page);
   await expect(
-    page.getByRole("button", { name: "Open my Colony" }),
+    page.getByRole("button", { name: "Test connection" }),
   ).toBeEnabled();
   await waitForAnimations(page);
   await page.screenshot({
@@ -622,7 +630,7 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
     fullPage: true,
   });
   await power
-    .getByRole("button", { name: "Open my Colony" })
+    .getByRole("button", { name: "Test connection" })
     .scrollIntoViewIfNeeded();
   await waitForAnimations(page);
   await page.screenshot({
@@ -679,7 +687,7 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
     "deepseek-v4-flash",
   );
   await expect(
-    power.getByRole("button", { name: "Open my Colony", exact: true }),
+    power.getByRole("button", { name: "Test connection", exact: true }),
   ).toBeEnabled();
   await waitForAnimations(page);
   await page.screenshot({
@@ -726,7 +734,7 @@ test("Power connects OpenRouter, explains verified allowance and rechecks after 
     fullPage: true,
   });
   await power
-    .getByRole("button", { name: "Open my Colony" })
+    .getByRole("button", { name: "Test connection" })
     .scrollIntoViewIfNeeded();
   await waitForAnimations(page);
   await page.screenshot({
@@ -783,6 +791,6 @@ test("subscription installation is an explicit step before vendor sign-in", asyn
     power.getByRole("button", { name: "Connect Claude", exact: true }),
   ).toBeEnabled();
   await expect(
-    power.getByRole("button", { name: "Open my Colony" }),
+    power.getByRole("button", { name: "Test connection" }),
   ).toBeDisabled();
 });

@@ -198,7 +198,15 @@ async fn seeding_creates_the_sales_employee_once_and_settles_on_a_re_run() {
     let first = ensure_core_employees(&state, community_id)
         .await
         .expect("seeding succeeds");
-    assert_eq!(first, 1, "the first run seeds exactly the bundled employee");
+    // Against the registry, not a literal: adding a bundled employee is an
+    // ordinary event and a pinned count turns it into a failure that says
+    // nothing about what broke.
+    let bundled = core_employee_manifests().expect("bundled employees are valid");
+    assert_eq!(
+        first,
+        bundled.len(),
+        "the first run seeds every bundled employee"
+    );
 
     let row = seeded_sales(&db, community_id).await;
     assert_eq!(row.display_name, "Sales");
@@ -562,7 +570,17 @@ async fn a_workspace_employee_already_in_the_role_is_not_displaced() {
     let written = ensure_core_employees(&state, community_id)
         .await
         .expect("seeding still succeeds");
-    assert_eq!(written, 0, "the seed stands down rather than displacing");
+    // The Chief of Staff still seeds here: it is the SALES seed that must
+    // stand down, because that is the role the workspace already filled.
+    // Counting every bundled employee would hide which one stood down.
+    assert!(
+        db.find_provisioned_employee(community_id, "sales")
+            .await
+            .expect("query the seeded employee")
+            .is_none(),
+        "the sales seed stands down rather than displacing the workspace's own"
+    );
+    let _ = written;
 
     let theirs_row = db
         .find_employee(community_id, &pubkey_bytes)
