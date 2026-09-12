@@ -76,6 +76,13 @@ export function WebsiteReview({
     enabled: showQaPanel,
   });
   const qaView = resolveQaView({ revision, report: reportState });
+  // A record that has already been approved or handed over is immutable from
+  // this surface. Keep the preview and evidence available for inspection, but
+  // never leave an editable decision form mounted after the saved decision.
+  const canShowDecisionControls =
+    showDecisionControls &&
+    record.status !== "approved" &&
+    record.status !== "handedOver";
 
   return (
     <section
@@ -116,7 +123,7 @@ export function WebsiteReview({
           selectedRevision={currentSelection}
         />
       ) : null}
-      {showDecisionControls ? (
+      {canShowDecisionControls ? (
         <WebsiteDecisionPanel
           actor={actor}
           onDecision={onDecision}

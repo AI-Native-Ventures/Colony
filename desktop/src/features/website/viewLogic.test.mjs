@@ -268,8 +268,35 @@ test("without a report there are no invented checklist rows", () => {
   });
   assert.equal(view.checks.length, 0);
   assert.equal(view.checksUnavailableReason, "No loader in this build.");
-  assert.equal(view.displayPassed, true, "the recorded result still shows");
+  assert.equal(view.recordedPassed, true, "the signed result is retained");
+  assert.equal(
+    view.displayPassed,
+    false,
+    "an unavailable checklist cannot be shown as a verified pass",
+  );
   assert.ok(view.diagnostics.some((row) => row.label === "Report event"));
+});
+
+test("a loading or failed report never becomes a verified pass", () => {
+  const head = revision(1, {
+    qa: {
+      reviewer: REVIEWER,
+      revision: 1,
+      manifestSha256: SHA_1,
+      passed: true,
+      reportEventId: "7".repeat(64),
+      report: REVIEWER_REPORT,
+    },
+  });
+  for (const report of [
+    { status: "loading" },
+    { status: "error", message: "The report could not be read." },
+  ]) {
+    const view = resolveQaView({ revision: head, report });
+    assert.equal(view.recordedPassed, true);
+    assert.equal(view.reportLoaded, false);
+    assert.equal(view.displayPassed, false);
+  }
 });
 
 test("a report that contradicts the recorded pass is not presented as passed", () => {
@@ -328,7 +355,61 @@ test("a report for another revision is not shown as this one's checklist", () =>
   });
   assert.equal(view.reportLoaded, false);
   assert.equal(view.checks.length, 0);
+  assert.equal(view.recordedPassed, true);
+  assert.equal(view.displayPassed, false);
   assert.ok(view.checksUnavailableReason.includes("different version"));
+});
+
+test("a non-independent or mismatched QA record cannot display a verified pass", () => {
+  const sameBuilder = revision(1, {
+    qa: {
+      reviewer: BUILDER,
+      revision: 1,
+      manifestSha256: SHA_1,
+      passed: true,
+      reportEventId: "7".repeat(64),
+      report: REVIEWER_REPORT,
+    },
+  });
+  const validReport = parseQaReportValue({
+    schema: "colony.website-qa-report/1",
+    reviewer: BUILDER,
+    revision: 1,
+    manifestSha256: SHA_1,
+    checks: [{ id: "layout", label: "Layouts checked", result: "pass" }],
+  });
+  assert.equal(validReport.ok, true);
+  const sameBuilderView = resolveQaView({
+    revision: sameBuilder,
+    report: { status: "ready", report: validReport.report },
+  });
+  assert.equal(sameBuilderView.independent, false);
+  assert.equal(sameBuilderView.displayPassed, false);
+
+  const mismatched = revision(1, {
+    qa: {
+      reviewer: REVIEWER,
+      revision: 1,
+      manifestSha256: SHA_2,
+      passed: true,
+      reportEventId: "7".repeat(64),
+      report: REVIEWER_REPORT,
+    },
+  });
+  const mismatchedReport = parseQaReportValue({
+    schema: "colony.website-qa-report/1",
+    reviewer: REVIEWER,
+    revision: 1,
+    manifestSha256: SHA_2,
+    checks: [{ id: "layout", label: "Layouts checked", result: "pass" }],
+  });
+  assert.equal(mismatchedReport.ok, true);
+  const mismatchedView = resolveQaView({
+    revision: mismatched,
+    report: { status: "ready", report: mismatchedReport.report },
+  });
+  assert.equal(mismatchedView.manifestMatches, false);
+  assert.equal(mismatchedView.displayPassed, false);
 });
 
 test("handover resources label the original site and the verified archive", () => {

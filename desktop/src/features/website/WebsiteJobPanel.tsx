@@ -222,6 +222,7 @@ export function WebsiteJobPanel({
             onSelectRevision={selection.selectRevision}
             record={record}
             selectedRevision={selection.selectedRevision}
+            showDecisionControls={false}
           />
         </>
       ) : null}

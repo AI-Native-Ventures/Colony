@@ -25,7 +25,11 @@ import {
 } from "./handoverState";
 import { isScopeCurrent, scopedKey } from "./scopedAsync";
 import { useScopedState } from "./useScopedState";
-import { resolveHandoverView, type WebsiteHandoverResource } from "./viewLogic";
+import {
+  activeApprovalForCurrentRevision,
+  resolveHandoverView,
+  type WebsiteHandoverResource,
+} from "./viewLogic";
 import type {
   WebsiteAgentDirectory,
   WebsiteArtifactDownloadAdapter,
@@ -79,6 +83,26 @@ function TeamIdentity({
       <span className="truncate">
         {label} {agent.name} · {agent.role}
       </span>
+    </span>
+  );
+}
+
+function ApprovalIdentity({
+  actor,
+  agents,
+  owner,
+}: {
+  actor: string;
+  agents: WebsiteAgentDirectory;
+  owner: string;
+}) {
+  const agent = agents.get(actor);
+  if (agent) {
+    return <TeamIdentity agents={agents} label="Approved by" pubkey={actor} />;
+  }
+  return (
+    <span className="text-2xs text-muted-foreground">
+      {actor === owner ? "Approved by the owner" : "Approval recorded"}
     </span>
   );
 }
@@ -197,6 +221,7 @@ export function WebsiteHandover({
   className,
 }: WebsiteHandoverProps) {
   const view = resolveHandoverView(record);
+  const currentApproval = activeApprovalForCurrentRevision(record);
   const draftScope: WebsiteHandoverDraftScope | null =
     view.kind === "approved"
       ? {
@@ -335,10 +360,25 @@ export function WebsiteHandover({
           )}
         </span>
         {view.kind === "handedOver" ? (
-          <TeamIdentity
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <TeamIdentity
+              agents={agents}
+              label="Accepted by"
+              pubkey={view.handover.acceptedBy}
+            />
+            {currentApproval ? (
+              <ApprovalIdentity
+                actor={currentApproval.actor}
+                agents={agents}
+                owner={record.owner}
+              />
+            ) : null}
+          </span>
+        ) : view.kind === "approved" && currentApproval ? (
+          <ApprovalIdentity
+            actor={currentApproval.actor}
             agents={agents}
-            label="Accepted by"
-            pubkey={view.handover.acceptedBy}
+            owner={record.owner}
           />
         ) : null}
       </div>

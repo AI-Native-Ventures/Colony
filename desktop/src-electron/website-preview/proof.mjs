@@ -464,7 +464,9 @@ async function proveClipPixels(window) {
         Math.round(x * scaleX),
         Math.round(y * scaleY),
       );
-    const background = sample(950, 12);
+    // Keep the control sample outside the 900px preview and below the 64px
+    // header so it is an unobscured, known-white app pixel.
+    const background = sample(950, 300);
     const header = sample(500, 30);
     const page = sample(500, 300);
     const backgroundTarget = [255, 255, 255];
@@ -518,7 +520,7 @@ async function main() {
     },
   });
   const header = encodeURIComponent(
-    "<style>html,body{margin:0}#header{height:64px;background:#ff00aa}</style>" +
+    "<style>html,body{margin:0;background:#fff}#header{height:64px;background:#ff00aa}</style>" +
       "<div id=header></div>",
   );
   await window.loadURL(`data:text/html,${header}`);
@@ -578,17 +580,18 @@ async function main() {
   const geometryReady = [
     [results.geometry.desktop, 1440],
     [results.geometry.mobile, 390],
-  ].every(([entry, expectedWidth]) =>
-    entry !== null &&
-    typeof entry === "object" &&
-    entry.width === expectedWidth &&
-    Number.isFinite(entry.height) &&
-    Number.isFinite(entry.expectedCssHeight) &&
-    Number.isFinite(entry.tolerance) &&
-    entry.fitted !== null &&
-    typeof entry.fitted === "object" &&
-    Number.isFinite(entry.fitted.width) &&
-    Number.isFinite(entry.fitted.height),
+  ].every(
+    ([entry, expectedWidth]) =>
+      entry !== null &&
+      typeof entry === "object" &&
+      entry.width === expectedWidth &&
+      Number.isFinite(entry.height) &&
+      Number.isFinite(entry.expectedCssHeight) &&
+      Number.isFinite(entry.tolerance) &&
+      entry.fitted !== null &&
+      typeof entry.fitted === "object" &&
+      Number.isFinite(entry.fitted.width) &&
+      Number.isFinite(entry.fitted.height),
   );
   const clipReady =
     results.clip !== null &&

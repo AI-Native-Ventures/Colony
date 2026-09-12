@@ -55,8 +55,10 @@ export type WebsiteQaView = {
   /** The independently authenticated backend result (`qa.passed`). */
   recordedPassed: boolean;
   /**
-   * The result to present: `recordedPassed` unless the checklist contradicts
-   * it, in which case the UI must not present a pass.
+   * A green result requires an exact, loaded report for an independent reviewer
+   * whose checklist agrees with the authenticated result. The signed result is
+   * still exposed separately as `recordedPassed` when the report is unavailable
+   * or cannot be used for this revision.
    */
   displayPassed: boolean;
   independent: boolean;
@@ -148,7 +150,12 @@ export function resolveQaView(input: {
   const recordedPassed = qa?.passed === true;
   const hasFailedChecks = checks.some((check) => check.result === "fail");
   const displayPassed =
-    recordedPassed && (reportLoaded ? reportAgrees : true) && !hasFailedChecks;
+    recordedPassed &&
+    independent &&
+    manifestMatches &&
+    reportLoaded &&
+    reportAgrees &&
+    !hasFailedChecks;
 
   return {
     present: Boolean(qa),

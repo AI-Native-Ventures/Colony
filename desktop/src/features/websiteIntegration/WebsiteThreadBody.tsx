@@ -121,6 +121,8 @@ export function WebsiteThreadBody({
     [communityId, head, instance],
   );
   const selected = inspection ?? record.currentRevision;
+  const canShowDecisionControls =
+    record.status !== "approved" && record.status !== "handedOver";
 
   // Before any revision exists there is nothing to review: no QA panel, no
   // decision form for "Version 0", no empty history. The channel card owns the
@@ -206,12 +208,14 @@ export function WebsiteThreadBody({
         record={record}
         selectedRevision={selected}
       />
-      <WebsiteDecisionPanel
-        actor={actor}
-        onDecision={actor ? onDecision : undefined}
-        record={record}
-        selectedRevision={selected}
-      />
+      {canShowDecisionControls ? (
+        <WebsiteDecisionPanel
+          actor={actor}
+          onDecision={actor ? onDecision : undefined}
+          record={record}
+          selectedRevision={selected}
+        />
+      ) : null}
     </section>
   );
 }

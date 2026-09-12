@@ -276,17 +276,115 @@ async function seedThreadReplies(page: Page, rootId: string, state: JobState) {
   }
 }
 
-function svgCapture(label: string, color: string) {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900"><rect width="1440" height="900" fill="${color}"/><text x="60" y="140" font-family="sans-serif" font-size="64" fill="#ffffff">${label}</text></svg>`;
+function svgCapture(kind: "before" | "desktop" | "mobile") {
+  const svg =
+    kind === "before"
+      ? `<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#f7f2eb"/>
+  <rect width="1440" height="72" fill="#14243b"/>
+  <text x="72" y="45" fill="#ffffff" font-family="Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2">HORIZON LABS</text>
+  <text x="1010" y="44" fill="#ffffff" font-family="Arial, sans-serif" font-size="14">Work</text>
+  <text x="1090" y="44" fill="#ffffff" font-family="Arial, sans-serif" font-size="14">About</text>
+  <text x="1170" y="44" fill="#ffffff" font-family="Arial, sans-serif" font-size="14">Contact</text>
+  <rect x="72" y="126" width="1296" height="354" rx="16" fill="#e5d5c7"/>
+  <text x="120" y="202" fill="#8d4f3c" font-family="Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="2">DIGITAL PARTNER FOR</text>
+  <text x="120" y="278" fill="#14243b" font-family="Georgia, serif" font-size="66" font-weight="700">Growing teams</text>
+  <text x="120" y="326" fill="#14243b" font-family="Arial, sans-serif" font-size="22">Clear websites for thoughtful brands.</text>
+  <rect x="120" y="368" width="156" height="44" rx="22" fill="#14243b"/>
+  <text x="151" y="396" fill="#ffffff" font-family="Arial, sans-serif" font-size="14" font-weight="700">See our work</text>
+  <rect x="914" y="164" width="330" height="254" rx="12" fill="#a9654d"/>
+  <circle cx="1080" cy="290" r="82" fill="#e2b49c"/>
+  <circle cx="1080" cy="290" r="42" fill="#f5ddc7"/>
+  <rect x="72" y="530" width="410" height="244" rx="14" fill="#ffffff"/>
+  <text x="108" y="584" fill="#14243b" font-family="Arial, sans-serif" font-size="15" font-weight="700">A calm process</text>
+  <text x="108" y="626" fill="#526276" font-family="Arial, sans-serif" font-size="16">Strategy, identity and web</text>
+  <text x="108" y="654" fill="#526276" font-family="Arial, sans-serif" font-size="16">working together.</text>
+  <rect x="524" y="530" width="410" height="244" rx="14" fill="#ffffff"/>
+  <text x="560" y="584" fill="#14243b" font-family="Arial, sans-serif" font-size="15" font-weight="700">Selected work</text>
+  <rect x="560" y="616" width="138" height="102" rx="8" fill="#d9e7e2"/>
+  <rect x="718" y="616" width="178" height="14" rx="7" fill="#d8dee8"/>
+  <rect x="718" y="646" width="132" height="14" rx="7" fill="#d8dee8"/>
+  <rect x="718" y="676" width="96" height="14" rx="7" fill="#d8dee8"/>
+  <rect x="976" y="530" width="392" height="244" rx="14" fill="#14243b"/>
+  <text x="1012" y="584" fill="#ffffff" font-family="Arial, sans-serif" font-size="15" font-weight="700">Start a project</text>
+  <text x="1012" y="638" fill="#d8e2ed" font-family="Georgia, serif" font-size="30">Let us make it</text>
+  <text x="1012" y="674" fill="#d8e2ed" font-family="Georgia, serif" font-size="30">clear.</text>
+  <text x="1012" y="728" fill="#e2b49c" font-family="Arial, sans-serif" font-size="14" font-weight="700">hello@horizon-labs.example</text>
+</svg>`
+      : kind === "desktop"
+        ? `<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#f5f2ff"/>
+  <circle cx="1270" cy="20" r="340" fill="#d9e9e2" opacity="0.8"/>
+  <rect x="72" y="34" width="1296" height="62" rx="20" fill="#ffffff"/>
+  <text x="108" y="73" fill="#191a3a" font-family="Arial, sans-serif" font-size="21" font-weight="700">horizon labs.</text>
+  <text x="730" y="72" fill="#66687d" font-family="Arial, sans-serif" font-size="14">Strategy</text>
+  <text x="816" y="72" fill="#66687d" font-family="Arial, sans-serif" font-size="14">Identity</text>
+  <text x="900" y="72" fill="#66687d" font-family="Arial, sans-serif" font-size="14">Web</text>
+  <text x="1030" y="72" fill="#191a3a" font-family="Arial, sans-serif" font-size="14" font-weight="700">Start a project</text>
+  <rect x="72" y="144" width="690" height="378" rx="28" fill="#ffffff"/>
+  <text x="116" y="212" fill="#6a659b" font-family="Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="2">A SMALL STUDIO FOR</text>
+  <text x="116" y="294" fill="#191a3a" font-family="Georgia, serif" font-size="68" font-weight="700">Good work.</text>
+  <text x="116" y="352" fill="#191a3a" font-family="Georgia, serif" font-size="68" font-weight="700">Clear signal.</text>
+  <text x="116" y="404" fill="#66687d" font-family="Arial, sans-serif" font-size="19">Brand systems that help growing teams be understood.</text>
+  <rect x="116" y="446" width="172" height="44" rx="22" fill="#191a3a"/>
+  <text x="150" y="474" fill="#ffffff" font-family="Arial, sans-serif" font-size="14" font-weight="700">Explore the studio</text>
+  <rect x="804" y="144" width="564" height="378" rx="28" fill="#191a3a"/>
+  <rect x="844" y="184" width="484" height="236" rx="18" fill="#c6dfd7"/>
+  <rect x="884" y="224" width="198" height="22" rx="11" fill="#ffffff" opacity="0.9"/>
+  <rect x="884" y="268" width="320" height="44" rx="8" fill="#ffffff" opacity="0.9"/>
+  <rect x="884" y="338" width="118" height="34" rx="17" fill="#191a3a"/>
+  <text x="884" y="464" fill="#ffffff" font-family="Arial, sans-serif" font-size="14">The work starts with the signal.</text>
+  <text x="72" y="588" fill="#191a3a" font-family="Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="2">WHAT WE DO</text>
+  <rect x="72" y="620" width="394" height="184" rx="20" fill="#ded9f3"/>
+  <text x="108" y="674" fill="#191a3a" font-family="Georgia, serif" font-size="31">Positioning</text>
+  <text x="108" y="720" fill="#4e5067" font-family="Arial, sans-serif" font-size="15">Find the words your best</text>
+  <text x="108" y="746" fill="#4e5067" font-family="Arial, sans-serif" font-size="15">customers remember.</text>
+  <rect x="522" y="620" width="394" height="184" rx="20" fill="#f1dccd"/>
+  <text x="558" y="674" fill="#191a3a" font-family="Georgia, serif" font-size="31">Identity</text>
+  <text x="558" y="720" fill="#4e5067" font-family="Arial, sans-serif" font-size="15">Make the feeling visible</text>
+  <text x="558" y="746" fill="#4e5067" font-family="Arial, sans-serif" font-size="15">across every touchpoint.</text>
+  <rect x="972" y="620" width="396" height="184" rx="20" fill="#d9e9e2"/>
+  <text x="1008" y="674" fill="#191a3a" font-family="Georgia, serif" font-size="31">Web</text>
+  <text x="1008" y="720" fill="#4e5067" font-family="Arial, sans-serif" font-size="15">Turn first impressions</text>
+  <text x="1008" y="746" fill="#4e5067" font-family="Arial, sans-serif" font-size="15">into the next conversation.</text>
+</svg>`
+        : `<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844">
+  <rect width="390" height="844" fill="#f5f2ff"/>
+  <circle cx="344" cy="42" r="140" fill="#d9e9e2" opacity="0.85"/>
+  <rect x="20" y="18" width="350" height="58" rx="17" fill="#ffffff"/>
+  <text x="42" y="54" fill="#191a3a" font-family="Arial, sans-serif" font-size="18" font-weight="700">horizon labs.</text>
+  <text x="308" y="54" fill="#191a3a" font-family="Arial, sans-serif" font-size="13" font-weight="700">Menu</text>
+  <text x="24" y="136" fill="#6a659b" font-family="Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.5">A SMALL STUDIO FOR</text>
+  <text x="24" y="190" fill="#191a3a" font-family="Georgia, serif" font-size="48" font-weight="700">Good work.</text>
+  <text x="24" y="238" fill="#191a3a" font-family="Georgia, serif" font-size="48" font-weight="700">Clear signal.</text>
+  <text x="24" y="278" fill="#66687d" font-family="Arial, sans-serif" font-size="15">Brand systems for growing teams.</text>
+  <rect x="24" y="304" width="164" height="42" rx="21" fill="#191a3a"/>
+  <text x="52" y="330" fill="#ffffff" font-family="Arial, sans-serif" font-size="13" font-weight="700">Explore the studio</text>
+  <rect x="20" y="382" width="350" height="196" rx="24" fill="#191a3a"/>
+  <rect x="44" y="406" width="302" height="116" rx="15" fill="#c6dfd7"/>
+  <rect x="68" y="430" width="126" height="14" rx="7" fill="#ffffff"/>
+  <rect x="68" y="462" width="214" height="28" rx="6" fill="#ffffff"/>
+  <rect x="68" y="504" width="76" height="8" rx="4" fill="#191a3a"/>
+  <text x="44" y="550" fill="#ffffff" font-family="Arial, sans-serif" font-size="12">The work starts with the signal.</text>
+  <text x="24" y="630" fill="#191a3a" font-family="Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.5">WHAT WE DO</text>
+  <rect x="20" y="654" width="166" height="138" rx="17" fill="#ded9f3"/>
+  <text x="40" y="696" fill="#191a3a" font-family="Georgia, serif" font-size="22">Positioning</text>
+  <text x="40" y="732" fill="#4e5067" font-family="Arial, sans-serif" font-size="12">Words people</text>
+  <text x="40" y="752" fill="#4e5067" font-family="Arial, sans-serif" font-size="12">remember.</text>
+  <rect x="204" y="654" width="166" height="138" rx="17" fill="#f1dccd"/>
+  <text x="224" y="696" fill="#191a3a" font-family="Georgia, serif" font-size="22">Identity</text>
+  <text x="224" y="732" fill="#4e5067" font-family="Arial, sans-serif" font-size="12">Make it</text>
+  <text x="224" y="752" fill="#4e5067" font-family="Arial, sans-serif" font-size="12">visible.</text>
+</svg>`;
   return {
     dataUrl: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
     sha256: sha256Text(svg),
   };
 }
 
-const BEFORE_CAPTURE = svgCapture("Original site", "#6b4c3b");
-const DESKTOP_CAPTURE = svgCapture("Redesign desktop", "#1f5f6b");
-const MOBILE_CAPTURE = svgCapture("Redesign mobile", "#2c7a5b");
+const BEFORE_CAPTURE = svgCapture("before");
+const DESKTOP_CAPTURE = svgCapture("desktop");
+const MOBILE_CAPTURE = svgCapture("mobile");
 
 function artifact(name: string, sha256: string) {
   return { url: `https://assets.example/${name}`, sha256 };
@@ -824,8 +922,22 @@ function screenshotPath(name: string) {
   return path.join(SCREENSHOT_DIR, `${name}.png`);
 }
 
-async function captureViewport(page: Page, name: string, locator?: Locator) {
-  if (locator) await locator.scrollIntoViewIfNeeded();
+async function captureViewport(
+  page: Page,
+  name: string,
+  locator?: Locator | readonly Locator[],
+) {
+  const targets = locator
+    ? Array.isArray(locator)
+      ? locator
+      : [locator]
+    : [];
+  for (const target of targets) {
+    await target.evaluate((element) =>
+      element.scrollIntoView({ block: "start", inline: "nearest" }),
+    );
+  }
+  await page.mouse.move(0, 0);
   await waitForAnimations(page);
   await page.screenshot({ animations: "disabled", path: screenshotPath(name) });
 }
@@ -833,7 +945,7 @@ async function captureViewport(page: Page, name: string, locator?: Locator) {
 async function captureBothWidths(
   page: Page,
   state: JobState,
-  locator?: Locator,
+  locator?: Locator | readonly Locator[],
 ) {
   await page.setViewportSize({ width: 1280, height: 720 });
   await captureViewport(page, `${state}-1280`, locator);
@@ -897,7 +1009,7 @@ test("mocked Brief state renders the brief and start action", async ({
   const rootAttachment = page.getByTestId("website-root-attachment").first();
   await expect(rootAttachment).toBeVisible();
   await openThreadForRoot(page, job.root.id);
-  await expectCompositeThread(page);
+  const threadAttachment = await expectCompositeThread(page);
   const threadPanel = page.getByTestId("message-thread-panel");
   await expect(threadPanel.getByText(/monthly branding service/)).toBeVisible();
   await expect(
@@ -906,7 +1018,7 @@ test("mocked Brief state renders the brief and start action", async ({
   await expect(
     rootAttachment.getByRole("button", { name: "Start redesign" }),
   ).toBeVisible();
-  await captureBothWidths(page, "brief", rootAttachment);
+  await captureBothWidths(page, "brief", [rootAttachment, threadAttachment]);
 });
 
 test("mocked Working state shows stages and earlier-version inspection", async ({
@@ -956,6 +1068,20 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   const versionHistory = threadAttachment.getByRole("region", {
     name: "Version history",
   });
+  const versionHistoryDisclosure = versionHistory.getByTestId(
+    "website-version-history-disclosure",
+  );
+  await expect(versionHistory.getByTestId("website-current-version-summary"))
+    .toContainText("Current · Version 2");
+  await expect(versionHistoryDisclosure).toHaveJSProperty("open", false);
+  await expect(
+    versionHistoryDisclosure.locator("ul > li").first(),
+  ).toBeHidden();
+  await versionHistoryDisclosure.locator("summary").click();
+  await expect(versionHistoryDisclosure).toHaveJSProperty("open", true);
+  await expect(
+    versionHistoryDisclosure.locator("ul > li").first(),
+  ).toBeVisible();
   await versionHistory
     .getByRole("listitem")
     .filter({ hasText: "Version 1" })
@@ -971,7 +1097,8 @@ test("mocked Working state shows stages and earlier-version inspection", async (
   await expect(
     threadAttachment.getByText(/Read-only view of Version 1/),
   ).toHaveCount(0);
-  await captureBothWidths(page, "working", rootAttachment);
+  await versionHistoryDisclosure.locator("summary").click();
+  await captureBothWidths(page, "working", [rootAttachment, threadAttachment]);
 });
 
 test("mocked Review state switches views, expands, and scopes decisions", async ({
@@ -1017,11 +1144,39 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
     threadPanel.getByText(/reads comfortably on mobile/),
   ).toBeVisible();
   await expect(threadPanel.getByText(/distinctive identity/)).toBeVisible();
+  const qaPanel = threadAttachment.getByRole("region", {
+    name: "Independent review",
+  });
+  const qaDisclosure = qaPanel.getByTestId("website-qa-disclosure");
+  await expect(qaPanel.getByTestId("website-qa-status")).toHaveText("Passed");
+  await expect(qaDisclosure).toHaveJSProperty("open", false);
+  await expect(qaDisclosure.locator("ul > li").first()).toBeHidden();
+  await qaDisclosure.locator("summary").click();
+  await expect(qaDisclosure).toHaveJSProperty("open", true);
   await expect(
-    threadAttachment.getByText("Desktop and mobile layouts reviewed"),
+    qaDisclosure.getByText("Desktop and mobile layouts reviewed"),
   ).toBeVisible();
-  await threadAttachment
-    .getByRole("region", { name: "Version history" })
+  await expect(qaDisclosure.locator("ul > li")).toHaveCount(3);
+  await qaDisclosure.locator("summary").click();
+
+  const versionHistory = threadAttachment.getByRole("region", {
+    name: "Version history",
+  });
+  const versionHistoryDisclosure = versionHistory.getByTestId(
+    "website-version-history-disclosure",
+  );
+  await expect(versionHistory.getByTestId("website-current-version-summary"))
+    .toContainText("Current · Version 2");
+  await expect(versionHistoryDisclosure).toHaveJSProperty("open", false);
+  await expect(
+    versionHistoryDisclosure.locator("ul > li").first(),
+  ).toBeHidden();
+  await versionHistoryDisclosure.locator("summary").click();
+  await expect(versionHistoryDisclosure).toHaveJSProperty("open", true);
+  await expect(
+    versionHistoryDisclosure.locator("ul > li").first(),
+  ).toBeVisible();
+  await versionHistory
     .getByRole("listitem")
     .filter({ hasText: "Version 1" })
     .getByRole("button", { name: "View" })
@@ -1036,7 +1191,8 @@ test("mocked Review state switches views, expands, and scopes decisions", async 
   await expect(
     threadAttachment.getByRole("button", { name: "Approve design" }),
   ).toBeEnabled();
-  await captureBothWidths(page, "review", rootAttachment);
+  await versionHistoryDisclosure.locator("summary").click();
+  await captureBothWidths(page, "review", [rootAttachment, threadAttachment]);
 });
 
 test("mocked Revision state shows the exact change request", async ({
@@ -1069,12 +1225,25 @@ test("mocked Revision state shows the exact change request", async ({
   await expect(
     threadPanel.getByText(/revised direction is ready/),
   ).toBeVisible();
+  const decisionPanel = threadAttachment.getByRole("region", {
+    name: "Your decision",
+  });
+  await expect(decisionPanel).toBeVisible();
+  await expect(
+    decisionPanel.getByRole("button", { name: "Approve design" }),
+  ).toBeDisabled();
+  await expect(decisionPanel).toContainText(
+    "Independent QA has not been recorded",
+  );
+  await expect(
+    threadAttachment.getByRole("region", { name: "Independent review" }),
+  ).toContainText("No independent review is recorded for this version.");
   const changeRequest = threadAttachment.getByRole("region", {
     name: "Change request",
   });
   await expect(changeRequest).toBeVisible();
   await expect(changeRequest.getByText(REQUEST_NOTE)).toBeVisible();
-  await captureBothWidths(page, "revision", threadAttachment);
+  await captureBothWidths(page, "revision", [rootAttachment, threadAttachment]);
 });
 
 test("mocked Handover state shows confirmed resources and the draft request", async ({
@@ -1130,10 +1299,32 @@ test("mocked Handover state shows confirmed resources and the draft request", as
       /Please share who manages the horizon-labs.example domain/,
     ),
   ).toBeVisible();
+  const currentVersion = threadAttachment.getByTestId(
+    "website-current-version-summary",
+  );
+  await expect(currentVersion).toContainText("Current · Version 1");
+  await expect(currentVersion).toContainText("Approved");
+  await expect(
+    threadAttachment.getByRole("region", { name: "Your decision" }),
+  ).toHaveCount(0);
+  await expect(
+    threadAttachment.getByPlaceholder(
+      "Describe what should change, or leave a note with an approval.",
+    ),
+  ).toHaveCount(0);
+  const threadViewApproved = threadAttachment.getByRole("button", {
+    name: "View approved design (Version 1)",
+  });
+  await expect(threadViewApproved).toBeVisible();
+  await threadViewApproved.click();
+  await expect(
+    threadAttachment.getByText(/Read-only view of Version 1/),
+  ).toBeVisible();
+  await threadAttachment.getByRole("button", { name: "Close preview" }).click();
   await expect(
     threadAttachment.getByRole("button", { name: "Download" }).first(),
   ).toBeVisible();
-  await captureBothWidths(page, "handover", threadAttachment);
+  await captureBothWidths(page, "handover", [rootAttachment, threadAttachment]);
 });
 
 test("mocked transport fails, retries, confirms from the head, and recovers on reload", async ({

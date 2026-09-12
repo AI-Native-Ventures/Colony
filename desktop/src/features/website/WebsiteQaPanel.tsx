@@ -157,6 +157,30 @@ export function WebsiteQaPanel({
     remaining -= shown.length;
     return { check, shown, hidden: check.evidence.length - shown.length };
   });
+  const integrityWarnings: string[] = [];
+  if (view.present && !view.independent) {
+    integrityWarnings.push("The builder cannot review their own work.");
+  }
+  if (view.present && !view.manifestMatches) {
+    integrityWarnings.push("QA evidence does not match this version.");
+  }
+  const displayPassed = view.displayPassed && integrityWarnings.length === 0;
+  const failedChecks = view.checks.filter((check) => check.result === "fail");
+  const checklistPending = view.present && reportState.status === "loading";
+  const recordedPassWithoutChecklist =
+    view.present &&
+    view.recordedPassed &&
+    !view.displayPassed &&
+    !view.reportLoaded &&
+    view.independent &&
+    view.manifestMatches;
+  const statusLabel = displayPassed
+    ? "Passed"
+    : checklistPending
+      ? "Checking review"
+      : recordedPassWithoutChecklist
+        ? "Recorded pass · checklist unavailable"
+        : "Not passed";
 
   return (
     <section
@@ -169,20 +193,38 @@ export function WebsiteQaPanel({
           <span
             className={cn(
               "inline-flex items-center gap-1.5 text-xs font-medium",
-              view.displayPassed
+              displayPassed
                 ? "text-emerald-700 dark:text-emerald-400"
-                : "text-destructive",
+                : checklistPending || recordedPassWithoutChecklist
+                  ? "text-muted-foreground"
+                  : "text-destructive",
             )}
+            data-testid="website-qa-status"
           >
-            {view.displayPassed ? (
+            {displayPassed ? (
               <Check aria-hidden="true" className="size-3.5" />
+            ) : checklistPending || recordedPassWithoutChecklist ? (
+              <MinusCircle aria-hidden="true" className="size-3.5" />
             ) : (
               <X aria-hidden="true" className="size-3.5" />
             )}
-            {view.displayPassed ? "Passed" : "Not passed"}
+            {statusLabel}
           </span>
         ) : null}
       </div>
+
+      {integrityWarnings.length > 0 ? (
+        <p
+          className="mt-2 flex items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2 text-2xs text-foreground"
+          role="alert"
+        >
+          <CircleAlert
+            aria-hidden="true"
+            className="mt-0.5 size-3.5 shrink-0 text-destructive"
+          />
+          <span>{integrityWarnings.join(" ")}</span>
+        </p>
+      ) : null}
 
       {view.present && !view.reportAgrees && view.reportLoaded ? (
         <p className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-2xs text-foreground">
@@ -204,43 +246,53 @@ export function WebsiteQaPanel({
       ) : null}
 
       {plan.length > 0 ? (
-        <ul className="mt-2 flex flex-col">
-          {plan.map(({ check, shown, hidden }) => (
-            <li
-              className="grid grid-cols-[18px_minmax(0,1fr)] gap-2 border-t border-border/60 py-2 first:border-t-0 first:pt-0"
-              key={check.id}
-            >
-              <ResultIcon result={check.result} />
-              <span className="flex min-w-0 flex-col gap-1">
-                <span className="text-xs leading-snug text-foreground">
-                  {check.label}
-                </span>
-                {check.detail ? (
-                  <span className="whitespace-pre-line text-2xs leading-relaxed text-muted-foreground">
-                    {check.detail}
-                  </span>
-                ) : null}
-                {shown.length > 0 || hidden > 0 ? (
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    {shown.map((evidence) => (
-                      <EvidenceThumb
-                        artifact={evidence}
-                        key={`${check.id}:${evidence.sha256}`}
-                        label={`Evidence for ${check.label}`}
-                        loader={artifactLoader}
-                      />
-                    ))}
-                    {hidden > 0 ? (
-                      <span className="text-3xs text-muted-foreground">
-                        +{hidden} more in the report
-                      </span>
-                    ) : null}
-                  </span>
-                ) : null}
+        <details className="mt-2" data-testid="website-qa-disclosure">
+          <summary className="flex cursor-pointer items-center justify-between gap-2 text-2xs text-muted-foreground hover:text-foreground">
+            <span>View review checklist ({plan.length})</span>
+            {failedChecks.length > 0 ? (
+              <span className="text-destructive">
+                {failedChecks.length} failed
               </span>
-            </li>
-          ))}
-        </ul>
+            ) : null}
+          </summary>
+          <ul className="mt-2 flex flex-col">
+            {plan.map(({ check, shown, hidden }) => (
+              <li
+                className="grid grid-cols-[18px_minmax(0,1fr)] gap-2 border-t border-border/60 py-2 first:border-t-0 first:pt-0"
+                key={check.id}
+              >
+                <ResultIcon result={check.result} />
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="text-xs leading-snug text-foreground">
+                    {check.label}
+                  </span>
+                  {check.detail ? (
+                    <span className="whitespace-pre-line text-2xs leading-relaxed text-muted-foreground">
+                      {check.detail}
+                    </span>
+                  ) : null}
+                  {shown.length > 0 || hidden > 0 ? (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      {shown.map((evidence) => (
+                        <EvidenceThumb
+                          artifact={evidence}
+                          key={`${check.id}:${evidence.sha256}`}
+                          label={`Evidence for ${check.label}`}
+                          loader={artifactLoader}
+                        />
+                      ))}
+                      {hidden > 0 ? (
+                        <span className="text-3xs text-muted-foreground">
+                          +{hidden} more in the report
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : view.present ? (
         <p className="mt-2 text-2xs text-muted-foreground">
           {view.checksUnavailableReason ??

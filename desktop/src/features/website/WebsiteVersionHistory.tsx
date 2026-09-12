@@ -7,6 +7,7 @@ import {
   websiteAgentColorClass,
   websiteAgentInitial,
 } from "./agentPresentation";
+import { activeApprovalForCurrentRevision } from "./viewLogic";
 import type {
   WebsiteAgentDirectory,
   WebsiteReviewRecord,
@@ -167,6 +168,13 @@ export function WebsiteVersionHistory({
   const sorted = [...record.revisions].sort(
     (left, right) => right.revision - left.revision,
   );
+  const currentApproval = activeApprovalForCurrentRevision(record);
+  const approvalAgent = currentApproval
+    ? agents.get(currentApproval.actor)
+    : undefined;
+  const currentDecision = [...record.decisions]
+    .reverse()
+    .find((decision) => decision.revision === record.currentRevision);
   return (
     <section
       aria-label="Version history"
@@ -175,18 +183,54 @@ export function WebsiteVersionHistory({
       <h4 className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
         Version history
       </h4>
-      <ul className="mt-1.5 flex flex-col">
-        {sorted.map((revision) => (
-          <RevisionRow
-            agents={agents}
-            key={revision.revision}
-            onSelect={() => onSelectRevision(revision.revision)}
-            record={record}
-            revision={revision}
-            selected={revision.revision === selectedRevision}
-          />
-        ))}
-      </ul>
+      <div
+        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-muted/30 px-2.5 py-2 text-2xs"
+        data-testid="website-current-version-summary"
+      >
+        <span className="font-medium text-foreground">
+          Current · Version {record.currentRevision}
+        </span>
+        {currentApproval ? (
+          <span className="text-emerald-700 dark:text-emerald-400">
+            Approved
+          </span>
+        ) : currentDecision?.kind === "requestChanges" ? (
+          <span className="text-foreground">Changes requested</span>
+        ) : record.status === "approved" || record.status === "handedOver" ? (
+          <span className="text-destructive">Approval needs verification</span>
+        ) : (
+          <span className="text-muted-foreground">Awaiting decision</span>
+        )}
+        {currentApproval ? (
+          <span className="flex items-center gap-1 text-muted-foreground">
+            {approvalAgent
+              ? `by ${approvalAgent.name}`
+              : currentApproval.actor === record.owner
+                ? "by the owner"
+                : "Approval recorded"}
+          </span>
+        ) : null}
+      </div>
+      <details
+        className="mt-2 text-2xs text-muted-foreground"
+        data-testid="website-version-history-disclosure"
+      >
+        <summary className="cursor-pointer hover:text-foreground">
+          View version history ({sorted.length})
+        </summary>
+        <ul className="mt-1.5 flex flex-col">
+          {sorted.map((revision) => (
+            <RevisionRow
+              agents={agents}
+              key={revision.revision}
+              onSelect={() => onSelectRevision(revision.revision)}
+              record={record}
+              revision={revision}
+              selected={revision.revision === selectedRevision}
+            />
+          ))}
+        </ul>
+      </details>
     </section>
   );
 }
