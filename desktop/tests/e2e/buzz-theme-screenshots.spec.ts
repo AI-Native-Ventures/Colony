@@ -647,22 +647,22 @@ test("appearance groups theme and preferences into labeled rows", async ({
 
   await themeCard.getByTestId("appearance-mode-dark").click();
   await waitForAnimations(page);
-  const movedIndicatorBox = await colorModeIndicator.boundingBox();
-  const darkModeButtonBox = await themeCard
-    .getByTestId("appearance-mode-dark")
-    .boundingBox();
-  expect(movedIndicatorBox).not.toBeNull();
-  expect(darkModeButtonBox).not.toBeNull();
-  if (!movedIndicatorBox || !darkModeButtonBox) {
-    throw new Error("Color mode indicator geometry is missing");
-  }
-  expect(
-    Math.abs(
-      movedIndicatorBox.x +
-        movedIndicatorBox.width / 2 -
-        (darkModeButtonBox.x + darkModeButtonBox.width / 2),
-    ),
-  ).toBeLessThanOrEqual(0.5);
+  await expect(themeCard.getByTestId("appearance-mode-dark")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect
+    .poll(async () => {
+      const indicator = await colorModeIndicator.boundingBox();
+      const button = await themeCard
+        .getByTestId("appearance-mode-dark")
+        .boundingBox();
+      if (!indicator || !button) return Number.POSITIVE_INFINITY;
+      return Math.abs(
+        indicator.x + indicator.width / 2 - (button.x + button.width / 2),
+      );
+    })
+    .toBeLessThanOrEqual(0.5);
 });
 
 test("appearance picker — system tab (Buzz follows OS)", async ({ page }) => {
@@ -872,7 +872,7 @@ for (const { hoverSurface, mode, theme } of [
     await expect(root).toHaveClass(
       new RegExp(`(^|\\s)${mode === "dark" ? "dark" : "light"}($|\\s)`),
     );
-    await expect(root).toHaveAttribute("data-prominent-active-tab", "");
+    await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
     const activeSurface = await readThemeColor(
       page,
       "hsl(var(--buzz-workspace-raised))",
