@@ -267,6 +267,7 @@ fn roundtrip_serialization() {
         provider: Some("anthropic".to_string()),
         model: Some("claude-opus-4".to_string()),
         preferred_runtime: Some("claude".to_string()),
+        reasoning_effort: Some("xhigh".to_string()),
         credential_mode: CredentialMode::Byok,
     };
     let json = serde_json::to_string(&config).expect("serialize");
@@ -663,6 +664,7 @@ fn populated_global_config_round_trips() {
         provider: Some("anthropic".to_string()),
         model: Some("claude-opus-4-5".to_string()),
         preferred_runtime: None,
+        reasoning_effort: Some("max".to_string()),
     };
     let json = serde_json::to_string(&original).expect("serialization must not fail");
     let decoded: GlobalAgentConfig =
@@ -721,4 +723,36 @@ fn record_runtime_wins_over_persona_runtime_for_command_resolution() {
         cmd, "claude-agent-acp",
         "record runtime must override persona runtime in command resolution"
     );
+}
+
+#[test]
+fn a_reasoning_effort_must_be_one_advertised_name_and_blank_means_the_vendor_default() {
+    let accepted = GlobalAgentConfig {
+        reasoning_effort: Some("xhigh".to_string()),
+        ..Default::default()
+    };
+    assert!(validate_global_config(&accepted).is_ok());
+    let too_long = "m".repeat(33);
+    for rejected in ["max high", "max;rm -rf /", "max\0", too_long.as_str()] {
+        let config = GlobalAgentConfig {
+            reasoning_effort: Some(rejected.to_string()),
+            ..Default::default()
+        };
+        assert!(
+            validate_global_config(&config).is_err(),
+            "{rejected:?} is not an effort a provider advertised"
+        );
+    }
+    // Blank passes validation and is stored as absent, so it can never reach the
+    // spawn env as a value.
+    let mut blank = GlobalAgentConfig {
+        reasoning_effort: Some("  ".to_string()),
+        ..Default::default()
+    };
+    assert!(validate_global_config(&blank).is_ok());
+    normalize_global_config_fields(&mut blank);
+    assert_eq!(blank.reasoning_effort, None);
+    let mut kept = accepted.clone();
+    normalize_global_config_fields(&mut kept);
+    assert_eq!(kept.reasoning_effort.as_deref(), Some("xhigh"));
 }

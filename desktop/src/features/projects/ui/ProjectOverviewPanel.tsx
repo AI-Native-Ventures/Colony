@@ -209,7 +209,7 @@ export function ProjectOverviewPanel({
               </p>
             )}
           </OverviewRailSection>
-          <OverviewRailSection title="Buzz Activity">
+          <OverviewRailSection title="Colony Activity">
             <dl className="space-y-2 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <dt className="flex items-center gap-1.5 text-muted-foreground">

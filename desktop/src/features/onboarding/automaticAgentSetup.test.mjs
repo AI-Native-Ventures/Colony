@@ -113,6 +113,9 @@ test("a first-run owner reaches Welcome with an agent configured, not a Settings
     provider: "openai-compat",
     model: "deepseek-v4-flash",
     preferred_runtime: "buzz-agent",
+    // Cleared with the model: a reasoning effort belongs to a subscription
+    // model, never to the hosted route.
+    reasoning_effort: null,
   });
   assert.deepEqual(device.installed, ["buzz-agent"]);
   assert.deepEqual(plan, {

@@ -289,7 +289,7 @@ pub(crate) async fn rearm_relay_mesh_for_running_agents(app: &AppHandle) -> Resu
         MeshRuntimeRecovery::RestartRequired => {
             if runtime_mode == Some(crate::mesh_llm::MeshNodeMode::Serve) {
                 eprintln!(
-                    "buzz-mesh: serving ingress failed; restarting Buzz to restore Share Compute without changing roles"
+                    "buzz-mesh: serving ingress failed; restarting Colony to restore Share Compute without changing roles"
                 );
                 app.request_restart();
                 return Ok(());
@@ -304,7 +304,7 @@ pub(crate) async fn rearm_relay_mesh_for_running_agents(app: &AppHandle) -> Resu
                 return Ok(());
             }
             eprintln!(
-                "buzz-mesh: supervised client startup lost its ingress before the SDK exposed a shutdown handle; restarting Buzz"
+                "buzz-mesh: supervised client startup lost its ingress before the SDK exposed a shutdown handle; restarting Colony"
             );
             app.request_restart();
             return Ok(());

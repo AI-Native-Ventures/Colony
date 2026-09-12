@@ -68,6 +68,7 @@ export function defaultColonyAgentConfig(
     preferred_runtime: COLONY_AGENT_RUNTIME_ID,
     provider: "openai-compat",
     model: "deepseek-v4-flash",
+    reasoning_effort: null,
     env_vars: envVars,
   };
 }

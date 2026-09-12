@@ -78,14 +78,17 @@ impl Codex {
                     json!({"limit":100,"includeHidden":false,"cursor":cursor}),
                 )
                 .await?;
-            if result["data"].as_array().is_some_and(|models| {
-                models.iter().any(|model| {
+            if let Some(entry) = result["data"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|model| {
                     model.get("model").or_else(|| model.get("id"))
                         == Some(&json!(self.config.model))
                         && model["hidden"] != true
                 })
-            }) {
-                return Ok(());
+            {
+                return require_supported_effort(entry, self.config.reasoning_effort.as_deref());
             }
             cursor = result.get("nextCursor").cloned().unwrap_or(Value::Null);
             if cursor.is_null() {
@@ -257,6 +260,29 @@ async fn deliver(
             Ok(true)
         }
     }
+}
+
+/// Accept the chosen effort only when this model's own catalog entry advertises
+/// it, so a stale or mismatched choice fails startup instead of quietly running
+/// at an effort the owner never picked.
+///
+/// The entry's `supportedReasoningEfforts` is a list of
+/// `{reasoningEffort, description}`, and a model may advertise none at all, in
+/// which case no effort can be honoured and naming one is an error rather than
+/// something to pass through and hope for.
+fn require_supported_effort(entry: &Value, effort: Option<&str>) -> Result<()> {
+    let Some(effort) = effort else {
+        return Ok(());
+    };
+    let advertised = entry["supportedReasoningEfforts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|option| option["reasoningEffort"].as_str() == Some(effort));
+    if !advertised {
+        bail!("This model does not offer that reasoning effort on your Codex subscription. Choose one in Power setup");
+    }
+    Ok(())
 }
 
 fn matches_turn(params: &Value, turn: Option<&str>) -> bool {

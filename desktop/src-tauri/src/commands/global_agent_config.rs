@@ -877,6 +877,7 @@ mod tests {
             provider: Some("anthropic".to_string()),
             model: None,
             preferred_runtime: Some("goose".to_string()),
+            reasoning_effort: None,
         };
         assert!(validate_provisioned_mode_eligibility(&config).is_err());
         let supported = GlobalAgentConfig {

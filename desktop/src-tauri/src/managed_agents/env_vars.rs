@@ -8,10 +8,15 @@
 //! A small set of *reserved* keys includes Buzz's identity, secrets, security
 //! gates, and control-plane values. Save-time validation rejects those keys.
 //! Runtime filtering strips old persisted overrides. Behavior knobs
-//! (GOOSE_MODE, BUZZ_ACP_MODEL, BUZZ_ACP_SYSTEM_PROMPT, …) remain freely
+//! (GOOSE_MODE, BUZZ_ACP_SYSTEM_PROMPT, …) remain freely
 //! overridable. Power users can still bypass their dedicated UI fields.
 //! `BUZZ_ACP_AGENTS` is reserved because Desktop applies harness-specific caps
 //! before it writes the provider launch policy.
+//!
+//! A second, narrower set is *config-owned*: the two universal model/provider
+//! routing keys ([`CONFIG_OWNED_MODEL_ENV_KEYS`]) are written from the resolved
+//! agent configuration at spawn time, so a persisted copy of them in `env_vars`
+//! is dropped here instead of shadowing the Model picker.
 
 use std::collections::BTreeMap;
 
@@ -39,6 +44,134 @@ pub(crate) fn is_derived_provider_model_key(key: &str) -> bool {
     DERIVED_PROVIDER_MODEL_ENV_KEYS
         .iter()
         .any(|k| k.eq_ignore_ascii_case(key))
+}
+
+/// The universal model/provider/effort routing keys the spawn path writes from
+/// the resolved agent configuration (`effective_cfg.model`, `.provider`,
+/// `.reasoning_effort`), and which a user `env_vars` entry must therefore never
+/// shadow.
+///
+/// Unlike [`RESERVED_ENV_KEYS`] these carry no security weight, so save-time
+/// validation still accepts them: they are simply not a second place where a
+/// model can be chosen. They are stripped from the user env layers
+/// ([`merged_user_env`]), and the two with a structured record field are also
+/// migrated off records on load ([`migrate_config_owned_model_env`]).
+///
+/// Measured symptom that made this necessary: an agent whose Edit dialog showed
+/// harness "Claude Code" and model `opus[1m]` launched with
+/// `--model metered/grok-4.5`, because a July/August metered-proxy experiment
+/// had left `BUZZ_ACP_MODEL=metered/grok-4.5` in its `env_vars`, and the spawn
+/// path writes the user env layer *after* the structured model (see
+/// `runtime::spawn_agent_child`, the "User env vars" block). The vendor CLI then
+/// answered "There's an issue with the selected model (metered/grok-4.5)".
+///
+/// Harness-specific model keys (`GOOSE_MODEL`, `BUZZ_AGENT_MODEL`, …) are NOT
+/// here: they are handled at pack-import time by
+/// [`DERIVED_PROVIDER_MODEL_ENV_KEYS`], and the config bridge still reads them
+/// as a real env tier.
+///
+/// `BUZZ_ACP_REASONING_EFFORT` joined this list when the Power screen gained its
+/// Reasoning picker. It has no per-record structured field to be migrated onto
+/// (the effort lives only in the global config), so
+/// [`migrate_config_owned_model_env`] leaves it alone and the spawn-time strip
+/// below is what stops a hand-set copy from overriding the picker.
+pub(crate) const CONFIG_OWNED_MODEL_ENV_KEYS: &[&str] = &[
+    "BUZZ_ACP_MODEL",
+    "BUZZ_ACP_PROVIDER",
+    "BUZZ_ACP_REASONING_EFFORT",
+];
+
+/// Returns `true` when `key` is one of [`CONFIG_OWNED_MODEL_ENV_KEYS`].
+///
+/// Case-insensitive for the same reason [`is_reserved_env_key`] is: the save
+/// path upper-cases nothing, so `buzz_acp_model` must not be a way around this.
+pub(crate) fn is_config_owned_model_env_key(key: &str) -> bool {
+    CONFIG_OWNED_MODEL_ENV_KEYS
+        .iter()
+        .any(|owned| owned.eq_ignore_ascii_case(key))
+}
+
+/// Move a record's stale `BUZZ_ACP_MODEL` / `BUZZ_ACP_PROVIDER` `env_vars`
+/// entries onto its structured `model` / `provider` fields, and drop the entries.
+///
+/// Returns `true` when the record changed, so a caller can log or count; the
+/// mutation itself is what matters. The value is never silently discarded:
+///
+/// | record field | env entry | result |
+/// |---|---|---|
+/// | blank | present | field takes the env value, entry removed |
+/// | set | present | field kept (the picker is the truth), entry removed |
+/// | blank | absent | untouched |
+/// | set | absent | untouched |
+///
+/// Runs on every load (see `storage::load_agent_store`) and is idempotent: once
+/// the entry is gone the record no longer matches, and the first save after the
+/// first migrating load is what makes it permanent on disk. This mirrors the
+/// inline-key migration in `storage::hydrate_keys`: mutate in memory on load and
+/// let the next save persist it, rather than rewriting the store on read.
+/// A record carrying neither key is not touched at all, so its bytes round-trip
+/// unchanged.
+///
+/// For an instance linked to a definition, `model`/`provider` on the record are
+/// not what `effective_config::resolve_linked` reads, so the moved value is
+/// preserved rather than promoted; the definition's own record (and any
+/// definition-less instance) is where the move changes the resolved model.
+pub(crate) fn migrate_config_owned_model_env(
+    record: &mut super::types::ManagedAgentRecord,
+) -> bool {
+    // Both entries are taken before either field is touched, so the two
+    // borrows of `record` never overlap.
+    let model_entry = take_env_entry_ignore_case(&mut record.env_vars, "BUZZ_ACP_MODEL");
+    let provider_entry = take_env_entry_ignore_case(&mut record.env_vars, "BUZZ_ACP_PROVIDER");
+    let pubkey = record.pubkey.clone();
+    let model_changed = adopt_or_drop_env_entry(&mut record.model, model_entry, &pubkey, "model");
+    let provider_changed =
+        adopt_or_drop_env_entry(&mut record.provider, provider_entry, &pubkey, "provider");
+    model_changed || provider_changed
+}
+
+/// Remove `key` from `env_vars` whatever its casing, returning the key as it was
+/// stored together with its value.
+fn take_env_entry_ignore_case(
+    env_vars: &mut BTreeMap<String, String>,
+    key: &str,
+) -> Option<(String, String)> {
+    let stored = env_vars
+        .keys()
+        .find(|stored| stored.eq_ignore_ascii_case(key))
+        .cloned()?;
+    let value = env_vars.remove(&stored)?;
+    Some((stored, value))
+}
+
+/// Apply one taken entry to its structured field per the table on
+/// [`migrate_config_owned_model_env`]. Returns `true` when an entry was present,
+/// which is exactly when the record changed (the entry is removed either way).
+fn adopt_or_drop_env_entry(
+    field: &mut Option<String>,
+    entry: Option<(String, String)>,
+    pubkey: &str,
+    label: &str,
+) -> bool {
+    let Some((key, value)) = entry else {
+        return false;
+    };
+    if field.as_deref().is_some_and(|set| !set.trim().is_empty()) {
+        eprintln!(
+            "buzz-desktop: agent {pubkey} carried a stale `{key}` env var; dropping it because \
+             the chosen {label} wins"
+        );
+    } else if value.trim().is_empty() {
+        // An entry that names nothing cannot be promoted to a field.
+        eprintln!("buzz-desktop: agent {pubkey} carried an empty `{key}` env var; dropping it");
+    } else {
+        eprintln!(
+            "buzz-desktop: agent {pubkey} had no {label} of its own; adopting the value from its \
+             stale `{key}` env var"
+        );
+        *field = Some(value);
+    }
+    true
 }
 
 // Canonical reserved-key list + predicate, shared verbatim with `build.rs`.
@@ -231,6 +364,17 @@ pub(crate) fn merged_user_env(
             );
             return false;
         }
+        if is_config_owned_model_env_key(k) {
+            // The resolved configuration owns these two. The spawn path writes
+            // the user env layer LAST, so leaving one here would shadow the
+            // model/provider the Model picker shows. See
+            // `CONFIG_OWNED_MODEL_ENV_KEYS` for the measured symptom.
+            eprintln!(
+                "buzz-desktop: ignoring `{k}` from persona/agent/global overrides. The agent's \
+                 chosen model and provider own it"
+            );
+            return false;
+        }
         if !is_well_formed_env_key(k) {
             // Defense in depth: drop malformed keys at spawn time so older
             // on-disk records (saved before the tightened validator) can't
@@ -261,6 +405,24 @@ pub(crate) fn merged_user_env(
         true
     });
     merged
+}
+
+/// Write the fully layered env map onto the spawn command, skipping the
+/// config-owned model/provider keys ([`CONFIG_OWNED_MODEL_ENV_KEYS`]).
+///
+/// This is the LAST env layer the spawn path writes, deliberately: a user value
+/// must win over every Buzz-set default above it. That ordering is exactly why
+/// the two model/provider keys have to be skipped here as well as filtered out
+/// of [`merged_user_env`]: the map also carries the harness definition's own
+/// `env` (see `readiness::resolve_effective_agent_env_with_def` layer 2b), which
+/// the user-env filter never sees. Whatever the layer, the resolved model wins.
+pub(crate) fn apply_user_env(command: &mut std::process::Command, env: &BTreeMap<String, String>) {
+    for (key, value) in env {
+        if is_config_owned_model_env_key(key) {
+            continue;
+        }
+        command.env(key, value);
+    }
 }
 
 /// Look up the live env map of `persona_id` within an already-loaded persona

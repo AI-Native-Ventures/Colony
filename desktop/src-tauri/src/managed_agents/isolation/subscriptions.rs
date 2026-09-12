@@ -132,6 +132,10 @@ pub(super) fn prepare(
     if model.trim().is_empty() {
         return Err("Choose a subscription model in Power setup before starting the agent.".into());
     }
+    // Absent means the vendor's own default effort, which is how these teammates
+    // ran before the Power screen could choose one. The bridge refuses an effort
+    // the selected model does not advertise rather than passing it on.
+    let effort = get("BUZZ_ACP_REASONING_EFFORT").trim();
     let mcp = find_command("buzz-dev-mcp")
         .ok_or("Colony's isolated work tools are unavailable. Reinstall this beta.")?;
     let harness = original.get_program().to_owned();
@@ -168,6 +172,12 @@ pub(super) fn prepare(
     browser["env"]["ELECTRON_RUN_AS_NODE"] = json!("1");
     let mut config = json!({"runtime":runtime,"vendor_binary":vendor,"profile":profile,"workspace":workspace,"model":model,
         "mcp_servers":{"colony_work":work,"colony_browser":browser}});
+    // Omitted entirely when unset rather than sent as "": the bridge rejects a
+    // blank effort outright, and its config refuses unknown fields, so a teammate
+    // on the vendor's default keeps a payload every bridge build accepts.
+    if !effort.is_empty() {
+        config["reasoning_effort"] = json!(effort);
+    }
     // Absent for a scoped profile, so an older bridge never reads a field it
     // does not know about and a newer one never guesses the mode.
     if let Some((home, config_dir, user)) = host_login {
@@ -223,6 +233,7 @@ fn coordinator_env(key: &str) -> bool {
             | "BUZZ_RELAY_URL"
             | "BUZZ_AUTH_TAG"
             | "BUZZ_ACP_MODEL"
+            | "BUZZ_ACP_REASONING_EFFORT"
             | "BUZZ_ACP_SYSTEM_PROMPT"
             | "BUZZ_ACP_TEAM_INSTRUCTIONS"
             | "BUZZ_ACP_SESSION_TITLE"
@@ -298,6 +309,11 @@ mod tests {
             assert!(!worker_env(key), "{key}");
             assert!(!coordinator_env(key), "{key}");
         }
+        assert!(
+            coordinator_env("BUZZ_ACP_REASONING_EFFORT")
+                && !worker_env("BUZZ_ACP_REASONING_EFFORT"),
+            "the effort routes the vendor process, never a work tool"
+        );
         assert!(worker_env("BUZZ_RELAY_URL"));
         assert!(coordinator_env("BUZZ_ACP_AGENT_OWNER"));
         assert!(!worker_env("BUZZ_ACP_AGENT_OWNER"));

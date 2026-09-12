@@ -55,6 +55,9 @@ test("the Colony Agent branch preselects Colony Credits and DeepSeek V4 Flash", 
     provider: "openai-compat",
     model: "deepseek-v4-flash",
     preferred_runtime: "buzz-agent",
+    // A reasoning effort belongs to a subscription model, so the hosted route
+    // clears it rather than carrying one across lanes.
+    reasoning_effort: null,
   });
 });
 

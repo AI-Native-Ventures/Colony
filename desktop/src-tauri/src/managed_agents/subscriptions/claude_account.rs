@@ -116,6 +116,15 @@ fn account_from_value(value: &Value) -> SubscriptionAccount {
                     .unwrap_or(id)
                     .to_owned(),
                 is_default: id == "default",
+                efforts: efforts_from_model(model),
+                // Claude advertises which efforts a model accepts but never
+                // which one it would have used, so there is no provider default
+                // to preselect here. Measured against the installed CLI on
+                // 2026-09-12: every model entry carries `supportsEffort` and
+                // `supportedEffortLevels`, and no entry (and nothing else in the
+                // initialize response) names a default. The owner therefore
+                // keeps an explicit "provider's default" choice.
+                default_effort: None,
             })
         })
         .collect();
@@ -125,6 +134,30 @@ fn account_from_value(value: &Value) -> SubscriptionAccount {
         models,
         ..Default::default()
     }
+}
+
+/// The efforts one Claude model entry advertises, in the order the CLI lists them.
+///
+/// `supportsEffort` gates the list rather than the list's presence: a model that
+/// says it does not support effort is offered none even if a future build starts
+/// sending levels beside that flag. Claude reports a flat array of level names
+/// with no descriptions, so the descriptions stay empty rather than invented.
+fn efforts_from_model(model: &Value) -> Vec<SubscriptionModelEffort> {
+    if model.get("supportsEffort").and_then(Value::as_bool) != Some(true) {
+        return vec![];
+    }
+    model
+        .get("supportedEffortLevels")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|level| {
+            Some(SubscriptionModelEffort {
+                effort: effort_token(level.as_str())?,
+                description: None,
+            })
+        })
+        .collect()
 }
 
 fn windows_from_value(value: &Value) -> Vec<AccountUsageWindow> {
@@ -141,7 +174,22 @@ fn windows_from_value(value: &Value) -> Vec<AccountUsageWindow> {
             let (label, duration_minutes) = match id.as_str() {
                 "five_hour" => ("5-hour allowance".into(), Some(300)),
                 "seven_day" => ("Weekly allowance".into(), Some(10080)),
-                _ => (id.replace('_', " "), None),
+                // Anthropic also returns internal bucket ids. One measured on
+                // this Mac was `nimbus_quill`, which the old fall-through
+                // rendered as a row reading "nimbus quill", with no duration and
+                // no reset time, between the owner's real 5-hour and weekly
+                // allowances. A provider codename is not an allowance an owner
+                // can reason about, and spelling it out invited exactly the
+                // question it got asked.
+                //
+                // The bucket is still read. It is hidden only while it has
+                // headroom, because a bucket that is actually exhausted is
+                // something the owner has to be able to find out about: at that
+                // point it is surfaced under a generic label, never its
+                // codename. Windows like this are already `account_wide: false`,
+                // so readiness never blocked on them either way.
+                _ if used_percent < 100.0 => return None,
+                _ => ("Another limit on this account".into(), None),
             };
             Some(AccountUsageWindow {
                 id: id.clone(),
@@ -189,6 +237,59 @@ mod tests {
             .authentication,
             AccountAuthentication::Unknown
         );
+    }
+
+    /// Shapes taken from the installed CLI's own initialize response.
+    #[test]
+    fn claude_models_carry_their_own_effort_levels_and_no_provider_default() {
+        let account = account_from_value(
+            &json!({"account":{"subscriptionType":"max","apiKeySource":"none"},
+            "models":[
+                {"value":"default","displayName":"Default (recommended)","supportsEffort":true,
+                 "supportedEffortLevels":["low","medium","high","xhigh","max"]},
+                {"value":"haiku","displayName":"Haiku"}
+            ]}),
+        );
+        assert_eq!(account.models.len(), 2);
+        assert_eq!(
+            account.models[0]
+                .efforts
+                .iter()
+                .map(|effort| effort.effort.as_str())
+                .collect::<Vec<_>>(),
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            account.models[0].default_effort, None,
+            "Claude never names the effort it would have used"
+        );
+        assert!(
+            account.models[1].efforts.is_empty(),
+            "Haiku reports no effort support, so it offers no choice"
+        );
+    }
+
+    #[test]
+    fn an_unknown_bucket_is_hidden_until_it_is_exhausted_and_never_named() {
+        let quiet = windows_from_value(&json!({"rate_limits_available":true,"rate_limits":{
+            "five_hour":{"utilization":12},
+            "nimbus_quill":{"utilization":40}
+        }}));
+        assert_eq!(
+            quiet
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["five_hour"],
+            "a provider codename is not an allowance an owner can reason about"
+        );
+        let exhausted = windows_from_value(&json!({"rate_limits_available":true,"rate_limits":{
+            "nimbus_quill":{"utilization":100}
+        }}));
+        assert_eq!(exhausted.len(), 1, "an exhausted bucket must be findable");
+        assert_eq!(exhausted[0].label, "Another limit on this account");
+        assert!(!exhausted[0].label.contains("nimbus"));
+        assert!(!exhausted[0].account_wide);
     }
 
     #[test]

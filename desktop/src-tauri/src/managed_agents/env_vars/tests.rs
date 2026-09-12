@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::{
-    display_invalid_key, is_derived_provider_model_key, is_reserved_env_key,
-    is_well_formed_env_key, merged_user_env, validate_user_env_keys,
+    apply_user_env, display_invalid_key, is_config_owned_model_env_key,
+    is_derived_provider_model_key, is_reserved_env_key, is_well_formed_env_key, merged_user_env,
+    migrate_config_owned_model_env, validate_user_env_keys, CONFIG_OWNED_MODEL_ENV_KEYS,
     DERIVED_PROVIDER_MODEL_ENV_KEYS, MAX_ENV_TOTAL_BYTES, MAX_ENV_VALUE_BYTES, RESERVED_ENV_KEYS,
 };
 
@@ -505,4 +506,239 @@ fn deploy_model_precedence_none_when_both_absent() {
 
     let effective = persona_model.clone().or(record_model.clone());
     assert_eq!(effective, None);
+}
+
+// ── config-owned model/provider keys ──────────────────────────────────
+//
+// Measured on 2026-09-12: an agent whose Edit dialog read harness "Claude Code",
+// model `opus[1m]` launched with `--model metered/grok-4.5`, because a
+// metered-proxy experiment had left `BUZZ_ACP_MODEL=metered/grok-4.5` in its
+// `env_vars` and the spawn path writes the user env layer after the structured
+// model. The vendor CLI answered "There's an issue with the selected model
+// (metered/grok-4.5)". These tests pin both halves of the fix: the key never
+// reaches the command, and the stale value is migrated rather than discarded.
+
+/// A record with only the fields these tests read.
+fn record_with(
+    model: Option<&str>,
+    provider: Option<&str>,
+    env_vars: &[(&str, &str)],
+) -> crate::managed_agents::types::ManagedAgentRecord {
+    crate::managed_agents::types::ManagedAgentRecord {
+        pubkey: "test-pubkey".to_string(),
+        name: "Chief of Staff".to_string(),
+        model: model.map(str::to_owned),
+        provider: provider.map(str::to_owned),
+        env_vars: map(env_vars),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn config_owned_predicate_covers_every_routing_key_case_insensitively() {
+    assert_eq!(CONFIG_OWNED_MODEL_ENV_KEYS.len(), 3);
+    assert!(is_config_owned_model_env_key("BUZZ_ACP_MODEL"));
+    assert!(is_config_owned_model_env_key("buzz_acp_provider"));
+    assert!(is_config_owned_model_env_key("buzz_acp_reasoning_effort"));
+    // Adjacent keys that must keep working.
+    assert!(!is_config_owned_model_env_key("BUZZ_AGENT_MODEL"));
+    assert!(!is_config_owned_model_env_key("BUZZ_ACP_SYSTEM_PROMPT"));
+    assert!(!is_config_owned_model_env_key("BUZZ_METER_OPENAI_PROVIDER"));
+}
+
+#[test]
+fn merged_env_strips_config_owned_model_keys_and_keeps_the_rest() {
+    // The exact shape found on the affected record.
+    let agent = map(&[
+        ("BUZZ_ACP_MODEL", "metered/grok-4.5"),
+        ("BUZZ_ACP_PROVIDER", "xai"),
+        ("BUZZ_ACP_REASONING_EFFORT", "max"),
+        ("BUZZ_METER_OPENAI_PROVIDER", "xai"),
+        ("ANTHROPIC_API_KEY", "sk-keep-me"),
+    ]);
+    let merged = merged_user_env(&BTreeMap::new(), &agent);
+    assert!(!merged.contains_key("BUZZ_ACP_MODEL"));
+    assert!(!merged.contains_key("BUZZ_ACP_PROVIDER"));
+    assert!(
+        !merged.contains_key("BUZZ_ACP_REASONING_EFFORT"),
+        "a saved effort must never outrank the one the owner picked"
+    );
+    assert_eq!(
+        merged.get("BUZZ_METER_OPENAI_PROVIDER").map(String::as_str),
+        Some("xai"),
+        "BUZZ_METER_* is untouched: only the routing keys change behaviour"
+    );
+    assert_eq!(
+        merged.get("ANTHROPIC_API_KEY").map(String::as_str),
+        Some("sk-keep-me"),
+        "credential keys must survive"
+    );
+}
+
+#[test]
+fn merged_env_strips_config_owned_model_keys_from_persona_layer() {
+    // `merged_user_env` is also the global layer's filter (called with an empty
+    // lower map), so one filter covers global, persona and per-agent alike.
+    let persona = map(&[("buzz_acp_model", "metered/grok-4.5")]);
+    let merged = merged_user_env(&persona, &BTreeMap::new());
+    assert!(merged.is_empty());
+}
+
+#[test]
+fn a_saved_effort_env_var_does_not_reach_the_spawned_command() {
+    // Same ordering trap as the model below: the structured value is written
+    // first and the layered user env last. A record cannot carry an effort of
+    // its own, so the only way one gets here is a hand-set override, and it must
+    // lose to the effort the Power screen resolved.
+    let record = record_with(None, None, &[("BUZZ_ACP_REASONING_EFFORT", "ultra")]);
+    let effective = crate::managed_agents::readiness::resolve_effective_agent_env(
+        &record,
+        &[],
+        None,
+        &crate::managed_agents::GlobalAgentConfig::default(),
+    );
+    let mut command = std::process::Command::new("buzz-acp");
+    command.env("BUZZ_ACP_REASONING_EFFORT", "medium");
+    apply_user_env(&mut command, &effective.env);
+    let effort = command
+        .get_envs()
+        .find(|(key, _)| key.to_string_lossy() == "BUZZ_ACP_REASONING_EFFORT")
+        .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()));
+    assert_eq!(effort.as_deref(), Some("medium"));
+}
+
+#[test]
+fn stale_model_env_does_not_reach_the_spawned_command() {
+    // The spawn path's real ordering: the structured model is written first, the
+    // fully layered user env last. Before the fix the second write won.
+    let record = record_with(
+        Some("opus[1m]"),
+        None,
+        &[("BUZZ_ACP_MODEL", "metered/grok-4.5")],
+    );
+    let effective = crate::managed_agents::readiness::resolve_effective_agent_env(
+        &record,
+        &[],
+        None,
+        &crate::managed_agents::GlobalAgentConfig::default(),
+    );
+
+    let mut command = std::process::Command::new("buzz-acp");
+    command.env("BUZZ_ACP_MODEL", "opus[1m]");
+    apply_user_env(&mut command, &effective.env);
+
+    let written: Vec<(String, Option<String>)> = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|v| v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    let model = written
+        .iter()
+        .find(|(key, _)| key == "BUZZ_ACP_MODEL")
+        .map(|(_, value)| value.clone());
+    assert_eq!(
+        model,
+        Some(Some("opus[1m]".to_string())),
+        "the resolved model must be what the command carries, not the saved env var"
+    );
+}
+
+#[test]
+fn migration_moves_the_value_into_an_empty_model_field() {
+    let mut record = record_with(None, None, &[("BUZZ_ACP_MODEL", "metered/grok-4.5")]);
+    assert!(migrate_config_owned_model_env(&mut record));
+    assert_eq!(record.model.as_deref(), Some("metered/grok-4.5"));
+    assert!(!record.env_vars.contains_key("BUZZ_ACP_MODEL"));
+}
+
+#[test]
+fn migration_moves_the_provider_value_into_an_empty_provider_field() {
+    let mut record = record_with(None, None, &[("BUZZ_ACP_PROVIDER", "xai")]);
+    assert!(migrate_config_owned_model_env(&mut record));
+    assert_eq!(record.provider.as_deref(), Some("xai"));
+    assert!(!record.env_vars.contains_key("BUZZ_ACP_PROVIDER"));
+}
+
+#[test]
+fn migration_keeps_the_chosen_model_and_drops_the_env_entry() {
+    let mut record = record_with(
+        Some("opus[1m]"),
+        Some("anthropic"),
+        &[
+            ("BUZZ_ACP_MODEL", "metered/grok-4.5"),
+            ("BUZZ_ACP_PROVIDER", "xai"),
+        ],
+    );
+    assert!(migrate_config_owned_model_env(&mut record));
+    assert_eq!(record.model.as_deref(), Some("opus[1m]"));
+    assert_eq!(record.provider.as_deref(), Some("anthropic"));
+    assert!(record.env_vars.is_empty());
+}
+
+#[test]
+fn migration_leaves_a_record_without_the_keys_untouched() {
+    let mut record = record_with(
+        Some("opus[1m]"),
+        Some("anthropic"),
+        &[
+            ("ANTHROPIC_API_KEY", "sk-keep-me"),
+            ("BUZZ_METER_OPENAI_PROVIDER", "xai"),
+            ("GOOSE_TEMPERATURE", "0.2"),
+        ],
+    );
+    let before = record.env_vars.clone();
+    assert!(
+        !migrate_config_owned_model_env(&mut record),
+        "nothing to migrate means no reported change"
+    );
+    assert_eq!(record.env_vars, before);
+    assert_eq!(record.model.as_deref(), Some("opus[1m]"));
+    assert_eq!(record.provider.as_deref(), Some("anthropic"));
+}
+
+#[test]
+fn migration_preserves_credential_and_meter_keys_while_migrating() {
+    let mut record = record_with(
+        None,
+        None,
+        &[
+            ("BUZZ_ACP_MODEL", "metered/grok-4.5"),
+            ("BUZZ_ACP_PROVIDER", "xai"),
+            ("BUZZ_METER_OPENAI_PROVIDER", "xai"),
+            ("XAI_API_KEY", "sk-xai"),
+        ],
+    );
+    assert!(migrate_config_owned_model_env(&mut record));
+    assert_eq!(
+        record.env_vars,
+        map(&[
+            ("BUZZ_METER_OPENAI_PROVIDER", "xai"),
+            ("XAI_API_KEY", "sk-xai"),
+        ])
+    );
+}
+
+#[test]
+fn migration_is_idempotent() {
+    let mut record = record_with(None, None, &[("BUZZ_ACP_MODEL", "metered/grok-4.5")]);
+    assert!(migrate_config_owned_model_env(&mut record));
+    let after_first = record.clone();
+    assert!(
+        !migrate_config_owned_model_env(&mut record),
+        "a second pass has nothing left to do"
+    );
+    assert_eq!(record.model, after_first.model);
+    assert_eq!(record.env_vars, after_first.env_vars);
+}
+
+#[test]
+fn migration_drops_an_empty_entry_without_setting_the_field() {
+    let mut record = record_with(None, None, &[("BUZZ_ACP_MODEL", "   ")]);
+    assert!(migrate_config_owned_model_env(&mut record));
+    assert_eq!(record.model, None, "a blank value is not a model");
+    assert!(record.env_vars.is_empty());
 }

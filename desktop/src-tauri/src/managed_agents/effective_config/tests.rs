@@ -949,3 +949,35 @@ fn harness_command_override_beats_dangling_id() {
 
 #[path = "power_inheritance_tests.rs"]
 mod power_inheritance_tests;
+
+// ── Reasoning effort: global only, for linked and definition-less alike ──
+
+#[test]
+fn the_reasoning_effort_comes_from_global_for_every_record_shape() {
+    let g = GlobalAgentConfig {
+        reasoning_effort: Some("xhigh".to_string()),
+        ..global(Some("global-model"), Some("global-prov"))
+    };
+    let defs = vec![definition("d1", Some("def-model"), None, "prompt")];
+    for rec in [
+        record(Some("d1"), None, None, None),
+        record(None, Some("own-model"), None, None),
+    ] {
+        let cfg = match resolve_effective_config(&rec, &defs, &g) {
+            EffectiveConfigResult::Resolved(c) => c,
+            other => panic!("expected Resolved, got {:?}", other),
+        };
+        assert_eq!(cfg.reasoning_effort.value.as_deref(), Some("xhigh"));
+        assert_eq!(cfg.reasoning_effort.source, ConfigSource::Global);
+    }
+    // Blank is "the vendor decides", never an effort of its own.
+    let blank = GlobalAgentConfig {
+        reasoning_effort: Some("   ".to_string()),
+        ..g.clone()
+    };
+    let cfg = match resolve_effective_config(&record(None, None, None, None), &defs, &blank) {
+        EffectiveConfigResult::Resolved(c) => c,
+        other => panic!("expected Resolved, got {:?}", other),
+    };
+    assert_eq!(cfg.reasoning_effort.value, None);
+}

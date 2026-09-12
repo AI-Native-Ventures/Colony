@@ -59,6 +59,7 @@ import {
 } from "@/features/agents/ui/buzzAgentModelTuningFields";
 import { SettingsOptionGroup } from "@/features/settings/ui/SettingsOptionGroup";
 import { AdvancedRequiredBadge } from "./AdvancedRequiredBadge";
+import { ModelEnvOverrideNotice } from "./ModelEnvOverrideNotice";
 import { CardMintKeyCue } from "./CardMintKeyCue";
 import { getGlobalAgentCredentialState } from "./globalAgentCredentialState";
 
@@ -840,6 +841,7 @@ export function AgentConfigFields({
             useChevronIcon={useChevronSelectIcon}
             usePersonaInputStyle={progressiveDefaults}
           />
+          <ModelEnvOverrideNotice envVars={config.env_vars} />
         </div>
       ) : null}
 

@@ -41,6 +41,9 @@ export function configForPowerLane(
 ): GlobalAgentConfig {
   if (lane === "existing") return current;
   if (lane === "colony") return defaultColonyAgentConfig(current);
+  // The effort belongs to a model on one provider, so it is cleared with the
+  // model on every lane change. Carrying it across would leave an effort chosen
+  // for a model nothing in the new lane offers.
   if (lane === "subscription")
     return {
       ...current,
@@ -48,6 +51,7 @@ export function configForPowerLane(
       preferred_runtime: runtimeId ?? null,
       provider: null,
       model: null,
+      reasoning_effort: null,
     };
   const envVars = { ...current.env_vars };
   delete envVars.BUZZ_AGENT_MODEL;
@@ -61,6 +65,7 @@ export function configForPowerLane(
     model: isFreeOpenRouterModel(current.model)
       ? current.model
       : "openrouter/free",
+    reasoning_effort: null,
     env_vars: envVars,
   };
 }

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- fix(onboarding): retry a slow or rate-limited relay read during first-job approval instead of failing the setup.
+- feat(desktop): pick the reasoning effort for a subscription teammate, with each model's own options and its own default read from the provider.
+- fix(desktop): the Model you choose for a teammate is the model that runs; a stale BUZZ_ACP_MODEL saved on an older agent no longer overrides it silently.
+- chore(desktop): the app calls itself Colony everywhere you can read it, instead of the upstream project it was forked from.
+- chore(desktop): the menu-bar icon is Colony's ant, and the native layer calls the product Colony where you can read it.
+- chore(desktop): rename the last Buzz references in native messages, and replace the beehive teammate name pool.
+
+## relay-v0.11.13
+
+- feat(relay): completing a hire now closes the hiring request that asked for it, so the agent waiting on that request wakes up and carries on instead of waiting to be told. The request is closed only when it is unambiguous: the one the hire names, or the single open hiring request addressed to that owner.
+
 ## relay-v0.11.12
 
 - feat(relay): Colony now provisions employees. A bundled registry seeds one employee per workspace at startup and at provisioning, with its own sealed key, and the relay refuses every attempt to archive, retire, rank, rename or re-prompt it, so an employee we provide cannot be edited or deleted by anyone but us.

@@ -189,7 +189,7 @@ export function IdentityRecoveryPairing({
               </p>
             </div>
             <p className="text-xs text-muted-foreground">
-              This gives this desktop permanent access to your Buzz identity.
+              This gives this desktop permanent access to your Colony identity.
               Only continue if you trust it.
             </p>
             <div className="flex w-full flex-col gap-2">
@@ -270,7 +270,7 @@ export function IdentityRecoveryPairing({
       ) : null}
       {step === "qr" ? (
         <p className="max-w-[266px] text-sm leading-5 text-foreground/75">
-          Scan this code with a signed-in Buzz phone.
+          Scan this code with a signed-in Colony phone.
         </p>
       ) : null}
       {step === "qr" || step === "loading" ? (
