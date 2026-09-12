@@ -1353,7 +1353,7 @@ test("composer no-image link embeds keep the attachment footprint", async ({
   await expect(card).toHaveAttribute("data-image-state", "none");
   await expect(card.locator("[data-link-preview-thumbnail]")).toBeVisible();
   await expect(card.locator('[data-slot="attachment-title"]')).toContainText(
-    /github\.com|Buzz/,
+    /github\.com|Colony/,
   );
   await expect(card).toHaveCSS("height", "55px");
 });
