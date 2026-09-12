@@ -4,7 +4,7 @@ The approved visual and product contract is [the design specification](2026-09-1
 
 ## Proof stages
 
-Keep implementation, automated checks, rendered acceptance, real agent work, merge, deployment and installed-app adoption separate. None of the cases below currently has a passing result recorded.
+Keep implementation, automated checks, rendered acceptance, real agent work, merge, deployment and installed-app adoption separate. The current implementation and hosted observations are recorded below; a case is complete only when its required exact-head evidence passes.
 
 | Case | Required observation | Evidence to retain |
 | --- | --- | --- |
@@ -45,6 +45,6 @@ No feature commit, PR, GitHub test result, rendered five-state acceptance, insta
 
 ## Current evidence checkpoint — 2026-09-12
 
-PR #691 is open as a draft on `codex/website-manager`; the current pushed source head is `448196b306f7318cf9e8a717c681c9e647a28b8b`. Worker evidence records 9 mock UI tests and 7 real-relay tests passing on the earlier source head `91208cba01d72b3225e2be1c3120be8e2488afbd`; those results are automated evidence for that earlier head and do not establish the current head's complete proof. Shared Blocks PR #682 has merged.
+PR #691 is open as a draft on `codex/website-manager`. The source now includes the visual/native corrections, immutable public-fixture relay lifecycle coverage, and bundled employee runbook/install work through candidate commit `37d7f748a`. The exact mock UI evidence at `448196b306f7318cf9e8a717c681c9e647a28b8b` records 9 passing cases and 10 distinct rendered screenshots; the hosted relay evidence at `91208cba01d72b3225e2be1c3120be8e2488afbd` records 7 passing cases. Those results are evidence for their exact source heads and do not establish the current candidate's complete proof. Shared Blocks PR #682 has merged.
 
-The exact-head GitHub `Website preview native proof` run `34707121191` completed with all 16 required non-clip checks passing and desktop/mobile geometry recorded, but its corrected clip gate failed: the white control pixel was valid while both the header and page samples read the preview RGB, proving the current nested native `View` does not clip an overflowing `WebContentsView` child. Production remains on the fail-closed hide fallback; no native clipping proof has passed. The packaged managed Website Manager job and authenticated/live end-to-end flow remain unknown. CI, rendered acceptance, installed runtime adoption and release state must be checked against the exact pushed head before any completion claim.
+The exact-head GitHub `Website preview native proof` run `34707121191` completed with all 16 required non-clip checks passing and desktop/mobile geometry recorded, but its corrected clip gate failed: the white control pixel was valid while both the header and page samples read the preview RGB, proving the nested native `View` did not clip an overflowing `WebContentsView` child. The subsequent native source correction at `e671aa6e9` still needs a fresh native proof; no native clipping proof has passed. The packaged managed Website Manager job and authenticated/live end-to-end flow remain unproven. CI, rendered acceptance, installed runtime adoption and release state must be checked against the exact pushed head before any completion claim.

@@ -66,8 +66,12 @@ before acting and use the role's command for the stage you own:
 6. Avery freezes a revision that passed independent QA with `buzz website ready
    --channel <uuid> --task <task-id> --thread <root-hex> [--generation N]`.
    Owner approval and request-changes decisions come through the Website
-   Manager Block; after approval Jules records the handover with `buzz website
-   handover ... --file handover.json`.
+   Manager Block. After approval Jules prepares `handover.json` with the exact
+   approved revision, manifest, source, archive, and asset refs; Avery verifies
+   it and records the handover as the pinned coordinator with `buzz website
+   handover ... --file handover.json`. Jules does not call the recording
+   command because handover authority is limited to the pinned owner or
+   coordinator.
 
 Mentions still carry the human-readable handoff in the project thread. They
 are best-effort and are not an exactly-once protocol: a race or restart can
@@ -224,5 +228,5 @@ source and its recipe version rather than editing one provisioned instance.
 
 The platform boundaries are not optional: owner identity and authorization,
 evidence honesty, scope discipline, no owner keys, and no publication. The
-manager coordinates, gates, and presents; the builder produces the source,
-assets, and handover artifact.
+manager coordinates, gates, records, and presents; the builder produces the
+source, assets, and handover artifact for the manager to verify.

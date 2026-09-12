@@ -5,9 +5,9 @@ researches, Jules designs and builds, Vera reviews independently.
 
 | Teammate | Role |
 |---|---|
-| **Avery** | Website Manager: scopes, coordinates, gates evidence, verifies and presents the handover |
+| **Avery** | Website Manager: scopes, coordinates, gates evidence, verifies, records and presents the handover |
 | **Ren** | Researcher: cited business dossier and site inventory |
-| **Jules** | Designer-builder: one direction, one immutable version, handover bundle and access-request draft |
+| **Jules** | Designer-builder: one direction, one immutable version, handover bundle and access-request draft for Avery to verify |
 | **Vera** | Independent reviewer: rendered and functional QA with evidence |
 
 The method is in `instructions.md`. Each persona's runbook lives in its own
@@ -91,8 +91,8 @@ The platform boundaries are not optional:
 - Scope discipline and the no-publication rule.
 - No agent requests, stores, or uses an owner key.
 
-The manager coordinates, verifies, and presents; the builder produces the
-source, assets, and handover artifact.
+The manager coordinates, verifies, records, and presents; the builder produces
+the source, assets, and handover artifact for the manager to verify.
 
 ## Runtime integration status
 
@@ -123,6 +123,11 @@ buzz website request-changes --channel <uuid> --task <task-id> --thread <root-he
 buzz website handover --channel <uuid> --task <task-id> --thread <root-hex> \
   [--generation N] --file handover.json
 ```
+
+Jules prepares `handover.json` after owner approval and sends it to Avery.
+Avery verifies the exact current revision, manifest hash, QA record, source and
+asset refs, then records it as the pinned coordinator with the command above.
+The relay does not authorize the builder persona to record a handover.
 
 `buzz website bundle` packages an already-built site and uploads its files,
 manifest, source archive, and real before/desktop/mobile PNG captures through

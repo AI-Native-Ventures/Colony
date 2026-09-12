@@ -8,7 +8,9 @@
 
 **Reference:** [Approved design](../specs/2026-09-10-website-manager-design.md), [proof matrix](../specs/2026-09-10-website-manager-proof.md), [Studio Method](../specs/2026-09-10-website-studio-method.md).
 
-> Takeover checkpoint (2026-09-12): the candidate branch contains the Website Manager source slice at HEAD `91208cba01`. GitHub CI run `34697231268` is red because Desktop Core reported stale `desktop/native-inventory.json`; the exact single-file correction from successful Format diff run `34697228681` is applied locally and awaits root review, commit and push. No CI rerun has been performed; packaged adoption and the live end-to-end Website Manager flow remain unproven.
+> Current checkpoint (2026-09-12): the Website Manager source slice now includes the visual/native corrections, immutable public-fixture relay lifecycle coverage, and bundled employee runbook/install work through candidate commit `37d7f748a`. Hosted evidence remains scoped to its exact source heads: the mock UI run at `448196b306f7318cf9e8a717c681c9e647a28b8b` passed 9 mock UI cases and produced 10 distinct rendered screenshots, while the hosted relay evidence at `91208cba01d72b3225e2be1c3120be8e2488afbd` passed 7 relay cases. The current native preview source is based on `e671aa6e9`; its native proof is still pending. The newly added lifecycle/runbook source needs current-head CI, and managed-agent adoption plus the authenticated/live Website Manager flow remain unproven.
+
+Implementation and proof are separate at this checkpoint. The source slices are present where marked below, but a checkbox stays open when the required exact-head CI, native rendering, installed-runtime, or real managed-agent observation has not passed.
 
 ## Phase 1: shared contract, isolated preview and team recipe
 

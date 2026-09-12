@@ -83,10 +83,11 @@ buzz website qa --channel <uuid> --task <task-id> --thread <root-hex> \
 
 Avery can freeze the QA-complete revision with `buzz website ready --channel
 <uuid> --task <task-id> --thread <root-hex> [--generation N]`. Owner decisions
-arrive through the Website Manager Block. Jules records an approved handover
-with `buzz website handover --channel <uuid> --task <task-id> --thread
-<root-hex> [--generation N] --file handover.json`; a coordinator may record
-owner-requested changes with `buzz website request-changes --channel <uuid>
+arrive through the Website Manager Block. Jules prepares the approved
+`handover.json` and sends it to Avery; Avery verifies and records it as the
+pinned coordinator with `buzz website handover --channel <uuid> --task <task-id>
+--thread <root-hex> [--generation N] --file handover.json`. A coordinator may
+record owner-requested changes with `buzz website request-changes --channel <uuid>
 --task <task-id> --thread <root-hex> [--generation N] --revision N --hash
 <sha256> --note <text>`.
 

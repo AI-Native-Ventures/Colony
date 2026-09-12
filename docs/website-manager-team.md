@@ -8,9 +8,9 @@ Method; it contains no Horizon-specific content and no sample outputs.
 
 | Teammate | Role | Owns |
 |---|---|---|
-| **Avery** | Website Manager | Scoping, delegation, evidence gates, owner review, handover verification and presentation |
+| **Avery** | Website Manager | Scoping, delegation, evidence gates, owner review, handover verification, recording and presentation |
 | **Ren** | Researcher | Cited dossier, site inventory, before captures, gaps |
-| **Jules** | Designer-builder | One direction, immutable version, source, assets, handover bundle and access-request draft |
+| **Jules** | Designer-builder | One direction, immutable version, source, assets, handover bundle and access-request draft for Avery to verify |
 | **Vera** | Independent reviewer | Rendered and functional QA, findings, verdict |
 
 The four role identities, bundled prompts, and reporting line are shipped by the
@@ -26,7 +26,8 @@ prohibitions are not optional.
 5. Owner review: Avery presents one review packet per version; feedback maps to
    the protocol's `requestChanges` decision.
 6. Handover: Jules assembles the bundle and drafts access requests; Avery
-   verifies the required refs and presents them.
+   verifies the required refs, records the handover as the pinned coordinator,
+   and presents it.
 
 Publication is a separate, owner-authorized step. Feedback on a reviewed version
 produces a new version; the reviewed one is never mutated.
@@ -44,7 +45,8 @@ bounded public evidence. Jules packages an already-built site and real captures
 with `buzz website bundle`, records the immutable revision with `buzz website
 revision`, and attaches stage evidence with `buzz website evidence`. Vera records
 the exact-version QA report with `buzz website qa`; Avery freezes a QA-complete
-revision with `buzz website ready`; Jules records an approved bundle with `buzz
+revision with `buzz website ready`; after owner approval Jules prepares
+`handover.json`, and Avery verifies and records the approved bundle with `buzz
 website handover`. The full argument forms are in
 `docs/website-manager-protocol.md` and the pack's `instructions.md`.
 

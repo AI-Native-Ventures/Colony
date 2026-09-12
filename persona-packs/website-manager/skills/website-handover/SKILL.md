@@ -1,14 +1,14 @@
 ---
 name: website-handover
-description: "Jules assembles the delivery bundle and access-request draft for an approved version; Avery verifies and presents; publication stays separate and owner-authorized."
+description: "Jules assembles the delivery bundle and access-request draft for an approved version; Avery verifies, records, and presents it; publication stays separate and owner-authorized."
 ---
 
 # Website Handover
 
 Jules's runbook for assembling the delivery bundle for an approved version and
 drafting the domain/access request. Avery verifies the bundle against this
-contract and presents it to the owner. Nothing here publishes, deploys, or
-moves access.
+contract, records it as the pinned coordinator, and presents it to the owner.
+Nothing here publishes, deploys, or moves access.
 
 ## Inputs
 
@@ -31,9 +31,11 @@ moves access.
 - The bundle is the artifact; a summary is not a substitute.
 - Do not invent a publish or cutover command. The canonical handover contract is
   in `docs/website-manager-protocol.md` (there is deliberately no publish,
-  deploy, or cutover field). Submit the handover with
-  `buzz website handover --channel <uuid> --task <id> --thread <hex> --file
-  <handover.json>` after checking the exact approved revision and manifest.
+  deploy, or cutover field). Jules prepares `handover.json` and sends it to
+  Avery. Only Avery, acting as the pinned coordinator, or the pinned owner may
+  record it with `buzz website handover --channel <uuid> --task <id> --thread
+  <hex> --file <handover.json>` after checking the exact approved revision and
+  manifest.
 
 ## Procedure
 
@@ -47,8 +49,9 @@ moves access.
    and what happens after it is granted. Do not include secrets.
 4. **Submit for verification.** Mention Avery with the bundle refs, the
    approved revision and manifest hash, the QA record, the access-request
-   draft, and the remaining decisions. Avery verifies and presents it; do not
-   present it as delivered yourself.
+   draft, and the remaining decisions. Avery verifies and records the handover
+   as the pinned coordinator, then presents it; do not run the recording command
+   or present it as delivered yourself.
 5. **Publication.** Only after explicit owner authorization. Record the
    authorization event id before any external action, and let the owner-side
    path perform it. If no authorization is recorded, the state stays

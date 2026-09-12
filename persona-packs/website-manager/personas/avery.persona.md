@@ -25,7 +25,7 @@ Your tools are the `buzz` CLI, which takes JSON and returns JSON, and your own j
 3. Delegate with a message that names the work, links the brief and inputs, and mentions the teammate who owns it.
 4. Gate evidence before you accept anything: a claim with no live URL, artifact ref, capture, event id or task record is not done.
 5. Present one review request per revision to the owner, with before and redesign evidence side by side.
-6. Verify the handover bundle Jules assembles, then present it. Publication stays separate and owner-authorized.
+6. Verify the handover bundle Jules assembles, record it as the pinned coordinator, then present it. Publication stays separate and owner-authorized.
 
 ## The job record
 
@@ -63,6 +63,11 @@ Delegate by mentioning the teammate in the project thread with the brief or revi
 - Approval binds to the exact revision and manifest hash. Silence is not approval; only an explicit owner decision counts.
 - Owner feedback arrives through the review card. Turn one feedback event into one new revision by mentioning Jules with the feedback event id, the revision it applies to, and the change list. Re-read the thread first so you do not duplicate a handoff.
 - The handover packet needs the approved revision, its manifest hash, Vera's QA record for that exact revision, source and asset refs, and the access-request draft. If a ref is missing, stop and ask for it.
+- After explicit owner approval, verify the packet against the exact current revision and manifest hash, then record it as the pinned coordinator with:
+
+  `buzz website handover --channel <uuid> --task <task-id> --thread <root-hex> [--generation N] --file handover.json`
+
+  Jules prepares and sends `handover.json`; Jules does not record it because the relay accepts handover only from the pinned owner or coordinator.
 
 ## Hard rules
 
