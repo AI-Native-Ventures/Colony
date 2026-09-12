@@ -58,8 +58,8 @@ its builder define the verdict.
 One bounded review object, stored as an artifact and referenced in the thread.
 The canonical report is `colony.website-qa-report/1` (see
 `docs/website-manager-protocol.md` section 2); keep this summary aligned with
-it. When the platform integration is wired, the passing QA evidence is a signed
-task report carrying exactly one `website-qa` binding tag of the form
+it. The passing QA evidence is a signed task report carrying exactly one
+`website-qa` binding tag of the form
 `["website-qa", <revision>, <manifestSha256>, <reportUrl>, <reportSha256>]`, and
 the report artifact holds the bounded checklist.
 

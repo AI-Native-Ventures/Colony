@@ -1,7 +1,7 @@
 {
   "schema": "ai-native-office/provisioned-employee/v1",
   "handle": "website-manager",
-  "version": 1,
+  "version": 2,
   "display_name": "Avery",
   "role_id": "website-manager",
   "rank": "leader",

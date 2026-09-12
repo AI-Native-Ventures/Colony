@@ -25,6 +25,7 @@ use crate::relay::agent_boundary::canonical;
 use crate::util::now_iso;
 
 use super::journal::{self, scope_key, WebsiteTeamJournalEntry};
+use super::adoption::{adopted_candidate, adopted_record_persona, reconcile_adopted_record};
 use super::provisioning::{
     apply_recipe_to_agent, apply_recipe_to_definition, apply_recipe_to_team, UpgradeSummary,
 };
@@ -485,7 +486,7 @@ async fn ensure_agent(
     manager_pubkey: Option<&str>,
     notes: &mut Vec<String>,
 ) -> Result<(ManagedAgentRecord, bool, UpgradeSummary), String> {
-    let existing = find_request_record(ctx.app, request_id)?;
+    let existing = find_request_record(ctx, persona, request_id)?;
     match existing {
         Some(record) => {
             reconcile_expected(&record, persona, ctx)?;
@@ -555,7 +556,7 @@ async fn ensure_agent(
                 Err(error) => {
                     // The retry race: another run applied this exact request id
                     // between the read and the create. Reconcile it.
-                    if let Some(record) = find_request_record(ctx.app, request_id)? {
+                    if let Some(record) = find_request_record(ctx, persona, request_id)? {
                         reconcile_expected(&record, persona, ctx)?;
                         let (record, upgrade) =
                             patch_placement(ctx, &record.pubkey, persona, manager_pubkey, notes)?;
@@ -570,13 +571,80 @@ async fn ensure_agent(
 }
 
 fn find_request_record(
-    app: &AppHandle,
+    ctx: &InstallContext<'_>,
+    persona: &RecipePersona,
     request_id: &str,
 ) -> Result<Option<ManagedAgentRecord>, String> {
-    let records = load_managed_agents(app)?;
-    Ok(records
-        .into_iter()
-        .find(|record| record.creation_request_id.as_deref() == Some(request_id)))
+    let mut records = load_managed_agents(ctx.app)?;
+    let request_matches: Vec<usize> = records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            (record.creation_request_id.as_deref() == Some(request_id)).then_some(index)
+        })
+        .collect();
+    match request_matches.as_slice() {
+        [index] => {
+            let mut record = records[*index].clone();
+            // Adoption may precede recipe seeding. This install path has
+            // already loaded the bundled definitions, so link the record now
+            // while resolving a pack-wide provenance marker from its full
+            // persona/role identity.
+            if adopted_record_persona(&record)?.is_some()
+                && (record.persona_id.is_none()
+                    || record.team_id.is_none()
+                    || record.role_id.is_none())
+            {
+                reconcile_adopted_record(
+                    &mut record,
+                    persona,
+                    request_id,
+                    &ctx.team_id,
+                    &ctx.owner,
+                    &ctx.canonical_relay,
+                )?;
+                records[*index] = record.clone();
+                save_managed_agents(ctx.app, &records)?;
+            }
+            return Ok(Some(record));
+        }
+        [] => {}
+        _ => {
+            return Err(format!(
+                "Multiple managed agents carry the Website Manager request identity {request_id}; review the duplicate records before retrying."
+            ));
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for (index, record) in records.iter().enumerate() {
+        if adopted_candidate(record, persona, &ctx.owner, &ctx.canonical_relay)? {
+            candidates.push(index);
+        }
+    }
+    let index = match candidates.as_slice() {
+        [] => return Ok(None),
+        [index] => *index,
+        _ => {
+            return Err(format!(
+                "Multiple adopted {} agents match this Website Manager community and owner; review the records before retrying.",
+                persona.display_name
+            ));
+        }
+    };
+
+    let mut record = records[index].clone();
+    reconcile_adopted_record(
+        &mut record,
+        persona,
+        request_id,
+        &ctx.team_id,
+        &ctx.owner,
+        &ctx.canonical_relay,
+    )?;
+    records[index] = record.clone();
+    save_managed_agents(ctx.app, &records)?;
+    Ok(Some(record))
 }
 
 fn load_record(app: &AppHandle, pubkey: &str) -> Result<ManagedAgentRecord, String> {

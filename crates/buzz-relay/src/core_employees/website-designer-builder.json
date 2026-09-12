@@ -1,7 +1,7 @@
 {
   "schema": "ai-native-office/provisioned-employee/v1",
   "handle": "website-designer-builder",
-  "version": 1,
+  "version": 2,
   "display_name": "Jules",
   "role_id": "website-designer-builder",
   "rank": "worker",

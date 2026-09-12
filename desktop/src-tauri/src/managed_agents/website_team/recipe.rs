@@ -8,17 +8,17 @@
 //! gets installed.
 //!
 //! Users edit the *installed* copies (persona prompts in Agents, skills in the
-//! agent workspace, team instructions in the team editor). The installer only
-//! seeds missing records and never overwrites an existing definition or skill,
-//! so those edits survive reinstall and upgrade.
+//! agent workspace, team instructions in the team editor). Reinstall preserves
+//! user-owned settings, while a recipe version change refreshes the bundled
+//! persona and team content that Colony owns.
 
 /// Recipe identity exposed to the UI and recorded in the install journal.
 pub const RECIPE_ID: &str = "website-manager";
-pub const RECIPE_VERSION: &str = "0.1.0";
+pub const RECIPE_VERSION: &str = "0.1.1";
 /// The same version as a monotonic stamp for `ManagedAgentRecord`, whose
 /// `provisioned_version` is numeric because the relay stamps the employees it
 /// mints that way. Bump it with `RECIPE_VERSION`.
-pub const RECIPE_RECORD_VERSION: i64 = 1;
+pub const RECIPE_RECORD_VERSION: i64 = 2;
 
 /// Team slug, used in the per-community team id.
 pub const TEAM_SLUG: &str = "website-manager";
@@ -84,10 +84,25 @@ pub const PROVISIONED_HANDLES: &[&str] = &[
 /// employees. Every entry is this pack's own constant, so no other pack can be
 /// matched by accident and no prefix guess is needed.
 pub fn owns_provisioned_handle(handle: &str) -> bool {
+    provisioned_persona(handle).is_some()
+}
+
+/// Resolve one relay provisioned handle to the persona this recipe owns.
+///
+/// The relay currently uses role slugs as handles, while older definitions
+/// may carry the recipe id or persona id. Every accepted spelling is explicit
+/// so a similarly named employee from another pack cannot be adopted here.
+pub fn provisioned_persona(handle: &str) -> Option<&'static RecipePersona> {
     let handle = handle.trim();
-    !handle.is_empty()
-        && (PROVISIONED_HANDLES.contains(&handle)
-            || PERSONAS.iter().any(|persona| persona.role_id == handle))
+    if handle.is_empty() {
+        return None;
+    }
+    PERSONAS.iter().find(|persona| {
+        (PROVISIONED_HANDLES.contains(&handle)
+            && (persona.role_id == handle || persona.persona_id == handle))
+            || persona.persona_id == handle
+            || (persona.persona_id == AVERY_PERSONA_ID && handle == RECIPE_ID)
+    })
 }
 
 pub const PERSONAS: &[RecipePersona] = &[
@@ -230,11 +245,10 @@ pub fn persona_body(raw: &str) -> &str {
     raw
 }
 
-/// Compose the definition prompt seeded for a recipe persona: the editable
-/// persona body plus a pointer to the skill files the installer writes.
-///
-/// Only used when the definition is first seeded. Once stored, the definition
-/// is the user's and the installer never rewrites it.
+/// Compose the bundled definition prompt for a recipe persona: the persona
+/// body plus a pointer to the skill files the installer writes. It is used for
+/// both initial seeding and recipe-version upgrades; user-owned runtime and
+/// model settings remain outside this content.
 pub fn persona_system_prompt(persona: &RecipePersona) -> String {
     let body = persona_body(persona.persona_md).trim_end();
     let skills = persona

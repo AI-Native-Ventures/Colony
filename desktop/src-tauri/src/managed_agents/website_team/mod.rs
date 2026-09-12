@@ -32,6 +32,7 @@
 //! user-created record are never rewritten by a retry or an upgrade at the
 //! same version.
 
+mod adoption;
 mod install;
 mod journal;
 mod provisioning;
@@ -39,10 +40,12 @@ mod recipe;
 mod skills;
 
 pub use install::{install_status, install_website_team};
+pub(crate) use adoption::reconcile_adopted_record;
 pub use journal::WebsiteTeamJournalEntry;
 pub use recipe::{
-    owns_provisioned_handle, EXAMPLE_PROMPT, INTEGRATION_NOTE, OUTCOME_SENTENCE, PERSONAS,
-    RECIPE_ID, RECIPE_VERSION, SKILLS, TEAM_NAME, TEAM_SLUG,
+    owns_provisioned_handle, provisioned_persona, EXAMPLE_PROMPT, INTEGRATION_NOTE,
+    OUTCOME_SENTENCE, PERSONAS, RECIPE_ID, RECIPE_VERSION, RecipePersona, SKILLS, TEAM_NAME,
+    TEAM_SLUG,
 };
 pub use skills::{install_recipe_skills, InstalledWebsiteSkill};
 

@@ -28,9 +28,10 @@ work without duplicates or ambiguity.
   does not exist yet; record the request and escalate, and do not invent a
   command for it.
 - One owner feedback event should yield one revision version. The mention path
-  is best-effort and not atomic under a race or restart; when the canonical
-  record and durable platform command are wired, recover and dispatch from that
-  record's derived decision identity instead of relying on the search alone.
+  is best-effort and not atomic under a race or restart. Use the canonical
+  record and the durable `buzz website request-changes` action for the state
+  transition; when handing work to Jules by mention, include the feedback event
+  id and exact version and treat the pre-record check as best-effort.
 - Never call owner-side job lease commands from an agent identity.
 
 ## Procedure

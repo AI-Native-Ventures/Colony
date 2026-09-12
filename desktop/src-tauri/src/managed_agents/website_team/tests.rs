@@ -4,6 +4,7 @@
 //! that make it safe to retry: deterministic identity, exact-identity
 //! reconciliation, community scoping, and customization-preserving team edits.
 
+use super::adoption::reconcile_adopted_record;
 use super::install::{ensure_team_members, record_matches_install};
 use super::provisioning::{
     apply_recipe_to_agent, apply_recipe_to_definition, apply_recipe_to_team,
@@ -13,7 +14,10 @@ use super::recipe::{
     TEAM_DESCRIPTION,
 };
 use super::{agent_request_id, recipe_view, team_id_for_relay};
-use crate::managed_agents::{AgentDefinition, ManagedAgentRecord, TeamRecord};
+use crate::managed_agents::effective_config::{
+    resolve_effective_harness_command, resolve_effective_runtime_id, ConfigSource,
+};
+use crate::managed_agents::{AgentDefinition, GlobalAgentConfig, ManagedAgentRecord, TeamRecord};
 
 fn team() -> TeamRecord {
     TeamRecord {
@@ -81,6 +85,66 @@ fn team_ids_are_per_community() {
         team_id_for_relay("   ").is_none(),
         "a blank relay is not a community"
     );
+}
+
+#[test]
+fn separate_communities_keep_their_own_adoption_identities() {
+    let persona = &PERSONAS[0];
+    let owner = "a".repeat(64);
+    let first_relay = "wss://one.example";
+    let second_relay = "wss://two.example";
+    let first_team = team_id_for_relay(first_relay).expect("first team id");
+    let second_team = team_id_for_relay(second_relay).expect("second team id");
+    let first_request = agent_request_id(&owner, first_relay, persona.persona_id);
+    let second_request = agent_request_id(&owner, second_relay, persona.persona_id);
+    assert_ne!(first_request, second_request);
+
+    let mut first = ManagedAgentRecord {
+        pubkey: "b".repeat(64),
+        name: "Avery one".to_string(),
+        provisioned: Some(RECIPE_ID.to_string()),
+        persona_id: Some(persona.persona_id.to_string()),
+        team_id: Some(first_team.clone()),
+        role_id: Some(persona.role_id.to_string()),
+        creation_request_id: Some(first_request.clone()),
+        owner_pubkey: Some(owner.clone()),
+        relay_url: first_relay.to_string(),
+        ..Default::default()
+    };
+    let mut second = ManagedAgentRecord {
+        pubkey: "c".repeat(64),
+        name: "Avery two".to_string(),
+        provisioned: Some(RECIPE_ID.to_string()),
+        persona_id: Some(persona.persona_id.to_string()),
+        team_id: Some(second_team.clone()),
+        role_id: Some(persona.role_id.to_string()),
+        creation_request_id: Some(second_request.clone()),
+        owner_pubkey: Some(owner.clone()),
+        relay_url: second_relay.to_string(),
+        ..Default::default()
+    };
+
+    assert!(!reconcile_adopted_record(
+        &mut first,
+        persona,
+        &first_request,
+        &first_team,
+        &owner,
+        first_relay,
+    )
+    .expect("the first community row remains valid"));
+    assert!(!reconcile_adopted_record(
+        &mut second,
+        persona,
+        &second_request,
+        &second_team,
+        &owner,
+        second_relay,
+    )
+    .expect("the second community row remains valid"));
+    assert_ne!(first.pubkey, second.pubkey);
+    assert_eq!(first.team_id.as_deref(), Some(first_team.as_str()));
+    assert_eq!(second.team_id.as_deref(), Some(second_team.as_str()));
 }
 
 #[test]
@@ -344,7 +408,6 @@ fn agent_upgrade_refreshes_tier_and_preserves_user_fields() {
 
     assert!(changed);
     assert!(upgrade.upgraded);
-    assert!(upgrade.upgraded);
     assert_eq!(record.tier.as_deref(), Some("worker"));
     assert!(record.is_builtin);
     assert_eq!(record.provisioned_version, Some(RECIPE_RECORD_VERSION));
@@ -365,4 +428,208 @@ fn agent_upgrade_refreshes_tier_and_preserves_user_fields() {
     assert!(!changed);
     assert!(!upgrade.upgraded);
     assert_eq!(record.tier.as_deref(), Some("leader"));
+}
+
+#[test]
+fn adopted_website_record_backfills_identity_and_inherits_power() {
+    let owner = "a".repeat(64);
+    let relay = "wss://one.example";
+    let persona = &PERSONAS[0];
+    let team_id = team_id_for_relay(relay).expect("website team id");
+    let request_id = agent_request_id(&owner, relay, persona.persona_id);
+    let mut record = ManagedAgentRecord {
+        pubkey: "ef".repeat(32),
+        name: "Avery".to_string(),
+        provisioned: Some("website-manager".to_string()),
+        provisioned_version: Some(RECIPE_RECORD_VERSION),
+        role_id: Some(persona.role_id.to_string()),
+        private_key_nsec: "nsec1existing".to_string(),
+        relay_url: "wss://one.example/".to_string(),
+        owner_pubkey: Some(owner.clone()),
+        agent_command: "claude".to_string(),
+        agent_command_override: Some("claude".to_string()),
+        ..Default::default()
+    };
+
+    let changed = reconcile_adopted_record(
+        &mut record,
+        persona,
+        &request_id,
+        &team_id,
+        &owner,
+        relay,
+    )
+    .expect("the exact adopted row is safe to reconcile");
+
+    assert!(changed);
+    assert_eq!(record.persona_id.as_deref(), Some(persona.persona_id));
+    assert_eq!(record.team_id.as_deref(), Some(team_id.as_str()));
+    assert_eq!(record.role_id.as_deref(), Some(persona.role_id));
+    assert_eq!(record.creation_request_id.as_deref(), Some(request_id.as_str()));
+    assert_eq!(record.private_key_nsec, "nsec1existing");
+    assert_eq!(record.agent_command_override, None);
+
+    // Once linked, an owner-selected runtime override remains theirs.
+    record.agent_command_override = Some("owner-selected-power".to_string());
+    let changed = reconcile_adopted_record(
+        &mut record,
+        persona,
+        &request_id,
+        &team_id,
+        &owner,
+        relay,
+    )
+    .expect("a linked row with a user override is safe to reconcile");
+    assert!(!changed);
+    assert_eq!(
+        record.agent_command_override.as_deref(),
+        Some("owner-selected-power")
+    );
+}
+
+#[test]
+fn adopted_website_record_rejects_crossed_identity_fields() {
+    let owner = "a".repeat(64);
+    let relay = "wss://one.example";
+    let persona = &PERSONAS[1];
+    let team_id = team_id_for_relay(relay).expect("website team id");
+    let request_id = agent_request_id(&owner, relay, persona.persona_id);
+    let base = ManagedAgentRecord {
+        pubkey: "fa".repeat(32),
+        name: "Ren".to_string(),
+        provisioned: Some("website-researcher".to_string()),
+        role_id: Some(persona.role_id.to_string()),
+        relay_url: relay.to_string(),
+        owner_pubkey: Some(owner.clone()),
+        ..Default::default()
+    };
+
+    let cases: [(&str, fn(&mut ManagedAgentRecord)); 4] = [
+        (
+            "persona",
+            |record: &mut ManagedAgentRecord| {
+                record.persona_id = Some(PERSONAS[0].persona_id.to_string());
+            },
+        ),
+        (
+            "team",
+            |record: &mut ManagedAgentRecord| {
+                record.team_id = Some("website-team:other:website-manager".to_string());
+            },
+        ),
+        (
+            "owner",
+            |record: &mut ManagedAgentRecord| {
+                record.owner_pubkey = Some("b".repeat(64));
+            },
+        ),
+        (
+            "community",
+            |record: &mut ManagedAgentRecord| {
+                record.relay_url = "wss://two.example".to_string();
+            },
+        ),
+    ];
+    for (field, mutate) in cases {
+        let mut crossed = base.clone();
+        mutate(&mut crossed);
+        let error = reconcile_adopted_record(
+            &mut crossed,
+            persona,
+            &request_id,
+            &team_id,
+            &owner,
+            relay,
+        )
+        .expect_err("crossed identity must fail closed");
+        assert!(error.contains(field), "error should name {field}: {error}");
+    }
+}
+
+#[test]
+fn a_linked_website_record_follows_global_power_after_pin_clear() {
+    let persona = &PERSONAS[0];
+    let mut definition = provisioned_definition(persona, RECIPE_VERSION);
+    definition.runtime = None;
+    let record = ManagedAgentRecord {
+        persona_id: Some(persona.persona_id.to_string()),
+        // Legacy create-time snapshot; the effective resolver must ignore it
+        // when the explicit instance override is absent.
+        agent_command: "claude".to_string(),
+        agent_command_override: None,
+        ..Default::default()
+    };
+    let mut global = GlobalAgentConfig::default();
+    global.preferred_runtime = Some("codex".to_string());
+    let definitions = vec![definition];
+
+    let runtime = resolve_effective_runtime_id(&record, &definitions, &global)
+        .expect("the global Power runtime should resolve");
+    assert_eq!(runtime.value.as_deref(), Some("codex"));
+    assert_eq!(runtime.source, ConfigSource::Global);
+    assert_eq!(
+        resolve_effective_harness_command(&record, &definitions, &global)
+            .expect("the selected Power runtime should have a command"),
+        crate::managed_agents::command_for_runtime_id("codex")
+            .expect("codex should be a known runtime")
+    );
+}
+
+#[test]
+fn adopted_website_roles_survive_pack_provenance_round_trip() {
+    let owner = "a".repeat(64);
+    let relay = "wss://one.example";
+    let team_id = team_id_for_relay(relay).expect("website team id");
+
+    for (index, persona) in PERSONAS.iter().enumerate() {
+        let request_id = agent_request_id(&owner, relay, persona.persona_id);
+        let mut record = ManagedAgentRecord {
+            pubkey: char::from(b'b' + index as u8).to_string().repeat(64),
+            name: persona.display_name.to_string(),
+            provisioned: Some(persona.role_id.to_string()),
+            provisioned_version: Some(0),
+            role_id: Some(persona.role_id.to_string()),
+            private_key_nsec: format!("nsec1-{index}"),
+            relay_url: relay.to_string(),
+            owner_pubkey: Some(owner.clone()),
+            agent_command: "claude".to_string(),
+            agent_command_override: Some("claude".to_string()),
+            ..Default::default()
+        };
+
+        assert!(reconcile_adopted_record(
+            &mut record,
+            persona,
+            &request_id,
+            &team_id,
+            &owner,
+            relay,
+        )
+        .expect("the role-specific provisioned row is safe to adopt"));
+        let private_key = record.private_key_nsec.clone();
+
+        // apply_recipe_to_agent is the same upgrade step that stamps every
+        // member with the pack-wide marker. The explicit persona/role fields
+        // must keep the row distinguishable on the next adoption pass.
+        apply_recipe_to_agent(&mut record, persona, Some(&owner), "2026-02-01T00:00:00Z");
+        assert_eq!(record.provisioned.as_deref(), Some(RECIPE_ID));
+        assert_eq!(record.persona_id.as_deref(), Some(persona.persona_id));
+
+        let changed = reconcile_adopted_record(
+            &mut record,
+            persona,
+            &request_id,
+            &team_id,
+            &owner,
+            relay,
+        )
+        .expect("the pack-wide marker resolves through explicit role identity");
+        assert!(!changed);
+        assert_eq!(record.persona_id.as_deref(), Some(persona.persona_id));
+        assert_eq!(record.role_id.as_deref(), Some(persona.role_id));
+        assert_eq!(record.team_id.as_deref(), Some(team_id.as_str()));
+        assert_eq!(record.creation_request_id.as_deref(), Some(request_id.as_str()));
+        assert_eq!(record.private_key_nsec, private_key);
+        assert_eq!(record.agent_command_override, None);
+    }
 }

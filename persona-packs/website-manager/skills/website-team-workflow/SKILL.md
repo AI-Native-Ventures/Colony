@@ -44,28 +44,74 @@ review, and handover without a second tracker.
 After a meaningful stage change, post one status line: stage, refs, next step.
 Never post a step that has not happened, and do not narrate routine replies.
 
+## Website Manager commands
+
+The canonical Website Manager record is live relay state. Read it before acting:
+
+```text
+buzz --format compact website get --channel <uuid> [--task <task-id>] [--job <uuid>]
+buzz website create --channel <uuid> --task <task-id> --thread <root-hex> \
+  --instance <event-id> --manifest <event-id> --coordinator <pubkey> \
+  --source-url <https-url> [--research <persona>]... [--build <persona>]... \
+  [--review <persona>]...
+buzz website begin-work --channel <uuid> --task <task-id> --thread <root-hex> \
+  [--generation N]
+```
+
+Ren records bounded public evidence with `buzz company scan --url <url>
+[--max-pages <n>]`. Jules packages the already-built site and real captures,
+then records the immutable revision:
+
+```text
+buzz website bundle --dir <built-site> --source <source-dir-or-archive> \
+  --before <before.png> --desktop <desktop.png> --mobile <mobile.png> \
+  [--entrypoint index.html] [--source-url <https-url>] [--out revision.json]
+buzz website revision --channel <uuid> --task <task-id> --thread <root-hex> \
+  [--generation N] --file revision.json
+buzz website evidence --channel <uuid> --task <task-id> --thread <root-hex> \
+  [--generation N] --stage <stage> [--revision N] --kind <kind> --event <hex>
+```
+
+Vera records the exact-version QA report. Use `--passed` only after the
+required rendered and functional checks passed:
+
+```text
+buzz website qa --channel <uuid> --task <task-id> --thread <root-hex> \
+  [--generation N] --revision N [--passed] --report-url <https-url> \
+  --report-file <path> [--report-event <hex>]
+```
+
+Avery can freeze the QA-complete revision with `buzz website ready --channel
+<uuid> --task <task-id> --thread <root-hex> [--generation N]`. Owner decisions
+arrive through the Website Manager Block. Jules records an approved handover
+with `buzz website handover --channel <uuid> --task <task-id> --thread
+<root-hex> [--generation N] --file handover.json`; a coordinator may record
+owner-requested changes with `buzz website request-changes --channel <uuid>
+--task <task-id> --thread <root-hex> [--generation N] --revision N --hash
+<sha256> --note <text>`.
+
 ## Deduplication and restart limits
 
 The mention handoff is best-effort. Searching the thread cannot guarantee
 exactly-once intent under concurrent workers or a restart: two actors can each
-miss the other's handoff and duplicate work. Never describe the fallback as
-providing restart-safe exactly-once.
+miss the other's handoff and duplicate work. Never describe mentions as
+restart-safe exactly-once.
 
-When the canonical Website Manager record and its durable platform command are
-wired (see `docs/website-manager-protocol.md`), recover from that record first
-and dispatch against its derived decision identity; that identity is the
-once-only key. Until then, re-read the thread immediately before re-issuing a
-handoff, treat an existing handoff as final, and say the check is best-effort
-when it matters.
+The Website Manager record and relay action path are implemented. Recover from
+the record first and respect its generation and exact revision/manifest
+bindings. Before re-issuing a human-readable mention, re-read the thread and
+record; if a handoff is already present, do not re-issue it, and say plainly
+that mention deduplication is best-effort.
 
 ## Restart recovery
 
-On restart, recover before acting. When a canonical record exists for the job,
-read it first: it owns the revision, QA, decision, and handover state. Then read
-the project thread newest-first and list the project's tasks
-(`buzz tasks list --company <id>`). Reconstruct the stage from the record and
-the refs. Resume at the first stage without a recorded output. Never repeat a
-recorded stage.
+On restart, recover before acting. For a Website Manager job, read the
+canonical record first with `buzz website get`; it owns the revision, QA,
+decision, and handover state. Then read the project thread newest-first and
+list the project's tasks (`buzz tasks list --company <id>`). Reconstruct the
+stage from the record and refs. Resume at the first stage without a recorded
+output. Never repeat a recorded stage. A project that has only a mention and no
+canonical Website Manager record remains on the best-effort fallback.
 
 ## Gaps
 
@@ -78,7 +124,7 @@ affected stage, and continue with what is possible. Escalate with
 One bounded status object per meaningful update, posted in the thread. This is a
 thread status, not a second tracker: the canonical job state is the Website
 Manager review record (`colony.website-review/v1` in
-`docs/website-manager-protocol.md`) once the platform integration is wired.
+`docs/website-manager-protocol.md`).
 
 ```json
 {

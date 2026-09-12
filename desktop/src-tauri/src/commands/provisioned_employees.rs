@@ -26,7 +26,8 @@ use crate::managed_agents::provisioned::{
     ProvisionedDefinition,
 };
 use crate::managed_agents::website_team::{
-    install_recipe_skills, owns_provisioned_handle, InstalledWebsiteSkill,
+    agent_request_id, install_recipe_skills, owns_provisioned_handle, provisioned_persona,
+    team_id_for_relay, InstalledWebsiteSkill,
 };
 use crate::managed_agents::{
     storage::{load_managed_agents, save_managed_agents},
@@ -193,15 +194,49 @@ async fn adopt_one(
     definition: &ProvisionedDefinition,
 ) -> Result<AdoptionOutcome, String> {
     let existing = load_managed_agents(app)?;
-    if existing.iter().any(|record| {
-        record.pubkey.eq_ignore_ascii_case(&definition.pubkey)
-            && record.provisioned_version.unwrap_or(-1) >= definition.version
-    }) {
-        return Ok(AdoptionOutcome::Unchanged {
-            handle: definition.handle.clone(),
-            pubkey: definition.pubkey.clone(),
-            skill_failures: Vec::new(),
-        });
+    let matching_rows: Vec<usize> = existing
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            record
+                .pubkey
+                .eq_ignore_ascii_case(&definition.pubkey)
+                .then_some(index)
+        })
+        .collect();
+    if matching_rows.len() > 1 {
+        return Err(
+            "multiple local records carry this provisioned employee identity; review the duplicates before retrying"
+                .to_owned(),
+        );
+    }
+    if let Some(index) = matching_rows.first().copied() {
+        let record = &existing[index];
+        let scope_matches = record
+            .owner_pubkey
+            .as_deref()
+            .is_some_and(|owner| owner.eq_ignore_ascii_case(owner_hex))
+            && crate::relay::agent_boundary::canonical(&record.relay_url)
+                == crate::relay::agent_boundary::canonical(relay_ws);
+        if !scope_matches {
+            return Err(
+                "this provisioned employee identity is already attached to another owner or community"
+                    .to_owned(),
+            );
+        }
+        if record.provisioned_version.unwrap_or(-1) >= definition.version {
+            let mut records = existing;
+            let mut record = records[index].clone();
+            if merge_existing_record(app, &mut record, definition, relay_ws, owner_hex)? {
+                records[index] = record;
+                save_managed_agents(app, &records)?;
+            }
+            return Ok(AdoptionOutcome::Unchanged {
+                handle: definition.handle.clone(),
+                pubkey: definition.pubkey.clone(),
+                skill_failures: Vec::new(),
+            });
+        }
     }
 
     // Checked BEFORE the key is fetched. An employee this build cannot serve
@@ -214,11 +249,101 @@ async fn adopt_one(
         });
     }
 
+    // A stale local adoption keeps its custody and every user-owned setting.
+    // Only the provisioned metadata and missing canonical defaults are
+    // refreshed from the relay definition; replacing the whole row here would
+    // erase Power/runtime choices, env, model/provider, and working state.
+    if let Some(index) = matching_rows.first().copied() {
+        let mut records = existing;
+        let mut record = records[index].clone();
+        if merge_existing_record(app, &mut record, definition, relay_ws, owner_hex)? {
+            records[index] = record;
+            save_managed_agents(app, &records)?;
+        }
+        return Ok(AdoptionOutcome::Adopted {
+            handle: definition.handle.clone(),
+            name: definition.name.clone(),
+            pubkey: definition.pubkey.clone(),
+            skill_failures: Vec::new(),
+        });
+    }
+
     let nsec = fetch_employee_key(state, signer, api_base, definition).await?;
 
     let mut records = load_managed_agents(app)?;
-    records.retain(|record| !record.pubkey.eq_ignore_ascii_case(&definition.pubkey));
-    records.push(record_for(definition, &nsec, relay_ws, owner_hex));
+    let reloaded_matches: Vec<usize> = records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            record
+                .pubkey
+                .eq_ignore_ascii_case(&definition.pubkey)
+                .then_some(index)
+        })
+        .collect();
+    if reloaded_matches.len() > 1 {
+        return Err(
+            "multiple local records carry this provisioned employee identity; review the duplicates before retrying"
+                .to_owned(),
+        );
+    }
+    if let Some(index) = reloaded_matches.first().copied() {
+        let existing = &records[index];
+        let scope_matches = existing
+            .owner_pubkey
+            .as_deref()
+            .is_some_and(|owner| owner.eq_ignore_ascii_case(owner_hex))
+            && crate::relay::agent_boundary::canonical(&existing.relay_url)
+                == crate::relay::agent_boundary::canonical(relay_ws);
+        if !scope_matches {
+            return Err(
+                "this provisioned employee identity is already attached to another owner or community"
+                    .to_owned(),
+            );
+        }
+        let was_current = existing.provisioned_version.unwrap_or(-1) >= definition.version;
+        let mut record = existing.clone();
+        if merge_existing_record(app, &mut record, definition, relay_ws, owner_hex)? {
+            records[index] = record;
+            save_managed_agents(app, &records)?;
+        }
+        return if was_current {
+            Ok(AdoptionOutcome::Unchanged {
+                handle: definition.handle.clone(),
+                pubkey: definition.pubkey.clone(),
+                skill_failures: Vec::new(),
+            })
+        } else {
+            Ok(AdoptionOutcome::Adopted {
+                handle: definition.handle.clone(),
+                name: definition.name.clone(),
+                pubkey: definition.pubkey.clone(),
+                skill_failures: Vec::new(),
+            })
+        };
+    }
+
+    let mut record = record_for(definition, &nsec, relay_ws, owner_hex);
+    if let Some(persona) = provisioned_persona(&definition.handle) {
+        let persona_is_seeded = crate::managed_agents::load_personas(app)?
+            .iter()
+            .any(|candidate| candidate.id == persona.persona_id);
+        if persona_is_seeded {
+            let team_id = team_id_for_relay(relay_ws).ok_or_else(|| {
+                "the Website Manager employee has no community-scoped team identity".to_owned()
+            })?;
+            let request_id = agent_request_id(owner_hex, relay_ws, persona.persona_id);
+            crate::managed_agents::website_team::reconcile_adopted_record(
+                &mut record,
+                persona,
+                &request_id,
+                &team_id,
+                owner_hex,
+                &crate::relay::agent_boundary::canonical(relay_ws),
+            )?;
+        }
+    }
+    records.push(record);
     save_managed_agents(app, &records)?;
 
     Ok(AdoptionOutcome::Adopted {
@@ -227,6 +352,101 @@ async fn adopt_one(
         pubkey: definition.pubkey.clone(),
         skill_failures: Vec::new(),
     })
+}
+
+/// Refresh the fields owned by the relay's provisioned bundle in an existing
+/// local record. User-owned runtime, Power, credential, key, environment,
+/// working-directory, and other settings are deliberately left untouched.
+fn merge_definition_into_record(
+    record: &mut ManagedAgentRecord,
+    definition: &ProvisionedDefinition,
+    now: &str,
+) -> bool {
+    let mut changed = false;
+    // A desktop may be newer than the relay that supplied the definition. An
+    // older response is useful for identity checks, but it must never roll
+    // back a newer bundled prompt, role, command requirements, or version
+    // stamp on disk.
+    if record
+        .provisioned_version
+        .is_some_and(|version| version > definition.version)
+    {
+        return false;
+    }
+    let version_changed = record.provisioned_version != Some(definition.version);
+    if record.provisioned.as_deref() != Some(definition.handle.as_str()) {
+        record.provisioned = Some(definition.handle.clone());
+        changed = true;
+    }
+    if record.provisioned_version != Some(definition.version) {
+        record.provisioned_version = Some(definition.version);
+        changed = true;
+    }
+    if record.provisioned_requires_commands != definition.requires_commands {
+        record.provisioned_requires_commands = definition.requires_commands.clone();
+        changed = true;
+    }
+    if record.name.trim().is_empty() && !definition.name.trim().is_empty() {
+        record.name = definition.name.clone();
+        changed = true;
+    }
+    if version_changed && !definition.role_id.trim().is_empty() {
+        record.role_id = Some(definition.role_id.clone());
+        changed = true;
+    }
+    if version_changed && !definition.system_prompt.trim().is_empty() {
+        record.system_prompt = Some(definition.system_prompt.clone());
+        changed = true;
+    }
+    if record.agent_command.trim().is_empty() && !definition.harness.trim().is_empty() {
+        record.agent_command = crate::managed_agents::known_acp_runtime_exact(&definition.harness)
+            .and_then(|runtime| runtime.commands.first().copied())
+            .unwrap_or(definition.harness.as_str())
+            .to_owned();
+        changed = true;
+    }
+    if changed {
+        record.updated_at = now.to_owned();
+    }
+    changed
+}
+
+/// Reconcile the local Website identity when its bundled persona is already
+/// seeded, then merge the relay's bundle-owned fields into the same record.
+///
+/// This is intentionally used after every store reload, including the reload
+/// that follows the asynchronous key fetch. A concurrent adopter therefore
+/// gets reconciled in place instead of being removed and replaced by a row
+/// that drops its key or Power settings.
+fn merge_existing_record(
+    app: &AppHandle,
+    record: &mut ManagedAgentRecord,
+    definition: &ProvisionedDefinition,
+    relay_ws: &str,
+    owner_hex: &str,
+) -> Result<bool, String> {
+    let mut changed = false;
+    if let Some(persona) = provisioned_persona(&definition.handle) {
+        let persona_is_seeded = crate::managed_agents::load_personas(app)?
+            .iter()
+            .any(|candidate| candidate.id == persona.persona_id);
+        if persona_is_seeded {
+            let team_id = team_id_for_relay(relay_ws).ok_or_else(|| {
+                "the Website Manager employee has no community-scoped team identity".to_owned()
+            })?;
+            let request_id = agent_request_id(owner_hex, relay_ws, persona.persona_id);
+            changed |= crate::managed_agents::website_team::reconcile_adopted_record(
+                record,
+                persona,
+                &request_id,
+                &team_id,
+                owner_hex,
+                &crate::relay::agent_boundary::canonical(relay_ws),
+            )?;
+        }
+    }
+    changed |= merge_definition_into_record(record, definition, &crate::util::now_iso());
+    Ok(changed)
 }
 
 /// Ask the relay for this employee's runtime key.
@@ -309,6 +529,7 @@ fn record_for(
     relay_ws: &str,
     owner_hex: &str,
 ) -> ManagedAgentRecord {
+    let website_persona = provisioned_persona(&definition.handle);
     let agent_command = crate::managed_agents::known_acp_runtime_exact(&definition.harness)
         .and_then(|runtime| runtime.commands.first().copied())
         .unwrap_or(definition.harness.as_str())
@@ -320,13 +541,24 @@ fn record_for(
         provisioned_requires_commands: definition.requires_commands.clone(),
         pubkey: definition.pubkey.clone(),
         name: definition.name.clone(),
+        // Adoption can run before the bundled persona definitions have been
+        // seeded. The caller links this only when that definition exists;
+        // until then runtime resolution safely falls back to global Power.
+        persona_id: None,
+        creation_request_id: website_persona
+            .map(|persona| agent_request_id(owner_hex, relay_ws, persona.persona_id)),
+        team_id: website_persona.and_then(|_| team_id_for_relay(relay_ws)),
         role_id: (!definition.role_id.is_empty()).then(|| definition.role_id.clone()),
         private_key_nsec: nsec.to_owned(),
         relay_url: relay_ws.to_owned(),
         owner_pubkey: Some(owner_hex.to_owned()),
         acp_command: DEFAULT_ACP_COMMAND.to_owned(),
         agent_command: agent_command.clone(),
-        agent_command_override: Some(agent_command),
+        // Website personas inherit the owner's Power runtime once their
+        // bundled definition is linked. Other provisioned employees retain
+        // the historical direct harness pin until they have an equivalent
+        // linked definition.
+        agent_command_override: (!website_persona.is_some()).then_some(agent_command),
         system_prompt: (!definition.system_prompt.is_empty())
             .then(|| definition.system_prompt.clone()),
         model: definition.model.clone(),
@@ -439,6 +671,187 @@ mod tests {
             record.agent_command_override.as_deref(),
             Some(record.agent_command.as_str())
         );
+    }
+
+    #[test]
+    fn stale_website_adoption_refreshes_bundle_metadata_without_replacing_user_state() {
+        let website = ProvisionedDefinition {
+            pubkey: "c".repeat(64),
+            handle: "website-manager".to_owned(),
+            version: 2,
+            name: "Avery".to_owned(),
+            role_id: "website-manager".to_owned(),
+            harness: "claude".to_owned(),
+            model: Some("bundle-model-must-not-replace".to_owned()),
+            system_prompt: "bundled prompt".to_owned(),
+            requires_commands: vec!["website create".to_owned()],
+        };
+        let mut record = ManagedAgentRecord {
+            provisioned: Some("website-manager".to_owned()),
+            provisioned_version: Some(1),
+            provisioned_requires_commands: vec!["old command".to_owned()],
+            pubkey: website.pubkey.clone(),
+            name: "Owner's Avery".to_owned(),
+            persona_id: Some("website-manager-avery".to_owned()),
+            private_key_nsec: "nsec1existing".to_owned(),
+            agent_command: "owner-command".to_owned(),
+            agent_command_override: Some("owner-power-pin".to_owned()),
+            agent_args: vec!["--owner-arg".to_owned()],
+            system_prompt: Some("old bundled prompt".to_owned()),
+            model: Some("owner-model".to_owned()),
+            provider: Some("owner-provider".to_owned()),
+            runtime: Some("owner-runtime".to_owned()),
+            env_vars: std::collections::BTreeMap::from([(
+                "OWNER_SETTING".to_owned(),
+                "keep".to_owned(),
+            )]),
+            working_dir: Some("/owner/worktree".to_owned()),
+            ..Default::default()
+        };
+
+        assert!(merge_definition_into_record(
+            &mut record,
+            &website,
+            "2026-02-01T00:00:00Z"
+        ));
+        assert_eq!(record.provisioned.as_deref(), Some("website-manager"));
+        assert_eq!(record.provisioned_version, Some(2));
+        assert_eq!(
+            record.provisioned_requires_commands,
+            vec!["website create".to_owned()]
+        );
+        assert_eq!(record.name, "Owner's Avery");
+        assert_eq!(record.private_key_nsec, "nsec1existing");
+        assert_eq!(record.agent_command, "owner-command");
+        assert_eq!(
+            record.agent_command_override.as_deref(),
+            Some("owner-power-pin")
+        );
+        assert_eq!(record.agent_args, vec!["--owner-arg".to_owned()]);
+        assert_eq!(record.system_prompt.as_deref(), Some("bundled prompt"));
+        assert_eq!(record.model.as_deref(), Some("owner-model"));
+        assert_eq!(record.provider.as_deref(), Some("owner-provider"));
+        assert_eq!(record.runtime.as_deref(), Some("owner-runtime"));
+        assert_eq!(
+            record.env_vars.get("OWNER_SETTING").map(String::as_str),
+            Some("keep")
+        );
+        assert_eq!(record.working_dir.as_deref(), Some("/owner/worktree"));
+    }
+
+    #[test]
+    fn an_older_relay_definition_never_downgrades_a_newer_local_bundle() {
+        let older_definition = ProvisionedDefinition {
+            pubkey: "d".repeat(64),
+            handle: "website-manager".to_owned(),
+            version: 1,
+            name: "Avery".to_owned(),
+            role_id: "old-role".to_owned(),
+            harness: "claude".to_owned(),
+            model: Some("old-bundle-model".to_owned()),
+            system_prompt: "old bundled prompt".to_owned(),
+            requires_commands: vec!["old command".to_owned()],
+        };
+        let mut record = ManagedAgentRecord {
+            provisioned: Some("website-manager".to_owned()),
+            provisioned_version: Some(2),
+            provisioned_requires_commands: vec!["new command".to_owned()],
+            pubkey: older_definition.pubkey.clone(),
+            name: "Owner's Avery".to_owned(),
+            role_id: Some("new-role".to_owned()),
+            private_key_nsec: "nsec1existing".to_owned(),
+            agent_command: "owner-command".to_owned(),
+            agent_command_override: Some("owner-power-pin".to_owned()),
+            system_prompt: Some("new bundled prompt".to_owned()),
+            ..Default::default()
+        };
+
+        assert!(!merge_definition_into_record(
+            &mut record,
+            &older_definition,
+            "2026-02-01T00:00:00Z"
+        ));
+        assert_eq!(record.provisioned_version, Some(2));
+        assert_eq!(
+            record.provisioned_requires_commands,
+            vec!["new command".to_owned()]
+        );
+        assert_eq!(record.role_id.as_deref(), Some("new-role"));
+        assert_eq!(record.system_prompt.as_deref(), Some("new bundled prompt"));
+        assert_eq!(record.private_key_nsec, "nsec1existing");
+        assert_eq!(
+            record.agent_command_override.as_deref(),
+            Some("owner-power-pin")
+        );
+    }
+
+    #[test]
+    fn same_version_merge_repairs_metadata_without_replacing_owned_prompt() {
+        let definition = ProvisionedDefinition {
+            pubkey: "e".repeat(64),
+            handle: "website-manager".to_owned(),
+            version: 2,
+            name: "Avery".to_owned(),
+            role_id: "bundled-role".to_owned(),
+            harness: "claude".to_owned(),
+            model: None,
+            system_prompt: "bundled prompt".to_owned(),
+            requires_commands: vec!["new command".to_owned()],
+        };
+        let mut record = ManagedAgentRecord {
+            provisioned: Some("website-manager".to_owned()),
+            provisioned_version: Some(2),
+            provisioned_requires_commands: vec!["stale metadata".to_owned()],
+            pubkey: definition.pubkey.clone(),
+            role_id: Some("owner-role".to_owned()),
+            system_prompt: Some("owner prompt".to_owned()),
+            ..Default::default()
+        };
+
+        assert!(merge_definition_into_record(
+            &mut record,
+            &definition,
+            "2026-02-01T00:00:00Z"
+        ));
+        assert_eq!(record.provisioned_version, Some(2));
+        assert_eq!(
+            record.provisioned_requires_commands,
+            vec!["new command".to_owned()]
+        );
+        assert_eq!(record.role_id.as_deref(), Some("owner-role"));
+        assert_eq!(record.system_prompt.as_deref(), Some("owner prompt"));
+    }
+
+    #[test]
+    fn website_adoption_carries_scope_identity_without_orphaning_persona() {
+        let website = ProvisionedDefinition {
+            pubkey: "c".repeat(64),
+            handle: "website-manager".to_owned(),
+            version: 1,
+            name: "Avery".to_owned(),
+            role_id: "website-manager".to_owned(),
+            harness: "claude".to_owned(),
+            model: None,
+            system_prompt: "You are Avery.".to_owned(),
+            requires_commands: vec!["website create".to_owned()],
+        };
+        let owner = "d".repeat(64);
+        let relay = "wss://relay.example";
+        let team_id = team_id_for_relay(relay).expect("website team id");
+        let request_id = agent_request_id(&owner, relay, "website-manager-avery");
+        let record = record_for(&website, "nsec1test", relay, &owner);
+
+        assert_eq!(record.pubkey, website.pubkey);
+        // The command can run before the installer seeds the local bundled
+        // definition. The install pass links this field after seeding it.
+        assert_eq!(record.persona_id, None);
+        assert_eq!(record.team_id.as_deref(), Some(team_id.as_str()));
+        assert_eq!(
+            record.creation_request_id.as_deref(),
+            Some(request_id.as_str())
+        );
+        assert_eq!(record.agent_command_override, None);
+        assert_eq!(record.private_key_nsec, "nsec1test");
     }
 
     #[test]

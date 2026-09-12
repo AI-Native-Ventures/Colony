@@ -31,8 +31,9 @@ moves access.
 - The bundle is the artifact; a summary is not a substitute.
 - Do not invent a publish or cutover command. The canonical handover contract is
   in `docs/website-manager-protocol.md` (there is deliberately no publish,
-  deploy, or cutover field); the agent-facing command surface, where not yet
-  documented, is **see protocol doc**.
+  deploy, or cutover field). Submit the handover with
+  `buzz website handover --channel <uuid> --task <id> --thread <hex> --file
+  <handover.json>` after checking the exact approved revision and manifest.
 
 ## Procedure
 

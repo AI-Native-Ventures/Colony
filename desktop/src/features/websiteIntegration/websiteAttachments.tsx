@@ -55,6 +55,7 @@ import {
 } from "./websiteProgress";
 import { useWebsiteStageTeam } from "./websiteStageTeam";
 import type { WebsiteHead } from "./websiteHeads";
+import { dispatchWebsiteStart } from "./websiteStartDispatch";
 import { submitWebsiteBeginWork } from "./websiteTransport";
 import { WebsiteThreadBody } from "./WebsiteThreadBody";
 
@@ -167,16 +168,16 @@ function WebsiteRootAttachment({
     [communityId],
   );
   const onStart = React.useCallback(
-    (request: WebsiteStartRequest): void => {
-      if (
-        request.jobId !== head.jobId ||
-        request.taskId !== head.taskId ||
-        request.channel !== head.channelId
-      ) {
-        return;
-      }
-      void submitWebsiteBeginWork(communityId, head);
-    },
+    (request: WebsiteStartRequest): Promise<void> =>
+      dispatchWebsiteStart(
+        request,
+        {
+          jobId: head.jobId,
+          taskId: head.taskId,
+          channel: head.channelId,
+        },
+        () => submitWebsiteBeginWork(communityId, head),
+      ),
     [communityId, head],
   );
   const showApprovalSummary =
