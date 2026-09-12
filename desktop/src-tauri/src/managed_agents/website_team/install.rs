@@ -24,8 +24,8 @@ use crate::managed_agents::{
 use crate::relay::agent_boundary::canonical;
 use crate::util::now_iso;
 
-use super::journal::{self, scope_key, WebsiteTeamJournalEntry};
 use super::adoption::{adopted_candidate, adopted_record_persona, reconcile_adopted_record};
+use super::journal::{self, scope_key, WebsiteTeamJournalEntry};
 use super::provisioning::{
     apply_recipe_to_agent, apply_recipe_to_definition, apply_recipe_to_team, UpgradeSummary,
 };

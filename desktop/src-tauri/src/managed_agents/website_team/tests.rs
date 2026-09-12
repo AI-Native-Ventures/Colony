@@ -451,35 +451,26 @@ fn adopted_website_record_backfills_identity_and_inherits_power() {
         ..Default::default()
     };
 
-    let changed = reconcile_adopted_record(
-        &mut record,
-        persona,
-        &request_id,
-        &team_id,
-        &owner,
-        relay,
-    )
-    .expect("the exact adopted row is safe to reconcile");
+    let changed =
+        reconcile_adopted_record(&mut record, persona, &request_id, &team_id, &owner, relay)
+            .expect("the exact adopted row is safe to reconcile");
 
     assert!(changed);
     assert_eq!(record.persona_id.as_deref(), Some(persona.persona_id));
     assert_eq!(record.team_id.as_deref(), Some(team_id.as_str()));
     assert_eq!(record.role_id.as_deref(), Some(persona.role_id));
-    assert_eq!(record.creation_request_id.as_deref(), Some(request_id.as_str()));
+    assert_eq!(
+        record.creation_request_id.as_deref(),
+        Some(request_id.as_str())
+    );
     assert_eq!(record.private_key_nsec, "nsec1existing");
     assert_eq!(record.agent_command_override, None);
 
     // Once linked, an owner-selected runtime override remains theirs.
     record.agent_command_override = Some("owner-selected-power".to_string());
-    let changed = reconcile_adopted_record(
-        &mut record,
-        persona,
-        &request_id,
-        &team_id,
-        &owner,
-        relay,
-    )
-    .expect("a linked row with a user override is safe to reconcile");
+    let changed =
+        reconcile_adopted_record(&mut record, persona, &request_id, &team_id, &owner, relay)
+            .expect("a linked row with a user override is safe to reconcile");
     assert!(!changed);
     assert_eq!(
         record.agent_command_override.as_deref(),
@@ -505,43 +496,25 @@ fn adopted_website_record_rejects_crossed_identity_fields() {
     };
 
     let cases: [(&str, fn(&mut ManagedAgentRecord)); 4] = [
-        (
-            "persona",
-            |record: &mut ManagedAgentRecord| {
-                record.persona_id = Some(PERSONAS[0].persona_id.to_string());
-            },
-        ),
-        (
-            "team",
-            |record: &mut ManagedAgentRecord| {
-                record.team_id = Some("website-team:other:website-manager".to_string());
-            },
-        ),
-        (
-            "owner",
-            |record: &mut ManagedAgentRecord| {
-                record.owner_pubkey = Some("b".repeat(64));
-            },
-        ),
-        (
-            "community",
-            |record: &mut ManagedAgentRecord| {
-                record.relay_url = "wss://two.example".to_string();
-            },
-        ),
+        ("persona", |record: &mut ManagedAgentRecord| {
+            record.persona_id = Some(PERSONAS[0].persona_id.to_string());
+        }),
+        ("team", |record: &mut ManagedAgentRecord| {
+            record.team_id = Some("website-team:other:website-manager".to_string());
+        }),
+        ("owner", |record: &mut ManagedAgentRecord| {
+            record.owner_pubkey = Some("b".repeat(64));
+        }),
+        ("community", |record: &mut ManagedAgentRecord| {
+            record.relay_url = "wss://two.example".to_string();
+        }),
     ];
     for (field, mutate) in cases {
         let mut crossed = base.clone();
         mutate(&mut crossed);
-        let error = reconcile_adopted_record(
-            &mut crossed,
-            persona,
-            &request_id,
-            &team_id,
-            &owner,
-            relay,
-        )
-        .expect_err("crossed identity must fail closed");
+        let error =
+            reconcile_adopted_record(&mut crossed, persona, &request_id, &team_id, &owner, relay)
+                .expect_err("crossed identity must fail closed");
         assert!(error.contains(field), "error should name {field}: {error}");
     }
 }
@@ -615,20 +588,17 @@ fn adopted_website_roles_survive_pack_provenance_round_trip() {
         assert_eq!(record.provisioned.as_deref(), Some(RECIPE_ID));
         assert_eq!(record.persona_id.as_deref(), Some(persona.persona_id));
 
-        let changed = reconcile_adopted_record(
-            &mut record,
-            persona,
-            &request_id,
-            &team_id,
-            &owner,
-            relay,
-        )
-        .expect("the pack-wide marker resolves through explicit role identity");
+        let changed =
+            reconcile_adopted_record(&mut record, persona, &request_id, &team_id, &owner, relay)
+                .expect("the pack-wide marker resolves through explicit role identity");
         assert!(!changed);
         assert_eq!(record.persona_id.as_deref(), Some(persona.persona_id));
         assert_eq!(record.role_id.as_deref(), Some(persona.role_id));
         assert_eq!(record.team_id.as_deref(), Some(team_id.as_str()));
-        assert_eq!(record.creation_request_id.as_deref(), Some(request_id.as_str()));
+        assert_eq!(
+            record.creation_request_id.as_deref(),
+            Some(request_id.as_str())
+        );
         assert_eq!(record.private_key_nsec, private_key);
         assert_eq!(record.agent_command_override, None);
     }

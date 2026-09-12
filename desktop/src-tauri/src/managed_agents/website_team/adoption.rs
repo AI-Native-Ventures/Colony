@@ -25,9 +25,8 @@ pub(super) fn adopted_candidate(
     {
         return Ok(false);
     }
-    Ok(adopted_record_persona(record)?.is_some_and(|candidate| {
-        candidate.persona_id == persona.persona_id
-    }))
+    Ok(adopted_record_persona(record)?
+        .is_some_and(|candidate| candidate.persona_id == persona.persona_id))
 }
 
 /// Resolve the role of a provisioned Website record after the pack-level
@@ -40,8 +39,8 @@ pub(super) fn adopted_record_persona(
     let Some(handle) = record.provisioned.as_deref().map(str::trim) else {
         return Ok(None);
     };
-    let is_pack_record = handle == recipe::RECIPE_ID
-        || recipe::provisioned_persona(handle).is_some();
+    let is_pack_record =
+        handle == recipe::RECIPE_ID || recipe::provisioned_persona(handle).is_some();
     if !is_pack_record {
         return Ok(None);
     }

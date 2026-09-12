@@ -1,7 +1,7 @@
 {
   "files": {
-    "rust_total": 524,
-    "tauri_coupled": 213,
+    "rust_total": 525,
+    "tauri_coupled": 214,
     "portable": 311,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
@@ -181,6 +181,7 @@
       "src-tauri/src/managed_agents/subscriptions/codex_account.rs",
       "src-tauri/src/managed_agents/teams.rs",
       "src-tauri/src/managed_agents/teams_tests.rs",
+      "src-tauri/src/managed_agents/website_team/adoption.rs",
       "src-tauri/src/managed_agents/website_team/install.rs",
       "src-tauri/src/managed_agents/website_team/journal.rs",
       "src-tauri/src/managed_agents/website_team/recipe.rs",

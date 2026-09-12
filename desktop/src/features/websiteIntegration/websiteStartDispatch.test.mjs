@@ -13,13 +13,9 @@ test("a start request for another job fails closed without submitting", async ()
   let submitted = false;
   await assert.rejects(
     () =>
-      dispatchWebsiteStart(
-        { ...scope, taskId: "task-2" },
-        scope,
-        async () => {
-          submitted = true;
-        },
-      ),
+      dispatchWebsiteStart({ ...scope, taskId: "task-2" }, scope, async () => {
+        submitted = true;
+      }),
     /changed before the start request could be sent/,
   );
   assert.equal(submitted, false);
