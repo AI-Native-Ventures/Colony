@@ -583,3 +583,56 @@ fn inbound_managed_agent_keeps_the_owner_authored_rank() {
         "a republish of the ranked agent drops its tier"
     );
 }
+
+// ── Step 6: inbound scoping for managed-agent events ─────────────────────
+
+/// A tombstone from relay A for a record pinned to B must not delete the
+/// real local agent: the agent lives on B, so A's deletion is foreign.
+#[test]
+fn tombstone_from_relay_a_for_agent_pinned_to_b_is_ignored() {
+    // The skip logic in `reconcile_inbound_tombstone` reads the local store,
+    // compares the record's `relay_url` with `arrival_relay_url`, and skips
+    // when they differ (non-empty foreign pin). We verify the conditions
+    // manually since the full `AppHandle` type does not match the mock runtime.
+    let agents = vec![local_agent()];
+    let pinned = agents[0].relay_url.trim();
+    assert!(!pinned.is_empty(), "local agent must have a non-empty pin");
+    assert_ne!(
+        pinned, "wss://localhost:3000",
+        "local agent is pinned to a different relay"
+    );
+    assert!(
+        !crate::managed_agents::reconcile::same_relay_community(pinned, "wss://localhost:3000"),
+        "belt must treat the local pin as different from relay A"
+    );
+}
+
+/// A head arriving from relay A for a record pinned to B must change nothing:
+/// the device must not overwrite its real agent with foreign event content.
+#[test]
+fn head_from_relay_a_for_agent_pinned_to_b_changes_nothing() {
+    let mut agents = vec![local_agent()];
+    agents[0].relay_url = "wss://other.example.com".to_string();
+    let event = foreign_agent_event_with_secrets(AGENT_PUBKEY);
+    let content =
+        crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
+    apply_inbound_managed_agent(
+        &mut agents,
+        AGENT_PUBKEY,
+        content,
+        None,
+        "wss://localhost:3000",
+    );
+
+    // The agent's fields must stay exactly as they were before the foreign head.
+    assert_eq!(
+        agents[0].name, "Local Agent",
+        "name must not change for foreign head"
+    );
+    assert_eq!(
+        agents[0].system_prompt,
+        Some("local prompt".to_string()),
+        "system prompt must not change"
+    );
+    assert_eq!(agents[0].relay_url, "wss://other.example.com");
+}

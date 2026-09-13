@@ -190,6 +190,7 @@ fn reconcile_inbound_persona_event_blocking(
                 &d_tag,
                 managed_agent_content_from_event(&event)?,
                 inbound_manager,
+                &arrival_relay_url,
             );
             save_managed_agents(&app, &agents)?;
         }
@@ -274,6 +275,28 @@ fn reconcile_inbound_tombstone(
     };
     if !matches!(target_kind, KIND_PERSONA | KIND_TEAM | KIND_MANAGED_AGENT) {
         return Ok(()); // deletion for a kind we don't track locally
+    }
+
+    // Inbound scoping: a tombstone for a managed-agent pinned to a different
+    // relay must not delete its real local agent (step 6). A blank pin keeps
+    // today's behaviour — only foreign pins are skipped.
+    if target_kind == KIND_MANAGED_AGENT {
+        let agents = load_managed_agents(app)?;
+        if let Some(record) = agents.iter().find(|r| r.pubkey == target_d_tag) {
+            let pinned = record.relay_url.trim();
+            if !pinned.is_empty()
+                && !crate::managed_agents::reconcile::same_relay_community(
+                    pinned,
+                    arrival_relay_url,
+                )
+            {
+                eprintln!(
+                    "buzz-desktop: inbound-tombstone: skipped kind {} tombstone for agent pinned elsewhere: d_tag={} pinned_relay={}",
+                    KIND_MANAGED_AGENT, target_d_tag, pinned
+                );
+                return Ok(()); // keep the local agent intact
+            }
+        }
     }
 
     let _store_guard = state
@@ -407,8 +430,22 @@ fn apply_inbound_managed_agent(
     d_tag: &str,
     inbound: ManagedAgentEventContent,
     inbound_manager: Option<String>,
+    arrival_relay_url: &str,
 ) {
     if let Some(local) = agents.iter_mut().find(|record| record.pubkey == d_tag) {
+        // Inbound scoping (step 6): ignore a head for a managed agent that is
+        // pinned to a different relay; the owner's device must not overwrite
+        // an agent that lives on another community with foreign content.
+        let pinned = local.relay_url.trim();
+        if !pinned.is_empty()
+            && !crate::managed_agents::reconcile::same_relay_community(pinned, arrival_relay_url)
+        {
+            eprintln!(
+                "buzz-desktop: inbound-managed-agent: skipped head for agent pinned elsewhere: d_tag={} pinned_relay={}",
+                d_tag, pinned
+            );
+            return; // skip changes, keep local record intact
+        }
         local.name = inbound.name;
         // Mirror of the slimmed writer (agent_event_content): a
         // definition-linked event omits the definition quad because those
