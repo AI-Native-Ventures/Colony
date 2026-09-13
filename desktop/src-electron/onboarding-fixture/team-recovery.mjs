@@ -291,12 +291,15 @@ export async function waitForSetupPublication({
     const records = await readRelayRecords();
     const ids = new Set(records.map((record) => record.id));
     const setupRows = rows.filter((row) =>
-      [30175, 30176, 30177, 30179, 30190].includes(JSON.parse(row.raw_event).kind),
+      [30175, 30176, 30177, 30179, 30190].includes(
+        JSON.parse(row.raw_event).kind,
+      ),
     );
     if (
       setupRows.length > 0 &&
       setupRows.every(
-        (row) => row.pending_sync === 0 && ids.has(JSON.parse(row.raw_event).id),
+        (row) =>
+          row.pending_sync === 0 && ids.has(JSON.parse(row.raw_event).id),
       )
     ) {
       return;
