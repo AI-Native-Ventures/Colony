@@ -837,7 +837,11 @@ async fn authenticate(
         .await
         .map_err(|_| safe_error(StatusCode::NOT_FOUND, "community_not_found"))?;
     let url = crate::api::bridge::nip98_expected_url(&state.config.relay_url, &tenant, path);
-    let (actor, event_id) = crate::api::bridge::verify_bridge_auth_with_options(
+    let crate::api::bridge::VerifiedBridgeAuth {
+        pubkey: actor,
+        event_id_bytes: event_id,
+        ..
+    } = crate::api::bridge::verify_bridge_auth_with_options(
         headers,
         method,
         &url,

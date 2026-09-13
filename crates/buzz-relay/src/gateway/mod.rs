@@ -1309,7 +1309,11 @@ async fn authenticate(
         })?;
 
     let url = crate::api::bridge::nip98_expected_url(&state.config.relay_url, &tenant, path);
-    let (pubkey, event_id_bytes) = crate::api::bridge::verify_bridge_auth_with_options(
+    let crate::api::bridge::VerifiedBridgeAuth {
+        pubkey,
+        event_id_bytes,
+        ..
+    } = crate::api::bridge::verify_bridge_auth_with_options(
         headers,
         method,
         &url,

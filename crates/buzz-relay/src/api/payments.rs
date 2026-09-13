@@ -338,7 +338,11 @@ async fn authenticate(
         .map_err(|_| api_error(StatusCode::NOT_FOUND, "unknown_community"))?;
 
     let url = super::bridge::nip98_expected_url(&state.config.relay_url, &tenant, path);
-    let (pubkey, event_id_bytes) = super::bridge::verify_bridge_auth_with_options(
+    let super::bridge::VerifiedBridgeAuth {
+        pubkey,
+        event_id_bytes,
+        ..
+    } = super::bridge::verify_bridge_auth_with_options(
         headers,
         "POST",
         &url,

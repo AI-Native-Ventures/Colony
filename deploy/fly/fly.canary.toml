@@ -122,9 +122,9 @@ force_https = true
 # Nothing is destroyed by "stop": the volume and the database outlive it, any
 # request to the public host wakes the machine via auto_start, and
 # `flyctl machine start -a colony-relay-canary` wakes it by hand.
-auto_stop_machines = "stop"
+auto_stop_machines = "off"
 auto_start_machines = true
-min_machines_running = 0
+min_machines_running = 1
 
 [[vm]]
 size = "shared-cpu-1x"
