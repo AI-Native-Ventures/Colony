@@ -509,6 +509,8 @@ type E2eConfig = {
     /** Delay (ms) applied to continuation channel-window requests so e2e
      *  tests can observe the in-flight prepend window. 0/undefined = instant. */
     channelWindowDelayMs?: number;
+    /** Delay (ms) applied to newest-page channel-window requests. */
+    channelHeadDelayMs?: number;
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
@@ -1482,6 +1484,8 @@ declare global {
     __BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__?: number[];
     /** Captured aggregate project-history filters for request-count assertions. */
     __BUZZ_E2E_PROJECT_QUERY_FILTERS__?: MockFilter[];
+    /** Withhold community-wide project queries so a scoped lookup is provable. */
+    __BUZZ_E2E_DEFER_FULL_PROJECT_QUERIES__?: boolean;
     __BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__?: {
       local_path: string | null;
       local_branch: string | null;
@@ -6371,19 +6375,20 @@ async function handleGetChannelWindow(
     return relayQuery(config, [filter]);
   };
 
-  if (!args.cursor) {
-    return execute();
-  }
-
   const probe = window as unknown as {
     __CHANNEL_WINDOW_FETCH_COUNT__?: number;
     __CHANNEL_WINDOW_INFLIGHT__?: number;
     __CHANNEL_WINDOW_INFLIGHT_PEAK__?: number;
   };
-  probe.__CHANNEL_WINDOW_FETCH_COUNT__ =
-    (probe.__CHANNEL_WINDOW_FETCH_COUNT__ ?? 0) + 1;
+  if (args.cursor !== null) {
+    probe.__CHANNEL_WINDOW_FETCH_COUNT__ =
+      (probe.__CHANNEL_WINDOW_FETCH_COUNT__ ?? 0) + 1;
+  }
 
-  const delayMs = getConfig()?.mock?.channelWindowDelayMs ?? 0;
+  const delayMs =
+    args.cursor === null
+      ? (getConfig()?.mock?.channelHeadDelayMs ?? 0)
+      : (getConfig()?.mock?.channelWindowDelayMs ?? 0);
   if (delayMs <= 0) {
     return execute();
   }
@@ -10280,6 +10285,7 @@ async function handleSendChannelMessage(
     channelId: string;
     content: string;
     parentEventId?: string | null;
+    rootEventId?: string | null;
     kind?: number | null;
     mentionPubkeys?: string[];
     mediaTags?: string[][] | null;
@@ -10455,7 +10461,8 @@ async function handleSendChannelMessage(
           parentEventId: null,
           rootEventId: null,
         };
-    const rootEventId = parentThread.rootEventId ?? args.parentEventId;
+    const rootEventId =
+      args.rootEventId ?? parentThread.rootEventId ?? args.parentEventId;
     const depth = parentEvent
       ? (() => {
           let currentEvent: RelayEvent | undefined = parentEvent;
@@ -10523,7 +10530,7 @@ async function handleSendChannelMessage(
         args.channelId,
         relayIdentity.pubkey,
         args.parentEventId,
-        args.parentEventId,
+        args.rootEventId ?? args.parentEventId,
         args.mentionPubkeys,
       )
     : buildTopLevelMessageTags(
@@ -10541,8 +10548,12 @@ async function handleSendChannelMessage(
   return {
     event_id: result.event_id,
     parent_event_id: args.parentEventId ?? null,
-    root_event_id: args.parentEventId ?? null,
-    depth: args.parentEventId ? 1 : 0,
+    root_event_id: args.rootEventId ?? args.parentEventId ?? null,
+    depth: args.parentEventId
+      ? args.rootEventId && args.rootEventId !== args.parentEventId
+        ? 2
+        : 1
+      : 0,
     created_at: Math.floor(Date.now() / 1000),
   };
 }
@@ -11240,6 +11251,17 @@ function sendToMockSocket(args: {
           subId,
           "mock project query failure",
         ]);
+        return;
+      }
+      if (
+        window.__BUZZ_E2E_DEFER_FULL_PROJECT_QUERIES__ &&
+        !filter.authors &&
+        !filter["#a"] &&
+        !filter["#buzz-channel"] &&
+        !filter["#d"] &&
+        !filter["#e"] &&
+        !filter.ids
+      ) {
         return;
       }
       for (const event of filterMockProjectEvents(filter)) {
@@ -15422,6 +15444,59 @@ export function maybeInstallE2eTauriMocks() {
             row.kinds = JSON.stringify(kinds);
           }
         }
+        return null;
+      }
+      case "channel_head_cache_load": {
+        const args = payload as {
+          scope: { pubkey: string; relayUrl: string };
+          limit: number;
+        };
+        const key = `buzz-e2e-channel-head:${args.scope.pubkey.toLowerCase()}:${args.scope.relayUrl.toLowerCase().replace(/\/$/, "")}`;
+        const entries = JSON.parse(
+          window.localStorage.getItem(key) ?? "[]",
+        ) as Array<{
+          channelId: string;
+          events: RelayEvent[];
+          savedAt: number;
+          lastVisitedAt: number;
+        }>;
+        return entries
+          .sort((left, right) => right.lastVisitedAt - left.lastVisitedAt)
+          .slice(0, args.limit);
+      }
+      case "channel_head_cache_store": {
+        const args = payload as {
+          scope: { pubkey: string; relayUrl: string };
+          channelId: string;
+          events: RelayEvent[];
+        };
+        const key = `buzz-e2e-channel-head:${args.scope.pubkey.toLowerCase()}:${args.scope.relayUrl.toLowerCase().replace(/\/$/, "")}`;
+        const entries = JSON.parse(
+          window.localStorage.getItem(key) ?? "[]",
+        ) as Array<{
+          channelId: string;
+          events: RelayEvent[];
+          savedAt: number;
+          lastVisitedAt: number;
+        }>;
+        const now = Math.floor(Date.now() / 1000);
+        const next = entries
+          .filter((entry) => entry.channelId !== args.channelId)
+          .concat({
+            channelId: args.channelId,
+            events: args.events,
+            savedAt: now,
+            lastVisitedAt: now,
+          })
+          .sort((left, right) => right.lastVisitedAt - left.lastVisitedAt)
+          .slice(0, 32);
+        window.localStorage.setItem(key, JSON.stringify(next));
+        return null;
+      }
+      case "channel_head_cache_clear": {
+        const args = payload as { scope: { pubkey: string; relayUrl: string } };
+        const key = `buzz-e2e-channel-head:${args.scope.pubkey.toLowerCase()}:${args.scope.relayUrl.toLowerCase().replace(/\/$/, "")}`;
+        window.localStorage.removeItem(key);
         return null;
       }
       default:

@@ -48,6 +48,11 @@ export type SendChannelMessageInput = {
   /** One-message model request for a named existing teammate. */
   replyModelTags?: string[][];
   sentFromThreadTag?: string[];
+  /**
+   * The thread root, when the renderer already holds it. Supplying it lets the
+   * native command skip its parent lookup — see `commands/messages/thread_ref.rs`.
+   */
+  rootEventId?: string | null;
 };
 
 export async function sendChannelMessage({
@@ -65,6 +70,7 @@ export async function sendChannelMessage({
   workTags,
   replyModelTags,
   sentFromThreadTag,
+  rootEventId,
 }: SendChannelMessageInput): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -72,6 +78,7 @@ export async function sendChannelMessage({
       channelId,
       content,
       parentEventId,
+      rootEventId: rootEventId ?? null,
       mediaTags: mediaTags ?? null,
       emojiTags: emojiTags ?? null,
       mentionTags: mentionTags ?? null,

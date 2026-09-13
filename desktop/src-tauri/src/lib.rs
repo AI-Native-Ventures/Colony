@@ -2,6 +2,7 @@
 mod app_menu;
 mod app_state;
 mod archive;
+mod channel_head_cache;
 mod colony_provisioning;
 mod command_registry;
 mod commands;
@@ -240,6 +241,7 @@ pub fn run() {
         .manage(ClipboardState::new())
         .manage(PendingCommunityDeepLinks::default())
         .manage(commands::pairing::PairingHandle::new())
+        .manage(channel_head_cache::ChannelHeadCacheStore::default())
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
