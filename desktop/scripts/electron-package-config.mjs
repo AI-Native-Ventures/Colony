@@ -28,6 +28,9 @@ export function electronBetaBuildEnv(env) {
  */
 export const CANARY_KEYRING_SERVICE = "colony-canary-desktop";
 
+/** The port keyring service the Tauri port build already bakes in. */
+export const PORT_KEYRING_SERVICE = "colony-port-desktop";
+
 /** Fixture transports are an explicit, separately named build, never a beta default. */
 export function electronPackageVariant(args) {
   const fixture = args.includes("--onboarding-fixture");
@@ -35,14 +38,18 @@ export function electronPackageVariant(args) {
   const adHoc = args.includes("--ad-hoc");
   const candidate = args.includes("--production-candidate");
   const canary = args.includes("--canary");
-  if (adHoc && !production && !canary)
+  const port = args.includes("--port");
+  if (canary && port)
+    throw new Error("--canary and --port are mutually exclusive");
+  if (adHoc && !production && !canary && !port)
     throw new Error(
-      "Explicit ad-hoc distribution requires --production or --canary",
+      "Explicit ad-hoc distribution requires --production, --canary, or --port",
     );
-  // Canary is a distribution of its own. It borrows production's signing and
-  // packaging, never production's name, identifier or updater channel.
-  const stable = !canary && (production || candidate);
-  const release = stable || canary;
+  // Canary and port are distributions of their own. They borrow production's
+  // signing and packaging, never production's name, identifier or updater
+  // channel.
+  const stable = !canary && !port && (production || candidate);
+  const release = stable || canary || port;
   if (
     release &&
     (fixture || args.includes("--debug") || (production && candidate))
@@ -50,50 +57,67 @@ export function electronPackageVariant(args) {
     throw new Error(
       "Production packages cannot use fixture, debug or conflicting release modes",
     );
+  if (port && candidate)
+    throw new Error("A port package cannot also be a production candidate");
   if (canary && candidate)
     throw new Error("A canary package cannot also be a production candidate");
   const name = canary
     ? "Colony Canary"
-    : stable
-      ? "Colony"
-      : fixture
-        ? "Colony Onboarding Fixture"
-        : "Colony Electron Beta";
+    : port
+      ? "Colony Port"
+      : stable
+        ? "Colony"
+        : fixture
+          ? "Colony Onboarding Fixture"
+          : "Colony Electron Beta";
   return {
     fixture,
     production,
     canary,
+    port,
     developerId: production && !adHoc,
     candidate,
     stable,
     release,
     channel: canary
       ? "canary"
-      : production
-        ? "stable"
-        : candidate
-          ? "candidate"
-          : "beta",
+      : port
+        ? "port"
+        : production
+          ? "stable"
+          : candidate
+            ? "candidate"
+            : "beta",
     name,
     // Never buzz-desktop for the canary: the two apps must be distinguishable
     // in Activity Monitor and killable one at a time.
-    executableName: canary ? "colony-canary" : stable ? "buzz-desktop" : name,
+    executableName: canary
+      ? "colony-canary"
+      : port
+        ? "colony-port"
+        : stable
+          ? "buzz-desktop"
+          : name,
     bundleId: canary
       ? "ventures.ainative.colony.canary"
-      : stable
-        ? "xyz.block.buzz.app"
-        : fixture
-          ? "ventures.ainative.colony.onboarding-fixture"
-          : "ventures.ainative.colony.electron-beta",
+      : port
+        ? "ventures.ainative.colony.port"
+        : stable
+          ? "xyz.block.buzz.app"
+          : fixture
+            ? "ventures.ainative.colony.onboarding-fixture"
+            : "ventures.ainative.colony.electron-beta",
     outputSuffix: canary
       ? "-canary"
-      : stable
-        ? production
-          ? "-stable"
-          : "-candidate"
-        : fixture
-          ? "-onboarding-fixture"
-          : "",
+      : port
+        ? "-port"
+        : stable
+          ? production
+            ? "-stable"
+            : "-candidate"
+          : fixture
+            ? "-onboarding-fixture"
+            : "",
     helperFeatures: fixture
       ? [
           "--features",

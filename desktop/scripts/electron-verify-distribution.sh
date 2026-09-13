@@ -39,16 +39,17 @@ REQUIRED=(buzz-updater-enabled "$UPDATER_ENDPOINT" "$RELAY_WS_URL")
 # The canary host must carry its own keyring service. Without it a side by side
 # install reads, and fails to rewrite, the stable install's identity blob.
 if [ "$CHANNEL" = canary ]; then REQUIRED+=(colony-canary-desktop); fi
+if [ "$CHANNEL" = port ]; then REQUIRED+=(colony-port-desktop); fi
 for required in "${REQUIRED[@]}"; do
   count=$(strings -a "$BIN" | grep -Fc "$required" || true)
   if [ "$count" -eq 0 ]; then echo "::error::Release host is missing required embedded runtime metadata: $required"; exit 1; fi
 done
-# A canary that still points at the stable endpoint would update itself into
-# the stable app. Nothing else in the bundle reveals it.
-if [ "$CHANNEL" = canary ]; then
+# A canary (or port) that still points at the stable endpoint would update
+# itself into the stable app. Nothing else in the bundle reveals it.
+if [ "$CHANNEL" = canary ] || [ "$CHANNEL" = port ]; then
   STABLE_ENDPOINT=https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-desktop-latest/latest.json
   if [ "$(strings -a "$BIN" | grep -Fc "$STABLE_ENDPOINT" || true)" -ne 0 ]; then
-    echo "::error::The canary host carries the stable updater endpoint"
+    echo "::error::The ${CHANNEL} host carries the stable updater endpoint"
     exit 1
   fi
 fi
