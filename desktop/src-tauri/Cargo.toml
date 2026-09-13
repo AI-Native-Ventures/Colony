@@ -159,6 +159,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 zip = "8"
 flate2 = "1"
 sherpa-onnx = "1.12"
+whisper-rs = { version = "=0.16.0", default-features = false }
 regex = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 axum = "0.8"
