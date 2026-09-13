@@ -17,6 +17,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   CANARY_KEYRING_SERVICE,
+  PORT_KEYRING_SERVICE,
   electronBetaBuildEnv,
   ELECTRON_BETA_RELAY,
   electronPackageVariant,
@@ -50,6 +51,9 @@ if (variant.canary) {
   // Owned by the variant, not by the workflow: a canary that inherits the
   // stable keyring service takes over the stable install's identity.
   buildEnv.BUZZ_DESKTOP_KEYRING_SERVICE = CANARY_KEYRING_SERVICE;
+}
+if (variant.port) {
+  buildEnv.BUZZ_DESKTOP_KEYRING_SERVICE = PORT_KEYRING_SERVICE;
 }
 // Build tools need public release metadata, never the signing credentials.
 for (const key of Object.keys(buildEnv)) {
@@ -179,7 +183,9 @@ try {
         ? "colony"
         : variant.canary
           ? "colony-canary"
-          : "colony-electron-beta",
+          : variant.port
+            ? "colony-port"
+            : "colony-electron-beta",
       productName: variant.name,
       version: metadata.version,
       type: "module",
@@ -243,7 +249,7 @@ try {
         "Colony uses your microphone to turn speech into message drafts.",
     },
     protocols:
-      variant.production || variant.canary
+      variant.production || variant.canary || variant.port
         ? [{ name: variant.name, schemes: ["buzz"] }]
         : [],
     electronVersion: metadata.devDependencies.electron,
