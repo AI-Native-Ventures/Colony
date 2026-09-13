@@ -97,3 +97,26 @@ test("a provider failure stops queued and later paid requests without echoing se
     await provider.close();
   }
 });
+
+
+test("temporary rate limit retries within the same model and total call budget", async () => {
+  let attempts = 0;
+  const provider = await createLiveProofProvider({
+    apiKey: key,
+    fetchImpl: async () => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
+        : completion();
+    },
+  });
+  try {
+    assert.equal((await post(provider)).status, 200);
+    assert.equal(attempts, 2);
+    assert.equal(provider.diagnostics().calls, 2);
+    assert.equal(provider.receipts.length, 1);
+    provider.assertHealthy();
+  } finally {
+    await provider.close();
+  }
+});

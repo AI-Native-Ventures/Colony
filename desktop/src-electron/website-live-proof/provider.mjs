@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 export const MODEL = "deepseek/deepseek-v4.1-flash";
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
@@ -73,8 +74,11 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
       }
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       assert.ok(Array.isArray(body.messages), "Messages required");
-      calls += 1;
-      const upstream = await fetchImpl(ENDPOINT, {
+      let upstream;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        assert.ok(calls < MAX_REQUESTS && Date.now() < expires && !closed);
+        calls += 1;
+        upstream = await fetchImpl(ENDPOINT, {
         method: "POST",
         redirect: "error",
         signal: controller.signal,
@@ -93,7 +97,14 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
           provider: { allow_fallbacks: false },
         }),
       });
-      upstreamStatus = upstream.status;
+        upstreamStatus = upstream.status;
+        if (upstream.status !== 429 || attempt === 2) break;
+        const retryAfter = upstream.headers.get("retry-after");
+        const seconds = retryAfter === null ? 10 : Number(retryAfter);
+        assert.ok(Number.isFinite(seconds) && seconds >= 0 && seconds <= 30, "Rate limit exceeds bounded retry window");
+        await upstream.body?.cancel();
+        await delay(Math.max(1, seconds) * 1000, undefined, { signal: controller.signal });
+      }
       assert.ok(upstream.ok, `Provider status ${upstream.status}`);
       const result = await upstream.json();
       assert.ok(Array.isArray(result.choices), "Provider completion missing");
