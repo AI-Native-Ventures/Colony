@@ -88,6 +88,28 @@ pub fn active_retention_scope(app: &AppHandle, state: &AppState) -> Result<Reten
     })
 }
 
+/// Resolve the retention database path a `record` belongs in: the database of
+/// the record's OWN `relay_url`, never the currently active community.
+///
+/// `None` when `record.relay_url` is blank after trimming. Publishing is a
+/// cross-tenant write, so an unpinned record must not be retained under
+/// whichever relay happens to be connected; mirroring the comment on
+/// `record_belongs_to_active_relay` in `reconcile`.
+///
+/// This is the pure decision behind [`retention_scope_for_record`], split out
+/// so it can be exercised without a live Tauri `AppHandle`.
+pub fn retention_db_path_for_record(
+    base_dir: &Path,
+    owner_pubkey_hex: &str,
+    record: &crate::managed_agents::ManagedAgentRecord,
+) -> Option<PathBuf> {
+    let pinned = record.relay_url.trim();
+    if pinned.is_empty() {
+        return None;
+    }
+    Some(scoped_retention_db_path(base_dir, pinned, owner_pubkey_hex))
+}
+
 /// Resolve the retention scope for a specific `record`: the scope of its
 /// own `relay_url`, not the currently active community. A blank pin must not
 /// publish anywhere; mirroring the comment on `record_belongs_to_active_relay`
@@ -101,13 +123,13 @@ pub fn retention_scope_for_record(
     state: &AppState,
     record: &crate::managed_agents::ManagedAgentRecord,
 ) -> Result<Option<RetentionScope>, String> {
-    let pinned = record.relay_url.trim();
-    if pinned.is_empty() {
-        return Ok(None);
-    }
     let owner_keys = state.signing_keys()?;
     let base_dir = super::managed_agents_base_dir(app)?;
-    let db_path = scoped_retention_db_path(&base_dir, pinned, &owner_keys.public_key().to_hex());
+    let owner_pubkey_hex = owner_keys.public_key().to_hex();
+    let Some(db_path) = retention_db_path_for_record(&base_dir, &owner_pubkey_hex, record) else {
+        return Ok(None);
+    };
+    let pinned = record.relay_url.trim();
     let parent = db_path
         .parent()
         .ok_or_else(|| "retention scope path has no parent".to_string())?;
