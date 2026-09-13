@@ -5,9 +5,9 @@ name: CI
 # production Promotion Gate over the exact relevant checks.
 on:
   push:
-    branches: [main, develop, release]
+    branches: [main, develop, release, canary/upstream-port]
   pull_request:
-    branches: [main, develop, release]
+    branches: [main, develop, release, canary/upstream-port]
 
 # Ordinary PRs and pushes keep only the newest run for each ref. A promotion PR
 # targeting main must finish its in-flight matrix even when develop advances
