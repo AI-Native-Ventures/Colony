@@ -3936,11 +3936,19 @@ async fn ingest_event_inner(
                 buzz_db::event::D_TAG_MAX_LEN,
             )));
         }
-        state
+        let (stored, was_inserted) = state
             .db
             .replace_parameterized_event(tenant.community(), &event, &d_tag, channel_id)
             .await
-            .map_err(|e| IngestError::Internal(format!("error: {e}")))?
+            .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
+        (
+            stored,
+            if was_inserted {
+                buzz_db::ReplaceOutcome::Inserted
+            } else {
+                buzz_db::ReplaceOutcome::AlreadyStored
+            },
+        )
     } else {
         let thread_params = thread_meta.as_ref().map(|m| m.as_params());
         match state
@@ -3987,9 +3995,7 @@ async fn ingest_event_inner(
         }
     };
 
-    let was_inserted = replace_outcome.was_inserted();
-
-    if !was_inserted {
+    if !replace_outcome.was_inserted() {
         if kind_u32 == KIND_JOB_CHECKPOINT
             && matches!(&replace_outcome, buzz_db::ReplaceOutcome::AlreadyStored)
         {
@@ -4083,6 +4089,7 @@ async fn ingest_event_inner(
     // separately in the spec (channel-less duplicates collapse to the
     // same observation shape as channel-less inserts at this seam);
     // see docs/spec/MultiTenantRelay.tla lines 559-595.
+    let was_inserted = matches!(replace_outcome, buzz_db::ReplaceOutcome::Inserted);
     {
         let claimed = claimed_community_from_event(&event);
         let action = match (channel_id, was_inserted) {

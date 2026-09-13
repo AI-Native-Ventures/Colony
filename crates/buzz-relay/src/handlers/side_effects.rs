@@ -2887,12 +2887,11 @@ async fn emit_initial_ref_state(
     };
     let event = build_ref_state_event(&inputs, &state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("build_ref_state_event: {e}"))?;
-    let (stored, was_inserted) = state
+    let (stored, inserted) = state
         .db
-        .insert_event(tenant.community(), &event, None)
-        .await
-        .map_err(|e| anyhow::anyhow!("insert kind:30618: {e}"))?;
-    if was_inserted {
+        .replace_parameterized_event(tenant.community(), &event, &owner_hex, None)
+        .await?;
+    if inserted {
         // Routed through the guarded send path for uniformity; the access gate
         // no-ops for this globally-scoped (channel_id = None) ref-state event.
         crate::handlers::event::fan_out_event_to_local_subscribers(
@@ -3253,11 +3252,11 @@ pub async fn publish_dm_visibility_snapshot(
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:{KIND_DM_VISIBILITY}: {e}"))?;
 
-    let (stored, was_inserted) = state
+    let (stored, inserted) = state
         .db
         .replace_parameterized_event(tenant.community(), &event, &viewer_hex, None)
         .await?;
-    if was_inserted.was_inserted() {
+    if inserted {
         dispatch_persistent_event(
             tenant,
             state,
