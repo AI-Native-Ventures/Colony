@@ -1,7 +1,7 @@
 {
   "files": {
-    "rust_total": 537,
-    "tauri_coupled": 221,
+    "rust_total": 539,
+    "tauri_coupled": 223,
     "portable": 316,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
@@ -122,6 +122,8 @@
       "src-tauri/src/commands/workspace.rs",
       "src-tauri/src/commands/workspace_files.rs",
       "src-tauri/src/deep_link.rs",
+      "src-tauri/src/dictation.rs",
+      "src-tauri/src/dictation_model.rs",
       "src-tauri/src/discovery_worker/brave_tests.rs",
       "src-tauri/src/discovery_worker/exa.rs",
       "src-tauri/src/discovery_worker/outscraper.rs",
@@ -549,10 +551,10 @@
     ]
   },
   "commands": {
-    "registered": 384,
-    "defined": 384,
+    "registered": 386,
+    "defined": 386,
     "by_reach": {
-      "frontend": 369,
+      "frontend": 371,
       "NO CALLER FOUND": 13,
       "frontend-plugin-prefixed": 2
     },
@@ -573,18 +575,18 @@
     ]
   },
   "params": {
-    "AppHandle": 428,
+    "AppHandle": 432,
     "State": 278,
     "Window": 7,
-    "ipc::Request": 1,
+    "ipc::Request": 2,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 425,
+      "AppHandle": 429,
       "State": 278,
       "Window": 7,
-      "ipc::Request": 1,
+      "ipc::Request": 2,
       "ipc::Channel": 4
     },
     "test": {
@@ -614,7 +616,7 @@
     ".run_on_main_thread(": 3,
     ".config()": 5,
     ".env()": 1,
-    ".path()": 31,
+    ".path()": 32,
     ".exit(": 5
   },
   "events": {
@@ -727,6 +729,7 @@
     "src-tauri/src/commands/dms.rs": 2,
     "src-tauri/src/commands/project_terminal.rs": 2,
     "src-tauri/src/commands/window_chrome.rs": 2,
+    "src-tauri/src/dictation.rs": 2,
     "src-tauri/src/commands/evidence_assignment.rs": 2,
     "src-tauri/src/commands/relay_reconnect.rs": 2,
     "src-tauri/src/huddle/transcription.rs": 2,
@@ -3153,6 +3156,15 @@
         "src/features/workspace/kinds/imageKind.tsx:64"
       ]
     },
+    "prepare_dictation": {
+      "defining_file": "src-tauri/src/dictation.rs",
+      "module": "dictation",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/messages/lib/useComposerDictation.ts:85"
+      ]
+    },
     "prepare_pending_signup": {
       "defining_file": "src-tauri/src/commands/onboarding_recovery.rs",
       "module": "onboarding_recovery",
@@ -4194,6 +4206,15 @@
         "src/parity/session/script.ts:1549",
         "src/shared/lib/titleBarActions.ts:8",
         "src/shared/lib/titleBarActions.ts:18"
+      ]
+    },
+    "transcribe_dictation": {
+      "defining_file": "src-tauri/src/dictation.rs",
+      "module": "dictation",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/messages/lib/useComposerDictation.ts:99"
       ]
     },
     "trigger_workflow": {

@@ -366,7 +366,7 @@ fn verify_event(event: &Event, kind: u32, author: &PublicKey, label: &str) -> Re
 
 fn unique_scalar_tag(event: &Event, name: &str, label: &str) -> Result<String, String> {
     let mut found: Option<String> = None;
-    for tag in &event.tags {
+    for tag in event.tags.iter() {
         let parts = tag.as_slice();
         if parts.first().map(String::as_str) != Some(name) {
             continue;

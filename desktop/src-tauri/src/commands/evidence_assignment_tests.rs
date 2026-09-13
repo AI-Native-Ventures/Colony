@@ -122,7 +122,7 @@ fn signed_website_event(scope: &VerifiedScope, website: &WebsiteReview, signer: 
             tag("p", &scope.relay_pubkey.to_hex()),
         ])
         .sign_with_keys(signer)
-        .expect("website head signs");
+        .expect("website head signs")
 }
 
 fn signed_managed_agent_event(scope: &VerifiedScope, owner: &Keys, persona_id: &str) -> Event {
@@ -133,7 +133,7 @@ fn signed_managed_agent_event(scope: &VerifiedScope, owner: &Keys, persona_id: &
     crate::managed_agents::agent_events::build_agent_event(&record)
         .expect("managed-agent head uses the production serializer")
         .sign_with_keys(owner)
-        .expect("managed-agent head signs");
+        .expect("managed-agent head signs")
 }
 
 fn fixture() -> AssignmentFixture {
