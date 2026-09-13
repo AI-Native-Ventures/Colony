@@ -15,7 +15,8 @@ use buzz_core::kind::{
     KIND_THREAD_SUMMARY,
 };
 use buzz_core::StoredEvent;
-use buzz_db::channel::{MemberRecord, MemberRole};
+use buzz_db::channel::MemberRole;
+use buzz_db::channel_members::MemberRecord;
 
 use super::event::dispatch_persistent_event;
 use crate::protocol::RelayMessage;
@@ -320,7 +321,7 @@ pub async fn validate_standard_deletion_event(
 async fn actor_owns_any_owner_agent(
     state: &Arc<AppState>,
     community_id: buzz_core::CommunityId,
-    members: &[buzz_db::channel::MemberRecord],
+    members: &[buzz_db::channel_members::MemberRecord],
     actor_bytes: &[u8],
 ) -> anyhow::Result<bool> {
     for owner in members.iter().filter(|m| m.role == "owner") {
