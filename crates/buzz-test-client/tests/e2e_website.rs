@@ -1644,7 +1644,11 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
     );
     let work_id = work.id.to_hex();
     let work_ok = send_past_transport_stall(&mut builder_client, work, "builder evidence").await;
-    assert!(work_ok.accepted, "builder work is stored: {}", work_ok.message);
+    assert!(
+        work_ok.accepted,
+        "builder work is stored: {}",
+        work_ok.message
+    );
     let evidence = update_action(
         &fixture,
         &builder,

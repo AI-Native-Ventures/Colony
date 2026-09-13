@@ -2553,7 +2553,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/onboarding/flow/completeFirstRunIo.ts:90",
+        "src/features/onboarding/flow/completeFirstRunIo.ts:159",
         "src/parity/session/script.ts:1416",
         "src/shared/api/tauriManagedAgentMessageMarkers.ts:9"
       ]
@@ -3875,7 +3875,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1552",
         "src/parity/session/script.ts:1553",
-        "src/shared/theme/ThemeProvider.tsx:474"
+        "src/shared/theme/ThemeProvider.tsx:495"
       ]
     },
     "show_native_notification": {
