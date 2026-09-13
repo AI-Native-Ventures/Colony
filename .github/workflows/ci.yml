@@ -83,7 +83,7 @@ jobs:
               # schema and the durable relay key e2e_interrupts requires.
               - 'scripts/start-relay-for-tests.sh'
               - 'scripts/create-required-extensions.sql'
-              - 'scripts/attach-schema-partitions.sql'
+              - 'scripts/reconcile-schema-after-pgschema.sql'
               - 'justfile'
             # Never put a negated pattern (`!foo/**`) in one of these lists.
             # dorny/paths-filter ORs the patterns in a rule, and picomatch
@@ -179,7 +179,7 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'scripts/start-relay-for-tests.sh'
               - 'scripts/create-required-extensions.sql'
-              - 'scripts/attach-schema-partitions.sql'
+              - 'scripts/reconcile-schema-after-pgschema.sql'
               - '.github/workflows/ci.yml'
               - 'scripts/ci-activate-hermit.sh'
               - 'scripts/ci-pnpm-store-path.sh'
@@ -837,14 +837,14 @@ jobs:
           PGSCHEMA_PLAN_USER: buzz
           PGSCHEMA_PLAN_PASSWORD: buzz_dev
         run: |
-          ./bin/pgschema apply --file schema/schema.sql --auto-approve
           # pgschema does not manage extensions, so schema.sql's CREATE
           # EXTENSION line is silently ignored and the relay's digest()-based
           # queries fail. See scripts/create-required-extensions.sql.
+          ./bin/pgschema apply --file schema/schema.sql --auto-approve
           docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
             psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/create-required-extensions.sql
           docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
-            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
+            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/reconcile-schema-after-pgschema.sql
           docker exec -e PGPASSWORD=buzz_dev buzz-postgres \
             psql -U buzz -d buzz -qtA -c "
           INSERT INTO communities (id, host)
@@ -1145,14 +1145,14 @@ jobs:
           PGSCHEMA_PLAN_USER: buzz
           PGSCHEMA_PLAN_PASSWORD: buzz_dev
         run: |
-          ./bin/pgschema apply --file schema/schema.sql --auto-approve
           # pgschema does not manage extensions, so schema.sql's CREATE
           # EXTENSION line is silently ignored and the relay's digest()-based
           # queries fail. See scripts/create-required-extensions.sql.
+          ./bin/pgschema apply --file schema/schema.sql --auto-approve
           docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
             psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/create-required-extensions.sql
           docker exec -i -e PGPASSWORD=buzz_dev buzz-postgres \
-            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
+            psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/reconcile-schema-after-pgschema.sql
           docker exec -e PGPASSWORD=buzz_dev buzz-postgres \
             psql -U buzz -d buzz -qtA -c "
           INSERT INTO communities (id, host)

@@ -15,5 +15,5 @@
 -- `function digest(text, unknown) does not exist`. Nothing caught it because
 -- the only suite exercising that path had never run in CI.
 --
--- Run this after `pgschema apply`, alongside attach-schema-partitions.sql.
+-- Run this after `pgschema apply`, alongside reconcile-schema-after-pgschema.sql.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
