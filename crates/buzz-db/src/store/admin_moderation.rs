@@ -4,6 +4,7 @@
 //! [`CommunityId`](buzz_core::CommunityId). Keep ordinary moderation reads in
 //! [`crate::moderation`] tenant-fenced.
 
+use crate::Db;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row as _};
@@ -282,6 +283,59 @@ fn row_to_feedback(row: sqlx::postgres::PgRow) -> Result<AdminFeedback> {
         event_created_at: row.try_get("event_created_at")?,
         received_at: row.try_get("received_at")?,
     })
+}
+
+impl Db {
+    /// List reports for the deployment-global read-only admin plane.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn admin_list_reports(
+        &self,
+        community_id: Option<Uuid>,
+        status: Option<&str>,
+        report_type: Option<&str>,
+        target_kind: Option<&str>,
+        after: Option<DateTime<Utc>>,
+        before: Option<DateTime<Utc>>,
+        cursor: Option<(DateTime<Utc>, Uuid)>,
+        limit: i64,
+    ) -> Result<Vec<crate::admin_moderation::AdminReport>> {
+        crate::admin_moderation::list_reports(
+            &self.pool,
+            community_id,
+            status,
+            report_type,
+            target_kind,
+            after,
+            before,
+            cursor,
+            limit,
+        )
+        .await
+    }
+
+    /// Fetch one report for the deployment-global read-only admin plane.
+    pub async fn admin_get_report(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<crate::admin_moderation::AdminReportDetail>> {
+        crate::admin_moderation::get_report(&self.pool, id).await
+    }
+
+    /// List feedback for the deployment-global read-only admin plane.
+    pub async fn admin_list_feedback(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::admin_moderation::AdminFeedback>> {
+        crate::admin_moderation::list_feedback(&self.pool, limit).await
+    }
+
+    /// Fetch one feedback submission for the deployment-global admin plane.
+    pub async fn admin_get_feedback(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<crate::admin_moderation::AdminFeedback>> {
+        crate::admin_moderation::get_feedback(&self.pool, id).await
+    }
 }
 
 #[cfg(test)]

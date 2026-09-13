@@ -3,6 +3,7 @@
 //! DMs are channels with channel_type='dm' and visibility='private'.
 //! Participant sets are immutable -- adding a member creates a NEW DM.
 
+use crate::Db;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
@@ -514,6 +515,80 @@ fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
 }
 
 // -- Tests --------------------------------------------------------------------
+
+impl Db {
+    /// Find an existing DM by its participant hash.
+    pub async fn find_dm_by_participants(
+        &self,
+        community_id: CommunityId,
+        participant_hash: &[u8],
+    ) -> Result<Option<crate::channel::ChannelRecord>> {
+        crate::dm::find_dm_by_participants(&self.pool, community_id, participant_hash).await
+    }
+
+    /// Create or return an existing DM channel.
+    pub async fn create_dm(
+        &self,
+        community_id: CommunityId,
+        participants: &[&[u8]],
+        created_by: &[u8],
+    ) -> Result<crate::channel::ChannelRecord> {
+        crate::dm::create_dm(&self.pool, community_id, participants, created_by).await
+    }
+
+    /// List all DMs for a user.
+    pub async fn list_dms_for_user(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+        limit: u32,
+        cursor: Option<Uuid>,
+    ) -> Result<Vec<crate::dm::DmRecord>> {
+        crate::dm::list_dms_for_user(&self.pool, community_id, pubkey, limit, cursor).await
+    }
+
+    /// Open or retrieve a DM for the given participants.
+    pub async fn open_dm(
+        &self,
+        community_id: CommunityId,
+        pubkeys: &[&[u8]],
+        created_by: &[u8],
+    ) -> Result<(crate::channel::ChannelRecord, bool)> {
+        crate::dm::open_dm(&self.pool, community_id, pubkeys, created_by).await
+    }
+
+    /// Hide a DM channel for a specific user.
+    ///
+    /// The DM is not deleted — it can be restored by opening a new DM with
+    /// the same participants.
+    pub async fn hide_dm(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) -> Result<()> {
+        crate::dm::hide_dm(&self.pool, community_id, channel_id, pubkey).await
+    }
+
+    /// Unhide a DM channel for a specific user.
+    pub async fn unhide_dm(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) -> Result<()> {
+        crate::dm::unhide_dm(&self.pool, community_id, channel_id, pubkey).await
+    }
+
+    /// List the channel IDs of all DMs the given user currently has hidden.
+    pub async fn list_hidden_dms(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Vec<Uuid>> {
+        crate::dm::list_hidden_dms(&self.pool, community_id, pubkey).await
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -602,7 +602,6 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{event, migration, replaceable};
     use sqlx::{Acquire, PgPool};
 
     const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
@@ -649,7 +648,7 @@ mod tests {
         let pool = PgPool::connect(&scratch_url)
             .await
             .expect("connect scratch db");
-        migration::run_migrations(&pool)
+        crate::migration::run_migrations(&pool)
             .await
             .expect("migrate scratch db");
         (pool, name)
@@ -793,13 +792,13 @@ mod tests {
                 &new,
                 &replace_d_tag,
                 None,
-                replaceable::ParameterizedReplacePrecondition::Unconditional,
+                crate::replaceable::ParameterizedReplacePrecondition::Unconditional,
             )
             .await
             .expect("replace inside caller transaction");
         assert_eq!(
             result.status,
-            replaceable::ParameterizedReplaceStatus::Inserted
+            crate::replaceable::ParameterizedReplaceStatus::Inserted
         );
 
         let leaked: Option<String> = sqlx::query_scalar(
@@ -861,7 +860,7 @@ mod tests {
                 &new,
                 &d_tag,
                 None,
-                replaceable::ParameterizedReplacePrecondition::ExpectedRevision(
+                crate::replaceable::ParameterizedReplacePrecondition::ExpectedRevision(
                     old.id.as_bytes().as_slice(),
                 ),
             )
@@ -869,7 +868,7 @@ mod tests {
             .expect("replace inside caller transaction");
         assert_eq!(
             outcome.status,
-            replaceable::ParameterizedReplaceStatus::Inserted
+            crate::replaceable::ParameterizedReplaceStatus::Inserted
         );
         tx.rollback().await.expect("roll back replacement tx");
 
@@ -897,7 +896,7 @@ mod tests {
                 &new,
                 &d_tag,
                 None,
-                replaceable::ParameterizedReplacePrecondition::ExpectedRevision(
+                crate::replaceable::ParameterizedReplacePrecondition::ExpectedRevision(
                     [0x42; 32].as_slice(),
                 ),
             )
@@ -905,7 +904,7 @@ mod tests {
             .expect("evaluate stale revision");
         assert_eq!(
             mismatch.status,
-            replaceable::ParameterizedReplaceStatus::RevisionMismatch
+            crate::replaceable::ParameterizedReplaceStatus::RevisionMismatch
         );
         tx.rollback().await.expect("roll back stale revision tx");
 
@@ -931,7 +930,7 @@ mod tests {
                 &missing,
                 &missing_d_tag,
                 None,
-                replaceable::ParameterizedReplacePrecondition::ExpectedRevision(
+                crate::replaceable::ParameterizedReplacePrecondition::ExpectedRevision(
                     [0x24; 32].as_slice(),
                 ),
             )
@@ -939,7 +938,7 @@ mod tests {
             .expect("evaluate missing revision");
         assert_eq!(
             missing_result.status,
-            replaceable::ParameterizedReplaceStatus::RevisionMissing
+            crate::replaceable::ParameterizedReplaceStatus::RevisionMissing
         );
         tx.rollback().await.expect("roll back missing revision tx");
     }
@@ -1009,7 +1008,7 @@ mod tests {
                 &new,
                 &d_tag,
                 None,
-                replaceable::ParameterizedReplacePrecondition::Unconditional,
+                crate::replaceable::ParameterizedReplacePrecondition::Unconditional,
             )
             .await
             .expect_err("mention failure must fail replacement");
@@ -1084,7 +1083,7 @@ mod tests {
             .await
             .expect("begin seed transaction");
         let (_, was_inserted) =
-            event::insert_event_in_transaction(&mut seed_tx, community, &old, None)
+            crate::event::insert_event_in_transaction(&mut seed_tx, community, &old, None)
                 .await
                 .expect("insert older live head");
         assert!(was_inserted);
@@ -1101,13 +1100,13 @@ mod tests {
                 &duplicate,
                 &d_tag,
                 None,
-                replaceable::ParameterizedReplacePrecondition::Unconditional,
+                crate::replaceable::ParameterizedReplacePrecondition::Unconditional,
             )
             .await
             .expect("evaluate soft-deleted duplicate");
         assert_eq!(
             result.status,
-            replaceable::ParameterizedReplaceStatus::Duplicate
+            crate::replaceable::ParameterizedReplaceStatus::Duplicate
         );
 
         let live_id: Vec<u8> = sqlx::query_scalar(

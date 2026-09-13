@@ -2,8 +2,11 @@
 //!
 //! One reaction per user per emoji per event. Soft-delete via removed_at.
 
+use crate::insert_mentions;
+use crate::Db;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
+use uuid::Uuid;
 
 use crate::error::Result;
 use crate::CommunityId;
@@ -415,4 +418,327 @@ pub async fn get_reactions_bulk(
     }
 
     Ok(entries)
+}
+
+impl Db {
+    /// Atomically insert a kind:7 reaction event and its reaction row.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_reaction_event_with_thread_metadata(
+        &self,
+        community_id: CommunityId,
+        event: &nostr::Event,
+        channel_id: Option<Uuid>,
+        thread_meta: Option<crate::event::ThreadMetadataParams<'_>>,
+        target_event_id: &[u8],
+        actor_pubkey: &[u8],
+        emoji: &str,
+    ) -> Result<crate::event::ReactionEventInsertOutcome> {
+        let outcome = crate::event::insert_reaction_event_with_thread_metadata(
+            &self.pool,
+            community_id,
+            event,
+            channel_id,
+            thread_meta,
+            target_event_id,
+            actor_pubkey,
+            emoji,
+        )
+        .await?;
+        if let crate::event::ReactionEventInsertOutcome::Inserted {
+            was_inserted: true, ..
+        } = &outcome
+        {
+            if let Err(e) = insert_mentions(&self.pool, community_id, event, channel_id).await {
+                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// Add (or re-activate) a reaction.
+    pub async fn add_reaction(
+        &self,
+        community: CommunityId,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+        reaction_event_id: Option<&[u8]>,
+    ) -> Result<bool> {
+        crate::reaction::add_reaction(
+            &self.pool,
+            community,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+            reaction_event_id,
+        )
+        .await
+    }
+
+    /// Soft-delete a reaction.
+    pub async fn remove_reaction(
+        &self,
+        community: CommunityId,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+    ) -> Result<bool> {
+        crate::reaction::remove_reaction(
+            &self.pool,
+            community,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+        )
+        .await
+    }
+
+    /// Soft-delete a reaction by its source event ID.
+    pub async fn remove_reaction_by_source_event_id(
+        &self,
+        community: CommunityId,
+        reaction_event_id: &[u8],
+    ) -> Result<bool> {
+        crate::reaction::remove_reaction_by_source_event_id(
+            &self.pool,
+            community,
+            reaction_event_id,
+        )
+        .await
+    }
+
+    /// Look up the active reaction row for one actor + emoji + target tuple.
+    pub async fn get_active_reaction_record(
+        &self,
+        community: CommunityId,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+    ) -> Result<Option<crate::reaction::ActiveReactionRecord>> {
+        crate::reaction::get_active_reaction_record(
+            &self.pool,
+            community,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+        )
+        .await
+    }
+
+    /// Backfill the source event ID on an active reaction row.
+    pub async fn set_reaction_event_id(
+        &self,
+        community: CommunityId,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        pubkey: &[u8],
+        emoji: &str,
+        reaction_event_id: &[u8],
+    ) -> Result<bool> {
+        crate::reaction::set_reaction_event_id(
+            &self.pool,
+            community,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+            reaction_event_id,
+        )
+        .await
+    }
+
+    /// Get all active reactions for an event, grouped by emoji.
+    pub async fn get_reactions(
+        &self,
+        community: CommunityId,
+        event_id: &[u8],
+        event_created_at: DateTime<Utc>,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<Vec<crate::reaction::ReactionGroup>> {
+        crate::reaction::get_reactions(
+            &self.pool,
+            community,
+            event_id,
+            event_created_at,
+            limit,
+            cursor,
+        )
+        .await
+    }
+
+    /// Batch-fetch emoji counts for a set of (event_id, event_created_at) pairs.
+    pub async fn get_reactions_bulk(
+        &self,
+        community: CommunityId,
+        event_ids: &[(&[u8], DateTime<Utc>)],
+    ) -> Result<Vec<crate::reaction::BulkReactionEntry>> {
+        crate::reaction::get_reactions_bulk(&self.pool, community, event_ids).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Db;
+    use sqlx::PgPool;
+
+    const REL_TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+
+    async fn setup_db() -> Db {
+        let database_url =
+            std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| REL_TEST_DB_URL.into());
+        let pool = PgPool::connect(&database_url)
+            .await
+            .expect("connect to test DB");
+        Db::from_pool(pool)
+    }
+
+    async fn make_community(pool: &PgPool) -> Uuid {
+        let id = Uuid::new_v4();
+        let host = format!("communities-of-channels-{}.example", id.simple());
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(id)
+            .bind(host)
+            .execute(pool)
+            .await
+            .expect("insert community");
+        id
+    }
+
+    use super::*;
+
+    /// BUG-5 regression: the `reactions` table is community-scoped
+    /// (`PK (community_id, event_created_at, event_id, pubkey, emoji)`), so a
+    /// reaction added under community A must be invisible and unremovable from
+    /// community B — even for the *identical* `(event_id, pubkey, emoji)` shape.
+    /// Before the fix, `add_reaction` omitted `community_id` (NOT NULL → 500) and
+    /// every read/remove filtered `event_id` only (latent cross-tenant bleed).
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn reactions_are_scoped_to_community() {
+        let db = setup_db().await;
+        let community_a = CommunityId::from_uuid(make_community(&db.pool).await);
+        let community_b = CommunityId::from_uuid(make_community(&db.pool).await);
+
+        // Identical referenced-event shape across both tenants.
+        let event_id = [0xABu8; 32];
+        let event_created_at = Utc::now();
+        let pubkey = [7u8; 32];
+        let emoji = "👍";
+
+        // (1) Add succeeds under A (this INSERT 500'd before the fix).
+        assert!(
+            db.add_reaction(
+                community_a,
+                &event_id,
+                event_created_at,
+                &pubkey,
+                emoji,
+                None
+            )
+            .await
+            .expect("add reaction under A"),
+            "first reaction under A must be inserted"
+        );
+        // Idempotent: re-adding the same active reaction is a no-op.
+        assert!(
+            !db.add_reaction(
+                community_a,
+                &event_id,
+                event_created_at,
+                &pubkey,
+                emoji,
+                None
+            )
+            .await
+            .expect("duplicate reaction under A"),
+            "active duplicate under A must not re-insert"
+        );
+
+        // (2) Visible on A, invisible on B (grouped read path).
+        let groups_a = db
+            .get_reactions(community_a, &event_id, event_created_at, 100, None)
+            .await
+            .expect("get reactions A");
+        assert_eq!(groups_a.len(), 1, "A must see its own reaction group");
+        assert_eq!(groups_a[0].emoji, emoji);
+        assert_eq!(groups_a[0].count, 1);
+
+        let groups_b = db
+            .get_reactions(community_b, &event_id, event_created_at, 100, None)
+            .await
+            .expect("get reactions B");
+        assert!(
+            groups_b.is_empty(),
+            "B must NOT see A's reaction for the same event shape, got {groups_b:?}"
+        );
+
+        // (3) Active-record lookup is scoped: present on A, absent on B.
+        assert!(
+            db.get_active_reaction_record(community_a, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("active record A")
+                .is_some(),
+            "A's active reaction record must be present"
+        );
+        assert!(
+            db.get_active_reaction_record(community_b, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("active record B")
+                .is_none(),
+            "B must not find A's active reaction record"
+        );
+
+        // (4) B can add the identical shape independently (no PK collision).
+        assert!(
+            db.add_reaction(
+                community_b,
+                &event_id,
+                event_created_at,
+                &pubkey,
+                emoji,
+                None
+            )
+            .await
+            .expect("add reaction under B"),
+            "B must be able to add the same shape as its own scoped row"
+        );
+
+        // (5) Removing from B does not touch A's row.
+        assert!(
+            db.remove_reaction(community_b, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("remove under B"),
+            "B remove must affect B's own row"
+        );
+        assert!(
+            db.get_active_reaction_record(community_a, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("active record A after B remove")
+                .is_some(),
+            "A's reaction must survive a B-side removal"
+        );
+
+        // (6) A remove affects only A; A's read now empty.
+        assert!(
+            db.remove_reaction(community_a, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("remove under A"),
+            "A remove must affect A's row"
+        );
+        let groups_a_after = db
+            .get_reactions(community_a, &event_id, event_created_at, 100, None)
+            .await
+            .expect("get reactions A after remove");
+        assert!(
+            groups_a_after.is_empty(),
+            "A's reaction must be gone after A removes it"
+        );
+    }
 }

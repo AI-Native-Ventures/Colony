@@ -13,6 +13,9 @@
 //! to Prometheus labels and calls `metrics::gauge!(...).set(...)`.
 
 use crate::error::Result;
+use crate::Db;
+use sqlx::postgres::PgConnection;
+use sqlx::Connection;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -354,11 +357,119 @@ pub async fn community_hosts(pool: &PgPool) -> Result<Vec<CommunityHost>> {
         .collect())
 }
 
+/// Owns the detached Postgres session holding the relay usage-metrics advisory lock.
+///
+/// The connection deliberately does not return to the main pool: session advisory
+/// locks must remain bound to this exact physical connection, and the poller
+/// pings it before each leader-only collection tick.
+pub struct UsageMetricsLeader {
+    connection: PgConnection,
+}
+
+impl UsageMetricsLeader {
+    /// Returns whether the lock-owning session is still reachable.
+    ///
+    /// Bounded to 5 seconds — a blackholed connection (no RST) would otherwise
+    /// stall the entire poller tick until the OS TCP timeout.
+    pub async fn is_live(&mut self) -> bool {
+        tokio::time::timeout(std::time::Duration::from_secs(5), self.connection.ping())
+            .await
+            .is_ok_and(|r| r.is_ok())
+    }
+}
+
+impl Db {
+    /// Try to acquire the detached session advisory lock for relay usage metrics.
+    ///
+    /// The returned guard owns the exact connection that acquired the lock. It is
+    /// detached from the shared pool so a stable leader neither returns a locked
+    /// session to other callers nor permanently consumes a pool slot. Dropping the
+    /// guard closes the connection and releases the session-scoped lock.
+    pub async fn try_lock_usage_metrics(
+        &self,
+        lock_key: i64,
+    ) -> Result<Option<UsageMetricsLeader>> {
+        let mut connection = self.pool.acquire().await?;
+        let acquired = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
+            .bind(lock_key)
+            .fetch_one(&mut *connection)
+            .await?;
+        if acquired {
+            Ok(Some(UsageMetricsLeader {
+                connection: connection.detach(),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Return total number of communities on this relay.
+    pub async fn usage_community_count(&self) -> Result<i64> {
+        crate::usage::community_count(&self.pool).await
+    }
+
+    /// Return per-community user counts split by human/agent.
+    pub async fn usage_user_counts(&self) -> Result<Vec<crate::usage::CommunityUserCounts>> {
+        crate::usage::user_counts(&self.pool).await
+    }
+
+    /// Return per-community channel counts by type.
+    pub async fn usage_channel_counts(&self) -> Result<Vec<crate::usage::CommunityChannelCount>> {
+        crate::usage::channel_counts(&self.pool).await
+    }
+
+    /// Return per-community kind=9 message counts.
+    pub async fn usage_message_counts(&self) -> Result<Vec<crate::usage::CommunityMessageCount>> {
+        crate::usage::message_counts(&self.pool).await
+    }
+
+    /// Return per-community relay-member counts by role.
+    pub async fn usage_relay_member_counts(
+        &self,
+    ) -> Result<Vec<crate::usage::CommunityMemberCount>> {
+        crate::usage::relay_member_counts(&self.pool).await
+    }
+
+    /// Return per-community workflow counts by status.
+    pub async fn usage_workflow_counts(&self) -> Result<Vec<crate::usage::CommunityWorkflowCount>> {
+        crate::usage::workflow_counts(&self.pool).await
+    }
+
+    /// Return per-community git-repo counts.
+    pub async fn usage_git_repo_counts(&self) -> Result<Vec<crate::usage::CommunityGitRepoCount>> {
+        crate::usage::git_repo_counts(&self.pool).await
+    }
+
+    /// Return per-community distinct active-user counts for a given SQL interval.
+    ///
+    /// `interval_sql` must be a trusted literal such as `"1 day"` or `"7 days"`.
+    pub async fn usage_active_user_counts(
+        &self,
+        interval_sql: &'static str,
+    ) -> Result<Vec<crate::usage::CommunityActiveUsers>> {
+        crate::usage::active_user_counts(&self.pool, interval_sql).await
+    }
+
+    /// Return per-community active-channel counts for a given SQL interval.
+    pub async fn usage_active_channel_counts(
+        &self,
+        interval_sql: &'static str,
+    ) -> Result<Vec<crate::usage::CommunityActiveChannels>> {
+        crate::usage::active_channel_counts(&self.pool, interval_sql).await
+    }
+
+    /// Return all community id → host mappings.
+    pub async fn usage_community_hosts(&self) -> Result<Vec<crate::usage::CommunityHost>> {
+        crate::usage::community_hosts(&self.pool).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use buzz_core::CommunityId;
     use nostr::Keys;
+    use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
 
     const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
@@ -717,6 +828,46 @@ mod tests {
         assert!(
             after_row.is_none(),
             "no stream row after last channel deleted — poller will zero-fill"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn test_usage_metrics_lock_has_single_owner_and_releases_on_drop() {
+        let database_url =
+            std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| TEST_DB_URL.into());
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("connect to test DB");
+        let first = Db::from_pool(pool.clone());
+        let second = Db::from_pool(pool);
+        let key = 0x4255_5A5A_4D45_5452;
+
+        let mut leader = first
+            .try_lock_usage_metrics(key)
+            .await
+            .expect("first lock attempt")
+            .expect("first database handle becomes leader");
+        assert!(leader.is_live().await, "lock owner remains reachable");
+        assert!(
+            second
+                .try_lock_usage_metrics(key)
+                .await
+                .expect("second lock attempt")
+                .is_none(),
+            "another session cannot become leader while the guard exists"
+        );
+
+        drop(leader);
+        assert!(
+            second
+                .try_lock_usage_metrics(key)
+                .await
+                .expect("lock attempt after leader drop")
+                .is_some(),
+            "dropping the detached session releases its advisory lock"
         );
     }
 }

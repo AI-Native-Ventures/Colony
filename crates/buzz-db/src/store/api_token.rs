@@ -1,5 +1,7 @@
 //! API token CRUD operations.
 
+use crate::Db;
+use buzz_core::CommunityId;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -322,6 +324,277 @@ pub async fn revoke_all_tokens(
     .await?;
 
     Ok(result.rows_affected())
+}
+
+/// Token summary returned by [`Db::list_active_tokens`].
+#[derive(Debug, Clone)]
+pub struct TokenSummary {
+    /// Unique token identifier.
+    pub id: Uuid,
+    /// Human-readable token name.
+    pub name: String,
+    /// Compressed public key bytes of the token owner.
+    pub owner_pubkey: Vec<u8>,
+    /// Permission scopes granted to this token.
+    pub scopes: Vec<String>,
+    /// When the token was created.
+    pub created_at: DateTime<Utc>,
+    /// Optional expiry timestamp; `None` means no expiry.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// A full API token record.
+#[derive(Debug, Clone)]
+pub struct ApiTokenRecord {
+    /// Unique token identifier.
+    pub id: Uuid,
+    /// SHA-256 hash of the raw token value.
+    pub token_hash: Vec<u8>,
+    /// Compressed public key bytes of the token owner.
+    pub owner_pubkey: Vec<u8>,
+    /// Human-readable token name.
+    pub name: String,
+    /// Permission scopes granted to this token.
+    pub scopes: Vec<String>,
+    /// Optional channel ID restrictions.
+    pub channel_ids: Option<Vec<Uuid>>,
+    /// When the token was created.
+    pub created_at: DateTime<Utc>,
+    /// Optional expiry timestamp.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// When the token was last used.
+    pub last_used_at: Option<DateTime<Utc>>,
+    /// When the token was revoked.
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+fn parse_api_token_row(row: sqlx::postgres::PgRow) -> Result<ApiTokenRecord> {
+    let id: Uuid = row.try_get("id")?;
+
+    let scopes_json: serde_json::Value = row.try_get("scopes")?;
+    let scopes: Vec<String> = serde_json::from_value(scopes_json)
+        .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
+
+    let channel_ids: Option<Vec<Uuid>> = {
+        let raw: Option<serde_json::Value> = row.try_get("channel_ids")?;
+        match raw {
+            None => None,
+            Some(v) => {
+                let strings: Vec<String> = serde_json::from_value(v)
+                    .map_err(|e| DbError::InvalidData(format!("channel_ids JSON: {e}")))?;
+                let uuids: std::result::Result<Vec<Uuid>, _> =
+                    strings.iter().map(|s| s.parse::<Uuid>()).collect();
+                Some(uuids.map_err(|e| DbError::InvalidData(format!("channel_ids UUID: {e}")))?)
+            }
+        }
+    };
+
+    Ok(ApiTokenRecord {
+        id,
+        token_hash: row.try_get("token_hash")?,
+        owner_pubkey: row.try_get("owner_pubkey")?,
+        name: row.try_get("name")?,
+        scopes,
+        channel_ids,
+        created_at: row.try_get("created_at")?,
+        expires_at: row.try_get("expires_at")?,
+        last_used_at: row.try_get("last_used_at")?,
+        revoked_at: row.try_get("revoked_at")?,
+    })
+}
+
+impl Db {
+    /// Create a new API token record.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_api_token(
+        &self,
+        community_id: CommunityId,
+        token_hash: &[u8],
+        owner_pubkey: &[u8],
+        name: &str,
+        scopes: &[String],
+        channel_ids: Option<&[Uuid]>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<Uuid> {
+        crate::api_token::create_api_token(
+            &self.pool,
+            *community_id.as_uuid(),
+            token_hash,
+            owner_pubkey,
+            name,
+            scopes,
+            channel_ids,
+            expires_at,
+        )
+        .await
+    }
+
+    /// Atomic conditional INSERT with 10-token limit (per (community, owner)).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_api_token_if_under_limit(
+        &self,
+        community_id: CommunityId,
+        token_hash: &[u8],
+        owner_pubkey: &[u8],
+        name: &str,
+        scopes: &[String],
+        channel_ids: Option<&[Uuid]>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<Option<Uuid>> {
+        crate::api_token::create_api_token_if_under_limit(
+            &self.pool,
+            *community_id.as_uuid(),
+            token_hash,
+            owner_pubkey,
+            name,
+            scopes,
+            channel_ids,
+            expires_at,
+        )
+        .await
+    }
+
+    /// Look up an active (non-revoked) API token by its SHA-256 hash,
+    /// scoped to the request's community.
+    ///
+    /// See [`crate::api_token::get_api_token_by_hash_including_revoked`] for the
+    /// row-44 conformance rationale — the `(community_id, token_hash)` key
+    /// is enforced both by the storage UNIQUE index and by this WHERE clause.
+    pub async fn get_api_token_by_hash(
+        &self,
+        community_id: CommunityId,
+        hash: &[u8],
+    ) -> Result<Option<ApiTokenRecord>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, token_hash, owner_pubkey, name, scopes, channel_ids,
+                   created_at, expires_at, last_used_at, revoked_at
+            FROM api_tokens
+            WHERE community_id = $1 AND token_hash = $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(community_id.as_uuid())
+        .bind(hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Ok(None),
+            Some(r) => parse_api_token_row(r).map(Some),
+        }
+    }
+
+    /// Look up an API token by hash, including revoked, scoped to community.
+    pub async fn get_api_token_by_hash_including_revoked(
+        &self,
+        community_id: CommunityId,
+        hash: &[u8],
+    ) -> Result<Option<ApiTokenRecord>> {
+        crate::api_token::get_api_token_by_hash_including_revoked(
+            &self.pool,
+            *community_id.as_uuid(),
+            hash,
+        )
+        .await
+    }
+
+    /// Record a token usage (update `last_used_at`), scoped to community.
+    pub async fn touch_api_token(&self, community_id: CommunityId, hash: &[u8]) -> Result<()> {
+        sqlx::query(
+            "UPDATE api_tokens SET last_used_at = NOW() WHERE community_id = $1 AND token_hash = $2",
+        )
+        .bind(community_id.as_uuid())
+        .bind(hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Alias for [`Self::touch_api_token`].
+    pub async fn update_token_last_used(
+        &self,
+        community_id: CommunityId,
+        hash: &[u8],
+    ) -> Result<()> {
+        self.touch_api_token(community_id, hash).await
+    }
+
+    /// List all active (non-revoked) tokens in a community, newest first.
+    pub async fn list_active_tokens(&self, community_id: CommunityId) -> Result<Vec<TokenSummary>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, owner_pubkey, scopes, created_at, expires_at
+            FROM api_tokens
+            WHERE community_id = $1 AND revoked_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1000
+            "#,
+        )
+        .bind(community_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id")?;
+            let scopes_json: serde_json::Value = row.try_get("scopes")?;
+            let scopes: Vec<String> = serde_json::from_value(scopes_json)
+                .map_err(|e| DbError::InvalidData(format!("scopes JSON: {e}")))?;
+
+            out.push(TokenSummary {
+                id,
+                name: row.try_get("name")?,
+                owner_pubkey: row.try_get("owner_pubkey")?,
+                scopes,
+                created_at: row.try_get("created_at")?,
+                expires_at: row.try_get("expires_at")?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// List all tokens for a (community, owner) pair (including revoked).
+    pub async fn list_tokens_by_owner(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Vec<ApiTokenRecord>> {
+        crate::api_token::list_tokens_by_owner(&self.pool, *community_id.as_uuid(), pubkey).await
+    }
+
+    /// Revoke a single token by ID, scoped to (community, owner).
+    pub async fn revoke_token(
+        &self,
+        community_id: CommunityId,
+        id: Uuid,
+        owner_pubkey: &[u8],
+        revoked_by: &[u8],
+    ) -> Result<bool> {
+        crate::api_token::revoke_token(
+            &self.pool,
+            *community_id.as_uuid(),
+            id,
+            owner_pubkey,
+            revoked_by,
+        )
+        .await
+    }
+
+    /// Revoke all active tokens for a (community, owner) pair.
+    pub async fn revoke_all_tokens(
+        &self,
+        community_id: CommunityId,
+        owner_pubkey: &[u8],
+        revoked_by: &[u8],
+    ) -> Result<u64> {
+        crate::api_token::revoke_all_tokens(
+            &self.pool,
+            *community_id.as_uuid(),
+            owner_pubkey,
+            revoked_by,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]

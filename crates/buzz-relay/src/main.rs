@@ -1756,7 +1756,7 @@ async fn shutdown_signal() {
     }
 }
 /// Reconstruct a `nostr::Event` from a [`DueReminder`] row for Redis pub/sub.
-fn reminder_to_event(reminder: &buzz_db::event::DueReminder) -> nostr::Event {
+fn reminder_to_event(reminder: &buzz_db::reminder::DueReminder) -> nostr::Event {
     let event_json = serde_json::json!({
         "id": hex::encode(&reminder.id),
         "pubkey": hex::encode(&reminder.pubkey),

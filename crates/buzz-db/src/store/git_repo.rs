@@ -16,6 +16,7 @@
 //! idempotent re-announce (same owner) from a collision (different owner), and
 //! backs the per-pubkey quota via `COUNT`.
 
+use crate::Db;
 use sqlx::{PgPool, Row as _};
 
 use crate::error::Result;
@@ -177,6 +178,52 @@ pub async fn release_repo_name(
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
+}
+
+impl Db {
+    /// Return the current owner of git repo name `repo_id` in `community`, or
+    /// `None` if unreserved. See [`crate::git_repo::repo_name_owner`].
+    pub async fn repo_name_owner(
+        &self,
+        community: CommunityId,
+        repo_id: &str,
+    ) -> Result<Option<String>> {
+        crate::git_repo::repo_name_owner(&self.pool, community, repo_id).await
+    }
+
+    /// Reserve a git repo name for `owner_pubkey` in `community` (NIP-34).
+    ///
+    /// See [`crate::git_repo::reserve_repo_name`] for the outcome semantics. The
+    /// per-pubkey quota is enforced by the caller against `count_repos_for_owner`.
+    pub async fn reserve_repo_name(
+        &self,
+        community: CommunityId,
+        repo_id: &str,
+        owner_pubkey: &str,
+    ) -> Result<crate::git_repo::ReserveOutcome> {
+        crate::git_repo::reserve_repo_name(&self.pool, community, repo_id, owner_pubkey).await
+    }
+
+    /// Count git repos reserved by `owner_pubkey` in `community` (quota check).
+    pub async fn count_repos_for_owner(
+        &self,
+        community: CommunityId,
+        owner_pubkey: &str,
+    ) -> Result<i64> {
+        crate::git_repo::count_repos_for_owner(&self.pool, community, owner_pubkey).await
+    }
+
+    /// Release a git repo name reservation held by `owner_pubkey` (rollback).
+    ///
+    /// Returns the number of rows removed (0 or 1). See [`crate::git_repo::release_repo_name`].
+    pub async fn release_repo_name(
+        &self,
+        community: CommunityId,
+        repo_id: &str,
+        owner_pubkey: &str,
+    ) -> Result<u64> {
+        crate::git_repo::release_repo_name(&self.pool, community, repo_id, owner_pubkey).await
+    }
 }
 
 #[cfg(test)]

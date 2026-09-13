@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{relay_members, Db, Result};
+use crate::{Db, Result};
 
 /// Community host-map row returned by [`Db::lookup_community_by_host`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,7 +302,9 @@ impl Db {
         // Serialize on the owner pubkey so concurrent creates to the same
         // owner cannot both pass the ownership count check.
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(relay_members::owner_count_advisory_lock_key(&owner_pubkey))
+            .bind(crate::relay_members::owner_count_advisory_lock_key(
+                &owner_pubkey,
+            ))
             .execute(&mut *tx)
             .await?;
 
@@ -330,7 +332,7 @@ impl Db {
             .fetch_one(&mut *tx)
             .await?;
 
-            if owned_count >= relay_members::max_communities_per_owner() {
+            if owned_count >= crate::relay_members::max_communities_per_owner() {
                 tx.rollback().await?;
                 return Ok(CreateCommunityWithOwnerResult::LimitReached);
             }
@@ -570,7 +572,7 @@ mod tests {
     #[test]
     fn community_implementation_and_tests_have_single_owners() {
         let community_source = include_str!("community.rs");
-        let lib_source = include_str!("lib.rs");
+        let lib_source = include_str!("../lib.rs");
         let operations = [
             "lookup_community_by_host",
             "is_community_active",

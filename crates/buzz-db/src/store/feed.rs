@@ -28,6 +28,9 @@
 /// before the query is issued so the SQL `LIMIT` clause always reflects this cap.
 pub const FEED_MAX_LIMIT: i64 = 100;
 
+use crate::Db;
+use crate::RouteDecision;
+use crate::RoutePredicate;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, QueryBuilder};
@@ -330,6 +333,232 @@ pub(crate) async fn query_activity_on(
 }
 
 // -- Tests --------------------------------------------------------------------
+
+impl Db {
+    /// Find events that @mention the given pubkey.
+    pub async fn query_feed_mentions(
+        &self,
+        community: CommunityId,
+        pubkey_bytes: &[u8],
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        crate::feed::query_mentions(
+            &self.pool,
+            community,
+            pubkey_bytes,
+            accessible_channel_ids,
+            since,
+            limit,
+        )
+        .await
+    }
+
+    /// [`Db::query_feed_mentions`] with replica routing — same contract and
+    /// classification-table requirement as [`Db::query_events_routed`].
+    ///
+    /// Feed queries route on the BOUNDED arm only: the `accessible_channel_ids`
+    /// parameter admits community-global rows alongside channel rows, so no
+    /// single channel's fence floor can prove completeness — the covered arm
+    /// is structurally unavailable, not merely unchosen.
+    pub async fn query_feed_mentions_routed(
+        &self,
+        path: &'static str,
+        community: CommunityId,
+        pubkey_bytes: &[u8],
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        match self.route_read(path, RoutePredicate::Bounded).await {
+            RouteDecision::Replica(mut tx, _entry, reason) => match crate::feed::query_mentions_on(
+                &mut tx,
+                community,
+                pubkey_bytes,
+                accessible_channel_ids,
+                since,
+                limit,
+            )
+            .await
+            {
+                Ok(events) => {
+                    Self::record_route(path, "replica", reason);
+                    Ok(events)
+                }
+                Err(e) => {
+                    tracing::warn!(path, "replica read failed; re-running on writer: {e}");
+                    Self::record_route(path, "writer", "replica_error");
+                    crate::feed::query_mentions(
+                        &self.pool,
+                        community,
+                        pubkey_bytes,
+                        accessible_channel_ids,
+                        since,
+                        limit,
+                    )
+                    .await
+                }
+            },
+            RouteDecision::Writer => {
+                crate::feed::query_mentions(
+                    &self.pool,
+                    community,
+                    pubkey_bytes,
+                    accessible_channel_ids,
+                    since,
+                    limit,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Find events that require action from the given pubkey.
+    ///
+    /// Includes unresolved attention-bearing Block instances alongside legacy
+    /// workflow approvals and reminders. The feed query preserves community
+    /// and accessible-channel scope; receipts only resolve their originating
+    /// Block instance inside that same boundary.
+    pub async fn query_feed_needs_action(
+        &self,
+        community: CommunityId,
+        pubkey_bytes: &[u8],
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        crate::feed::query_needs_action(
+            &self.pool,
+            community,
+            pubkey_bytes,
+            accessible_channel_ids,
+            since,
+            limit,
+        )
+        .await
+    }
+
+    /// [`Db::query_feed_needs_action`] with replica routing — BOUNDED arm
+    /// only; see [`Db::query_feed_mentions_routed`] for why the covered arm
+    /// is structurally unavailable to feed queries.
+    pub async fn query_feed_needs_action_routed(
+        &self,
+        path: &'static str,
+        community: CommunityId,
+        pubkey_bytes: &[u8],
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        match self.route_read(path, RoutePredicate::Bounded).await {
+            RouteDecision::Replica(mut tx, _entry, reason) => {
+                match crate::feed::query_needs_action_on(
+                    &mut tx,
+                    community,
+                    pubkey_bytes,
+                    accessible_channel_ids,
+                    since,
+                    limit,
+                )
+                .await
+                {
+                    Ok(events) => {
+                        Self::record_route(path, "replica", reason);
+                        Ok(events)
+                    }
+                    Err(e) => {
+                        tracing::warn!(path, "replica read failed; re-running on writer: {e}");
+                        Self::record_route(path, "writer", "replica_error");
+                        crate::feed::query_needs_action(
+                            &self.pool,
+                            community,
+                            pubkey_bytes,
+                            accessible_channel_ids,
+                            since,
+                            limit,
+                        )
+                        .await
+                    }
+                }
+            }
+            RouteDecision::Writer => {
+                crate::feed::query_needs_action(
+                    &self.pool,
+                    community,
+                    pubkey_bytes,
+                    accessible_channel_ids,
+                    since,
+                    limit,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Find recent activity across accessible channels.
+    pub async fn query_feed_activity(
+        &self,
+        community: CommunityId,
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        crate::feed::query_activity(&self.pool, community, accessible_channel_ids, since, limit)
+            .await
+    }
+
+    /// [`Db::query_feed_activity`] with replica routing — BOUNDED arm only;
+    /// see [`Db::query_feed_mentions_routed`] for why the covered arm is
+    /// structurally unavailable to feed queries.
+    pub async fn query_feed_activity_routed(
+        &self,
+        path: &'static str,
+        community: CommunityId,
+        accessible_channel_ids: &[Uuid],
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        match self.route_read(path, RoutePredicate::Bounded).await {
+            RouteDecision::Replica(mut tx, _entry, reason) => match crate::feed::query_activity_on(
+                &mut tx,
+                community,
+                accessible_channel_ids,
+                since,
+                limit,
+            )
+            .await
+            {
+                Ok(events) => {
+                    Self::record_route(path, "replica", reason);
+                    Ok(events)
+                }
+                Err(e) => {
+                    tracing::warn!(path, "replica read failed; re-running on writer: {e}");
+                    Self::record_route(path, "writer", "replica_error");
+                    crate::feed::query_activity(
+                        &self.pool,
+                        community,
+                        accessible_channel_ids,
+                        since,
+                        limit,
+                    )
+                    .await
+                }
+            },
+            RouteDecision::Writer => {
+                crate::feed::query_activity(
+                    &self.pool,
+                    community,
+                    accessible_channel_ids,
+                    since,
+                    limit,
+                )
+                .await
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
