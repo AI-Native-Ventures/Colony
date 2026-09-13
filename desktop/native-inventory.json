@@ -1,12 +1,13 @@
 {
   "files": {
-    "rust_total": 523,
-    "tauri_coupled": 210,
-    "portable": 313,
+    "rust_total": 525,
+    "tauri_coupled": 211,
+    "portable": 314,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
       "src-tauri/src/archive/mod.rs",
+      "src-tauri/src/channel_head_cache.rs",
       "src-tauri/src/colony_provisioning.rs",
       "src-tauri/src/command_registry.rs",
       "src-tauri/src/commands/agent_access.rs",
@@ -280,6 +281,7 @@
       "src-tauri/src/commands/mesh_llm_tests.rs",
       "src-tauri/src/commands/mesh_readiness.rs",
       "src-tauri/src/commands/messages/feed.rs",
+      "src-tauri/src/commands/messages/thread_ref.rs",
       "src-tauri/src/commands/messages_tests.rs",
       "src-tauri/src/commands/mod.rs",
       "src-tauri/src/commands/onboarding_history_hermes.rs",
@@ -535,10 +537,10 @@
     ]
   },
   "commands": {
-    "registered": 382,
-    "defined": 382,
+    "registered": 385,
+    "defined": 385,
     "by_reach": {
-      "frontend": 368,
+      "frontend": 371,
       "NO CALLER FOUND": 10,
       "frontend-plugin-prefixed": 2,
       "rust-internal": 2
@@ -557,16 +559,16 @@
     ]
   },
   "params": {
-    "AppHandle": 419,
-    "State": 272,
+    "AppHandle": 424,
+    "State": 274,
     "Window": 7,
     "ipc::Request": 2,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 416,
-      "State": 272,
+      "AppHandle": 421,
+      "State": 274,
       "Window": 7,
       "ipc::Request": 2,
       "ipc::Channel": 4
@@ -598,7 +600,7 @@
     ".run_on_main_thread(": 3,
     ".config()": 5,
     ".env()": 1,
-    ".path()": 32,
+    ".path()": 33,
     ".exit(": 5
   },
   "events": {
@@ -679,6 +681,7 @@
     "src-tauri/src/commands/teams.rs": 4,
     "src-tauri/src/electron_host/migration.rs": 4,
     "src-tauri/src/commands/canvas.rs": 4,
+    "src-tauri/src/channel_head_cache.rs": 3,
     "src-tauri/src/commands/subscription_power.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
@@ -852,7 +855,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:291",
+        "src/features/communities/useCommunityInit.ts:296",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -998,6 +1001,33 @@
       "example_sites": [
         "src/parity/session/script.ts:680",
         "src/shared/api/tauri.ts:625"
+      ]
+    },
+    "channel_head_cache_clear": {
+      "defining_file": "src-tauri/src/channel_head_cache.rs",
+      "module": "channel_head_cache",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriChannelHeadCache.ts:24"
+      ]
+    },
+    "channel_head_cache_load": {
+      "defining_file": "src-tauri/src/channel_head_cache.rs",
+      "module": "channel_head_cache",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriChannelHeadCache.ts:14"
+      ]
+    },
+    "channel_head_cache_store": {
+      "defining_file": "src-tauri/src/channel_head_cache.rs",
+      "module": "channel_head_cache",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriChannelHeadCache.ts:21"
       ]
     },
     "check_pipeline_hotstart": {
@@ -2575,7 +2605,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:277",
+        "src/features/communities/useCommunityInit.ts:282",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:88"
       ]
@@ -3645,7 +3675,7 @@
       "example_sites": [
         "src/features/factory/lib/delegation.ts:10",
         "src/parity/session/script.ts:550",
-        "src/shared/api/sendChannelMessage.ts:70"
+        "src/shared/api/sendChannelMessage.ts:76"
       ]
     },
     "send_managed_agent_channel_message": {
