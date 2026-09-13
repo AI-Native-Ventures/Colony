@@ -25,7 +25,11 @@ export function RightAuxiliaryPane({
   return (
     <aside
       className={cn(
-        "group/right-pane relative flex h-full shrink-0 flex-col overflow-hidden bg-background before:pointer-events-none before:absolute before:bottom-0 before:left-0 before:top-0 before:z-50 before:w-px before:bg-border/80 before:content-['']",
+        // `isolate` keeps this pane's own z-40 header chrome in its own
+        // stacking context, and `z-31` lifts the pane above the channel's
+        // shared z-30 header blur strip in split layout so that chrome (X/Edit)
+        // stays clickable, while remaining under the z-41 thread drawer.
+        "group/right-pane relative isolate z-31 flex h-full shrink-0 flex-col overflow-hidden bg-background before:pointer-events-none before:absolute before:bottom-0 before:left-0 before:top-0 before:z-50 before:w-px before:bg-border/80 before:content-['']",
       )}
       data-testid={testId}
       style={{

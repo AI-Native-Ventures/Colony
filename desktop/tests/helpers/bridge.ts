@@ -434,6 +434,11 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   ensureStarterChannelsErrors?: string[];
   /** Reject successive mock `join_channel` calls, then resume. */
   joinChannelErrors?: string[];
+  channelsReadDelayMs?: number;
+  /** Return not-modified for this many reads before resuming full payloads. */
+  channelsNotModifiedResponses?: number;
+  /** When true, a matching knownHash returns a not-modified channel payload. */
+  honorChannelsKnownHash?: boolean;
   /** Number of seeded rows in the deep-history fixture. Defaults to 600. */
   deepHistoryMessageCount?: number;
   feedReadError?: string;
@@ -461,6 +466,11 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
    * deliver live reply/aux events while an older response is in flight. */
   threadRepliesDelayMs?: number;
+  /** Hold every `get_thread_replies` response until
+   * `__BUZZ_E2E_RELEASE_THREAD_REPLIES__()` is called — a manual gate the test
+   * releases explicitly, so the thread-aux backfill provably cannot land (and
+   * heal a stale head) before assertions run. See e2eBridge mock config. */
+  deferThreadReplies?: boolean;
   usersBatchDelayMs?: number;
   /** Delay (ms) for older-history fetches; see e2eBridge mock config. */
   channelWindowDelayMs?: number;
@@ -482,6 +492,10 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   nostrBindSignDelayMs?: number;
   /** Reject successive mock WebSocket connect attempts, then resume. */
   websocketConnectErrors?: string[];
+  /** Deliver AUTH synchronously, before the mock connect command resolves. */
+  websocketAuthBeforeConnectResolves?: boolean;
+  /** Stall the first AUTH signing command forever; later attempts complete. */
+  stallFirstAuthSigning?: boolean;
   stallWebsocketSends?: boolean;
   userSearchDelayMs?: number;
   /**

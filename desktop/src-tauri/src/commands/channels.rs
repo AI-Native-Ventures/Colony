@@ -8,6 +8,13 @@ use crate::{
     relay::{query_relay, relay_api_base_url_with_override, submit_event, submit_event_with_keys},
 };
 
+// Split out to keep this file under the desktop file-size ratchet.
+#[path = "channels_last_messages.rs"]
+mod last_messages;
+#[cfg(test)]
+pub(super) use last_messages::last_message_filter_batches;
+use last_messages::{last_message_filter, query_last_messages};
+
 // ── Reads (pure-nostr via /query) ────────────────────────────────────────────
 
 const DIRECTORY_PAGE_SIZE: usize = 500;
@@ -309,19 +316,13 @@ async fn fetch_channels(state: &AppState) -> Result<Vec<ChannelInfo>, String> {
     }
 
     // Phase 2 — concurrent: member counts (step 4) and last-message timestamps
-    // (step 5). Both tolerate failures — empty defaults leave counts at 0 and
-    // timestamps at None rather than aborting.
+    // (step 5). Member-count failures degrade to zero. Timestamp failures
+    // abort this refresh so the frontend keeps its previous Recent ordering.
     let all_channel_ids: Vec<String> = channels.iter().map(|c| c.id.clone()).collect();
     if !all_channel_ids.is_empty() {
         let last_msg_filters: Vec<serde_json::Value> = all_channel_ids
             .iter()
-            .map(|id| {
-                serde_json::json!({
-                    "kinds": [9, 40002],
-                    "#h": [id],
-                    "limit": 1
-                })
-            })
+            .map(|id| last_message_filter(id))
             .collect();
 
         // Bind both filter arrays before the join so their lifetimes cover
@@ -334,10 +335,14 @@ async fn fetch_channels(state: &AppState) -> Result<Vec<ChannelInfo>, String> {
         let (members_result, message_result) = tokio::join!(
             // Step 4: batch-fetch kind:39002 for member counts.
             query_relay(state, &member_count_filters),
-            // Step 5: per-channel last-message filter. Uses per-channel `#h`
-            // so the relay can push each query to its indexed channel_id column.
-            query_relay(state, &last_msg_filters),
+            // Step 5: preserve one indexed filter per channel while keeping
+            // every relay request within its aggregate explicit-channel cap.
+            query_last_messages(state, &last_msg_filters),
         );
+        // Message timestamps drive the user-selected Recent ordering. Unlike
+        // member counts, a failed query must not masquerade as an authoritative
+        // empty result and clear every cached timestamp in the frontend.
+        let messages = message_result?;
 
         let membership = collect_members_by_channel(&members_result.unwrap_or_default());
         for channel in &mut channels {
@@ -349,7 +354,7 @@ async fn fetch_channels(state: &AppState) -> Result<Vec<ChannelInfo>, String> {
 
         let mut last_message_by_channel: std::collections::HashMap<String, u64> =
             std::collections::HashMap::new();
-        for ev in &message_result.unwrap_or_default() {
+        for ev in &messages {
             if let Some(ch_id) = ev.tags.iter().find_map(|t| {
                 let s = t.as_slice();
                 (s.len() >= 2 && s[0] == "h").then(|| s[1].clone())

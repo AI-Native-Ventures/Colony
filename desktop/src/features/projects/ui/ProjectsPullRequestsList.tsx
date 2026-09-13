@@ -1,3 +1,6 @@
+import * as React from "react";
+
+import { useIncrementalMount } from "@/shared/hooks/useIncrementalMount";
 import { GitPullRequest, MessageSquare } from "lucide-react";
 
 import type {
@@ -56,16 +59,26 @@ function nextStepLabel(status: ProjectPullRequest["status"]) {
   return "Review PR";
 }
 
-function PullRequestGridCard({
+// Memoized: these cards render in unbounded lists, and any Projects-view
+// state change used to re-render every one of them. `onOpen` is the caller's
+// stable handler and the repository travels as a prop, so no row needs a
+// freshly-allocated closure (upstream #6460).
+const PullRequestGridCard = React.memo(function PullRequestGridCard({
   project,
   profiles,
   pullRequest,
   onOpen,
+  repository,
 }: {
   project: Project;
   profiles?: UserProfileLookup;
   pullRequest: ProjectPullRequest;
-  onOpen: (project: Project, pullRequest: ProjectPullRequest) => void;
+  onOpen: (
+    project: Project,
+    repository: Repository,
+    pullRequest: ProjectPullRequest,
+  ) => void;
+  repository: Repository;
 }) {
   const authorLabel = resolveUserLabel({
     profiles,
@@ -79,7 +92,7 @@ function PullRequestGridCard({
     >
       <button
         className="absolute inset-0"
-        onClick={() => onOpen(project, pullRequest)}
+        onClick={() => onOpen(project, repository, pullRequest)}
         type="button"
       >
         <span className="sr-only">View {pullRequest.title}</span>
@@ -101,7 +114,7 @@ function PullRequestGridCard({
             className="relative z-10 h-7 shrink-0 px-2.5"
             onClick={(event) => {
               event.stopPropagation();
-              onOpen(project, pullRequest);
+              onOpen(project, repository, pullRequest);
             }}
             size="xs"
             type="button"
@@ -145,18 +158,25 @@ function PullRequestGridCard({
       </div>
     </Card>
   );
-}
+});
 
-function PullRequestListRow({
+// Memoized for the same reason as PullRequestGridCard (upstream #6460).
+const PullRequestListRow = React.memo(function PullRequestListRow({
   project,
   profiles,
   pullRequest,
   onOpen,
+  repository,
 }: {
   project: Project;
   profiles?: UserProfileLookup;
   pullRequest: ProjectPullRequest;
-  onOpen: (project: Project, pullRequest: ProjectPullRequest) => void;
+  onOpen: (
+    project: Project,
+    repository: Repository,
+    pullRequest: ProjectPullRequest,
+  ) => void;
+  repository: Repository;
 }) {
   const authorLabel = resolveUserLabel({
     profiles,
@@ -170,7 +190,7 @@ function PullRequestListRow({
     >
       <button
         className="absolute inset-0"
-        onClick={() => onOpen(project, pullRequest)}
+        onClick={() => onOpen(project, repository, pullRequest)}
         type="button"
       >
         <span className="sr-only">View {pullRequest.title}</span>
@@ -222,7 +242,9 @@ function PullRequestListRow({
             {relativeTime(pullRequest.createdAt)}
           </span>
           <ProjectListRowMenu label={`More options for ${pullRequest.title}`}>
-            <DropdownMenuItem onSelect={() => onOpen(project, pullRequest)}>
+            <DropdownMenuItem
+              onSelect={() => onOpen(project, repository, pullRequest)}
+            >
               <GitPullRequest className="h-4 w-4" />
               {nextStepLabel(pullRequest.status)}
             </DropdownMenuItem>
@@ -231,7 +253,7 @@ function PullRequestListRow({
       </div>
     </div>
   );
-}
+});
 
 export function ProjectsPullRequestsList({
   embedded,
@@ -245,6 +267,11 @@ export function ProjectsPullRequestsList({
   pullRequests,
   viewMode,
 }: ProjectsPullRequestsListProps) {
+  // Mount long lists progressively so a single React commit never blocks the
+  // main thread with hundreds of heavy rows (upstream #6460).
+  const mountedCount = useIncrementalMount(pullRequests.length);
+  const visiblePullRequests = pullRequests.slice(0, mountedCount);
+
   if (isLoading) {
     return (
       <div
@@ -293,15 +320,14 @@ export function ProjectsPullRequestsList({
       <div className="space-y-3">
         {loadNotice}
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {pullRequests.map(({ project, pullRequest, repository }) => (
+          {visiblePullRequests.map(({ project, pullRequest, repository }) => (
             <PullRequestGridCard
               key={`${repository.id}:${pullRequest.id}`}
-              onOpen={(selectedProject, selectedPullRequest) =>
-                onOpen(selectedProject, repository, selectedPullRequest)
-              }
+              onOpen={onOpen}
               profiles={profiles}
               project={project}
               pullRequest={pullRequest}
+              repository={repository}
             />
           ))}
         </div>
@@ -318,15 +344,14 @@ export function ProjectsPullRequestsList({
         }
         data-testid="projects-list-container"
       >
-        {pullRequests.map(({ project, pullRequest, repository }) => (
+        {visiblePullRequests.map(({ project, pullRequest, repository }) => (
           <PullRequestListRow
             key={`${repository.id}:${pullRequest.id}`}
-            onOpen={(selectedProject, selectedPullRequest) =>
-              onOpen(selectedProject, repository, selectedPullRequest)
-            }
+            onOpen={onOpen}
             profiles={profiles}
             project={project}
             pullRequest={pullRequest}
+            repository={repository}
           />
         ))}
       </div>

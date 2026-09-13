@@ -20,6 +20,7 @@
 mod agent_usage;
 mod metric_store;
 mod pipeline;
+pub mod retention;
 pub mod store;
 mod store_migrations;
 
@@ -773,6 +774,24 @@ pub async fn get_agent_usage_series(
     let relay_url = relay_ws_url_with_override(&state);
     run_archive_db_task(move |conn| agent_usage_series(conn, &identity_pk, &relay_url, &request))
         .await
+}
+
+/// The local observer-frame retention window, in days.
+#[tauri::command]
+pub async fn get_observer_retention_days() -> Result<i64, String> {
+    run_archive_db_task(retention::get_observer_retention_days).await
+}
+
+/// Set the local observer-frame retention window, in days.
+#[tauri::command]
+pub async fn set_observer_retention_days(days: i64) -> Result<(), String> {
+    run_archive_db_task(move |conn| retention::set_observer_retention_days(conn, days)).await
+}
+
+/// On-disk size of the local archive, split into used and reclaimable bytes.
+#[tauri::command]
+pub async fn archive_size_stats() -> Result<retention::ArchiveSizeStats, String> {
+    run_archive_db_task(retention::size_stats).await
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

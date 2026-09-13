@@ -105,6 +105,40 @@ test("selected Inbox and Agents rows keep their highlight without bold text", as
   await expect(agents).toHaveCSS("font-weight", "400");
 });
 
+test("primary navigation rows share the same inactive emphasis", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+
+  const primaryMenu = page.getByTestId("sidebar-primary-menu");
+  // Colony groups Pulse, Projects and Workflows behind the "More" nav group,
+  // so the rows asserted here are the ones the primary menu always renders.
+  const inactiveRows = [
+    primaryMenu.getByRole("button", { name: "Inbox", exact: true }),
+    page.getByTestId("open-work-view"),
+    page.getByTestId("open-agents-view"),
+  ];
+
+  for (const row of inactiveRows) {
+    await expect(row).toHaveAttribute("data-active", "false");
+    await expect(row.locator("[data-sidebar=menu-label]")).toHaveCSS(
+      "opacity",
+      "0.8",
+    );
+    await expect(row.locator("svg")).toHaveCSS("opacity", "0.8");
+  }
+
+  const work = page.getByTestId("open-work-view");
+  await work.click();
+  await expect(work).toHaveAttribute("data-active", "true");
+  await expect(work.locator("[data-sidebar=menu-label]")).toHaveCSS(
+    "opacity",
+    "1",
+  );
+  await expect(work.locator("svg")).toHaveCSS("opacity", "1");
+});
+
 test("hovering a channel keeps its text color", async ({ page }) => {
   await page.goto("/");
   const channel = page.getByTestId("channel-engineering");

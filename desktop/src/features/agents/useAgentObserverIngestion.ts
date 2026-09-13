@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsStore";
+import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsBridge";
 import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,

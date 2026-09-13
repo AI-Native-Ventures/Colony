@@ -38,6 +38,8 @@ type MockFeedWindow = Window & {
     content: string;
     createdAt?: number;
     id?: string;
+    kind?: number;
+    mentionPubkeys?: string[];
     parentEventId?: string;
     pubkey?: string;
   }) => {
@@ -789,33 +791,18 @@ test("creates the DM before preparing a persona mention", async ({ page }) => {
   expect(expandedOpenIndex).toBeLessThan(startIndex);
   expect(sendCommands).not.toContain("add_channel_members");
 
-  const sentMessageCommand = sendCommandPayloads.find((entry) => {
-    if (entry.command !== "plugin:websocket|send") {
-      return false;
-    }
-    const data = (entry.payload as { message?: { data?: string } } | undefined)
-      ?.message?.data;
-    if (!data) {
-      return false;
-    }
-    const frame = JSON.parse(data) as unknown[];
-    return (
-      frame[0] === "EVENT" &&
-      (frame[1] as { content?: string } | undefined)?.content.includes(
-        "for a hand",
-      )
-    );
-  });
-  const sentMessageData = (
-    sentMessageCommand?.payload as { message?: { data?: string } } | undefined
-  )?.message?.data;
-  expect(sentMessageData).toBeTruthy();
-  const sentMessageEvent = (
-    JSON.parse(sentMessageData ?? "[]") as [string, { tags?: string[][] }]
-  )[1];
-  const sentChannelId = sentMessageEvent.tags?.find(
-    (tag) => tag[0] === "h",
-  )?.[1];
+  const sentMessageCommand = sendCommandPayloads.find(
+    (entry) =>
+      entry.command === "send_channel_message" &&
+      (
+        entry.payload as { content?: string; channelId?: string } | undefined
+      )?.content?.includes("for a hand"),
+  );
+  const sentChannelId = (
+    sentMessageCommand?.payload as
+      | { content?: string; channelId?: string }
+      | undefined
+  )?.channelId;
   expect(sentChannelId).toBeTruthy();
   await expect(
     page.locator("[data-active='true'][data-channel-id]"),
@@ -1058,7 +1045,15 @@ test("drops an expanded DM after the first message fails", async ({ page }) => {
   await expect(input).toContainText(GUIDE_NAME);
 
   const commandsAfterFailure = await readCommandPayloadLog(page);
-  const failedSendChannelId = await readOutgoingChannelId(page, "for a hand");
+  const failedSendChannelId = (
+    commandsAfterFailure.find(
+      (entry) =>
+        entry.command === "send_channel_message" &&
+        (
+          entry.payload as { content?: string; channelId?: string } | undefined
+        )?.content?.includes("for a hand"),
+    )?.payload as { content?: string; channelId?: string } | undefined
+  )?.channelId;
   expect(failedSendChannelId).toBeTruthy();
   expect(commandsAfterFailure.map((entry) => entry.command)).not.toContain(
     "add_channel_members",
@@ -1085,29 +1080,15 @@ test("drops an expanded DM after the first message fails", async ({ page }) => {
     ),
   ).toBe(baselineOpenDmCount + 1);
   const retryCommands = allCommands.slice(retryBaseline);
-  const retrySend = retryCommands.find((entry) => {
-    if (entry.command !== "plugin:websocket|send") {
-      return false;
-    }
-    const data = (entry.payload as { message?: { data?: string } } | undefined)
-      ?.message?.data;
-    if (!data) {
-      return false;
-    }
-    const frame = JSON.parse(data) as unknown[];
-    return (
-      frame[0] === "EVENT" &&
-      (frame[1] as { content?: string } | undefined)?.content === retryMessage
-    );
-  });
-  const retrySendData = (
-    retrySend?.payload as { message?: { data?: string } } | undefined
-  )?.message?.data;
-  expect(retrySendData).toBeTruthy();
-  const retryEvent = (
-    JSON.parse(retrySendData ?? "[]") as [string, { tags?: string[][] }]
-  )[1];
-  const retryChannelId = retryEvent.tags?.find((tag) => tag[0] === "h")?.[1];
+  const retrySend = retryCommands.find(
+    (entry) =>
+      entry.command === "send_channel_message" &&
+      (entry.payload as { content?: string; channelId?: string } | undefined)
+        ?.content === retryMessage,
+  );
+  const retryChannelId = (
+    retrySend?.payload as { content?: string; channelId?: string } | undefined
+  )?.channelId;
   expect(retryChannelId).toBeTruthy();
   expect(retryChannelId).not.toBe(failedSendChannelId);
   await expect(
@@ -1241,7 +1222,7 @@ test("does not reopen a direct message after leaving the composer", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 });
 
-test("does not reopen a sent direct message after leaving during cache reseed", async ({
+test("opens a sent direct message without waiting for a channel-list refresh", async ({
   page,
 }) => {
   await page.goto("/");
@@ -1251,29 +1232,37 @@ test("does not reopen a sent direct message after leaving during cache reseed", 
   await page
     .getByTestId(`new-dm-result-${TEST_IDENTITIES.charlie.pubkey}`)
     .click();
-  const staleMessage = "Stay on the channel after cache reseed";
-  await page.getByTestId("message-input").fill(staleMessage);
+  const message = "Open without a channel-list refresh";
+  await page.getByTestId("message-input").fill(message);
+  const baselineChannelsReads = commandCount(
+    await readCommandLog(page),
+    "get_channels",
+  );
+  const baselineHttpSends = commandCount(
+    await readCommandLog(page),
+    "send_channel_message",
+  );
   await page.evaluate(() => {
     const testWindow = window as Window & {
       __BUZZ_E2E__?: { mock?: { channelsReadDelayMs?: number } };
     };
     testWindow.__BUZZ_E2E__ ??= {};
     testWindow.__BUZZ_E2E__.mock ??= {};
-    testWindow.__BUZZ_E2E__.mock.channelsReadDelayMs = 1_000;
+    testWindow.__BUZZ_E2E__.mock.channelsReadDelayMs = 3_000;
   });
 
   await page.getByTestId("send-message").click();
-  await expect
-    .poll(async () => hasOutgoingEventWithContent(page, staleMessage))
-    .toBe(true);
-
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await page.waitForTimeout(1_250);
-  await expect(page).toHaveURL(
-    new RegExp(`/channels/${GENERAL_CHANNEL_ID}(?:\\?|$)`),
+  await expect(page.getByTestId("chat-title")).toHaveText("charlie", {
+    timeout: 1_000,
+  });
+  await expect(page.getByTestId("message-timeline")).toContainText(message);
+  expect(commandCount(await readCommandLog(page), "get_channels")).toBe(
+    baselineChannelsReads,
   );
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  expect(commandCount(await readCommandLog(page), "send_channel_message")).toBe(
+    baselineHttpSends + 1,
+  );
+  await expect(page).toHaveURL(/\/channels\/[0-9a-f-]+(?:\?|$)/);
 });
 
 test("shows capped participant stack in group direct message header", async ({
@@ -1608,12 +1597,83 @@ test("create ephemeral stream shows sidebar and header affordances", async ({
     /Ephemeral channel\. Cleans up in 14 days\./,
   );
 
+  const channelRow = page.getByTestId(`channel-${channelName}`);
+  const channelId = await channelRow.getAttribute("data-channel-id");
+  if (!channelId) {
+    throw new Error("Created ephemeral channel is missing its channel id.");
+  }
+
+  await waitForMockLiveSubscription(page, channelName);
+  await page.getByTestId("channel-general").click();
+  await page.evaluate(
+    ({ agentPubkey, channelId: activeChannelId }) => {
+      (window as MockFeedWindow).__BUZZ_E2E_SEED_ACTIVE_TURNS__?.({
+        agentPubkey,
+        channelId: activeChannelId,
+        turnId: "ephemeral-sidebar-status",
+      });
+    },
+    { agentPubkey: OWNED_RELAY_AGENT_PUBKEY, channelId },
+  );
+
+  await expect(
+    page.getByTestId(`channel-working-${channelName}`),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId(`channel-ephemeral-${channelName}`),
+  ).toHaveCount(0);
+
+  await page.evaluate(
+    ({ agentPubkey, channelId: activeChannelId }) => {
+      (window as MockFeedWindow).__BUZZ_E2E_SEED_ACTIVE_TURNS__?.({
+        agentPubkey,
+        channelId: activeChannelId,
+        turnId: "ephemeral-sidebar-status",
+        kind: "turn_completed",
+      });
+    },
+    { agentPubkey: OWNED_RELAY_AGENT_PUBKEY, channelId },
+  );
+  await expect(
+    page.getByTestId(`channel-ephemeral-${channelName}`),
+  ).toBeVisible();
+
   await page
     .getByRole("button", { name: "Toggle Sidebar", exact: true })
     .click();
   await expect(
     page.getByTestId(`channel-ephemeral-${channelName}`),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Toggle Sidebar", exact: true })
+    .click();
+
+  await page.evaluate(
+    ({ channelName: targetChannelName, mentionPubkey, senderPubkey }) => {
+      (window as MockFeedWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: targetChannelName,
+        content: "Unread mention in an ephemeral channel",
+        kind: 40002,
+        mentionPubkeys: [mentionPubkey],
+        pubkey: senderPubkey,
+      });
+    },
+    {
+      channelName,
+      mentionPubkey: MOCK_IDENTITY_PUBKEY,
+      senderPubkey: TEST_IDENTITIES.alice.pubkey,
+    },
+  );
+
+  // Colony marks a top-level channel unread by bolding the row (the dot is for
+  // thread unreads, the count badge was retired in #1253), so that is the
+  // affordance the ephemeral badge has to stand down for.
+  await expect(page.getByTestId(`channel-${channelName}`)).toHaveClass(
+    /font-bold/,
+  );
+  await expect(
+    page.getByTestId(`channel-ephemeral-${channelName}`),
+  ).toHaveCount(0);
 });
 
 test("ephemeral countdown refreshes when switching channels after a clock jump", async ({
@@ -1782,8 +1842,15 @@ test("empty channel shows intro actions", async ({ page }) => {
   await expect(
     page.getByTestId("channel-intro-action-create-channel"),
   ).toHaveCount(0);
+  const addAgentsAction = page.getByTestId("channel-intro-action-create-agent");
+  await expect(addAgentsAction).toBeVisible();
   await expect(
-    page.getByTestId("channel-intro-action-create-agent"),
+    addAgentsAction.getByText("Add agents", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addAgentsAction.getByText("Bring them in.", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(
     page.getByTestId("channel-intro-action-add-people"),
@@ -1803,7 +1870,7 @@ test("empty channel shows intro actions", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
 
-  await page.getByTestId("channel-intro-action-create-agent").click();
+  await addAgentsAction.click();
   await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
 
   await page.keyboard.press("Escape");
@@ -2567,6 +2634,85 @@ test("manage channel updates details", async ({ page }) => {
   await expect(
     reopenedEditDialog.getByTestId("channel-management-purpose"),
   ).toHaveCount(0);
+});
+
+test("channel management keeps both description paragraphs visible for editors and readers", async ({
+  page,
+}) => {
+  const description =
+    "Post deploy requests here before 3pm.\n\nFor emergencies, ping the on-call directly.\nInclude the service name and rollback plan.";
+  const visibleFragment = "Include the service name and rollback plan.";
+
+  await page.goto("/");
+  await page.waitForFunction(
+    () =>
+      typeof window.__BUZZ_E2E_MUTATE_CHANNEL__ === "function" &&
+      typeof window.__BUZZ_E2E_INVALIDATE_CHANNELS__ === "function",
+  );
+  await page.evaluate(
+    async ({ generalChannelId, randomChannelId, description }) => {
+      const bridge = window as Window & {
+        __BUZZ_E2E_INVALIDATE_CHANNELS__: () => Promise<void>;
+        __BUZZ_E2E_MUTATE_CHANNEL__: (options: {
+          channelId: string;
+          description?: string;
+        }) => void;
+      };
+      for (const channelId of [generalChannelId, randomChannelId]) {
+        bridge.__BUZZ_E2E_MUTATE_CHANNEL__({ channelId, description });
+      }
+      await bridge.__BUZZ_E2E_INVALIDATE_CHANNELS__();
+    },
+    {
+      generalChannelId: GENERAL_CHANNEL_ID,
+      randomChannelId: RANDOM_CHANNEL_ID,
+      description,
+    },
+  );
+
+  for (const [channelName, editable] of [
+    ["general", true],
+    ["random", false],
+  ] as const) {
+    await openChannelManagement(page, channelName);
+    const summary = page.getByTestId("channel-management-description");
+    await expect(summary).toHaveText(description);
+    await expect(page.getByTestId("channel-management-edit")).toHaveCount(
+      editable ? 1 : 0,
+    );
+
+    const fragmentBounds = await summary.evaluate((element, fragment) => {
+      const textNode = Array.from(element.childNodes).find(
+        (node) => node.nodeType === Node.TEXT_NODE,
+      );
+      if (!textNode?.textContent) {
+        throw new Error("channel summary text node is missing");
+      }
+      const start = textNode.textContent.indexOf(fragment);
+      if (start < 0) {
+        throw new Error(`channel summary is missing fragment: ${fragment}`);
+      }
+      const range = document.createRange();
+      range.setStart(textNode, start);
+      range.setEnd(textNode, start + fragment.length);
+      const textRect = range.getBoundingClientRect();
+      const containerRect = element.getBoundingClientRect();
+      return {
+        containerBottom: containerRect.bottom,
+        containerTop: containerRect.top,
+        textBottom: textRect.bottom,
+        textTop: textRect.top,
+      };
+    }, visibleFragment);
+    expect(fragmentBounds.textTop).toBeGreaterThanOrEqual(
+      fragmentBounds.containerTop - 1,
+    );
+    expect(fragmentBounds.textBottom).toBeLessThanOrEqual(
+      fragmentBounds.containerBottom + 1,
+    );
+
+    await closeChannelManagement(page);
+  }
 });
 
 test("manage channel shows member avatars and owner-only row controls", async ({
@@ -3890,7 +4036,40 @@ test("members sidebar virtualizes large channel rosters", async ({ page }) => {
   await expect(memberRows.first()).toBeVisible();
   expect(await memberRows.count()).toBeLessThan(50);
 
+  const firstGeneratedRow = memberList.getByTestId(
+    `sidebar-member-${pubkeys[0]}`,
+  );
+  await expect
+    .poll(() =>
+      firstGeneratedRow.evaluate(
+        (row) =>
+          getComputedStyle(row.parentElement as HTMLElement).contentVisibility,
+      ),
+    )
+    .toBe("visible");
+
   const virtualizedList = memberList.locator(".overflow-y-auto");
+  await page.evaluate(() => document.fonts.ready);
+
+  const heights: number[] = [];
+  for (const ratio of [0, 0.1, 0.25, 0.5, 0.75, 1]) {
+    heights.push(
+      await virtualizedList.evaluate(async (element, ratio) => {
+        element.scrollTop =
+          (element.scrollHeight - element.clientHeight) * ratio;
+        element.dispatchEvent(new Event("scroll"));
+
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+
+        return element.scrollHeight;
+      }, ratio),
+    );
+  }
+
+  expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(120);
+
   await virtualizedList.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
     element.dispatchEvent(new Event("scroll"));
@@ -3898,6 +4077,25 @@ test("members sidebar virtualizes large channel rosters", async ({ page }) => {
   await expect(
     memberList.getByTestId(`sidebar-member-${pubkeys.at(-1)}`),
   ).toBeVisible();
+});
+
+test("opening a human-only members sidebar skips managed runtime discovery", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const baselineCommands = await readCommandLog(page);
+  const baselineRuntimeListCount = commandCount(
+    baselineCommands,
+    "list_managed_agent_runtimes",
+  );
+
+  await openMembersSidebar(page, "random");
+  await expect(page.getByTestId("members-sidebar-people")).toBeVisible();
+
+  const commands = await readCommandLog(page);
+  expect(commandCount(commands, "list_managed_agent_runtimes")).toBe(
+    baselineRuntimeListCount,
+  );
 });
 
 test("members sidebar can invite relay-authorized agents", async ({ page }) => {
@@ -4411,8 +4609,17 @@ test("members sidebar can stop and start a managed bot in this community", async
     baselineCommands,
     "stop_managed_agent",
   );
+  const baselineRuntimeListCount = commandCount(
+    baselineCommands,
+    "list_managed_agent_runtimes",
+  );
 
   await openMembersSidebar(page, "general");
+  await expect
+    .poll(async () =>
+      commandCount(await readCommandLog(page), "list_managed_agent_runtimes"),
+    )
+    .toBe(baselineRuntimeListCount + 1);
 
   const agentStatus = page.getByTestId(
     `sidebar-managed-agent-status-${agentPubkey}`,

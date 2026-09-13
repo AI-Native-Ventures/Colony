@@ -216,11 +216,10 @@ fn corrupt_scoped_keyring_recovers_legacy_identity() {
 
     assert_key_eq(&original_keys, &resolved.keys);
     assert_eq!(resolved.recovery, RecoveryState::None);
-    // The corrupt scoped value was cleared before recovery ran.
-    assert_eq!(
-        scoped_store.deleted.borrow().as_slice(),
-        [IDENTITY_KEY_NAME]
-    );
+    // Recovery overwrites the corrupt scoped value without deleting it first
+    // (upstream #7203): the unreadable entry is only cleared on the genuine
+    // first-launch generate-fresh path, never while a replacement exists.
+    assert!(scoped_store.deleted.borrow().is_empty());
 }
 
 #[test]
