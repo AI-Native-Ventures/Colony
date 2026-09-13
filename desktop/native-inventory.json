@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 516,
+    "rust_total": 517,
     "tauri_coupled": 206,
-    "portable": 310,
+    "portable": 311,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -255,6 +255,7 @@
       "src-tauri/src/commands/global_agent_config/restart_policy.rs",
       "src-tauri/src/commands/global_agent_config_scope_tests.rs",
       "src-tauri/src/commands/identity_key_backup_tests.rs",
+      "src-tauri/src/commands/initiative_agent_identity.rs",
       "src-tauri/src/commands/initiative_dispatch_binding.rs",
       "src-tauri/src/commands/initiative_scope_tests.rs",
       "src-tauri/src/commands/initiative_team_readiness_policy.rs",

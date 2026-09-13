@@ -32,6 +32,8 @@ use crate::{
     },
 };
 
+#[path = "initiative_agent_identity.rs"]
+mod agent_identity;
 #[path = "initiative_scope.rs"]
 mod attach_scope;
 #[path = "initiative_dispatch_binding.rs"]
@@ -546,11 +548,11 @@ pub async fn attach_thread_task(
     // the first time this runs for it; a repeat call is a cheap read.
     //
     // A send that names no agent resolves no persona: the relay charges it to
-    // the thread's task all the same, and the team follows from whoever
-    // answers rather than from a mention this message never made.
+    // the thread's task all the same; an unmentioned agent does not imply a team.
     let normalized = agent_pubkey
         .map(|pubkey| pubkey.trim().to_lowercase())
         .filter(|pubkey| !pubkey.is_empty());
+    let mut legacy_identity = None;
     let agent_persona_id = if let Some(scope) = &scope {
         let persona = scope.persona(&app, normalized.as_deref())?;
         scope.check(&state)?;
@@ -565,6 +567,11 @@ pub async fn attach_thread_task(
                     .map_err(|error| error.to_string())?;
 
                 let mut agents = load_managed_agents(&app)?;
+                let record = agents
+                    .iter()
+                    .find(|agent| agent.pubkey == pubkey)
+                    .ok_or("that agent is not a company employee")?;
+                agent_identity::check_record(record, &keys, &relay_url)?;
                 let mut personas = load_personas(&app)?;
                 let mut teams = Vec::new();
                 let now = crate::util::now_iso();
@@ -588,10 +595,17 @@ pub async fn attach_thread_task(
                     save_teams(&app, &teams)?;
                 }
 
+                if outcome.persona_id.starts_with("legacy-employee:") {
+                    legacy_identity = agents.iter().find(|agent| agent.pubkey == pubkey).cloned();
+                }
                 Some(outcome.persona_id)
             }
         }
     };
+
+    if let Some(record) = &legacy_identity {
+        agent_identity::publish_repair(record, &state, &keys, &relay_url).await?;
+    }
 
     // Derived from the send rather than read from the clock, so a retry
     // produces the same bytes and the relay recognises the replay.
