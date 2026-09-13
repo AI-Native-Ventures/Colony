@@ -57,7 +57,8 @@ pub(super) const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
 // one, so callers keep reaching those names through `crate::managed_agents`
 // exactly as before the split.
 use crate::managed_agents::coordination::{
-    is_coordination_team_id, retire_per_relay_defaults, split_legacy_coordination_team,
+    is_coordination_team_id, promote_coordination_teams, retire_per_relay_defaults,
+    split_legacy_coordination_team,
 };
 
 // Built-in teams that have been retired. A stored copy that still exactly
@@ -127,6 +128,11 @@ pub(super) fn merge_teams(
 ) -> (Vec<TeamRecord>, bool) {
     let (mut records, mut changed) =
         merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now);
+    // Before anything reads `is_builtin`: a coordination record is built in by
+    // its id, and `retire_per_relay_defaults` below would otherwise read one
+    // whose flag was rewritten to false as a blueprint team that supersedes
+    // this community's own.
+    changed |= promote_coordination_teams(&mut records, now);
     // Split before retiring, and run both unconditionally rather than
     // short-circuiting: the split can be what makes a per-relay default
     // retirable in the same pass, and neither call is a no-op the other

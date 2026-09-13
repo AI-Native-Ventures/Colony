@@ -109,6 +109,37 @@ pub(crate) fn is_coordination_team_id(id: &str) -> bool {
         .is_some_and(|before_slug| before_slug.ends_with(':'))
 }
 
+/// Restore `is_builtin` on every stored coordination record, whatever the
+/// stored flag says. Returns whether any record changed.
+///
+/// A coordination team is infrastructure, not a team a user assembled: the
+/// relay's `company_broker::load_team_refs` resolves a Task's `owningTeamId`
+/// against its published `KIND_TEAM` head, and `built_in_team_order` exempts
+/// the whole class from demotion precisely because these records are seeded
+/// per community rather than listed in `BUILT_IN_TEAMS`. The flag is what
+/// every other rule reads to tell the two apart.
+///
+/// The flag can still arrive false: another client sharing this data
+/// directory rewrote `teams.json` with its own team repair on 2026-09-13, and
+/// with the flag false `team_publishes_to_relay` took the user-team branch and
+/// published all thirteen of this device's coordination heads into whichever
+/// community happened to be open. Trusting the stored flag is therefore not
+/// safe; the id is the authority.
+///
+/// Runs on every load, so a rewritten store heals itself and persists on the
+/// next save rather than needing a one-shot migration.
+pub(crate) fn promote_coordination_teams(stored: &mut [TeamRecord], now: &str) -> bool {
+    let mut changed = false;
+    for team in stored.iter_mut() {
+        if !team.is_builtin && is_coordination_team_id(&team.id) {
+            team.is_builtin = true;
+            team.updated_at = now.to_string();
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Whether `team` is in scope for the community reachable at `relay_url`.
 ///
 /// An unpinned team belongs to every community, which is exactly how every
