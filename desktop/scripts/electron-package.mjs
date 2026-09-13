@@ -34,7 +34,7 @@ const repo = path.dirname(desktop);
 const profile = process.argv.includes("--debug") ? "debug" : "release";
 const cargoProfile = profile === "debug" ? "dev" : "release";
 const variant = electronPackageVariant(process.argv);
-const buildEnv = electronBetaBuildEnv(process.env);
+const buildEnv = electronBetaBuildEnv(process.env, { port: variant.port });
 const signing = variant.developerId ? productionSigning(process.env) : {};
 if (variant.release) {
   const updaterConfig = channelUpdaterConfig(variant.channel, process.env);
