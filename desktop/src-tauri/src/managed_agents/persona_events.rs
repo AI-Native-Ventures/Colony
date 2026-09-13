@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 
-use buzz_core_pkg::kind::{event_is_shared, KIND_PERSONA};
+use buzz_core_pkg::kind::{event_is_shared, KIND_MANAGED_AGENT, KIND_PERSONA};
 use nostr::{EventBuilder, Kind, Tag};
 use serde::{Deserialize, Serialize};
 
