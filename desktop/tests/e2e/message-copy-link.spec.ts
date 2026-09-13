@@ -154,11 +154,23 @@ test("pending and huddle rows omit both copy-link surfaces", async ({
   const { huddleId, pendingId } = await page.evaluate((huddleKind) => {
     const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
     if (!emit) throw new Error("Mock message emitter is unavailable.");
-    const pending = emit({
+    // Colony has no `pending` option on the message emitter: a pending row is
+    // an optimistic local send carrying `pending: true` on the event itself,
+    // so this injects that event shape through the signed-event seam.
+    const emitEvent = window.__BUZZ_E2E_EMIT_MOCK_EVENT__;
+    if (!emitEvent) throw new Error("Mock event emitter is unavailable.");
+    const pending = emitEvent({
       channelName: "general",
-      content: "Pending copy-link regression",
-      id: "c".repeat(64),
-      pending: true,
+      event: {
+        content: "Pending copy-link regression",
+        created_at: Math.floor(Date.now() / 1000),
+        id: "c".repeat(64),
+        kind: 40002,
+        pending: true,
+        pubkey: "a".repeat(64),
+        sig: "",
+        tags: [],
+      } as never,
     });
     const huddle = emit({
       channelName: "general",
