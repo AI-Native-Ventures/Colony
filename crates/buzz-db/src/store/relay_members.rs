@@ -502,10 +502,13 @@ pub async fn transfer_ownership(
 
     // 1. Serialize on the transferee so concurrent transfers to the same
     //    recipient cannot both pass the ownership count check.
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(owner_count_advisory_lock_key(&pubkey))
-        .execute(&mut *tx)
-        .await?;
+    crate::observability::observe_advisory_lock(
+        crate::observability::LockType::Membership,
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(owner_count_advisory_lock_key(&pubkey))
+            .execute(&mut *tx),
+    )
+    .await?;
 
     // 2. Lock the current owner row FOR UPDATE and verify the expected owner.
     //    FOR UPDATE prevents the stale-owner race: a concurrent transfer that
@@ -857,16 +860,25 @@ impl Db {
             None,
         );
 
-        let mut tx = self.pool.begin().await?;
+        let (mut tx, transaction_timer) = crate::observability::begin_transaction(
+            &self.pool,
+            crate::observability::TransactionOperation::PublishNip43MembershipLocked,
+        )
+        .await?;
+        let (event, received_at, was_inserted, member_count) = transaction_timer
+            .observe(async {
 
         // Acquire the per-community snapshot lock BEFORE reading members.
         // This serializes the entire read-build-write cycle: a concurrent
         // publication will block here until our transaction commits, then
         // read the updated membership state.
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(lock_key)
-            .execute(&mut *tx)
-            .await?;
+        crate::observability::observe_advisory_lock(
+            crate::observability::LockType::Membership,
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(lock_key)
+                .execute(&mut *tx),
+        )
+        .await?;
 
         // Read current members inside the locked transaction.
         let rows = sqlx::query(
@@ -941,24 +953,24 @@ impl Db {
         .await?;
 
         let was_inserted = insert_result.rows_affected() > 0;
-        if !was_inserted {
+        if was_inserted {
+            tx.commit().await?;
+        } else {
             tx.rollback().await?;
-            return Ok((
-                StoredEvent::with_received_at(event, received_at, None, false),
-                false,
-                member_count,
-            ));
         }
+        Ok::<_, DbError>((event, received_at, was_inserted, member_count))
+            })
+            .await?;
 
-        tx.commit().await?;
-
-        if let Err(e) = crate::insert_mentions(&self.pool, community_id, &event, None).await {
-            tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+        if was_inserted {
+            if let Err(e) = crate::insert_mentions(&self.pool, community_id, &event, None).await {
+                tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+            }
         }
 
         Ok((
-            StoredEvent::with_received_at(event, received_at, None, true),
-            true,
+            StoredEvent::with_received_at(event, received_at, None, was_inserted),
+            was_inserted,
             member_count,
         ))
     }
@@ -995,7 +1007,7 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
-    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz"; // sadscan:disable np.postgres.1 -- local test-only credentials
 
     async fn setup_pool() -> PgPool {
         let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")

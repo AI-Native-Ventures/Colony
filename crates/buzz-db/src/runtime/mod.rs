@@ -6,6 +6,7 @@
 
 /// Embedded database migrations.
 pub mod migration;
+pub(crate) mod observability;
 /// Replica freshness fence for keyset-cursor read routing.
 pub mod replica_fence;
 
@@ -639,7 +640,7 @@ impl Db {
         // `read_pool` separately would spend a second budget whenever the
         // capability is uncached — i.e. after a failed boot ping, which is
         // precisely the reader-unavailable case the bound must hold for.
-        let conn = match read_pool.acquire().await {
+        let conn = match observability::acquire(read_pool, observability::PoolRole::Reader).await {
             Ok(conn) => conn,
             Err(sqlx::Error::PoolTimedOut) => {
                 tracing::warn!("reader pool acquire timed out; routing to writer");
@@ -895,7 +896,7 @@ impl Db {
         };
         let aurora_identity = self.reader_aurora_identity.clone();
         tokio::spawn(async move {
-            match read_pool.acquire().await {
+            match observability::acquire(&read_pool, observability::PoolRole::Reader).await {
                 Ok(mut conn) => {
                     tracing::info!("read replica reachable at boot");
                     match crate::replica_fence::reader_supports_aurora_identity(&mut conn).await {
@@ -1036,7 +1037,11 @@ impl Db {
     /// Returns a `'static` transaction because `PgPool` is `Arc`-backed internally.
     /// The transaction holds an owned pool handle, not a borrow.
     pub async fn begin_transaction(&self) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
-        self.pool.begin().await.map_err(Into::into)
+        let connection =
+            observability::acquire(&self.pool, observability::PoolRole::Writer).await?;
+        sqlx::Transaction::begin(connection, None)
+            .await
+            .map_err(Into::into)
     }
 
     /// Insert an event while holding and validating an admitted serving-write

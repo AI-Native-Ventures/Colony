@@ -36,7 +36,8 @@ pub use runtime::{
     ReadSession,
 };
 pub(crate) use runtime::{
-    insert_mentions_in_transaction, route_proof, ReadSessionInner, RouteDecision, RoutePredicate,
+    insert_mentions_in_transaction, observability, route_proof, ReadSessionInner, RouteDecision,
+    RoutePredicate,
 };
 
 pub use store::{

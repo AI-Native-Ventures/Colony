@@ -389,7 +389,9 @@ impl Db {
         &self,
         lock_key: i64,
     ) -> Result<Option<UsageMetricsLeader>> {
-        let mut connection = self.pool.acquire().await?;
+        let mut connection =
+            crate::observability::acquire(&self.pool, crate::observability::PoolRole::Writer)
+                .await?;
         let acquired = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
             .bind(lock_key)
             .fetch_one(&mut *connection)
