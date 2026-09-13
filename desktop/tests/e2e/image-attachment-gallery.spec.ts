@@ -212,68 +212,10 @@ test("image bundle lightbox navigates as a gallery", async ({ page }) => {
     "naturalWidth",
     160,
   );
-  await expect(page.getByRole("button", { name: "Zoom out" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Zoom in" })).toBeEnabled();
-
-  // Clicking the image zooms to the secondary level instead of dismissing the
-  // dialog, and the clicked image point remains under the cursor.
-  await waitForAnimations(page);
-  const lightboxImage = dialog.locator(`img[src*="${IMAGE_SHAS[0]}"]`);
-  const initialImageBox = await lightboxImage.boundingBox();
-  if (!initialImageBox) {
-    throw new Error("Expected lightbox image to have a layout box");
-  }
-  const clickPoint = {
-    x: initialImageBox.x + initialImageBox.width * 0.25,
-    y: initialImageBox.y + initialImageBox.height * 0.35,
-  };
-  await page.mouse.click(clickPoint.x, clickPoint.y);
-  await expect(dialog).toBeVisible();
-  await expect(page.getByText("175%", { exact: true })).toBeVisible();
-  await expect(page.getByRole("slider", { name: "Image zoom" })).toHaveValue(
-    "1.75",
-  );
-  await waitForAnimations(page);
-  const zoomedImageBox = await lightboxImage.boundingBox();
-  if (!zoomedImageBox) {
-    throw new Error("Expected zoomed lightbox image to have a layout box");
-  }
-  expect(zoomedImageBox.width).toBeCloseTo(initialImageBox.width * 1.75, 0);
-  expect(zoomedImageBox.height).toBeCloseTo(initialImageBox.height * 1.75, 0);
-  expect(
-    Math.abs(
-      zoomedImageBox.x + initialImageBox.width * 0.25 * 1.75 - clickPoint.x,
-    ),
-  ).toBeLessThan(2);
-  expect(
-    Math.abs(
-      zoomedImageBox.y + initialImageBox.height * 0.35 * 1.75 - clickPoint.y,
-    ),
-  ).toBeLessThan(2);
-
-  // A second image click toggles back to the centered 1× view.
-  await page.mouse.click(clickPoint.x, clickPoint.y);
-  await expect(dialog).toBeVisible();
-  await expect(page.getByText("100%", { exact: true })).toBeVisible();
-  await expect(page.getByRole("slider", { name: "Image zoom" })).toHaveValue(
-    "1",
-  );
-
-  await page.getByRole("button", { name: "Zoom in" }).click();
-  await expect(dialog).toBeVisible();
-  await expect(page.getByText("115%", { exact: true })).toBeVisible();
-  await expect(page.getByRole("slider", { name: "Image zoom" })).toHaveValue(
-    "1.15",
-  );
-  await expect(
-    page.getByRole("slider", { name: "Image zoom" }),
-  ).toHaveAttribute("step", "0.15");
-  await page.getByRole("button", { name: "Zoom out" }).click();
-  await expect(dialog).toBeVisible();
-  await expect(page.getByText("100%", { exact: true })).toBeVisible();
-  await expect(page.getByRole("slider", { name: "Image zoom" })).toHaveValue(
-    "1",
-  );
+  // Colony opens message images in its own media lightbox (title bar, counter,
+  // Download), not the markdown zoom overlay upstream asserts here, so the
+  // ported zoom-control block does not apply to this surface. #6710's controls
+  // are covered where that overlay is used.
   await expect(
     dialog.getByRole("button", { name: "Previous image" }),
   ).toBeDisabled();
@@ -345,52 +287,23 @@ test("thread lightbox navigates images across messages", async ({ page }) => {
   await finalImage.click();
 
   const dialog = page.getByRole("dialog");
-  const position = dialog.getByRole("status");
+  const position = dialog.getByTestId("media-preview-count");
   await expect(dialog.locator(`img[src="${NO_DIM_SECOND_URL}"]`)).toBeVisible();
   await expect(position).toHaveText("3 / 3");
-  await expect(position).toHaveAttribute("aria-label", "Image 3 of 3");
-  await expect(dialog.getByRole("button", { name: "Next image" })).toHaveCount(
-    0,
-  );
+  // Colony's lightbox keeps the arrows mounted and disables them at the ends.
+  await expect(
+    dialog.getByRole("button", { name: "Next image" }),
+  ).toBeDisabled();
 
   await page.keyboard.press("ArrowLeft");
   await expect(dialog.getByRole("img", { name: "reply one" })).toBeVisible();
   await expect(position).toHaveText("2 / 3");
 
-  const replyOneImage = replies
-    .getByTestId("message-row")
-    .filter({ hasText: "thread gallery reply one" })
-    .getByTestId("message-image-lightbox-trigger");
-  const replyOneThumbnailBox = await replyOneImage.locator("img").boundingBox();
-  if (!replyOneThumbnailBox) {
-    throw new Error("Expected duplicate reply thumbnail to have a layout box");
-  }
-  const lightboxFrame = page.locator("[data-image-lightbox-frame]");
+  // Upstream's overlay animates back to the source thumbnail on close and the
+  // ported block measured that frame; Colony's message lightbox closes without
+  // a return-to-source frame, so only the close itself is asserted here.
   await page.waitForTimeout(500);
   await page.mouse.click(20, 20);
-  const closingFrameBox = await lightboxFrame.evaluate((element) => {
-    if (!(element instanceof HTMLElement)) {
-      throw new Error("Expected HTML lightbox frame");
-    }
-    return {
-      height: Number.parseFloat(element.style.height),
-      left: Number.parseFloat(element.style.left),
-      top: Number.parseFloat(element.style.top),
-      width: Number.parseFloat(element.style.width),
-    };
-  });
-  expect(Math.abs(closingFrameBox.left - replyOneThumbnailBox.x)).toBeLessThan(
-    2,
-  );
-  expect(Math.abs(closingFrameBox.top - replyOneThumbnailBox.y)).toBeLessThan(
-    2,
-  );
-  expect(
-    Math.abs(closingFrameBox.width - replyOneThumbnailBox.width),
-  ).toBeLessThan(2);
-  expect(
-    Math.abs(closingFrameBox.height - replyOneThumbnailBox.height),
-  ).toBeLessThan(2);
   await expect(dialog).toHaveCount(0);
 
   await finalImage.click();
@@ -403,7 +316,7 @@ test("thread lightbox navigates images across messages", async ({ page }) => {
   await expect(position).toHaveText("1 / 3");
   await expect(
     dialog.getByRole("button", { name: "Previous image" }),
-  ).toHaveCount(0);
+  ).toBeDisabled();
 });
 
 test("thread gallery includes only currently rendered media", async ({
@@ -460,7 +373,7 @@ test("thread gallery includes only currently rendered media", async ({
     .click();
 
   const dialog = page.getByRole("dialog");
-  const position = dialog.getByRole("status");
+  const position = dialog.getByTestId("media-preview-count");
   await expect(position).toHaveText("3 / 3");
   await dialog.getByRole("button", { name: "Previous image" }).click();
   await expect(dialog.getByRole("img", { name: "branch" })).toBeVisible();
@@ -543,6 +456,8 @@ test("preview-first galleries retain Markdown image actions", async ({
   await reply.getByRole("button", { name: /Zoom image: Preview from/ }).click();
 
   const dialog = page.getByRole("dialog");
+  // The link-preview lightbox is the markdown zoom overlay, whose position
+  // indicator is `ImageGalleryStatus` rather than the media-preview counter.
   await expect(dialog.getByRole("status")).toHaveText("2 / 2");
   await dialog.getByRole("button", { name: "Previous image" }).click();
   const bodyImage = dialog.getByRole("img", { name: "body image" });
@@ -598,7 +513,7 @@ test("adjacent channel messages remain separate image galleries", async ({
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("status")).toHaveCount(0);
+  await expect(dialog.getByTestId("media-preview-count")).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Next image" })).toHaveCount(
     0,
   );
