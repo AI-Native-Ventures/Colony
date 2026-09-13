@@ -12,6 +12,7 @@ import {
   getAgentObserverSnapshot,
 } from "@/features/agents/observerRelayStore";
 import { relayClient } from "@/shared/api/relayClient";
+import { parseRateLimitHint } from "@/shared/api/relayRateLimitGate";
 import { listRelayMembers } from "@/shared/api/relayMembers";
 import {
   discoverAcpRuntimes,
@@ -85,16 +86,51 @@ function verified(event: RelayEvent): boolean {
 
 /** Select an existing pair for explicit thread delegation, without reparenting either agent. */
 export function createFirstJobTeamAdapter(deps: FirstJobTeamDependencies) {
+  // Retry only rejected snapshot reads, never staffing writes or runtime starts.
+  // A short relay cooldown can coincide with the burst of onboarding reads.
+  async function readSnapshot<T>(
+    scope: FirstJobScope,
+    read: () => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      await deps.assertCurrent(scope);
+      try {
+        const value = await read();
+        await deps.assertCurrent(scope);
+        return value;
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+              ? error
+              : "";
+        const seconds = parseRateLimitHint(message);
+        if (
+          attempt >= 2 ||
+          !message.includes("rate-limited:") ||
+          seconds === null ||
+          seconds > 5
+        )
+          throw error;
+        await deps.assertCurrent(scope);
+        await (
+          deps.delay ??
+          ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
+        )(Math.max(1000, seconds * 1000));
+      }
+    }
+  }
   async function availableTeams(scope: FirstJobScope): Promise<FirstJobTeam[]> {
     await deps.assertCurrent(scope);
     const [agents, personas, runtimes, members, owners, rawHeads] =
       await Promise.all([
-        deps.listAgents(),
-        deps.listPersonas(),
-        deps.listRuntimes(),
-        deps.listMembers(scope.channelId),
-        deps.listOwners(),
-        deps.readHeads(),
+        readSnapshot(scope, () => deps.listAgents()),
+        readSnapshot(scope, () => deps.listPersonas()),
+        readSnapshot(scope, () => deps.listRuntimes()),
+        readSnapshot(scope, () => deps.listMembers(scope.channelId)),
+        readSnapshot(scope, () => deps.listOwners()),
+        readSnapshot(scope, () => deps.readHeads()),
       ]);
     await deps.assertCurrent(scope);
     const ownerPubkeys = ownerPubkeysFromMembers(owners);
