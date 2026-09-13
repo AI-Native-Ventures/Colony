@@ -88,7 +88,7 @@ pub fn active_retention_scope(app: &AppHandle, state: &AppState) -> Result<Reten
     })
 }
 
-/// Resolve the retention scope for a specific `record` — the scope of its
+/// Resolve the retention scope for a specific `record`: the scope of its
 /// own `relay_url`, not the currently active community. A blank pin must not
 /// publish anywhere; mirroring the comment on `record_belongs_to_active_relay`
 /// in `reconcile`: an unpinned record must not be retained under whichever

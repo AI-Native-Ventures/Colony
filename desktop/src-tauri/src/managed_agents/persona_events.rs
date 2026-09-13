@@ -317,8 +317,8 @@ async fn flush_pending_events_at(
         get_pending_sync(&conn)?
     }; // connection dropped before any .await
 
-    // Belt: for kind 30177, skip any retained row whose local record is
-    // pinned to a different relay — the boot reconcile may have retained it
+    // Belt: for kind KIND_MANAGED_AGENT, skip any retained row whose local record is
+    // pinned to a different relay; the boot reconcile may have retained it
     // before the scope fix, and the flush must not publish foreign heads
     // into the active relay.
     let store_path =
@@ -352,9 +352,9 @@ async fn flush_pending_events_at(
             continue; // superseded by a newer edit; that row publishes itself
         }
 
-        // Belt: a kind 30177 row whose local record is pinned to a different
+        // Belt: a kind KIND_MANAGED_AGENT row whose local record is pinned to a different
         // relay must not be published into this sweep's relay.
-        if current.kind == 30177 {
+        if current.kind == KIND_MANAGED_AGENT {
             if let Some(ref records) = pinned_records {
                 if let Some(record) = records.iter().find(|r| r.pubkey == current.d_tag) {
                     let pinned = record.relay_url.trim();
@@ -364,7 +364,7 @@ async fn flush_pending_events_at(
                         )
                     {
                         eprintln!(
-                            "buzz-desktop: event-flush: skipped kind 30177 row pinned elsewhere: d_tag={} pinned_relay={}",
+                            "buzz-desktop: event-flush: skipped kind KIND_MANAGED_AGENT row pinned elsewhere: d_tag={} pinned_relay={}",
                             current.d_tag, pinned
                         );
                         continue; // skip, do not delete, leave pending

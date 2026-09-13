@@ -279,7 +279,7 @@ fn reconcile_inbound_tombstone(
 
     // Inbound scoping: a tombstone for a managed-agent pinned to a different
     // relay must not delete its real local agent (step 6). A blank pin keeps
-    // today's behaviour — only foreign pins are skipped.
+    // today's behaviour: only foreign pins are skipped.
     if target_kind == KIND_MANAGED_AGENT {
         let agents = load_managed_agents(app)?;
         if let Some(record) = agents.iter().find(|r| r.pubkey == target_d_tag) {
