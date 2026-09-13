@@ -71,6 +71,7 @@ export async function createOnboardingFixtureProvider() {
   let context;
   let probeAuthorized = false;
   let probeNonce;
+  let probeTool;
   const probeRequests = [];
   let error;
   let calls = 0;
@@ -98,7 +99,7 @@ export async function createOnboardingFixtureProvider() {
         const prompt = JSON.stringify(body.messages);
         const nonce = [
           ...prompt.matchAll(
-            /Colony connection test\. Reply in this thread with a short greeting and this verification code: ([a-f0-9-]{36})\. Do not use tools or start any other work\./g,
+            /Colony connection test\. Reply in this thread with a short greeting and this verification code: ([a-f0-9-]{36})\. Use your messaging tool to post exactly one reply in this thread\. Do not use other tools or start any other work\./g,
           ),
         ].at(-1)?.[1];
         assert.ok(
@@ -114,6 +115,83 @@ export async function createOnboardingFixtureProvider() {
         const completion =
           typeof body.messages.at(-1)?.content === "string" &&
           body.messages.at(-1).content.startsWith("You have stopped.");
+        let message;
+        if (!probeTool) {
+          assert.equal(completion, false);
+          const blocks = body.messages.flatMap((entry) =>
+            typeof entry.content === "string"
+              ? entry.content.split("Event ID: ").slice(1)
+              : [],
+          );
+          const block = blocks.findLast((value) =>
+            value.includes(`verification code: ${nonce}.`),
+          );
+          assert.ok(block, "Verification must have a real event coordinate");
+          const eventId = block.match(/^([a-f0-9]{64})\n/)?.[1];
+          const channel = block.match(/\nChannel: ([^\n]+)/)?.[1];
+          const channelId = channel?.match(
+            /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/,
+          )?.[0];
+          assert.ok(
+            eventId && channelId,
+            "Bounded channel and reply coordinates",
+          );
+          const name = body.tools?.find((tool) =>
+            tool.function.name.endsWith("__shell"),
+          )?.function.name;
+          assert.ok(
+            name,
+            "The actual managed agent exposes its messaging shell",
+          );
+          const command = `buzz messages send --channel ${channelId} --reply-to ${eventId} --content ${quote(`Hello, your Colony connection is ready. ${nonce}`)}`;
+          probeTool = {
+            actor: "scout",
+            stage: "connection-test",
+            command,
+            toolCallId: `onboarding-call-${requestNumber}`,
+          };
+          tools.push(probeTool);
+          message = {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: probeTool.toolCallId,
+                type: "function",
+                function: {
+                  name,
+                  arguments: JSON.stringify({ command, timeout_ms: 15000 }),
+                },
+              },
+            ],
+          };
+        } else {
+          const result = readFixtureShellResult(
+            body.messages,
+            probeTool.toolCallId,
+          );
+          assert.equal(result.exitCode, 0);
+          assert.equal(result.timedOut, false);
+          assert.equal(
+            result.accepted,
+            true,
+            "Verification reply must be accepted by the real relay",
+          );
+          if (
+            !toolResults.some((entry) => entry.toolCallId === result.toolCallId)
+          )
+            toolResults.push({
+              actor: "scout",
+              stage: "connection-test",
+              ...result,
+            });
+          message = {
+            role: "assistant",
+            content: completion
+              ? '{"complete":true}'
+              : "Posted the verification reply.",
+          };
+        }
         const responseId = `onboarding-${requestNumber}`;
         const usage = {
           prompt_tokens: 10,
@@ -140,13 +218,8 @@ export async function createOnboardingFixtureProvider() {
             choices: [
               {
                 index: 0,
-                message: {
-                  role: "assistant",
-                  content: completion
-                    ? '{"complete":true}'
-                    : `Hello, your Colony connection is ready. ${nonce}`,
-                },
-                finish_reason: "stop",
+                message,
+                finish_reason: message.tool_calls ? "tool_calls" : "stop",
               },
             ],
           }),
