@@ -623,7 +623,7 @@ fn tombstone_from_relay_a_for_agent_pinned_to_b_is_ignored() {
     // compares the record's `relay_url` with `arrival_relay_url`, and skips
     // when they differ (non-empty foreign pin). We verify the conditions
     // manually since the full `AppHandle` type does not match the mock runtime.
-    let agents = vec![local_agent()];
+    let agents = [local_agent()];
     let pinned = agents[0].relay_url.trim();
     assert!(!pinned.is_empty(), "local agent must have a non-empty pin");
     assert_ne!(
