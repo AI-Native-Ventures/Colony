@@ -51,17 +51,26 @@ pub(crate) fn agent_belongs_to_owner(record: &ManagedAgentRecord, current_owner_
 ///
 /// The single predicate `commands::agents_roster::list_managed_agents`
 /// evaluates per record — community match (`agent_belongs_to_workspace`),
-/// identity match (`agent_belongs_to_owner`), and the blank-pin exclusion
-/// that keeps an unassigned agent out of every community's People list even
-/// though `agent_belongs_to_workspace` alone would say yes to all of them.
+/// identity match (`agent_belongs_to_owner`), the blank-pin exclusion that
+/// keeps an unassigned agent out of every community's People list even though
+/// `agent_belongs_to_workspace` alone would say yes to all of them, and the
+/// retirement mark that takes a superseded record off the roster.
 /// Pulled out here so the exact production rule is unit-testable without a
 /// Tauri `AppHandle`.
+///
+/// A record carrying `superseded_by` is no longer an employee anywhere: the
+/// office it held belongs to the provisioned employee that replaced it (see
+/// `managed_agents::supersede`). It is hidden rather than deleted because
+/// channel history references the agent, and it is hidden HERE rather than at
+/// each read site because every roster and org-chart source that reads
+/// records goes through this command.
 pub(crate) fn agent_visible_in_roster(
     record: &ManagedAgentRecord,
     workspace_relay: &str,
     current_owner_hex: &str,
 ) -> bool {
-    !record.relay_url.trim().is_empty()
+    record.superseded_by.is_none()
+        && !record.relay_url.trim().is_empty()
         && agent_belongs_to_workspace(&record.relay_url, workspace_relay)
         && agent_belongs_to_owner(record, current_owner_hex)
 }
@@ -196,6 +205,21 @@ mod tests {
         // Not a 4-element "auth" array — e.g. a stray tag of a different kind.
         let record = record_with(None, Some(r#"["e","abc"]"#));
         assert_eq!(effective_owner_pubkey(&record), None);
+    }
+
+    /// A retired built-in Chief of Staff leaves the roster, and with it every
+    /// org-chart source that reads records. Its community and identity still
+    /// match, so without the mark it would keep showing next to the
+    /// provisioned employee that replaced it.
+    #[test]
+    fn a_superseded_record_leaves_the_roster() {
+        const RELAY: &str = "wss://relay.colony.example.com";
+        let mut retired = record_with(Some(OWNER_HEX), None);
+        retired.relay_url = RELAY.to_string();
+        assert!(agent_visible_in_roster(&retired, RELAY, OWNER_HEX));
+
+        retired.superseded_by = Some("c".repeat(64));
+        assert!(!agent_visible_in_roster(&retired, RELAY, OWNER_HEX));
     }
 
     #[test]
