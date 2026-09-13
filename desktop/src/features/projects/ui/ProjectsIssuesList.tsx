@@ -1,3 +1,6 @@
+import * as React from "react";
+
+import { useIncrementalMount } from "@/shared/hooks/useIncrementalMount";
 import { Eye, MessageSquare } from "lucide-react";
 
 import type {
@@ -114,16 +117,26 @@ function IssueHeader({
   );
 }
 
-function IssueGridCard({
+// Memoized: these cards render in unbounded lists, and any Projects-view
+// state change used to re-render every one of them. `onOpen` is the caller's
+// stable handler and the repository travels as a prop, so no row needs a
+// freshly-allocated closure (upstream #6460).
+const IssueGridCard = React.memo(function IssueGridCard({
   issue,
   onOpen,
   profiles,
   project,
+  repository,
 }: {
   issue: ProjectIssue;
-  onOpen: (project: Project, issue: ProjectIssue) => void;
+  onOpen: (
+    project: Project,
+    repository: Repository,
+    issue: ProjectIssue,
+  ) => void;
   profiles?: UserProfileLookup;
   project: Project;
+  repository: Repository;
 }) {
   return (
     <Card
@@ -132,7 +145,7 @@ function IssueGridCard({
     >
       <button
         className="absolute inset-0"
-        onClick={() => onOpen(project, issue)}
+        onClick={() => onOpen(project, repository, issue)}
         type="button"
       >
         <span className="sr-only">View {issue.title}</span>
@@ -145,7 +158,7 @@ function IssueGridCard({
             className="relative z-10 h-7 shrink-0 px-2.5"
             onClick={(event) => {
               event.stopPropagation();
-              onOpen(project, issue);
+              onOpen(project, repository, issue);
             }}
             size="xs"
             type="button"
@@ -177,18 +190,25 @@ function IssueGridCard({
       </div>
     </Card>
   );
-}
+});
 
-function IssueListRow({
+// Memoized for the same reason as IssueGridCard (upstream #6460).
+const IssueListRow = React.memo(function IssueListRow({
   issue,
   onOpen,
   profiles,
   project,
+  repository,
 }: {
   issue: ProjectIssue;
-  onOpen: (project: Project, issue: ProjectIssue) => void;
+  onOpen: (
+    project: Project,
+    repository: Repository,
+    issue: ProjectIssue,
+  ) => void;
   profiles?: UserProfileLookup;
   project: Project;
+  repository: Repository;
 }) {
   return (
     <div
@@ -197,7 +217,7 @@ function IssueListRow({
     >
       <button
         className="absolute inset-0"
-        onClick={() => onOpen(project, issue)}
+        onClick={() => onOpen(project, repository, issue)}
         type="button"
       >
         <span className="sr-only">View {issue.title}</span>
@@ -229,7 +249,9 @@ function IssueListRow({
             {relativeTime(issue.createdAt)}
           </span>
           <ProjectListRowMenu label={`More options for ${issue.title}`}>
-            <DropdownMenuItem onSelect={() => onOpen(project, issue)}>
+            <DropdownMenuItem
+              onSelect={() => onOpen(project, repository, issue)}
+            >
               <Eye className="h-4 w-4" />
               {nextStepLabel(issue.status)}
             </DropdownMenuItem>
@@ -238,7 +260,7 @@ function IssueListRow({
       </div>
     </div>
   );
-}
+});
 
 export function ProjectsIssuesList({
   embedded,
@@ -252,6 +274,11 @@ export function ProjectsIssuesList({
   profiles,
   viewMode,
 }: ProjectsIssuesListProps) {
+  // Mount long lists progressively so a single React commit never blocks the
+  // main thread with hundreds of heavy rows (upstream #6460).
+  const mountedCount = useIncrementalMount(issues.length);
+  const visibleIssues = issues.slice(0, mountedCount);
+
   if (isLoading) {
     return (
       <div
@@ -300,15 +327,14 @@ export function ProjectsIssuesList({
       <div className="space-y-3">
         {loadNotice}
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {issues.map(({ project, issue, repository }) => (
+          {visibleIssues.map(({ project, issue, repository }) => (
             <IssueGridCard
               issue={issue}
               key={`${repository.id}:${issue.id}`}
-              onOpen={(selectedProject, selectedIssue) =>
-                onOpen(selectedProject, repository, selectedIssue)
-              }
+              onOpen={onOpen}
               profiles={profiles}
               project={project}
+              repository={repository}
             />
           ))}
         </div>
@@ -325,15 +351,14 @@ export function ProjectsIssuesList({
         }
         data-testid="projects-list-container"
       >
-        {issues.map(({ project, issue, repository }) => (
+        {visibleIssues.map(({ project, issue, repository }) => (
           <IssueListRow
             issue={issue}
             key={`${repository.id}:${issue.id}`}
-            onOpen={(selectedProject, selectedIssue) =>
-              onOpen(selectedProject, repository, selectedIssue)
-            }
+            onOpen={onOpen}
             profiles={profiles}
             project={project}
+            repository={repository}
           />
         ))}
       </div>
