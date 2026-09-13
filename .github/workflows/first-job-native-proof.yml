@@ -2,6 +2,11 @@ name: Native first-job proof
 
 on:
   workflow_dispatch:
+    inputs:
+      live_website:
+        description: One-off paid Website Manager acceptance (dedicated capped key)
+        type: boolean
+        default: false
   pull_request:
     branches: [develop, main]
     paths:
@@ -50,6 +55,8 @@ jobs:
         run: node --check desktop/src-electron/onboarding-fixture/work.mjs
       - name: Validate proof authority and service contract
         run: node --test desktop/src-electron/onboarding-fixture/native-publish-diagnostics.test.mjs desktop/src-electron/onboarding-fixture/failure-diagnostics.test.mjs desktop/src-electron/onboarding-fixture/provider.test.mjs desktop/src-electron/onboarding-fixture/native-team.test.mjs desktop/src-electron/onboarding-fixture/team-recovery.test.mjs desktop/src-electron/onboarding-fixture/instruction.test.mjs desktop/src-electron/onboarding-fixture/task-head.test.mjs desktop/src-electron/onboarding-fixture/tool-result.test.mjs
+      - name: Verify live bridge with mocked upstream (no paid calls)
+        run: node --test desktop/src-electron/website-live-proof/provider.test.mjs
       - name: Verify worker evidence authority and browser transport
         run: node --test desktop/src-electron/worker-evidence/*.test.mjs desktop/src-electron/browser/managed-workers.test.mjs desktop/src-electron/browser/mcp.test.mjs
       - name: Install PostgreSQL build prerequisite
@@ -92,6 +99,28 @@ jobs:
           export COLONY_SMOKE_PROOF_DIR="$RUNNER_TEMP/colony-first-job-proof"
           node desktop/src-electron/onboarding-smoke.mjs --with-work
           jq -e '.completed == true and .accountCompleted == true and .workerCompletion.status == "completed" and .workerCompletion.teamRecovery.status == "recovered-before-task" and .cleanup == "complete" and .backingServices.cleanup.complete == true' "$COLONY_SMOKE_PROOF_DIR/account-proof.json"
+      - name: One-off live Website Manager acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.live_website
+        env:
+          COLONY_WEBSITE_PROOF_OPENROUTER_KEY: ${{ secrets.COLONY_WEBSITE_PROOF_OPENROUTER_KEY }}
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version desktop/package.json)
+          MANIFEST="desktop/electron-dist/${VERSION}-release-arm64-onboarding-fixture/manifest.json"
+          export COLONY_SMOKE_APP="$(jq -r .app "$MANIFEST")"
+          export COLONY_SMOKE_RELAY_BINARY="$GITHUB_WORKSPACE/target/release/buzz-relay"
+          export COLONY_SMOKE_ADMIN_BINARY="$GITHUB_WORKSPACE/target/release/buzz-admin"
+          export COLONY_SMOKE_PROOF_DIR="$RUNNER_TEMP/colony-website-live-proof"
+          node desktop/src-electron/onboarding-smoke.mjs --with-website-live
+          jq -e '.websiteLive.status == "review-reached" and .cleanup == "complete"' "$COLONY_SMOKE_PROOF_DIR/account-proof.json"
+      - name: Preserve one-off Website proof
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.live_website
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: colony-website-live-proof
+          path: ${{ runner.temp }}/colony-website-live-proof
+          if-no-files-found: warn
+          retention-days: 7
       - name: Preserve synthetic provider real native proof
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

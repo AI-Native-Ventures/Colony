@@ -78,6 +78,7 @@ export function extractLatestPromptEventId(messages) {
 
 /** Serve the OpenAI-compatible upstream consumed by the real local credits gateway. */
 export async function createOnboardingFixtureProvider() {
+  let liveProvider;
   let context;
   let probeAuthorized = false;
   let probeNonce;
@@ -95,6 +96,27 @@ export async function createOnboardingFixtureProvider() {
   const toolResults = [];
   const server = createServer(async (request, response) => {
     try {
+      if (liveProvider) {
+        assert.equal(request.method, "POST");
+        assert.equal(request.url, "/v1/chat/completions");
+        assert.equal(request.headers.authorization, "Bearer synthetic-onboarding-provider");
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of request) {
+          size += chunk.length;
+          assert.ok(size <= 1024 * 1024);
+          chunks.push(chunk);
+        }
+        const upstream = await fetch(`${liveProvider.httpUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${liveProvider.token}`, "Content-Type": "application/json" },
+          body: Buffer.concat(chunks),
+          signal: AbortSignal.timeout(150_000),
+        });
+        response.writeHead(upstream.status, { "Content-Type": "application/json" });
+        response.end(await upstream.text());
+        return;
+      }
       const requestNumber = ++calls;
       assert.ok(requestNumber <= 40, "Fixture model call budget exceeded");
       assert.equal(request.method, "POST");
@@ -601,6 +623,13 @@ export async function createOnboardingFixtureProvider() {
     httpUrl: `http://127.0.0.1:${server.address().port}`,
     requests,
     probeRequests,
+    enableLiveWebsiteProof(provider) {
+      assert.equal(liveProvider, undefined);
+      assert.equal(context, undefined);
+      assert.ok(setupContext?.completed, "Complete isolated Scout setup first");
+      assert.ok(!error, "Synthetic setup must pass before paid work");
+      liveProvider = provider;
+    },
     authorizeConnectionTest() {
       assert.equal(context, undefined);
       assert.equal(probeAuthorized, false);

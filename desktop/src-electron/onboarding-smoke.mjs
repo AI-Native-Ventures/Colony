@@ -1,5 +1,5 @@
 // Joined native account/provisioning gate. All services and identities belong to
-// this process's unique local fixture; no hosted accounts or paid models are used.
+// this process's unique local fixture. Paid Website acceptance is explicit/manual only.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -28,11 +28,15 @@ import { readIngestFailures } from "./onboarding-fixture/failure-diagnostics.mjs
 import { readApprovalAttempt } from "./onboarding-fixture/approval-diagnostics.mjs";
 import { readNativePublishObservations } from "./onboarding-fixture/native-publish-diagnostics.mjs";
 
-assert.ok(
-  process.argv.includes("--account-only") !==
-    process.argv.includes("--with-work"),
-  "Choose exactly one joined gate: --account-only or --with-work",
+const liveWebsite = process.argv.includes("--with-website-live");
+assert.equal(
+  ["--account-only", "--with-work", "--with-website-live"].filter((flag) => process.argv.includes(flag)).length,
+  1,
+  "Choose exactly one joined gate",
 );
+let liveProvider;
+let liveProofKey = liveWebsite ? process.env.COLONY_WEBSITE_PROOF_OPENROUTER_KEY : undefined;
+delete process.env.COLONY_WEBSITE_PROOF_OPENROUTER_KEY;
 assert.equal(process.platform, "darwin");
 const bundle = process.env.COLONY_SMOKE_APP;
 assert.ok(
@@ -127,6 +131,8 @@ const proof = {
     [
       "onboarding-smoke.mjs",
       "onboarding-fixture/account.mjs",
+      "website-live-proof/provider.mjs",
+      "website-live-proof/work.mjs",
       "onboarding-fixture/account-diagnostics.mjs",
       "onboarding-fixture/work.mjs",
       "onboarding-fixture/instruction.mjs",
@@ -248,6 +254,7 @@ async function launch() {
     },
     {
       origins: [
+        ...(liveWebsite ? ["https://example.com"] : []),
         proxy.bootstrapHttpUrl,
         `https://${proxy.businessHost}`,
         `wss://${proxy.bootstrapHost}`,
@@ -430,6 +437,18 @@ try {
     hostedSignup: "not tested",
     workerCompletion: "not completed",
   });
+  if (liveWebsite) {
+    const { createLiveProofProvider } = await import("./website-live-proof/provider.mjs");
+    const { runLiveWebsiteProof } = await import("./website-live-proof/work.mjs");
+    liveProvider = await createLiveProofProvider({ apiKey: liveProofKey });
+    liveProofKey = undefined;
+    provider.enableLiveWebsiteProof(liveProvider);
+    proof.websiteLive = await runLiveWebsiteProof({ page, account: result, proofDirectory, onProgress: (stage) => {
+      proof.stage = stage;
+      console.log(`Website live proof: ${stage}`);
+    } });
+  }
+  liveProvider?.assertHealthy();
   const workerCompletion = process.argv.includes("--with-work")
     ? await completeFixtureWork({
         page,
@@ -570,6 +589,7 @@ try {
 } finally {
   if (failure) proof.accountDiagnostics = accountDiagnostics.snapshot();
   accountDiagnostics.close();
+  proof.websiteLiveUsage = liveProvider?.receipts ?? [];
   proof.modelRequests = provider?.requests || [];
   proof.modelTools = provider?.tools || [];
   proof.modelToolResults = provider?.toolResults || [];
@@ -577,6 +597,7 @@ try {
     closeApp,
     () => proxy?.close(),
     () => relay?.close(),
+    () => liveProvider?.close(),
     () => provider?.close(),
     async () => {
       if (networkTrap) {
