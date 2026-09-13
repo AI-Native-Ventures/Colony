@@ -21,6 +21,9 @@ void main() {
     final relay = nostr.Keys.generate();
     final task = parseTaskHead(signedTaskHead(keys: relay), relay.public);
     expect(task, isNotNull);
-    expect(task!.workContextTags, contains(['team', 'team-coordination']));
+    expect(task!.workContextTags, [
+      ['task', task.id],
+      ['team', 'team-coordination'],
+    ]);
   });
 }
