@@ -314,7 +314,10 @@ async fn private_blossom_website_lifecycle_is_tenant_scoped() {
         1,
         &manifest.sha256,
     );
-    private_submit_event(&tenant, &fixture.builder, &work).await;
+    private_assert_accepted(
+        private_submit_event(&tenant, &fixture.builder, &work).await,
+        "signed builder work",
+    );
     let evidence = private_update_action(
         &fixture,
         &fixture.builder,
