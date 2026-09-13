@@ -50,8 +50,11 @@ pub async fn verify_operator_request(
         .as_deref()
         .ok_or_else(|| internal_error("operator API origin is not configured"))?;
     let url = canonical_operator_url(origin, path, raw_query);
-    let (pubkey, event_id_bytes) =
-        bridge::verify_bridge_auth_with_options(headers, method, &url, body, true, body.is_some())?;
+    let bridge::VerifiedBridgeAuth {
+        pubkey,
+        event_id_bytes,
+        ..
+    } = bridge::verify_bridge_auth_with_options(headers, method, &url, body, true, body.is_some())?;
     check_operator_replay(state, event_id_bytes, replay_scope).await?;
     Ok(pubkey)
 }
