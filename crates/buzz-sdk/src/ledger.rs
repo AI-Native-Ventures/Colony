@@ -126,7 +126,10 @@ impl LedgerActionPayload {
                 if rule.id.trim().is_empty() {
                     return Err(LedgerSdkError::Refused("rule id must be non-empty"));
                 }
-                validate_assignment_ids(&rule.assign.cost_centre_id, &rule.assign.owning_team_id)?;
+                validate_assignment_ids(
+                    &rule.assign.cost_centre_id,
+                    rule.assign.owning_team_id.as_deref(),
+                )?;
             }
             Self::Correction(correction) => {
                 if correction.id.trim().is_empty() {
@@ -142,7 +145,7 @@ impl LedgerActionPayload {
                 }
                 validate_assignment_ids(
                     &correction.assign.cost_centre_id,
-                    &correction.assign.owning_team_id,
+                    correction.assign.owning_team_id.as_deref(),
                 )?;
             }
             Self::Budget(budget) => {
@@ -167,14 +170,17 @@ pub fn budget_d_tag(cost_centre_id: &str, period: &str) -> String {
 
 fn validate_assignment_ids(
     cost_centre_id: &str,
-    owning_team_id: &str,
+    owning_team_id: Option<&str>,
 ) -> Result<(), LedgerSdkError> {
     if cost_centre_id.trim().is_empty() {
         return Err(LedgerSdkError::Refused(
             "assignment cost centre must be non-empty",
         ));
     }
-    if owning_team_id.trim().is_empty() {
+    if owning_team_id
+        .as_ref()
+        .is_some_and(|id| id.trim().is_empty())
+    {
         return Err(LedgerSdkError::Refused(
             "assignment owning team must be non-empty",
         ));
@@ -621,7 +627,7 @@ mod tests {
     fn assignment() -> RuleAssignment {
         RuleAssignment {
             cost_centre_id: "web-delivery".to_string(),
-            owning_team_id: "web-team".to_string(),
+            owning_team_id: Some("web-team".to_string()),
             commercial_purpose: CommercialPurpose::ClientDelivery,
             client_organization_id: Some("tennant-group".to_string()),
             task_id: None,

@@ -124,7 +124,7 @@ pub(super) fn coordination_team() -> TeamRecord {
 /// this fails: the send stays blocked forever. See the PR description for
 /// the exact before/after `cargo test` output.
 #[test]
-fn chat_agent_with_no_persona_is_repaired_onto_the_coordination_team() {
+fn chat_agent_identity_is_repaired_without_team_enrolment() {
     let pubkey = "abc123def456";
     let mut agents = vec![agent_with_no_persona(pubkey)];
     let mut personas: Vec<AgentDefinition> = Vec::new();
@@ -142,7 +142,7 @@ fn chat_agent_with_no_persona_is_repaired_onto_the_coordination_team() {
 
     assert!(outcome.agents_changed);
     assert!(outcome.personas_changed);
-    assert!(outcome.teams_changed);
+    assert!(!outcome.teams_changed);
 
     // The record is permanently repaired, not just resolved for this call.
     assert_eq!(
@@ -154,22 +154,8 @@ fn chat_agent_with_no_persona_is_repaired_onto_the_coordination_team() {
     // shared builtin identity that would misattribute its work.
     assert!(personas.iter().any(|p| p.id == outcome.persona_id));
 
-    // It is an actual member of THIS community's coordination team, not
-    // just covered by the ambiguous-work fallback, and not of a team
-    // belonging to some other community.
-    let team = teams
-        .iter()
-        .find(|team| team.id == chat_team_id())
-        .expect("the team for this community must still be there");
-    assert!(team.persona_ids.contains(&outcome.persona_id));
-    assert_eq!(teams.len(), 1, "the repair must not seed a second team");
-
-    // And `owning_team_for_chat` resolves it as a member, so the Task this
-    // becomes will carry a real assignee.
-    let refs = teams_to_company_refs(teams);
-    let owner = owning_team_for_chat(&refs, &outcome.persona_id)
-        .expect("a member of the coordination team must resolve an owning team");
-    assert!(owner.persona_ids.iter().any(|id| id == &outcome.persona_id));
+    assert_eq!(teams.len(), 1);
+    assert!(!teams[0].persona_ids.contains(&outcome.persona_id));
 }
 
 /// The one case that must stay un-repairable: no agent record at all.
@@ -252,7 +238,7 @@ fn fresh_install_has_a_coordination_team_for_ambiguous_chat_work() {
 /// community's team is the wrong place to put the repaired persona. The
 /// repair seeds this community's own team instead.
 #[test]
-fn chat_repair_seeds_this_communitys_team_and_leaves_another_alone() {
+fn chat_repair_does_not_create_or_change_any_team() {
     let pubkey = "abc123def456";
     let mut agents = vec![agent_with_no_persona(pubkey)];
     let mut personas: Vec<AgentDefinition> = Vec::new();
@@ -272,12 +258,9 @@ fn chat_repair_seeds_this_communitys_team_and_leaves_another_alone() {
     )
     .expect("a persona-less agent must be repairable here too");
 
-    assert!(outcome.teams_changed);
-    let seeded = teams
-        .iter()
-        .find(|team| team.id == chat_team_id())
-        .expect("this community must have got its own team");
-    assert!(seeded.persona_ids.contains(&outcome.persona_id));
+    assert!(!outcome.teams_changed);
+    assert_eq!(teams.len(), 1);
+    assert!(!teams.iter().any(|team| team.id == chat_team_id()));
 
     let other = teams
         .iter()

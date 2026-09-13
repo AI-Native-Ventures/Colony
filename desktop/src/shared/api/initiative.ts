@@ -123,7 +123,7 @@ export async function attachThreadTask(
 /** The Task a human created directly, e.g. from a "New Task" affordance. */
 export type UserTaskResult = {
   taskId: string;
-  owningTeamId: string;
+  owningTeamId: string | null;
   /** The signed Company Action that creates it. */
   signedAction: string;
 };

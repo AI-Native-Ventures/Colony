@@ -16,8 +16,9 @@ type NamedTeam = { id: string; name: string };
  */
 export function teamDisplayName(
   teams: readonly NamedTeam[] | undefined,
-  teamId: string,
+  teamId: string | null,
 ): string {
+  if (teamId === null) return "Direct assignment";
   const match = teams?.find((team) => team.id === teamId);
   return match ? match.name : teamId;
 }

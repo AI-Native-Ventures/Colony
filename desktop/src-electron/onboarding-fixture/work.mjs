@@ -21,7 +21,6 @@ import { readApprovalAttempt } from "./approval-diagnostics.mjs";
 import { assertCreditsProof, creditsProofQuery } from "./credits-proof.mjs";
 import {
   loseSyncedFixtureTeam,
-  proveFixtureTeamRecovery,
   readFixtureTeamReadiness,
 } from "./team-recovery.mjs";
 import {
@@ -420,14 +419,19 @@ export async function completeFixtureWork({
       () => ({ unavailable: true }),
     ),
   });
-  const teamRecovery = await proveFixtureTeamRecovery({
-    directory,
-    account,
-    reader,
-    loss: teamLoss,
-    task,
-  });
-  onEvidence({ teamRecovery });
+  assert.equal(task.owningTeamId, null, "Direct work has no mandatory team");
+  assert.equal(
+    task.qaPersonaId,
+    null,
+    "Direct work has no fabricated reviewer",
+  );
+  const directTaskAfterTeamLoss = {
+    taskId: task.id,
+    owningTeamId: task.owningTeamId,
+    priorLoss: teamLoss,
+    status: task.status,
+  };
+  onEvidence({ directTaskAfterTeamLoss });
   const actualAgents = await invoke("list_managed_agents");
   const isolatedRuntimes = [approved.scout, approved.worker].map((ref) => {
     const agent = actualAgents.find(
@@ -487,7 +491,7 @@ export async function completeFixtureWork({
         ["h", account.channelId],
         ["e", account.rootEventId],
         ["task", task.id],
-        ["team", task.owningTeamId],
+        ...(task.owningTeamId ? [["team", task.owningTeamId]] : []),
       ]) {
         assert.ok(
           event.tags.some((tag) => tag[0] === name && tag[1] === value),
@@ -774,7 +778,7 @@ export async function completeFixtureWork({
     deliveredDrafts,
     taskId: task.id,
     status: task.status,
-    teamRecovery,
+    directTaskAfterTeamLoss,
     instructionCount,
     taskCount,
     modelResponses: "deterministic local fixture",

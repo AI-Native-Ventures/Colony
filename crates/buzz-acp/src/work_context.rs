@@ -44,7 +44,7 @@ pub struct WorkReference {
     /// The Initiative containing it, when it has one.
     pub initiative_id: Option<String>,
     /// The team accountable for the Task.
-    pub owning_team_id: String,
+    pub owning_team_id: Option<String>,
 }
 
 /// Everything the turn needed, resolved from relay-authored records.
@@ -131,13 +131,13 @@ pub fn read_work_reference(event: &Event) -> Result<Option<WorkReference>, Strin
     let initiative_id = scalar_tag(event, "initiative")?;
     let owning_team_id = scalar_tag(event, "team")?;
 
-    let (Some(task_id), Some(owning_team_id)) = (task_id, owning_team_id) else {
+    let Some(task_id) = task_id else {
         if task_id.is_some() || owning_team_id.is_some() || initiative_id.is_some() {
             return Err("message carries an incomplete work reference".to_string());
         }
         return Ok(None);
     };
-    if !is_record_id(task_id) || !is_record_id(owning_team_id) {
+    if !is_record_id(task_id) || owning_team_id.is_some_and(|id| !is_record_id(id)) {
         return Err("message carries an unusable work identifier".to_string());
     }
     if initiative_id.is_some_and(|id| !is_record_id(id)) {
@@ -147,7 +147,7 @@ pub fn read_work_reference(event: &Event) -> Result<Option<WorkReference>, Strin
     Ok(Some(WorkReference {
         task_id: task_id.to_string(),
         initiative_id: initiative_id.map(str::to_string),
-        owning_team_id: owning_team_id.to_string(),
+        owning_team_id: owning_team_id.map(str::to_owned),
     }))
 }
 
@@ -225,7 +225,10 @@ pub fn hydrate(
     // team. Anything else is a message wrong about who is accountable, and
     // accepting it would charge the turn to a team that never took the work.
     if task.owning_team_id != reference.owning_team_id
-        && !responder_teams.contains(&reference.owning_team_id)
+        && !reference
+            .owning_team_id
+            .as_ref()
+            .is_some_and(|team| task.owning_team_id.is_some() && responder_teams.contains(team))
     {
         return Err("the message and the task disagree about the owning team".to_string());
     }
@@ -276,8 +279,8 @@ pub fn hydrate(
         // whose budget every later turn in the thread comes out of.
         // Ambiguity (an agent in several teams, or in none we can see) falls
         // back to the task's team rather than picking one.
-        owning_team_id: match responder_teams {
-            [only] => only.clone(),
+        owning_team_id: match (task.owning_team_id.as_ref(), responder_teams) {
+            (Some(_), [only]) => Some(only.clone()),
             _ => task.owning_team_id.clone(),
         },
         cost_centre_id: task.cost_centre_id.clone(),
@@ -711,7 +714,11 @@ pub fn work_context_section(context: &HydratedWorkContext) -> String {
         company = context.company.trading_name,
         task = context.task.title,
         task_id = context.task.id,
-        team = context.task.owning_team_id,
+        team = context
+            .task
+            .owning_team_id
+            .as_deref()
+            .unwrap_or("Direct assignment"),
         purpose = purpose_label(context.task.commercial_purpose),
         rank_block = rank_block,
         rank_note = rank_note,
@@ -792,9 +799,9 @@ mod tests {
             initiative_id: None,
             title: "Take a look at the failing deploy".to_string(),
             status: TaskStatus::InProgress,
-            owning_team_id: "company-team:abc:horizonlabs:engineering".to_string(),
+            owning_team_id: Some("company-team:abc:horizonlabs:engineering".to_string()),
             assignee_persona_ids: vec!["company-role:abc:horizonlabs:cto".to_string()],
-            qa_persona_id: "company-role:abc:horizonlabs:cto".to_string(),
+            qa_persona_id: Some("company-role:abc:horizonlabs:cto".to_string()),
             reviewer_team_id: None,
             cost_centre_id: "cc-coordination".to_string(),
             commercial_purpose: CommercialPurpose::Administration,
@@ -863,9 +870,11 @@ mod tests {
     fn task_head(record: &CompanyTask, keys: &Keys) -> Event {
         let mut tags = vec![
             scalar("d", &record.id),
-            scalar("team", &record.owning_team_id),
             scalar("cost-centre", &record.cost_centre_id),
         ];
+        if let Some(team) = record.owning_team_id.as_deref() {
+            tags.push(scalar("team", team));
+        }
         if let Some(initiative_id) = record.initiative_id.as_deref() {
             tags.push(scalar("initiative", initiative_id));
         }
@@ -891,7 +900,7 @@ mod tests {
         WorkReference {
             task_id: "horizonlabs:chat:0001".to_string(),
             initiative_id: None,
-            owning_team_id: "company-team:abc:horizonlabs:engineering".to_string(),
+            owning_team_id: Some("company-team:abc:horizonlabs:engineering".to_string()),
         }
     }
 
@@ -914,7 +923,7 @@ mod tests {
             Some(WorkReference {
                 task_id: "horizonlabs:chat:0001".to_string(),
                 initiative_id: Some("horizonlabs:launch-outbound".to_string()),
-                owning_team_id: "company-team:abc:horizonlabs:engineering".to_string(),
+                owning_team_id: Some("company-team:abc:horizonlabs:engineering".to_string()),
             })
         );
     }
@@ -931,10 +940,6 @@ mod tests {
                     scalar("task", "horizonlabs:chat:0002"),
                     scalar("team", "company-team:abc:horizonlabs:engineering"),
                 ],
-            ),
-            (
-                "task without team",
-                vec![scalar("task", "horizonlabs:chat:0001")],
             ),
             (
                 "team without task",
@@ -984,8 +989,8 @@ mod tests {
         assert_eq!(context.initiative, None);
         assert_eq!(context.metric.task_id, "horizonlabs:chat:0001");
         assert_eq!(
-            context.metric.owning_team_id,
-            "company-team:abc:horizonlabs:engineering"
+            context.metric.owning_team_id.as_deref(),
+            Some("company-team:abc:horizonlabs:engineering")
         );
         assert_eq!(context.metric.cost_centre_id, "cc-coordination");
         assert_eq!(
@@ -1055,8 +1060,8 @@ mod tests {
         )
         .expect("hydrate for the agent whose team opened the task");
         assert_eq!(
-            opener.metric.owning_team_id,
-            "company-team:abc:horizonlabs:engineering"
+            opener.metric.owning_team_id.as_deref(),
+            Some("company-team:abc:horizonlabs:engineering")
         );
 
         let responder = hydrate(
@@ -1069,11 +1074,13 @@ mod tests {
         )
         .expect("hydrate for a second agent answering in the same thread");
         assert_eq!(
-            responder.metric.owning_team_id, "company-team:abc:horizonlabs:sales",
+            responder.metric.owning_team_id.as_deref(),
+            Some("company-team:abc:horizonlabs:sales"),
             "the turn is charged to the team of the agent that answered"
         );
         assert_eq!(
-            responder.task.owning_team_id, "company-team:abc:horizonlabs:engineering",
+            responder.task.owning_team_id.as_deref(),
+            Some("company-team:abc:horizonlabs:engineering"),
             "the task still records who opened it"
         );
     }
@@ -1094,7 +1101,8 @@ mod tests {
         )
         .expect("hydrate");
         assert_eq!(
-            context.metric.owning_team_id, "company-team:abc:horizonlabs:engineering",
+            context.metric.owning_team_id.as_deref(),
+            Some("company-team:abc:horizonlabs:engineering"),
             "ambiguity picks nobody's budget, it falls back to the task's team"
         );
     }
@@ -1103,7 +1111,7 @@ mod tests {
     fn a_message_naming_a_team_the_responder_belongs_to_is_accepted() {
         let keys = relay();
         let mut sales_reference = reference();
-        sales_reference.owning_team_id = "company-team:abc:horizonlabs:sales".to_string();
+        sales_reference.owning_team_id = Some("company-team:abc:horizonlabs:sales".to_string());
         assert!(
             hydrate(
                 &sales_reference,
@@ -1206,7 +1214,7 @@ mod tests {
         );
 
         let mut wrong_team = reference();
-        wrong_team.owning_team_id = "company-team:abc:horizonlabs:sales".to_string();
+        wrong_team.owning_team_id = Some("company-team:abc:horizonlabs:sales".to_string());
         assert!(
             hydrate(
                 &wrong_team,
@@ -1793,5 +1801,35 @@ mod base_prompt_tests {
             BASE_PROMPT.contains("Never write as if the reader already knows us"),
             "the base prompt must forbid copy that assumes familiarity"
         );
+    }
+
+    #[test]
+    fn direct_work_hydrates_without_team_and_does_not_infer_one_from_membership() {
+        let keys = relay();
+        let mut direct = task();
+        direct.owning_team_id = None;
+        direct.qa_persona_id = None;
+        let event = message(vec![scalar("task", &direct.id)]);
+        let reference = read_work_reference(&event)
+            .expect("reference")
+            .expect("task reference");
+        assert_eq!(reference.owning_team_id, None);
+        for memberships in [vec![], vec!["engineering-team".to_owned()]] {
+            let context = hydrate(
+                &reference,
+                &task_head(&direct, &keys),
+                None,
+                &company_head(&keys),
+                &keys.public_key(),
+                &memberships,
+            )
+            .expect("direct hydration");
+            assert_eq!(context.metric.owning_team_id, None);
+            assert_eq!(context.metric.task_id, direct.id);
+            context
+                .metric
+                .validate()
+                .expect("attributed without a team");
+        }
     }
 }

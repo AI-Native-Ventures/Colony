@@ -351,6 +351,7 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys, personas: &[String]) -
         persona_ids,
     };
     publish_team(client, owner, &team).await;
+    publish_managed_agent(client, owner, &Keys::generate(), &team.lead_persona_id).await;
     let channel = create_channel(owner).await;
     Fixture {
         relay,
@@ -1165,4 +1166,50 @@ fn a_thread_attach_is_carried_by_the_company_action_kind() {
         KIND_COMPANY_ACTION,
         "an attach travels on the same envelope every company request does"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres"]
+async fn a_direct_agent_task_needs_no_team_and_rejects_an_unknown_persona() {
+    let owner = owner_keys();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("owner");
+    seed_member(&owner, "owner", None).await;
+    let relay = relay_self().await;
+    let channel = create_channel(&owner).await;
+    let agent = Keys::generate();
+    let persona = format!("standalone-{}", Uuid::new_v4().simple());
+    publish_managed_agent(&mut client, &owner, &agent, &persona).await;
+    let signer = owner.public_key().to_hex();
+    let request = |persona: &str, send: &str| {
+        plan_thread_attach(ThreadAttachRequest {
+            channel_id: &channel,
+            thread_root: None,
+            conversation_scope: false,
+            send_id: send,
+            mode: ThreadAttachMode::Open,
+            title: "Draft a reply",
+            agent_persona_id: Some(persona),
+            client_organization_id: None,
+            parent_task_id: None,
+            owner_pubkey: &signer,
+            relay_pubkey: &relay,
+            now: now(),
+        })
+        .expect("request")
+    };
+    let action = request(&persona, "direct-send");
+    let task = attached_task(&mut client, &owner, &relay, &action).await;
+    assert_eq!(task.owning_team_id, None);
+    assert_eq!(task.qa_persona_id, None);
+    assert_eq!(task.assignee_persona_ids, vec![persona]);
+    let replay = attached_task(&mut client, &owner, &relay, &action).await;
+    assert_eq!(replay.id, task.id);
+    let unknown = request(
+        &format!("unknown-{}", Uuid::new_v4().simple()),
+        "unknown-send",
+    );
+    let (outcome, _) = broker(&mut client, &owner, &relay, &unknown).await;
+    assert_ne!(outcome, CompanyReceiptOutcome::Applied);
 }

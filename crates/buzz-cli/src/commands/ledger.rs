@@ -250,7 +250,7 @@ fn assignment(
         .map_err(|_| CliError::Usage(format!("unknown commercial purpose: {purpose}")))?;
     Ok(RuleAssignment {
         cost_centre_id,
-        owning_team_id,
+        owning_team_id: Some(owning_team_id),
         commercial_purpose,
         client_organization_id,
         task_id,

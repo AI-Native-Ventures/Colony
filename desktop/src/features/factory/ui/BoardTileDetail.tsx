@@ -87,7 +87,12 @@ export function BoardTileDetail({
           label="Accountable owner"
           value={shortIdLabel(task.owningTeamId)}
         />
-        <DetailRow label="QA owner" value={shortIdLabel(task.qaPersonaId)} />
+        <DetailRow
+          label="QA owner"
+          value={
+            task.qaPersonaId ? shortIdLabel(task.qaPersonaId) : "Owner review"
+          }
+        />
         <DetailRow label="Task state" value={task.status} />
         <DetailRow label="Execution" value={execution.label} />
         <DetailRow

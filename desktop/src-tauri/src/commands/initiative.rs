@@ -25,8 +25,8 @@ use crate::{
     app_state::AppState,
     company::transaction::is_event_id,
     managed_agents::{
-        enrol_persona_for_relay, ensure_coordination_team_for_relay, is_coordination_team_id,
-        load_personas, load_teams, save_personas, save_teams, sort_teams,
+        ensure_coordination_team_for_relay, is_coordination_team_id, load_personas, load_teams,
+        save_personas, save_teams, sort_teams,
         storage::{load_managed_agents, save_managed_agents},
         team_applies_to_relay, AgentDefinition, ManagedAgentRecord, TeamRecord,
     },
@@ -36,8 +36,6 @@ use crate::{
 mod attach_scope;
 #[path = "initiative_dispatch_binding.rs"]
 mod dispatch_binding;
-#[path = "initiative_team_readiness.rs"]
-mod team_readiness;
 
 /// What the caller has to publish next, and what it will do.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,13 +425,9 @@ fn resolve_chat_agent_persona(
     agent.persona_id = Some(persona_id.clone());
     agent.updated_at = now.to_string();
 
-    // One `teams.json` serves every community this device has joined, so
-    // "the" coordination team is not a device-wide thing to look up. The
-    // repaired persona joins the team of the community this send arrived in,
-    // and seeds it when that community has none: enrolling onto whichever
-    // coordination team happened to sort first is how the pre-migration
-    // record accumulated members no community could actually see.
-    let teams_changed = enrol_persona_for_relay(teams, &persona_id, relay_url, now);
+    // A repaired identity is a stand-alone agent; sending does not enrol it in a team.
+    let _ = (teams, relay_url);
+    let teams_changed = false;
 
     Ok(PersonaBackfillOutcome {
         persona_id,
@@ -579,7 +573,7 @@ pub async fn attach_thread_task(
 
                 let mut agents = load_managed_agents(&app)?;
                 let mut personas = load_personas(&app)?;
-                let mut teams = load_teams(&app)?;
+                let mut teams = Vec::new();
                 let now = crate::util::now_iso();
 
                 let outcome = resolve_chat_agent_persona(
@@ -606,29 +600,6 @@ pub async fn attach_thread_task(
         }
     };
 
-    // Seeds this community's coordination team when it has none, so the relay
-    // has a team to charge the turn to before the question is even asked.
-    if scope.is_none() {
-        company_team_refs(&app, &state, &relay_url)?;
-    }
-    let ready_team = if let Some(scope) = &scope {
-        Some(
-            team_readiness::ensure(
-                &app,
-                &state,
-                scope,
-                &keys,
-                &relay_pubkey,
-                normalized
-                    .as_deref()
-                    .ok_or_else(|| "This job needs its approved Chief of Staff.".to_string())?,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-
     // Derived from the send rather than read from the clock, so a retry
     // produces the same bytes and the relay recognises the replay.
     let now = buzz_core_pkg::company_roster::approval_timestamp(&format!("{channel_id}:{send_id}"));
@@ -649,9 +620,9 @@ pub async fn attach_thread_task(
     })?;
     let action = dispatch_binding::bind(action, dispatch_binding.as_deref())?;
 
-    let signed_action = match (&scope, &ready_team) {
-        (Some(scope), Some(ready)) => ready.sign(&app, &state, scope, &send_id, &action, &keys)?,
-        _ => sign_action(&action, &keys)?,
+    let signed_action = match &scope {
+        Some(scope) => scope.sign(&app, &state, normalized.as_deref(), &action, &keys)?,
+        None => sign_action(&action, &keys)?,
     };
     if let Some(scope) = &scope {
         scope.check(&state)?;
@@ -666,7 +637,7 @@ pub struct UserTaskResult {
     /// The stable Task identifier.
     pub task_id: String,
     /// The single team accountable for it.
-    pub owning_team_id: String,
+    pub owning_team_id: Option<String>,
     /// The signed Company Action that creates it.
     pub signed_action: String,
 }
@@ -727,11 +698,15 @@ pub async fn create_user_task(
 
     // This command never goes through `resolve_chat_agent_persona`, so the
     // active community is read here rather than inherited from a repair.
-    let teams = company_team_refs(
-        &app,
-        &state,
-        &crate::relay::relay_ws_url_with_override(&state),
-    )?;
+    let teams = if owning_team_id.is_some() {
+        company_team_refs(
+            &app,
+            &state,
+            &crate::relay::relay_ws_url_with_override(&state),
+        )?
+    } else {
+        Vec::new()
+    };
 
     // Derived from the request id rather than read from the clock, so a
     // retry produces the same bytes and the relay recognises the replay.

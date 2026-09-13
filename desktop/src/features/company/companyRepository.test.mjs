@@ -1358,3 +1358,41 @@ test("a task can be read back by the head event a receipt named", async () => {
   assert.equal(missing.ok, false);
   assert.equal(missing.code, "missing-head");
 });
+
+test("a signed direct task needs neither team nor reviewer", () => {
+  const record = {
+    ...TASK,
+    owningTeamId: null,
+    qaPersonaId: null,
+    reviewerTeamId: null,
+  };
+  const event = head(30181, record, [
+    ["d", record.id],
+    ["cost-centre", record.costCentreId],
+    ["initiative", record.initiativeId],
+  ]);
+  const result = parseTaskHead(event, RELAY_PUBKEY);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.value.owningTeamId, null);
+  assert.equal(result.value.qaPersonaId, null);
+});
+
+test("direct task heads reject explicit, duplicate and malformed team tags", () => {
+  const record = { ...TASK, owningTeamId: null, qaPersonaId: null };
+  for (const teamTags of [
+    [["team", "other"]],
+    [
+      ["team", "a"],
+      ["team", "b"],
+    ],
+    [["team"]],
+  ]) {
+    const event = head(30181, record, [
+      ["d", record.id],
+      ["cost-centre", record.costCentreId],
+      ["initiative", record.initiativeId],
+      ...teamTags,
+    ]);
+    assert.equal(parseTaskHead(event, RELAY_PUBKEY).ok, false);
+  }
+});

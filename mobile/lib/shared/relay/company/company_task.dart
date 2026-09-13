@@ -30,7 +30,7 @@ class CompanyTask {
   final String id;
   final String title;
   final String status;
-  final String owningTeamId;
+  final String? owningTeamId;
   final String? initiativeId;
   final String sourceChannelId;
 
@@ -90,7 +90,7 @@ class CompanyTask {
     ['task', id],
     if (initiativeId case final initiative? when initiative.isNotEmpty)
       ['initiative', initiative],
-    ['team', owningTeamId],
+    if (owningTeamId case final team? when team.isNotEmpty) ['team', team],
   ];
 }
 
@@ -127,8 +127,19 @@ CompanyTask? parseTaskHead(NostrEvent event, String relaySelfPubkey) {
       id != coordinate ||
       title is! String ||
       status is! String ||
-      owningTeamId is! String ||
+      (owningTeamId != null && owningTeamId is! String) ||
       sourceChannelId is! String) {
+    return null;
+  }
+
+  final teamTags = event.tags
+      .where((tag) => tag.isNotEmpty && tag[0] == 'team')
+      .toList();
+  if (owningTeamId == null
+      ? teamTags.isNotEmpty
+      : teamTags.length != 1 ||
+            teamTags[0].length != 2 ||
+            teamTags[0][1] != owningTeamId) {
     return null;
   }
 
@@ -138,7 +149,7 @@ CompanyTask? parseTaskHead(NostrEvent event, String relaySelfPubkey) {
     id: id,
     title: title,
     status: status,
-    owningTeamId: owningTeamId,
+    owningTeamId: owningTeamId as String?,
     initiativeId: _optionalString(decoded['initiativeId']),
     sourceChannelId: sourceChannelId,
     threadRoot: _optionalString(decoded['threadRoot']),

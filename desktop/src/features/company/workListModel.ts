@@ -206,7 +206,8 @@ export const WORK_LIST_GROUP_LABELS: Record<WorkListGroupKey, string> = {
 
 /** The readable tail of a colon-scoped id: `relay1:horizonlabs:sales` →
  * `sales`. Ids without scope render whole. */
-export function shortIdLabel(id: string): string {
+export function shortIdLabel(id: string | null): string {
+  if (id === null) return "Direct assignment";
   const tail = id.slice(Math.max(id.lastIndexOf(":"), id.lastIndexOf("/")) + 1);
   return tail === "" ? id : tail;
 }
@@ -228,7 +229,7 @@ function groupOf(row: WorkListRow, dimension: WorkListGroupKey): string {
     case "status":
       return row.task.status;
     case "team":
-      return row.task.owningTeamId;
+      return row.task.owningTeamId ?? "direct-assignment";
     case "initiative":
       return row.task.initiativeId ?? "";
     case "assignee":

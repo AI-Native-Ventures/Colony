@@ -163,11 +163,11 @@ fn kickoff_action(
         // Ready, not in progress: the work is waiting for whoever picks it up,
         // and claiming it started would record time nobody spent.
         status: TaskStatus::Ready,
-        owning_team_id: team.id.clone(),
+        owning_team_id: Some(team.id.clone()),
         assignee_persona_ids: assignees,
         // The lead reviews the team's work. It is always a member, which is
         // what the Task contract requires of a QA persona.
-        qa_persona_id: team.lead_persona_id.clone(),
+        qa_persona_id: Some(team.lead_persona_id.clone()),
         reviewer_team_id: None,
         cost_centre_id: initiative.cost_centre_id.clone(),
         commercial_purpose: initiative.commercial_purpose,
@@ -469,10 +469,13 @@ mod tests {
         match &action.payload {
             CompanyActionPayload::Task(task) => {
                 assert_eq!(task.status, TaskStatus::Ready);
-                assert_eq!(task.owning_team_id, "company-team:abc:horizonlabs:sales");
                 assert_eq!(
-                    task.qa_persona_id,
-                    "company-role:abc:horizonlabs:sales-lead"
+                    task.owning_team_id.as_deref(),
+                    Some("company-team:abc:horizonlabs:sales")
+                );
+                assert_eq!(
+                    task.qa_persona_id.as_deref(),
+                    Some("company-role:abc:horizonlabs:sales-lead")
                 );
                 assert_eq!(
                     task.initiative_id.as_deref(),
@@ -651,8 +654,8 @@ mod tests {
                 // QA stays the lead, not the owner, even when the owner is an
                 // ordinary member.
                 assert_eq!(
-                    task.qa_persona_id,
-                    "company-role:abc:horizonlabs:sales-lead"
+                    task.qa_persona_id.as_deref(),
+                    Some("company-role:abc:horizonlabs:sales-lead")
                 );
                 assert_eq!(
                     task.assignee_persona_ids,
