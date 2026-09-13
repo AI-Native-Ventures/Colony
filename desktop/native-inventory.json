@@ -2807,6 +2807,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/agents/lib/teamsSectionVisibility.ts:16",
         "src/parity/session/script.ts:855",
         "src/shared/api/tauriTeams.ts:43"
       ]

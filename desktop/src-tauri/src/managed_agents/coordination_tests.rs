@@ -744,6 +744,56 @@ fn split_does_not_overwrite_a_blueprint_team_that_already_covers_a_relay() {
     );
 }
 
+// ── the stored built-in flag is not the authority ───────────────────────
+
+/// Another client sharing this data directory rewrote `teams.json` with
+/// `is_builtin: false` on every coordination record. The id is what makes a
+/// coordination team infrastructure, so the load restores the flag.
+#[test]
+fn a_coordination_record_stored_as_user_owned_loads_as_built_in() {
+    let mut stored = seeded_for(RELAY_A);
+    stored.is_builtin = false;
+
+    let (records, changed) = merge_teams(vec![stored], &[], "2026-09-13T00:00:00Z");
+
+    assert!(changed, "the restored flag has to reach the next save");
+    let restored = records
+        .iter()
+        .find(|team| team.id == id_for(RELAY_A))
+        .expect("the coordination record survives the merge");
+    assert!(restored.is_builtin);
+    assert_eq!(restored.updated_at, "2026-09-13T00:00:00Z");
+}
+
+/// The rewritten flag used to make this community's own coordination team
+/// look like the blueprint team that supersedes it, so the load deleted it
+/// and the next boot seeded a replacement.
+#[test]
+fn a_coordination_record_stored_as_user_owned_is_not_retired_by_itself() {
+    let mut stored = seeded_for(RELAY_A);
+    stored.is_builtin = false;
+
+    let (records, _changed) = merge_teams(vec![stored], &[], "2026-09-13T00:00:00Z");
+
+    assert!(records.iter().any(|team| team.id == id_for(RELAY_A)));
+}
+
+/// A blueprint's coordination team is user owned by design: it lives in a
+/// different id namespace and is exactly what retires ours.
+#[test]
+fn a_blueprint_coordination_team_keeps_its_user_owned_flag() {
+    let blueprint = blueprint_team_pinned_to(RELAY_B);
+    let id = blueprint.id.clone();
+
+    let (records, _changed) = merge_teams(vec![blueprint], &[], "2026-09-13T00:00:00Z");
+
+    let kept = records
+        .iter()
+        .find(|team| team.id == id)
+        .expect("the blueprint team survives the merge");
+    assert!(!kept.is_builtin);
+}
+
 // ── merge and load, without a device-wide default ───────────────────────
 
 #[test]

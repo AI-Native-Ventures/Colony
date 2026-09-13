@@ -8,6 +8,10 @@ import {
 } from "lucide-react";
 
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
+import {
+  isCoordinationTeamId,
+  teamsSectionIsVisible,
+} from "@/features/agents/lib/teamsSectionVisibility";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
 import {
   DropdownMenu,
@@ -53,6 +57,18 @@ export function TeamsSection({
   onShare,
   onImport,
 }: TeamsSectionProps) {
+  // Nothing but the teams this client seeds for itself means nothing worth a
+  // heading. Hidden while the list is still loading too, so the section does
+  // not flash a row of skeletons on its way to not being there.
+  if (!teamsSectionIsVisible(teams, error !== null)) {
+    return null;
+  }
+
+  // The coordination team is in the list so mentions, tasks and the deploy
+  // dialogs can resolve a Task's owning team through it. It is not a team a
+  // person assembled, so it gets no card.
+  const visibleTeams = teams.filter((team) => !isCoordinationTeamId(team.id));
+
   return (
     <section className="relative space-y-4" data-testid="agents-library-teams">
       <div className={TEAM_CARD_COLUMN_CLASS}>
@@ -89,7 +105,7 @@ export function TeamsSection({
             onCreate={onCreate}
             onImport={onImport}
           />
-          {teams.map((team) => {
+          {visibleTeams.map((team) => {
             const resolution = resolveTeamPersonas(team, personas);
             const missingPersonaCount = resolution.missingPersonaCount;
             const hasMissingPersonas = resolution.hasMissingPersonas;
