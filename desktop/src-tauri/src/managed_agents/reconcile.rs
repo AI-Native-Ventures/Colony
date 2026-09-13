@@ -158,7 +158,7 @@ fn record_belongs_to_active_relay(record: &ManagedAgentRecord, active_relay: &st
 /// schemes in practice, and treating them as different communities would drop
 /// an agent from its own roster. An unparseable side falls back to a trimmed,
 /// lowercased verbatim form, which fails closed against a parseable one.
-fn same_relay_community(a: &str, b: &str) -> bool {
+pub(crate) fn same_relay_community(a: &str, b: &str) -> bool {
     fn authority(url: &str) -> String {
         match buzz_core_pkg::relay::normalize_relay_url(url) {
             Ok(canonical) => canonical
