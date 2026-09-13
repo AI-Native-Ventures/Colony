@@ -241,7 +241,7 @@ fn parse_effective_from(value: Option<&str>) -> Result<u64, CliError> {
 
 fn assignment(
     cost_centre_id: String,
-    owning_team_id: String,
+    owning_team_id: Option<String>,
     purpose: &str,
     client_organization_id: Option<String>,
     task_id: Option<String>,
@@ -250,7 +250,7 @@ fn assignment(
         .map_err(|_| CliError::Usage(format!("unknown commercial purpose: {purpose}")))?;
     Ok(RuleAssignment {
         cost_centre_id,
-        owning_team_id: Some(owning_team_id),
+        owning_team_id,
         commercial_purpose,
         client_organization_id,
         task_id,
@@ -723,6 +723,39 @@ fn rfc3339_utc_day(timestamp: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ledger_corrections_accept_direct_and_explicit_team_work() {
+        use clap::Parser;
+        let args = [
+            "buzz",
+            "ledger",
+            "correct",
+            "--record",
+            "abc",
+            "--cost-centre",
+            "internal",
+            "--purpose",
+            "administration",
+            "--reason",
+            "Correct attribution",
+        ];
+        assert!(crate::Cli::try_parse_from(args).is_ok());
+        let mut team_args = args.to_vec();
+        team_args.extend(["--team", "engineering"]);
+        assert!(crate::Cli::try_parse_from(team_args).is_ok());
+        for team in [None, Some("engineering".to_owned())] {
+            let result = assignment(
+                "internal".into(),
+                team.clone(),
+                "administration",
+                None,
+                None,
+            )
+            .expect("assignment");
+            assert_eq!(result.owning_team_id, team);
+        }
+    }
 
     #[test]
     fn dollars_per_mtok_convert_exactly() {
