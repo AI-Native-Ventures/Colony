@@ -945,9 +945,11 @@ test("lifts Jump to latest when the composer grows", async ({ page }) => {
     ].join("\n"),
   );
 
+  // Four lines grow Colony's composer by exactly 40px, so this waits for at
+  // least that much rather than upstream's strictly-greater-than.
   await expect
     .poll(async () => (await composer.boundingBox())?.height ?? 0)
-    .toBeGreaterThan((initialComposerBox?.height ?? 0) + 40);
+    .toBeGreaterThanOrEqual((initialComposerBox?.height ?? 0) + 40);
   await page.waitForTimeout(250);
 
   const expandedPillBox = await jumpToLatest.boundingBox();
