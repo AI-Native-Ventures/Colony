@@ -47,11 +47,10 @@ import { buildMessageComposerEditTarget } from "@/features/messages/lib/draftMen
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
 import { DeleteMessageConfirmDialog } from "@/features/messages/ui/DeleteMessageConfirmDialog";
 import { getThreadReference } from "@/features/messages/lib/threading";
-import { hasPersistedHydratedChannel } from "@/features/messages/lib/channelHeadCache";
-import { resolveTimelineQueryLoadingState } from "@/features/messages/lib/timelineLoadingState";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useIndependentThreadPanel } from "@/features/messages/useIndependentThreadPanel";
 import { useThreadReplies } from "@/features/messages/useThreadReplies";
+import { useChannelTimelineLoading } from "@/features/channels/ui/useChannelTimelineLoading";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
@@ -195,6 +194,7 @@ export function ChannelScreen({
   const threadRepliesQuery = useThreadReplies(
     activeChannel,
     effectiveOpenThreadHeadId,
+    threadScrollTargetId,
   );
   useChannelSubscription(activeChannel);
   const { fetchOlder, hasOlderMessages, historyExhausted, isFetchingOlder } =
@@ -613,27 +613,12 @@ export function ChannelScreen({
       setThreadReplyTargetId,
       setThreadScrollTargetId,
     });
-  const settledChannelIdRef = React.useRef<string | null>(null);
-  const { settledChannelId, isLoading: isTimelineLoading } =
-    resolveTimelineQueryLoadingState(
-      settledChannelIdRef.current,
-      activeChannelId,
-      {
-        isEnabled:
-          activeChannel !== null && activeChannel.channelType !== "forum",
-        isPending: messagesQuery.isPending,
-        isFetching: messagesQuery.isFetching,
-        isPlaceholderData: messagesQuery.isPlaceholderData,
-        dataLength: messagesQuery.data?.length ?? null,
-        isError: messagesQuery.isError,
-      },
-      // A persisted head only counts as hydrated when it has rows to paint
-      // (channelHeadCache.ts), so this bypass never settles onto an empty
-      // placeholder while the authoritative refresh is still in flight.
-      activeChannelId !== null &&
-        hasPersistedHydratedChannel(queryClient, activeChannelId),
-    );
-  settledChannelIdRef.current = settledChannelId;
+  const isTimelineLoading = useChannelTimelineLoading({
+    activeChannel,
+    activeChannelId,
+    messagesQuery,
+    queryClient,
+  });
   const { welcomeKickoffStage, welcomeKickoffSettingUp } =
     useWelcomeKickoffStagePresence(
       activeChannel,
