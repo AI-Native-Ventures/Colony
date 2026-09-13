@@ -284,7 +284,9 @@ fn inbound_managed_agent_drops_injected_secrets_and_harness() {
         AGENT_PUBKEY,
         content,
         None,
-        "wss://localhost:3000",
+        // The head arrives on the agent's OWN community, so the pin guard lets
+        // it through and these assertions see the apply itself.
+        "wss://relay.local",
     );
 
     let a = &agents[0];
@@ -381,7 +383,9 @@ fn inbound_definition_less_agent_applies_quad() {
         AGENT_PUBKEY,
         content,
         None,
-        "wss://localhost:3000",
+        // The head arrives on the agent's OWN community, so the pin guard lets
+        // it through and these assertions see the apply itself.
+        "wss://relay.local",
     );
 
     let a = &agents[0];
@@ -588,7 +592,8 @@ fn inbound_managed_agent_keeps_the_owner_authored_rank() {
         AGENT_PUBKEY,
         parsed,
         None,
-        "wss://localhost:3000",
+        // Arrives on the agent's own community, past the pin guard.
+        "wss://relay.local",
     );
 
     assert_eq!(
