@@ -1,6 +1,8 @@
 import { verifyEvent } from "nostr-tools/pure";
-import { parseCompanyHead } from "../../src/features/company/contracts";
-import { parseCompanyReceipt } from "../../src/features/company/workRepository";
+import {
+  parseScoutOnboardingRoot,
+  ROOT_PROTOCOL,
+} from "../../src/features/onboarding/channelOnboardingRuntime/protocol";
 import { waitForAnimations } from "../helpers/animations";
 import { expect, test } from "@playwright/test";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
@@ -67,11 +69,16 @@ test("public first run: account, business and power reach Welcome with the owner
     page.getByRole("button", { name: /^OpenRouter free models/ }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Open my Colony" }),
+    page.getByRole("button", { name: "Test connection" }),
   ).toBeEnabled();
   await waitForAnimations(page);
   await page.screenshot({ path: "test-results/simple-founder-power-1440.png" });
-  await page.getByRole("button", { name: "Open my Colony" }).click();
+  await page.getByRole("button", { name: "Test connection" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const commandCountBeforeChoiceHandoff = await page.evaluate(
+    () => window.__BUZZ_E2E_COMMANDS__?.length ?? 0,
+  );
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
   await expect(page).toHaveURL(/channels/);
@@ -103,40 +110,63 @@ test("public first run: account, business and power reach Welcome with the owner
   await expect(
     page.getByRole("heading", { name: /Pick who|Put something/ }),
   ).toHaveCount(0);
-  // Real React completion must retain business context through a signed owner
-  // action, relay receipt and canonical readback; this transport is synthetic.
+  // Signup completion hands the owner context to Scout's choice-first Welcome
+  // root. Company writes and agent/work setup wait for the later channel
+  // approval, so the root is the durable proof at this stage.
   const retained = await page.evaluate(() => ({
-    broker: window.__BUZZ_E2E_MOCK_COMPANY_BROKER__?.(),
-    signed: window.__BUZZ_E2E_COMMAND_PAYLOADS__?.filter(
+    published: window.__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [],
+    signedProfileUpdates: window.__BUZZ_E2E_COMMAND_PAYLOADS__?.filter(
       (entry) => entry.command === "sign_community_profile_update",
     ),
-    launched: window.__BUZZ_E2E_COMMANDS__?.filter(
-      (command) => command === "start_managed_agent",
-    ),
+    commands: window.__BUZZ_E2E_COMMANDS__ ?? [],
   }));
-  expect(retained.signed).toHaveLength(1);
-  expect(retained.launched ?? []).toHaveLength(0);
-  const heads = retained.broker?.profileHeads ?? [];
-  expect(heads).toHaveLength(2);
-  const initial = parseCompanyHead(heads[0], heads[0].pubkey);
-  const saved = parseCompanyHead(heads[1], heads[1].pubkey);
-  expect(initial.ok).toBe(true);
-  expect(initial.ok && initial.value.summary).toBe("");
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.message);
-  expect(saved.value.tradingName).toBe("Horizon Labs");
-  expect(saved.value.summary).toBe(
-    "We build websites and manage social media for small businesses.",
+  const postHandoffCommands = retained.commands.slice(
+    commandCountBeforeChoiceHandoff,
   );
-  expect(saved.value.website).toBe("https://horizon.example");
-  const receipt = retained.broker?.receipts.find((entry) =>
-    entry.tags.some((tag) => tag[0] === "a" && tag[1]?.startsWith("30179:")),
+  const roots = retained.published.filter((event) =>
+    event.tags.some(
+      (tag) => tag[0] === "client" && tag[1] === ROOT_PROTOCOL.marker,
+    ),
   );
-  expect(receipt).toBeDefined();
-  if (!receipt) throw new Error("Missing canonical business receipt");
-  expect(verifyEvent(receipt)).toBe(true);
-  const actionId = receipt.tags.find((tag) => tag[0] === "e")?.[1] ?? "";
-  const parsed = parseCompanyReceipt(receipt, heads[1].pubkey, actionId);
-  expect(parsed?.outcome).toBe("applied");
-  expect(parsed?.headEventId).toBe(heads[1].id);
+  expect(roots).toHaveLength(1);
+  const root = roots[0];
+  expect(root?.kind).toBe(ROOT_PROTOCOL.kind);
+  if (!root) throw new Error("Missing signed Scout onboarding root");
+  expect(verifyEvent(root)).toBe(true);
+  const payload = parseScoutOnboardingRoot(root.tags);
+  expect(payload).not.toBeNull();
+  if (!payload) throw new Error("The Scout onboarding root was not readable");
+  expect(payload).toMatchObject({
+    ownerPubkey: TEST_IDENTITIES.tyler.pubkey,
+    relayUrl: nativeRelays.active,
+    seed: {
+      ownerName: "Horizon Owner",
+      businessName: "Horizon Labs",
+      businessDescription:
+        "We build websites and manage social media for small businesses.",
+      website: "https://horizon.example",
+      websiteState: "provided",
+    },
+  });
+  expect(payload.requestId).toMatch(
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i,
+  );
+  expect(retained.signedProfileUpdates ?? []).toHaveLength(0);
+  for (const command of [
+    "attach_thread_task",
+    "create_managed_agent",
+    "create_team",
+    "create_user_task",
+    "execute_agent_proposal",
+    "publish_note",
+    "send_managed_agent_channel_message",
+    "send_stream_message",
+    "set_canvas",
+    "set_thread_canvas",
+    "start_managed_agent",
+    "start_managed_agent_runtime",
+    "update_company_profile",
+  ]) {
+    expect(postHandoffCommands).not.toContain(command);
+  }
 });

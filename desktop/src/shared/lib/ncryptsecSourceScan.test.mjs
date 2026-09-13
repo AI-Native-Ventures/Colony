@@ -21,6 +21,9 @@ const SRC_ROOT = path.resolve(
 
 const ALLOWLIST = [
   "shared/api/tauriIdentity.ts",
+  // History import only rejects backup material; native save also guards plaintext before encryption.
+  "features/onboarding/historyDrafts.ts",
+  "features/onboarding/historyDrafts.test.mjs",
   "features/onboarding/lib/encryptedBackup.ts",
   "features/onboarding/lib/encryptedBackup.test.mjs",
   "features/onboarding/lib/keyImportInput.ts",

@@ -64,11 +64,29 @@ export const WORKER_DRAFT = [
 ].join("\n\n");
 export const SCOUT_REVIEW =
   "ONBOARDING_SCOUT_REVIEW: Reviewed all five captions and five matching visual briefs. They follow the shared website, branding and social-content offer, with a different purpose for each weekday. No invented customer results, prices or guarantees. Ready for your review; no images created and no posts published.";
+export const SCOUT_SETUP_REPLY =
+  "Scout is ready in Welcome. I will carry the context you approved and wait for your next direction.";
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+
+/** Find the latest event id in the real ACP prompt envelope. */
+export function extractLatestPromptEventId(messages) {
+  const matches = [
+    ...JSON.stringify(messages).matchAll(/Event ID:\s*([a-f0-9]{64})/gi),
+  ];
+  return matches.at(-1)?.[1] ?? null;
+}
 
 /** Serve the OpenAI-compatible upstream consumed by the real local credits gateway. */
 export async function createOnboardingFixtureProvider() {
   let context;
+  let probeAuthorized = false;
+  let probeNonce;
+  let probeTool;
+  const probeRequests = [];
+  let setupAuthorized = false;
+  let setupContext;
+  const setupRequests = [];
+  const setupTools = [];
   let error;
   let calls = 0;
   const requests = [];
@@ -91,9 +109,334 @@ export async function createOnboardingFixtureProvider() {
         assert.ok(Buffer.byteLength(raw) <= 4 * 1024 * 1024);
       }
       const body = JSON.parse(raw);
+      if (!context && probeAuthorized) {
+        const prompt = JSON.stringify(body.messages);
+        const nonce = [
+          ...prompt.matchAll(
+            /Colony connection test\. Reply in this thread with a short greeting and this verification code: ([a-f0-9-]{36})\. Use your messaging tool to post exactly one reply in this thread\. Do not use other tools or start any other work\./g,
+          ),
+        ].at(-1)?.[1];
+        assert.ok(
+          nonce,
+          "Only the exact onboarding verification prompt is authorized",
+        );
+        assert.ok(
+          !probeNonce || probeNonce === nonce,
+          "One verification turn per authorization",
+        );
+        assert.ok(probeRequests.length < 3, "Bounded verification call budget");
+        probeNonce = nonce;
+        const completion =
+          typeof body.messages.at(-1)?.content === "string" &&
+          body.messages.at(-1).content.startsWith("You have stopped.");
+        let message;
+        if (!probeTool) {
+          assert.equal(completion, false);
+          const blocks = body.messages.flatMap((entry) =>
+            typeof entry.content === "string"
+              ? entry.content.split("Event ID: ").slice(1)
+              : [],
+          );
+          const block = blocks.findLast((value) =>
+            value.includes(`verification code: ${nonce}.`),
+          );
+          assert.ok(block, "Verification must have a real event coordinate");
+          const eventId = block.match(/^([a-f0-9]{64})\n/)?.[1];
+          const channel = block.match(/\nChannel: ([^\n]+)/)?.[1];
+          const channelId = channel?.match(
+            /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/,
+          )?.[0];
+          assert.ok(
+            eventId && channelId,
+            "Bounded channel and reply coordinates",
+          );
+          const name = body.tools?.find((tool) =>
+            tool.function.name.endsWith("__shell"),
+          )?.function.name;
+          assert.ok(
+            name,
+            "The actual managed agent exposes its messaging shell",
+          );
+          const command = `buzz messages send --channel ${channelId} --reply-to ${eventId} --content ${quote(`Hello, your Colony connection is ready. ${nonce}`)}`;
+          probeTool = {
+            actor: "scout",
+            stage: "connection-test",
+            command,
+            toolCallId: `onboarding-call-${requestNumber}`,
+          };
+          tools.push(probeTool);
+          message = {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: probeTool.toolCallId,
+                type: "function",
+                function: {
+                  name,
+                  arguments: JSON.stringify({ command, timeout_ms: 15000 }),
+                },
+              },
+            ],
+          };
+        } else {
+          const result = readFixtureShellResult(
+            body.messages,
+            probeTool.toolCallId,
+          );
+          assert.equal(result.exitCode, 0);
+          assert.equal(result.timedOut, false);
+          assert.equal(
+            result.accepted,
+            true,
+            "Verification reply must be accepted by the real relay",
+          );
+          if (
+            !toolResults.some((entry) => entry.toolCallId === result.toolCallId)
+          )
+            toolResults.push({
+              actor: "scout",
+              stage: "connection-test",
+              ...result,
+            });
+          message = {
+            role: "assistant",
+            content: completion
+              ? '{"complete":true}'
+              : "Posted the verification reply.",
+          };
+        }
+        const responseId = `onboarding-${requestNumber}`;
+        const usage = {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+        };
+        const record = {
+          actor: "scout",
+          stage: "connection-test",
+          completion,
+          model: body.model,
+          responseId,
+          usage,
+        };
+        requests.push(record);
+        probeRequests.push(record);
+        response.setHeader("Content-Type", "application/json");
+        response.end(
+          JSON.stringify({
+            id: responseId,
+            object: "chat.completion",
+            model: body.model,
+            usage,
+            choices: [
+              {
+                index: 0,
+                message,
+                finish_reason: message.tool_calls ? "tool_calls" : "stop",
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      if (!context && setupAuthorized) {
+        const all = JSON.stringify(body.messages);
+        assert.ok(
+          setupContext,
+          "Approved Scout setup is missing its durable context",
+        );
+        assert.ok(
+          all.includes(setupContext.rootId),
+          "Scout setup prompt is bound to the approved onboarding root",
+        );
+        assert.ok(
+          all.includes(setupContext.channelId),
+          "Scout setup prompt is bound to the approved Welcome channel",
+        );
+        assert.ok(
+          all.includes("colony:scout-onboarding-approval:v1"),
+          "Scout setup prompt carries the signed approval marker",
+        );
+        const ackEventId = extractLatestPromptEventId(body.messages);
+        assert.match(
+          ackEventId ?? "",
+          /^[a-f0-9]{64}$/,
+          "Scout setup prompt includes the signed approval event",
+        );
+        if (setupContext.ackEventId)
+          assert.equal(
+            ackEventId,
+            setupContext.ackEventId,
+            "Retries stay bound to the same signed approval event",
+          );
+        else setupContext.ackEventId = ackEventId;
+
+        const previousTool = setupTools.at(-1);
+        if (previousTool) {
+          const result = readFixtureShellResult(
+            body.messages,
+            previousTool.toolCallId,
+          );
+          if (
+            !toolResults.some((entry) => entry.toolCallId === result.toolCallId)
+          )
+            toolResults.push({
+              actor: "scout",
+              stage: "scout-onboarding",
+              ...result,
+            });
+          assert.equal(
+            result.exitCode,
+            0,
+            "Scout acknowledgment command must exit successfully",
+          );
+          assert.equal(
+            result.timedOut,
+            false,
+            "Scout acknowledgment command must finish within its bound",
+          );
+          assert.equal(
+            result.accepted,
+            true,
+            "Scout acknowledgment command must report relay acceptance",
+          );
+          assert.match(
+            result.eventId ?? "",
+            /^[a-f0-9]{64}$/,
+            "Scout acknowledgment command returns its signed event id",
+          );
+          setupContext.replyEventId ??= result.eventId;
+        }
+
+        const usage = {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+        };
+        const name = body.tools?.find((tool) =>
+          tool.function.name.endsWith("__shell"),
+        )?.function.name;
+        let message;
+        if (!previousTool) {
+          assert.ok(name, "The real Scout exposes the shell tool");
+          const command = `buzz messages send --channel ${setupContext.channelId} --reply-to ${setupContext.ackEventId} --content ${quote(SCOUT_SETUP_REPLY)}`;
+          const toolCallId = `onboarding-scout-call-${calls}`;
+          setupTools.push({
+            actor: "scout",
+            stage: "scout-onboarding",
+            command,
+            toolCallId,
+          });
+          message = {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: toolCallId,
+                type: "function",
+                function: {
+                  name,
+                  arguments: JSON.stringify({ command, timeout_ms: 15_000 }),
+                },
+              },
+            ],
+          };
+        } else {
+          setupAuthorized = false;
+          setupContext.completed = true;
+          message = { role: "assistant", content: SCOUT_SETUP_REPLY };
+        }
+        const responseId = `onboarding-${calls}`;
+        const record = {
+          actor: "scout",
+          stage: "scout-onboarding",
+          completion: false,
+          model: body.model,
+          responseId,
+          usage,
+        };
+        requests.push(record);
+        setupRequests.push(record);
+        response.setHeader("Content-Type", "application/json");
+        response.end(
+          JSON.stringify({
+            id: responseId,
+            object: "chat.completion",
+            model: body.model,
+            usage,
+            choices: [
+              {
+                index: 0,
+                message,
+                finish_reason: message.tool_calls ? "tool_calls" : "stop",
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      if (!context && setupContext?.completed) {
+        const all = JSON.stringify(body.messages);
+        assert.ok(
+          all.includes(setupContext.rootId),
+          "Scout completion check stays bound to the onboarding root",
+        );
+        assert.ok(
+          all.includes(setupContext.channelId),
+          "Scout completion check stays bound to the Welcome channel",
+        );
+        assert.ok(
+          all.includes("colony:scout-onboarding-approval:v1"),
+          "Scout completion check carries the signed approval marker",
+        );
+        assert.equal(
+          extractLatestPromptEventId(body.messages),
+          setupContext.ackEventId,
+          "Scout completion check stays bound to the signed acknowledgment",
+        );
+        assert.ok(
+          typeof body.messages.at(-1)?.content === "string" &&
+            body.messages.at(-1).content.startsWith("You have stopped."),
+          "Only the ACP completion check is authorized after setup reply",
+        );
+        const usage = {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+        };
+        const responseId = `onboarding-${calls}`;
+        const record = {
+          actor: "scout",
+          stage: "scout-onboarding",
+          completion: true,
+          model: body.model,
+          responseId,
+          usage,
+        };
+        requests.push(record);
+        setupRequests.push(record);
+        response.setHeader("Content-Type", "application/json");
+        response.end(
+          JSON.stringify({
+            id: responseId,
+            object: "chat.completion",
+            model: body.model,
+            usage,
+            choices: [
+              {
+                index: 0,
+                message: { role: "assistant", content: '{"complete":true}' },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+        );
+        return;
+      }
       assert.ok(
         context,
-        "No model calls are allowed before explicit staffing and Start",
+        "No model calls are allowed before explicit staffing, an approved setup, or Start",
       );
       const all = JSON.stringify(body.messages);
       const team = await context.readTeam();
@@ -257,6 +600,42 @@ export async function createOnboardingFixtureProvider() {
   return {
     httpUrl: `http://127.0.0.1:${server.address().port}`,
     requests,
+    probeRequests,
+    authorizeConnectionTest() {
+      assert.equal(context, undefined);
+      assert.equal(probeAuthorized, false);
+      assert.equal(
+        calls,
+        0,
+        "No upstream call before explicit probe authorization",
+      );
+      probeAuthorized = true;
+    },
+    finishConnectionTest() {
+      assert.ok(probeRequests.length > 0);
+      probeAuthorized = false;
+    },
+    authorizeScoutSetup(value) {
+      assert.equal(context, undefined);
+      assert.equal(probeAuthorized, false);
+      assert.equal(setupAuthorized, false);
+      assert.ok(setupContext === undefined || setupContext.completed);
+      assert.match(value.rootId, /^[a-f0-9]{64}$/);
+      assert.match(value.channelId, /^[a-f0-9-]{36}$/);
+      setupContext = {
+        rootId: value.rootId,
+        channelId: value.channelId,
+        ackEventId: null,
+        replyEventId: null,
+        completed: false,
+      };
+      setupAuthorized = true;
+    },
+    get scoutSetup() {
+      return setupContext ? { ...setupContext } : null;
+    },
+    setupRequests,
+    setupTools,
     get receivedCallCount() {
       return calls;
     },

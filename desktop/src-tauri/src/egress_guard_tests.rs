@@ -268,13 +268,15 @@ const EVENTS_INVENTORY: &[(&str, usize, usize)] = &[
     ("src/huddle/pipeline.rs", 1, 1),                   // boundary 5
     ("src/commands/team_snapshot.rs", 1, 1),            // boundary 6
     ("src/commands/personas/snapshot/import.rs", 1, 1), // boundary 7
+    // Reviewed plaintext is guarded before encryption; submission uses boundary 7.
+    ("src/commands/onboarding_history.rs", 1, 1),
     (
         "src/commands/personas/snapshot/import_egress_guard_tests.rs",
         1,
         0,
     ), // discard-port fixture
-    ("src/company/live_proof_tests.rs", 1, 0),          // live-proof integration fixture
-    ("src/native_websocket.rs", 0, 2),                  // boundary 8 (WS frames; no events URL)
+    ("src/company/live_proof_tests.rs", 1, 0), // live-proof integration fixture
+    ("src/native_websocket.rs", 0, 2),         // boundary 8 (WS frames; no events URL)
     // Test-only fixtures — no production egress, no guard:
     ("src/relay_admission.rs", 1, 0),
     ("src/archive/mod_tests.rs", 1, 0),
@@ -457,6 +459,7 @@ fn ncryptsec_handling_is_confined_to_allowlisted_files() {
         "src/commands/team_snapshot.rs",
         "src/commands/team_snapshot/tests.rs",
         "src/commands/personas/snapshot/import.rs",
+        "src/commands/onboarding_history.rs",
         "src/commands/personas/snapshot/import_egress_guard_tests.rs",
         "src/native_websocket.rs",
     ];

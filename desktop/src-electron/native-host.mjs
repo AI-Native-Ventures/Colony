@@ -11,6 +11,8 @@ export function nativeRequestTimeout(type, command, fallback) {
     return Math.max(fallback, 16 * 60_000);
   if (command === "electron_install_update")
     return Math.max(fallback, 5 * 60_000);
+  if (command === "save_onboarding_memories")
+    return Math.max(fallback, 5 * 60_000);
   if (command === "electron_check_for_update")
     return Math.max(fallback, 130_000);
   return fallback;

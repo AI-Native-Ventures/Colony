@@ -5,7 +5,12 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { verifyEvent } from "nostr-tools/pure";
 import { expect } from "@playwright/test";
+import { assertCreditsProof, creditsProofQuery } from "./credits-proof.mjs";
 import { waitForAnimations } from "../../tests/helpers/animations.ts";
+import {
+  completeFixtureScoutSetup,
+  sendExplicitLegacyFirstJob,
+} from "./scout-setup.mjs";
 
 const OWNER =
   "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
@@ -41,6 +46,8 @@ export async function completeFixtureOnboarding({
   page,
   relaunch,
   proxy,
+  relay,
+  provider,
   recoveryPath,
   proofDirectory,
   onProgress = () => {},
@@ -154,16 +161,80 @@ export async function completeFixtureOnboarding({
     "Power reads the real scoped relay catalog before continuing",
   );
   await page
-    .getByRole("button", { name: "Open my Colony", exact: true })
+    .getByRole("button", { name: "Test connection", exact: true })
     .click({ trial: true });
   await screenshot(page, proofDirectory, "joined-power.png");
   await page
-    .getByRole("button", { name: "Open my Colony", exact: true })
+    .getByRole("button", { name: "Test connection", exact: true })
     .click();
+  await expect(
+    page.getByTestId("onboarding-power").getByRole("alert"),
+  ).toBeVisible({ timeout: 130_000 });
+  await expect(
+    page.getByRole("button", { name: "Continue", exact: true }),
+  ).toHaveCount(0);
+  assert.ok(
+    proxy.requests.some(
+      (request) =>
+        request.host === proxy.businessHost &&
+        request.method === "POST" &&
+        request.path === "/gateway/openai/v1/chat/completions" &&
+        request.status === 402,
+    ),
+    "Unfunded connection reaches the scoped gateway and receives HTTP 402",
+  );
+  assert.equal(
+    provider.receivedCallCount,
+    0,
+    "Unfunded connection cannot reach the model",
+  );
+  provider.assertHealthy();
+  await screenshot(page, proofDirectory, "joined-zero-credit-block.png");
+  onProgress("zero-credit-connection-blocked");
+  await relay.seedCredits(OWNER);
+  provider.authorizeConnectionTest();
+  await page.getByRole("button", { name: "Retry test", exact: true }).click();
   await page
-    .getByTestId("first-job-suggestion")
-    .first()
-    .waitFor({ state: "visible", timeout: 90_000 });
+    .getByRole("button", { name: "Continue", exact: true })
+    .click({ timeout: 130_000 });
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
+  const probeAgents = await invoke(page, "list_managed_agents");
+  assert.equal(
+    probeAgents.length,
+    1,
+    "Probe provisions only the Chief of Staff",
+  );
+  const stoppedProbe = await invoke(page, "stop_managed_agent", {
+    pubkey: probeAgents[0].pubkey,
+  });
+  assert.equal(
+    stoppedProbe.pid,
+    null,
+    "Stop the probe producer before exact accounting",
+  );
+  provider.assertHealthy();
+  provider.finishConnectionTest();
+  let probeSettlement;
+  await expect
+    .poll(
+      async () => {
+        const snapshot = JSON.parse(
+          await relay.query(creditsProofQuery(OWNER)),
+        );
+        try {
+          probeSettlement = assertCreditsProof(
+            snapshot,
+            provider.probeRequests,
+            "5000000000",
+          );
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 30_000, intervals: [1000] },
+    )
+    .toBe(true);
   onProgress("business-provisioned");
   // Fresh packaged profiles offer optional browser import after completion.
   // Exercise its real defer action; never inspect or import personal cookies.
@@ -196,6 +267,11 @@ export async function completeFixtureOnboarding({
   // threadRootId is a fetch hint cleared after deep-link resolution; thread
   // is the canonical open pane state retained by the router.
   const rootEventId = route.searchParams.get("thread");
+  assert.match(
+    rootEventId ?? "",
+    /^[a-f0-9]{64}$/,
+    "The Welcome route retains the signed Scout onboarding root",
+  );
   const relayUrl = await invoke(page, "get_relay_ws_url");
   assert.equal(
     relayUrl,
@@ -220,29 +296,57 @@ export async function completeFixtureOnboarding({
       welcome.visibility === "private",
     "The UI entered its actual private Welcome channel",
   );
-  const rootEvent = JSON.parse(
+  const onboardingRootEvent = JSON.parse(
     await invoke(page, "get_event", { eventId: rootEventId }),
   );
-  assert.equal(rootEvent.id, rootEventId);
-  assert.equal(rootEvent.kind, 9);
-  assert.equal(rootEvent.pubkey, OWNER);
+  assert.equal(onboardingRootEvent.id, rootEventId);
+  assert.equal(onboardingRootEvent.kind, 9);
+  assert.equal(onboardingRootEvent.pubkey, OWNER);
   assert.ok(
-    verifyEvent(rootEvent),
-    "Setup root retains its real owner signature",
+    verifyEvent(onboardingRootEvent),
+    "Scout onboarding root retains its real owner signature",
   );
   assert.ok(
-    !rootEvent.tags.some((tag) => tag[0] === "e"),
-    "Suggestion is a root, not fabricated work output",
+    !onboardingRootEvent.tags.some((tag) => tag[0] === "e"),
+    "Scout onboarding is a root, not fabricated work output",
   );
   assert.deepEqual(
-    rootEvent.tags.filter((tag) => tag[0] === "h"),
+    onboardingRootEvent.tags.filter((tag) => tag[0] === "h"),
     [["h", channelId]],
   );
-  const tags = rootEvent.tags.filter(
-    (tag) => tag[0] === "client" && tag[1] === "colony:first-job-suggestion:v1",
+  const setup = await completeFixtureScoutSetup({
+    page,
+    invoke,
+    relay,
+    provider,
+    communityHost: proxy.businessHost,
+    onboardingRootEventId: rootEventId,
+    onboardingRootEvent,
+    channelId,
+    ownerPubkey: OWNER,
+    relayUrl,
+    beforeSetupCalls: provider.receivedCallCount,
+    proofDirectory,
+    screenshot: (directory, filename) => screenshot(page, directory, filename),
+  });
+  onProgress("scout-setup-approved");
+  const legacy = await sendExplicitLegacyFirstJob({
+    page,
+    invoke,
+    provider,
+    channelId,
+    ownerPubkey: OWNER,
+    relayUrl,
+    preLegacyModelCalls: setup.preLegacyModelCalls,
+  });
+  const legacyRootEventId = legacy.rootEventId;
+  const legacyRootEvent = legacy.rootEvent;
+  const suggestion = legacy.suggestion;
+  assert.notEqual(
+    legacyRootEventId,
+    rootEventId,
+    "The later explicit first-job root has separate identity",
   );
-  assert.equal(tags.length, 1);
-  const suggestion = JSON.parse(tags[0][2]);
   assert.equal(suggestion.ownerPubkey, OWNER);
   assert.equal(suggestion.relayUrl, relayUrl);
   assert.equal(suggestion.channelId, channelId);
@@ -254,10 +358,22 @@ export async function completeFixtureOnboarding({
   return {
     page,
     ownerPubkey: OWNER,
+    connectionProbe: {
+      settlement: probeSettlement,
+      calls: provider.probeRequests.length,
+      fundingNanousd: "5000000000",
+      zeroCredit: "blocked before model call",
+    },
     relayUrl,
     channelId,
-    rootEventId,
+    onboardingRootEventId: rootEventId,
+    onboardingRootEvent,
+    onboardingPayload: setup.onboardingPayload,
+    scoutSetup: setup,
+    setupModelCalls: setup.setupModelCalls,
+    preLegacyModelCalls: setup.preLegacyModelCalls,
+    rootEventId: legacyRootEventId,
     suggestion,
-    rootEvent,
+    rootEvent: legacyRootEvent,
   };
 }

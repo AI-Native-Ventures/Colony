@@ -1,4 +1,8 @@
-import { useEffect, useState } from "react";
+import {
+  verifyAgentResponse,
+  type AgentResponseProof,
+} from "../../../verifyAgentResponse";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useAcpRuntimesQuery,
@@ -54,7 +58,7 @@ export function PowerScreen({
   busy: boolean;
   error: string | null;
   onBack: () => void;
-  onContinue: (save: () => Promise<void>) => Promise<void>;
+  onContinue: (proof: AgentResponseProof) => Promise<void>;
 }) {
   const queryClient = useQueryClient();
   const runtimes = useAcpRuntimesQuery();
@@ -90,6 +94,50 @@ export function PowerScreen({
   const [customModel, setCustomModel] = useState(false);
   const [modelAttempt, setModelAttempt] = useState(0);
   const [customProvider, setCustomProvider] = useState(false);
+  const [proof, setProof] = useState<AgentResponseProof | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testStatus, setTestStatus] = useState("");
+  const [testError, setTestError] = useState<string | null>(null);
+  const attempt = useRef<AbortController | null>(null);
+  useEffect(() => () => attempt.current?.abort(), []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: every draft change invalidates response proof.
+  useEffect(() => {
+    setProof(null);
+    setTestError(null);
+    attempt.current?.abort();
+  }, [draft]);
+  async function testConnection() {
+    if (attempt.current && !attempt.current.signal.aborted) return;
+    const controller = new AbortController();
+    attempt.current = controller;
+    setTesting(true);
+    setProof(null);
+    setTestError(null);
+    setTestStatus("Saving your connection…");
+    try {
+      await save();
+      controller.signal.throwIfAborted();
+      if (!scope.data) throw new Error("Your business connection changed.");
+      const verified = await verifyAgentResponse(
+        scope.data,
+        controller.signal,
+        setTestStatus,
+      );
+      if (!controller.signal.aborted) {
+        setProof(verified);
+        setTestStatus("Your agent replied");
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted)
+        setTestError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (attempt.current === controller) {
+        attempt.current = null;
+        setTesting(false);
+      }
+    }
+  }
+
   useEffect(() => {
     if (!saved.data || draft) return;
     const initialLane = powerLaneForConfig(saved.data);
@@ -172,11 +220,8 @@ export function PowerScreen({
     <FounderLayout step="power" businessOnly={businessOnly}>
       <div className="onb-simple-card" data-testid="onboarding-power-form">
         <div className="onb-simple-form-heading">
-          <h2>Power your agents</h2>
-          <p>
-            Choose your default account and model for teammates on this
-            computer.
-          </p>
+          <h2>Connect and test</h2>
+          <p>Choose an account, then check that your agent responds.</p>
         </div>
         {saved.isLoading || runtimes.isLoading ? (
           <p role="status">Checking your connections…</p>
@@ -203,7 +248,7 @@ export function PowerScreen({
         )}
         {draft && lane && (
           <fieldset
-            disabled={busy || !scope.isSuccess || scope.isFetching}
+            disabled={busy || testing || !scope.isSuccess || scope.isFetching}
             className="space-y-5"
           >
             <fieldset className="onb-power-lanes">
@@ -367,12 +412,61 @@ export function PowerScreen({
             )}
             <Button
               className="onb-simple-button onb-simple-primary"
-              disabled={!canContinue || busy}
-              onClick={() => void onContinue(save)}
+              disabled={!canContinue || busy || testing}
+              onClick={() => void testConnection()}
             >
-              {busy ? "Opening your Colony…" : "Open my Colony"}
+              {proof
+                ? "Test again"
+                : testError
+                  ? "Retry test"
+                  : "Test connection"}
             </Button>
           </fieldset>
+        )}
+        {(testing || proof || testError) && (
+          <div className="onb-response" aria-live="polite">
+            {testing && (
+              <>
+                <p role="status">{testStatus}</p>
+                <button
+                  type="button"
+                  className="onb-simple-link"
+                  onClick={() => {
+                    attempt.current?.abort();
+                    setTesting(false);
+                    setTestStatus("");
+                  }}
+                >
+                  Cancel test
+                </button>
+              </>
+            )}
+            {testError && (
+              <p role="alert" className="onb-simple-error">
+                {testError}
+              </p>
+            )}
+            {proof && (
+              <>
+                <strong>Your agent replied</strong>
+                <p>{proof.reply}</p>
+                <Button
+                  className="onb-simple-button onb-simple-primary"
+                  disabled={busy || testing}
+                  onClick={() =>
+                    void onContinue(proof).catch((cause) => {
+                      setProof(null);
+                      setTestError(
+                        cause instanceof Error ? cause.message : String(cause),
+                      );
+                    })
+                  }
+                >
+                  Continue
+                </Button>
+              </>
+            )}
+          </div>
         )}
         <button
           type="button"

@@ -6,7 +6,7 @@ import {
 import type { OnboardingAnswers } from "./steps";
 import { firstJobStarters } from "../firstJobStarters";
 
-/** Carry confirmed answers into an editable setup suggestion; no work starts here. */
+/** Carry confirmed answers into the choice-first Welcome root; no work starts here. */
 export function draftFromAnswers(
   answers: OnboardingAnswers,
 ): OnboardingV2Draft {
@@ -36,10 +36,11 @@ export function draftFromAnswers(
     },
     firstTask: {
       ...base.firstTask,
-      mode: "suggestion",
+      // Signup now opens Scout's choice-first conversation. Keep the marker
+      // for durable resume, but do not carry a social starter task into it.
+      mode: "choice",
       deliveryMarker: answers.firstTaskMarker ?? base.firstTask.deliveryMarker,
-      // Suggested by setup, editable by the founder before explicit Start.
-      content: firstTaskFor(answers),
+      content: "",
     },
   };
 }

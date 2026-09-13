@@ -1,5 +1,5 @@
 import { BrowserSettings } from "@/features/browser/BrowserImport";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   Archive,
@@ -38,18 +38,12 @@ import { LocalArchiveSettingsCard } from "@/features/local-archive/ui/LocalArchi
 import { cn } from "@/shared/lib/cn";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { Badge } from "@/shared/ui/badge";
-import { isBuzzTheme, useTheme } from "@/shared/theme/ThemeProvider";
+import { useTheme } from "@/shared/theme/ThemeProvider";
+import type { SyntaxThemeName } from "@/shared/theme/theme-loader";
+import { deriveWorkspaceAppearance } from "@/shared/theme/workspaceAppearance";
 import {
-  LIGHT_THEMES,
-  SYNTAX_THEMES,
-  type SyntaxThemeName,
-  getThemePair,
-} from "@/shared/theme/theme-loader";
-import {
-  BUZZ_GRADIENT_STOPS,
   SystemPreferencePreviewFrame,
   ThemePreviewFrame,
-  type ThemePreviewVars,
 } from "@/shared/theme/ThemePreviewFrame";
 import {
   getThemeFallbackPreviewVars,
@@ -58,6 +52,7 @@ import {
 } from "@/shared/theme/useThemePreviewVars";
 import { appearanceCommunityLabel } from "../lib/appearanceScopeCopy";
 import {
+  CustomGradientControls,
   AccentPickerContent,
   GlassBackgroundSetting,
   LinkPreviewStyleSetting,
@@ -253,180 +248,6 @@ export const settingsSections: SettingsSectionDescriptor[] = [
   },
 ];
 
-/**
- * Display names for themes whose stored id does not read as its label. The ids
- * (`buzz`, `buzz-dark`) are persisted preferences and E2E fixtures, so only the
- * label moves to the product's own name.
- */
-const THEME_LABEL_OVERRIDES: Readonly<Record<string, string>> = {
-  buzz: "Colony",
-  "buzz-dark": "Colony Dark",
-};
-
-function formatThemeLabel(name: string): string {
-  const override = THEME_LABEL_OVERRIDES[name];
-  if (override) return override;
-  return name
-    .split("-")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
-
-/**
- * Derive a display label for a paired theme from its light variant name.
- * Strips mode-specific tokens (light, latte, dawn, lotus, ochin, lighter, plus)
- * from any position, handling names like "github-light-default", "light-plus",
- * "material-theme-lighter", and "gruvbox-light-soft".
- */
-function pairedThemeLabel(lightName: string): string {
-  const modeTokens = new Set([
-    "light",
-    "latte",
-    "dawn",
-    "lotus",
-    "ochin",
-    "lighter",
-    "plus",
-  ]);
-  const parts = lightName.split("-").filter((t) => !modeTokens.has(t));
-  // If stripping removed everything (e.g. "light-plus"), fall back to the raw name
-  const base = parts.length > 0 ? parts.join("-") : lightName;
-  return formatThemeLabel(base);
-}
-
-/**
- * Categorize themes into three groups:
- * 1. Paired — themes with both a light and dark variant (auto-switches with system)
- * 2. Light-only — light themes with no dark counterpart
- * 3. Dark-only — dark themes with no light counterpart
- *
- * For paired themes, we deduplicate by only keeping the light member
- * (the dark member is shown alongside it as a preview).
- */
-function useThemeCategories() {
-  return useMemo(() => {
-    const pairedLight: SyntaxThemeName[] = [];
-    const lightOnly: SyntaxThemeName[] = [];
-    const darkOnly: SyntaxThemeName[] = [];
-
-    // Track which themes are the "dark side" of a pair so we skip them
-    const darkPairMembers = new Set<string>();
-    for (const name of SYNTAX_THEMES) {
-      if (LIGHT_THEMES.has(name)) {
-        const pair = getThemePair(name);
-        if (pair) {
-          darkPairMembers.add(pair);
-        }
-      }
-    }
-
-    for (const name of SYNTAX_THEMES) {
-      // Skip dark members of pairs — they'll be shown alongside their light counterpart
-      if (darkPairMembers.has(name)) continue;
-
-      if (LIGHT_THEMES.has(name)) {
-        const pair = getThemePair(name);
-        if (pair) {
-          pairedLight.push(name);
-        } else {
-          lightOnly.push(name);
-        }
-      } else {
-        darkOnly.push(name);
-      }
-    }
-
-    return { pairedLight, lightOnly, darkOnly };
-  }, []);
-}
-
-function PairedThemeTile({
-  isActive,
-  lightName,
-  lightVars,
-  darkVars,
-  onSelect,
-}: {
-  isActive: boolean;
-  lightName: SyntaxThemeName;
-  lightVars: ThemePreviewVars | null;
-  darkVars: ThemePreviewVars | null;
-  onSelect: () => void;
-}) {
-  const darkName = getThemePair(lightName);
-  return (
-    <button
-      aria-pressed={isActive}
-      className="group flex w-[168px] shrink-0 flex-col items-center text-center focus-visible:outline-hidden"
-      data-testid={`theme-pair-${lightName}`}
-      onClick={onSelect}
-      type="button"
-    >
-      <SystemPreferencePreviewFrame
-        className={cn(
-          "h-[112px] w-[168px] transition-shadow",
-          isActive
-            ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
-            : "group-hover:ring-2 group-hover:ring-border",
-        )}
-        darkGradient={darkName ? BUZZ_GRADIENT_STOPS[darkName] : undefined}
-        darkVars={darkVars}
-        lightGradient={BUZZ_GRADIENT_STOPS[lightName]}
-        lightVars={lightVars}
-      />
-      <span
-        className={cn(
-          "mt-1.5 w-full truncate text-xs",
-          isActive ? "font-medium text-foreground" : "text-muted-foreground",
-        )}
-      >
-        {pairedThemeLabel(lightName)}
-      </span>
-    </button>
-  );
-}
-
-function SingleThemeTile({
-  isActive,
-  name,
-  vars,
-  onSelect,
-}: {
-  isActive: boolean;
-  name: SyntaxThemeName;
-  vars: ThemePreviewVars | null;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      aria-pressed={isActive}
-      className="group flex w-[168px] shrink-0 flex-col items-center text-center focus-visible:outline-hidden"
-      data-testid={`theme-option-${name}`}
-      onClick={onSelect}
-      type="button"
-    >
-      <ThemePreviewFrame
-        className={cn(
-          "h-[112px] w-[168px] transition-shadow",
-          isActive
-            ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
-            : "group-hover:ring-2 group-hover:ring-border",
-        )}
-        sidebarGradient={BUZZ_GRADIENT_STOPS[name]}
-        vars={vars}
-      />
-      <span
-        className={cn(
-          "mt-1.5 w-full truncate text-xs",
-          isActive ? "font-medium text-foreground" : "text-muted-foreground",
-        )}
-      >
-        {formatThemeLabel(name)}
-      </span>
-    </button>
-  );
-}
-
 type AppearanceMode = "system" | "light" | "dark";
 
 const APPEARANCE_MODE_OPTIONS = [
@@ -438,11 +259,11 @@ const APPEARANCE_MODE_OPTIONS = [
 function ThemeSettingsCard() {
   const {
     setTheme,
-    selectedThemeName,
-    themeName,
     isDark,
     accentColor,
     setAccentColor,
+    customGradient,
+    setCustomGradient,
     followSystem,
     setFollowSystem,
   } = useTheme();
@@ -454,128 +275,59 @@ function ThemeSettingsCard() {
   const showCommunityScope = communities.length > 1;
   const communityLabel = appearanceCommunityLabel(activeCommunity?.name);
 
-  const buzzThemeSelected = isBuzzTheme(themeName);
   const shouldReduceMotion = useReducedMotion();
-
   const previewVarsByTheme = useThemePreviewVars();
-  const { pairedLight, lightOnly, darkOnly } = useThemeCategories();
-
-  // Determine the active mode from current state
-  const activeMode: AppearanceMode = followSystem
+  const selectedMode: AppearanceMode = followSystem
     ? "system"
     : isDark
       ? "dark"
       : "light";
-
-  const [selectedMode, setSelectedMode] = useState<AppearanceMode>(activeMode);
   const [themeStyleExpanded, setThemeStyleExpanded] = useState(false);
+  const selectedThemeLabel = customGradient.enabled ? "Custom" : "Default";
 
   const getVars = (name: SyntaxThemeName) =>
     withAccentPreviewVars(
       previewVarsByTheme[name] ?? getThemeFallbackPreviewVars(name),
       accentColor,
     );
-
-  // All light themes (paired light + light-only)
-  const allLightThemes = useMemo(
-    () => [...pairedLight, ...lightOnly],
-    [pairedLight, lightOnly],
-  );
-
-  // All dark themes (paired dark + dark-only)
-  const allDarkThemes = useMemo(() => {
-    const pairedDark = pairedLight
-      .map((l) => getThemePair(l))
-      .filter(Boolean) as SyntaxThemeName[];
-    return [...pairedDark, ...darkOnly];
-  }, [pairedLight, darkOnly]);
-
-  const handleModeSelect = (mode: AppearanceMode) => {
-    setSelectedMode(mode);
-    // When leaving the default Buzz system theme, reveal the available theme
-    // choices so the mode switch immediately exposes a concrete light/dark
-    // selection. Keep the picker collapsed for an already-selected theme.
-    if (mode !== "system" && isBuzzTheme(themeName)) {
-      setThemeStyleExpanded(true);
-    }
-    if (mode === "system") {
-      setFollowSystem(true);
-      // If the current theme is unpaired, resolveSystemTheme can't switch it
-      // with the OS. Fall back to the first paired theme so System mode works.
-      const pair = getThemePair(selectedThemeName as SyntaxThemeName);
-      if (!pair && pairedLight.length > 0) {
-        setTheme(pairedLight[0]);
-      }
-    } else {
-      setFollowSystem(false);
-      // Switch to the counterpart theme when the current theme doesn't match
-      // the selected mode. E.g. if the stored theme is light and the user
-      // clicks Dark, apply the dark pair so the app immediately reflects the
-      // chosen mode. For unpaired themes (no counterpart), fall back to the
-      // first available theme in the target mode's list.
-      const currentIsLight = LIGHT_THEMES.has(
-        selectedThemeName as SyntaxThemeName,
-      );
-      const needsDark = mode === "dark" && currentIsLight;
-      const needsLight = mode === "light" && !currentIsLight;
-      if (needsDark || needsLight) {
-        const pair = getThemePair(selectedThemeName as SyntaxThemeName);
-        if (pair) {
-          setTheme(pair);
-        } else {
-          // Unpaired theme — pick the first theme from the target mode
-          const fallback = needsDark ? allDarkThemes[0] : allLightThemes[0];
-          if (fallback) {
-            setTheme(fallback);
-          }
+  const preview = (custom: boolean, className: string) => {
+    const palettes = deriveWorkspaceAppearance(accentColor, {
+      ...customGradient,
+      enabled: custom,
+    });
+    const stops = {
+      lightTop: palettes.light.chromeStart,
+      lightBottom: palettes.light.chromeEnd,
+      darkTop: palettes.dark.chromeStart,
+      darkBottom: palettes.dark.chromeEnd,
+    };
+    return selectedMode === "system" ? (
+      <SystemPreferencePreviewFrame
+        className={className}
+        lightVars={getVars("buzz")}
+        darkVars={getVars("buzz-dark")}
+        lightGradient={{ top: stops.lightTop, bottom: stops.lightBottom }}
+        darkGradient={{ top: stops.darkTop, bottom: stops.darkBottom }}
+      />
+    ) : (
+      <ThemePreviewFrame
+        className={className}
+        vars={getVars(selectedMode === "dark" ? "buzz-dark" : "buzz")}
+        sidebarGradient={
+          selectedMode === "dark"
+            ? { top: stops.darkTop, bottom: stops.darkBottom }
+            : { top: stops.lightTop, bottom: stops.lightBottom }
         }
-      }
-    }
+      />
+    );
   };
-
-  const handleSelectTheme = (name: SyntaxThemeName) => {
-    setTheme(name);
-    if (selectedMode === "system") {
-      setFollowSystem(true);
-    } else {
-      setFollowSystem(false);
-    }
+  const handleModeSelect = (mode: AppearanceMode) => {
+    setFollowSystem(mode === "system");
+    setTheme(mode === "dark" ? "buzz-dark" : "buzz");
   };
-
-  /** Check if a paired theme (by its light member) is the active selection */
-  const isPairActive = (lightName: SyntaxThemeName) => {
-    const darkName = getThemePair(lightName);
-    return selectedThemeName === lightName || selectedThemeName === darkName;
-  };
-  const selectedPairedTheme =
-    selectedMode === "system" ? pairedLight.find(isPairActive) : undefined;
-  const selectedTheme = selectedThemeName as SyntaxThemeName;
-  const selectedPairedDarkTheme = selectedPairedTheme
-    ? getThemePair(selectedPairedTheme)
-    : undefined;
-  const selectedThemeLabel = selectedPairedTheme
-    ? pairedThemeLabel(selectedPairedTheme)
-    : formatThemeLabel(selectedTheme);
-  const selectedThemePreview = selectedPairedTheme ? (
-    <SystemPreferencePreviewFrame
-      className="h-[112px] w-[168px] shrink-0"
-      darkGradient={
-        selectedPairedDarkTheme
-          ? BUZZ_GRADIENT_STOPS[selectedPairedDarkTheme]
-          : undefined
-      }
-      darkVars={
-        selectedPairedDarkTheme ? getVars(selectedPairedDarkTheme) : null
-      }
-      lightGradient={BUZZ_GRADIENT_STOPS[selectedPairedTheme]}
-      lightVars={getVars(selectedPairedTheme)}
-    />
-  ) : (
-    <ThemePreviewFrame
-      className="h-[112px] w-[168px] shrink-0"
-      sidebarGradient={BUZZ_GRADIENT_STOPS[selectedTheme]}
-      vars={getVars(selectedTheme)}
-    />
+  const selectedThemePreview = preview(
+    customGradient.enabled,
+    "h-[112px] w-[168px] shrink-0",
   );
   const themeStyleGrid = (
     <div
@@ -583,56 +335,42 @@ function ThemeSettingsCard() {
       data-testid="theme-style-options"
       id="theme-style-options"
     >
-      {/* Theme grid — constrained to ~3 rows, scrolls internally */}
-      <div className="relative">
-        {/* Top fade */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3"
-          style={{
-            background:
-              "linear-gradient(to bottom, hsl(var(--background)), hsl(var(--background) / 0))",
-          }}
-        />
-        <div className="max-h-[430px] overflow-y-auto rounded-lg pt-2">
-          <div className="flex flex-wrap gap-4 p-1">
-            {selectedMode === "system" &&
-              pairedLight.map((lightName) => {
-                const darkName = getThemePair(lightName);
-                if (!darkName) return null;
-                return (
-                  <PairedThemeTile
-                    darkVars={getVars(darkName)}
-                    isActive={isPairActive(lightName)}
-                    key={lightName}
-                    lightName={lightName}
-                    lightVars={getVars(lightName)}
-                    onSelect={() => handleSelectTheme(lightName)}
-                  />
-                );
-              })}
-            {selectedMode === "light" &&
-              allLightThemes.map((name) => (
-                <SingleThemeTile
-                  isActive={selectedThemeName === name}
-                  key={name}
-                  name={name}
-                  onSelect={() => handleSelectTheme(name)}
-                  vars={getVars(name)}
-                />
-              ))}
-            {selectedMode === "dark" &&
-              allDarkThemes.map((name) => (
-                <SingleThemeTile
-                  isActive={selectedThemeName === name}
-                  key={name}
-                  name={name}
-                  onSelect={() => handleSelectTheme(name)}
-                  vars={getVars(name)}
-                />
-              ))}
-          </div>
-        </div>
+      <div className="flex flex-wrap gap-4 p-1">
+        {[
+          { label: "Default", custom: false },
+          { label: "Custom", custom: true },
+        ].map(({ label, custom }) => (
+          <button
+            aria-pressed={customGradient.enabled === custom}
+            className="group flex w-[168px] shrink-0 flex-col items-center text-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded-md"
+            data-testid={`theme-option-${label.toLowerCase()}`}
+            key={label}
+            onClick={() =>
+              setCustomGradient({ ...customGradient, enabled: custom })
+            }
+            type="button"
+          >
+            {preview(
+              custom,
+              cn(
+                "h-[112px] w-[168px] transition-shadow",
+                customGradient.enabled === custom
+                  ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
+                  : "group-hover:ring-2 group-hover:ring-border",
+              ),
+            )}
+            <span
+              className={cn(
+                "mt-1.5 w-full truncate text-xs",
+                customGradient.enabled === custom
+                  ? "font-medium text-foreground"
+                  : "text-muted-foreground",
+              )}
+            >
+              {label}
+            </span>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -775,15 +513,19 @@ function ThemeSettingsCard() {
             </AnimatePresence>
           )}
 
-          <AccentPickerContent
-            accentColor={accentColor}
-            isDark={isDark}
-            setAccentColor={setAccentColor}
-          />
-          {buzzThemeSelected ? <WorkspacePatternSetting /> : null}
+          {customGradient.enabled ? (
+            <CustomGradientControls />
+          ) : (
+            <AccentPickerContent
+              accentColor={accentColor}
+              isDark={isDark}
+              setAccentColor={setAccentColor}
+            />
+          )}
+          <WorkspacePatternSetting />
 
           <GlassBackgroundSetting />
-          {buzzThemeSelected ? <ProminentActiveTabSetting /> : null}
+          <ProminentActiveTabSetting />
         </SettingsOptionGroup>
 
         <SettingsOptionGroup

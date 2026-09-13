@@ -22,6 +22,7 @@ import {
   type ThemeInfo,
   extractThemeInfo,
   getThemePair,
+  isLightTheme,
   loadThemeData,
   resolveSystemTheme,
 } from "./theme-loader";
@@ -32,6 +33,30 @@ import {
   applyWorkspaceAppearance,
   parseWorkspaceGradientPattern,
 } from "./workspaceAppearance";
+
+import {
+  CUSTOM_GRADIENT_STORAGE_KEY,
+  DEFAULT_CUSTOM_GRADIENT,
+  parseCustomGradient,
+  type CustomGradient,
+} from "./customGradient";
+
+function readCustomGradient(): CustomGradient {
+  try {
+    return (
+      parseCustomGradient(
+        JSON.parse(getStorageItem(CUSTOM_GRADIENT_STORAGE_KEY) ?? "null"),
+      ) ?? DEFAULT_CUSTOM_GRADIENT
+    );
+  } catch {
+    return DEFAULT_CUSTOM_GRADIENT;
+  }
+}
+
+/** Retire legacy styles while preserving their light/dark mode. */
+export function defaultAppearanceTheme(name: string): SyntaxThemeName {
+  return isLightTheme(name) || name === "light" ? "buzz" : "buzz-dark";
+}
 
 export const THEME_STORAGE_KEY = "buzz-theme";
 /**
@@ -103,6 +128,8 @@ type ThemeContextValue = {
   isLoading: boolean;
   accentColor: string;
   gradientPattern: WorkspaceGradientPattern;
+  customGradient: CustomGradient;
+  setCustomGradient: (gradient: CustomGradient) => void;
   followSystem: boolean;
   glassBackground: boolean;
   glassOpacity: number;
@@ -118,6 +145,7 @@ type ThemeContextValue = {
     theme: SyntaxThemeName;
     accent: string;
     gradientPattern?: WorkspaceGradientPattern;
+    customGradient?: CustomGradient;
     followSystem: boolean;
   }) => void;
   setGlassBackground: (enabled: boolean) => void;
@@ -154,10 +182,10 @@ function readStoredTheme(fallback: SyntaxThemeName): SyntaxThemeName {
   if (!stored) return fallback;
 
   // Migrate legacy values
-  if (stored === "light") return "catppuccin-latte";
-  if (stored === "dark" || stored === "system") return "houston";
+  if (stored === "light") return "buzz";
+  if (stored === "dark" || stored === "system") return "buzz-dark";
 
-  return isValidThemeName(stored) ? stored : fallback;
+  return isValidThemeName(stored) ? defaultAppearanceTheme(stored) : fallback;
 }
 
 function getContrastColor(hex: string): string {
@@ -249,13 +277,6 @@ function rgbToHex({ r, g, b }: Rgb): string {
 
 function applyAccentColor(value: string) {
   const root = document.documentElement;
-  applyWorkspaceAppearance(
-    root,
-    value,
-    parseWorkspaceGradientPattern(
-      getStorageItem(WORKSPACE_GRADIENT_STORAGE_KEY),
-    ),
-  );
   if (value === NEUTRAL_ACCENT) {
     const styles = window.getComputedStyle(root);
     const foreground = styles.getPropertyValue("--foreground").trim();
@@ -498,6 +519,8 @@ function applyCachedVars(): string | null {
     const cached = window.localStorage.getItem(CACHE_KEY);
     if (!cached) return null;
     const { themeName, vars, isDark } = JSON.parse(cached);
+    // A retired style must not flash from cache before its Default replacement.
+    if (defaultAppearanceTheme(themeName) !== themeName) return null;
     const root = document.documentElement;
     for (const [key, value] of Object.entries(vars)) {
       root.style.setProperty(key, value as string);
@@ -510,6 +533,14 @@ function applyCachedVars(): string | null {
     const accent = getStorageItem(ACCENT_STORAGE_KEY) ?? DEFAULT_ACCENT;
     // Restore the selected accent and pattern before the first cached paint.
     applyAccentColor(resolveEffectiveAccent(themeName, accent));
+    applyWorkspaceAppearance(
+      root,
+      accent,
+      parseWorkspaceGradientPattern(
+        getStorageItem(WORKSPACE_GRADIENT_STORAGE_KEY),
+      ),
+      readCustomGradient(),
+    );
 
     return themeName;
   } catch {
@@ -521,7 +552,14 @@ function applyCachedVars(): string | null {
 let themeApplyRequest = 0;
 
 /** Apply a theme: load data, derive CSS vars, set them on :root. */
-async function applyTheme(name: SyntaxThemeName): Promise<{
+async function applyTheme(
+  name: SyntaxThemeName,
+  appearance: () => {
+    accentColor: string;
+    customGradient: CustomGradient;
+    gradientPattern: WorkspaceGradientPattern;
+  },
+): Promise<{
   isDark: boolean;
   terminalPalette: ThemeInfo["terminalPalette"];
 } | null> {
@@ -547,15 +585,15 @@ async function applyTheme(name: SyntaxThemeName): Promise<{
   glassThemeReady = true;
   maybeEnableGlassBackground(glassVibrancyRequest);
 
-  // Apply the accent synchronously in the same batch as the theme vars so the
-  // browser paints the new theme + accent together. Doing this in a later
-  // microtask (e.g. the caller's `.then`) let the previous accent flash on the
-  // new theme for a frame — the flicker seen when switching to Buzz.
-  applyAccentColor(
-    resolveEffectiveAccent(
-      name,
-      getStorageItem(ACCENT_STORAGE_KEY) ?? DEFAULT_ACCENT,
-    ),
+  // Read the latest in-memory colors after loading: edits during a theme
+  // load (or unavailable storage) must not restore an older gradient.
+  const current = appearance();
+  applyAccentColor(resolveEffectiveAccent(name, current.accentColor));
+  applyWorkspaceAppearance(
+    root,
+    current.accentColor,
+    current.gradientPattern,
+    current.customGradient,
   );
 
   // Cache for FOUC prevention
@@ -598,6 +636,14 @@ export function ThemeProvider({
       getStorageItem(WORKSPACE_GRADIENT_STORAGE_KEY),
     ),
   );
+
+  const [customGradient, setCustomGradientState] = useState(readCustomGradient);
+  const appearanceRef = useRef({
+    accentColor,
+    customGradient,
+    gradientPattern,
+  });
+  appearanceRef.current = { accentColor, customGradient, gradientPattern };
   const [glassBackground, setGlassBackgroundState] = useState<boolean>(() => {
     const stored = getStorageItem(GLASS_BACKGROUND_STORAGE_KEY);
     // Glass is opt-in. Explicitly saved preferences remain intact, while a
@@ -648,7 +694,10 @@ export function ThemeProvider({
     loadingRef.current = thisTheme;
     setIsLoading(true);
 
-    applyTheme(effectiveTheme as SyntaxThemeName).then((result) => {
+    applyTheme(
+      effectiveTheme as SyntaxThemeName,
+      () => appearanceRef.current,
+    ).then((result) => {
       if (!result) return;
       // Only update if this is still the theme we want. The accent is applied
       // inside applyTheme (synchronously with the theme vars), so there's no
@@ -733,8 +782,9 @@ export function ThemeProvider({
       document.documentElement,
       accentColor,
       gradientPattern,
+      customGradient,
     );
-  }, [accentColor, gradientPattern]);
+  }, [accentColor, gradientPattern, customGradient]);
 
   const setGradientPattern = useCallback(
     (pattern: WorkspaceGradientPattern) => {
@@ -756,6 +806,13 @@ export function ThemeProvider({
     setAccentColorState(color);
   }, []);
 
+  const setCustomGradient = useCallback((value: CustomGradient) => {
+    const parsed = parseCustomGradient(value);
+    if (!parsed) return;
+    setStorageItem(CUSTOM_GRADIENT_STORAGE_KEY, JSON.stringify(parsed));
+    setCustomGradientState(parsed);
+  }, []);
+
   const setFollowSystem = useCallback((enabled: boolean) => {
     window.localStorage.setItem(FOLLOW_SYSTEM_KEY, enabled ? "true" : "false");
     setFollowSystemState(enabled);
@@ -766,15 +823,24 @@ export function ThemeProvider({
       theme: SyntaxThemeName;
       accent: string;
       gradientPattern?: WorkspaceGradientPattern;
+      customGradient?: CustomGradient;
       followSystem: boolean;
     }) => {
       const pattern = parseWorkspaceGradientPattern(appearance.gradientPattern);
       setStorageItem(WORKSPACE_GRADIENT_STORAGE_KEY, pattern);
       setGradientPatternState(pattern);
+      const gradient =
+        parseCustomGradient(appearance.customGradient) ??
+        DEFAULT_CUSTOM_GRADIENT;
+      setStorageItem(CUSTOM_GRADIENT_STORAGE_KEY, JSON.stringify(gradient));
+      setCustomGradientState(gradient);
       // Write the complete preference before updating state so applyTheme reads
       // the target community's accent in the same batch, never the previous one.
       try {
-        window.localStorage.setItem(THEME_STORAGE_KEY, appearance.theme);
+        window.localStorage.setItem(
+          THEME_STORAGE_KEY,
+          defaultAppearanceTheme(appearance.theme),
+        );
         window.localStorage.setItem(ACCENT_STORAGE_KEY, appearance.accent);
         window.localStorage.setItem(
           FOLLOW_SYSTEM_KEY,
@@ -783,7 +849,7 @@ export function ThemeProvider({
       } catch {
         // Keep the active appearance responsive even if the local cache is full.
       }
-      setSelectedTheme(appearance.theme);
+      setSelectedTheme(defaultAppearanceTheme(appearance.theme));
       setAccentColorState(appearance.accent);
       setFollowSystemState(appearance.followSystem);
     },
@@ -824,6 +890,8 @@ export function ThemeProvider({
     isLoading,
     accentColor,
     gradientPattern,
+    customGradient,
+    setCustomGradient,
     followSystem,
     glassBackground,
     glassOpacity,

@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { _electron as electron, expect } from "@playwright/test";
+import { _electron as electron } from "@playwright/test";
 import { waitForAnimations } from "../tests/helpers/animations.ts";
 import { completeFixtureOnboarding } from "./onboarding-fixture/account.mjs";
 import { createPassiveAccountDiagnostics } from "./onboarding-fixture/account-diagnostics.mjs";
@@ -142,6 +142,7 @@ const proof = {
       "onboarding-fixture/tool-result.mjs",
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",
+      "onboarding-fixture/scout-setup.mjs",
       "onboarding-fixture/relay.mjs",
       "onboarding-fixture/proxy.mjs",
       "onboarding-fixture/certificates.mjs",
@@ -156,14 +157,6 @@ const proof = {
     .update(await readFile(path.join(bundle, "Contents/Resources/app.asar")))
     .digest("hex"),
 };
-
-async function invoke(command, args = {}) {
-  return page.evaluate(
-    ({ command, args }) =>
-      window.colonyDesktop.request("invoke", { command, args }),
-    { command, args },
-  );
-}
 
 async function launch() {
   application = await electron.launch({
@@ -368,6 +361,8 @@ try {
       return launch();
     },
     proxy,
+    relay,
+    provider,
     recoveryPath,
     proofDirectory,
     onProgress(stage) {
@@ -389,7 +384,16 @@ try {
   );
   const counts = async () => ({
     suggestion: await relay.query(
-      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND tags @> '[["client","colony:first-job-suggestion:v1"]]'::jsonb;`,
+      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)=3 AND tag->>0='client' AND tag->>1='colony:first-job-suggestion:v1');`,
+    ),
+    scoutRoot: await relay.query(
+      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)=3 AND tag->>0='client' AND tag->>1='colony:scout-onboarding-root:v1');`,
+    ),
+    scoutAcknowledgement: await relay.query(
+      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)=3 AND tag->>0='client' AND tag->>1='colony:scout-onboarding-approval:v1');`,
+    ),
+    scoutReply: await relay.query(
+      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND pubkey=decode('${result.scoutSetup.scout.pubkey}','hex') AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)>=2 AND tag->>0='e' AND tag->>1='${result.scoutSetup.acknowledgementEventId}');`,
     ),
     instruction: await relay.query(
       `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND tags @> '[["client","colony:first-job-start:v1"]]'::jsonb;`,
@@ -400,37 +404,29 @@ try {
   });
   assert.deepEqual(await counts(), {
     suggestion: "1",
-    instruction: "0",
-    tasks: "0",
-  });
-  const credits = await invoke("get_colony_credits_account");
-  assert.equal(credits.available_balance_nanousd, "0");
-  const card = page
-    .getByTestId("first-job-suggestion")
-    .filter({ visible: true })
-    .first();
-  await card
-    .getByRole("button", { name: "Approve team and start", exact: true })
-    .click();
-  await expect(card.getByTestId("first-job-status")).toHaveText(
-    "Add credits before starting this job. Your brief stays here.",
-    { timeout: 30_000 },
-  );
-  assert.deepEqual(await counts(), {
-    suggestion: "1",
+    scoutRoot: "1",
+    scoutAcknowledgement: "1",
+    scoutReply: "1",
     instruction: "0",
     tasks: "0",
   });
   provider.assertHealthy();
-  assert.equal(provider.receivedCallCount, 0);
-  await waitForAnimations(page);
-  await page.screenshot({
-    path: path.join(proofDirectory, "joined-zero-credit-block.png"),
-  });
+  assert.equal(provider.receivedCallCount, result.preLegacyModelCalls);
+  assert.ok(
+    provider.requests.every((request) =>
+      ["connection-test", "scout-onboarding"].includes(request.stage),
+    ),
+  );
+  assert.ok(
+    provider.requests.some((request) => request.stage === "scout-onboarding"),
+    "Approved setup produced a paid Scout-only model turn",
+  );
   const { page: _page, rootEvent: _event, ...identifiers } = result;
   Object.assign(proof, identifiers, {
     accountCompleted: true,
-    zeroCreditStart: "blocked without Task, instruction or model call",
+    zeroCreditConnection: "blocked before model call; funded probe then passed",
+    beforeWorkApproval:
+      "Scout setup acknowledgment/reply verified; no Task, job instruction or business-work model call",
     hostedSignup: "not tested",
     workerCompletion: "not completed",
   });
@@ -456,7 +452,9 @@ try {
     : "not tested";
   Object.assign(proof, identifiers, {
     completed: true,
-    zeroCreditStart: "blocked without Task, instruction or model call",
+    zeroCreditConnection: "blocked before model call; funded probe then passed",
+    beforeWorkApproval:
+      "Scout setup acknowledgment/reply verified; no Task, job instruction or business-work model call",
     hostedSignup: "not tested",
     workerCompletion,
     chromiumTrust:
