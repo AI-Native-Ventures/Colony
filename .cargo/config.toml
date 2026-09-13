@@ -9,3 +9,14 @@ debug = "line-tables-only"
 # cmake_minimum_required < 3.5; audiopus_sys's vendored opus declares 3.1.
 # Same workaround CI uses. A value already set in the environment wins.
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# whisper.cpp must match the existing sherpa-onnx static-MT Windows archive.
+# Its CMake 3.5 minimum otherwise leaves the runtime-selection policy on OLD.
+CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
+CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+# Portable CPU inference: never bake the CI host's instruction set into installers.
+GGML_NATIVE = "OFF"
+GGML_AVX = "OFF"
+GGML_AVX2 = "OFF"
+GGML_FMA = "OFF"
+GGML_F16C = "OFF"
+GGML_AVX512 = "OFF"

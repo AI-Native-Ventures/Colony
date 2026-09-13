@@ -113,7 +113,7 @@ impl OwnedBrowserCleanup {
     ///
     /// This is the crash fallback, and it runs from `Drop` on whatever thread
     /// released the host, so it is deliberately bounded: it never waits more
-    /// than [`TERMINATE_GRACE`] before escalating to a kill. Callers that want
+    /// than two seconds before escalating to a kill. Callers that want
     /// Chromium to flush a persistent profile cleanly should await
     /// [`BrowserHost::close_gracefully`] first.
     pub fn cleanup(&self) {
@@ -158,6 +158,7 @@ impl OwnedBrowserCleanup {
 }
 
 /// How long a synchronous teardown waits for `SIGTERM` before killing.
+#[cfg(unix)]
 const TERMINATE_GRACE: Duration = Duration::from_secs(2);
 
 /// How long [`BrowserHost::close_gracefully`] waits for a browser that has
@@ -168,7 +169,7 @@ const GRACEFUL_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// This can run inside `Drop` on a tokio worker thread, so it must not stall
 /// that thread: the unix path asks with `SIGTERM` (which lets Chromium flush a
-/// persistent profile) and escalates to a kill after [`TERMINATE_GRACE`].
+/// persistent profile) and escalates to a kill after two seconds.
 fn terminate_child(child: &mut Child) {
     if matches!(child.try_wait(), Ok(Some(_))) {
         return;

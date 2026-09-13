@@ -17,6 +17,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   CANARY_KEYRING_SERVICE,
+  PORT_KEYRING_SERVICE,
   electronBetaBuildEnv,
   ELECTRON_BETA_RELAY,
   electronPackageVariant,
@@ -26,6 +27,12 @@ import {
   productionSigning,
 } from "./electron-release-contract.mjs";
 import { stageNodePty } from "./electron-stage-node-pty.mjs";
+import {
+  stageModel,
+  resourceDir,
+  verifyModel,
+  modelManifest,
+} from "./stage-dictation-model.mjs";
 
 const exec = promisify(execFile);
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -44,6 +51,9 @@ if (variant.canary) {
   // Owned by the variant, not by the workflow: a canary that inherits the
   // stable keyring service takes over the stable install's identity.
   buildEnv.BUZZ_DESKTOP_KEYRING_SERVICE = CANARY_KEYRING_SERVICE;
+}
+if (variant.port) {
+  buildEnv.BUZZ_DESKTOP_KEYRING_SERVICE = PORT_KEYRING_SERVICE;
 }
 // Build tools need public release metadata, never the signing credentials.
 for (const key of Object.keys(buildEnv)) {
@@ -102,6 +112,7 @@ const targetDir = async (manifest) =>
 
 // Always build from the current source. Never silently package an old helper or
 // a Tauri compile-only placeholder supplied by another build.
+await stageModel();
 await run("pnpm", ["build"], desktop);
 await run("cargo", [
   "build",
@@ -140,6 +151,7 @@ try {
   const nativeDir = path.join(stage, "native");
   await mkdir(appDir);
   await mkdir(nativeDir);
+  await cp(resourceDir, path.join(nativeDir, "dictation"), { recursive: true });
   await cp(path.join(desktop, "dist"), path.join(appDir, "dist"), {
     recursive: true,
   });
@@ -171,7 +183,9 @@ try {
         ? "colony"
         : variant.canary
           ? "colony-canary"
-          : "colony-electron-beta",
+          : variant.port
+            ? "colony-port"
+            : "colony-electron-beta",
       productName: variant.name,
       version: metadata.version,
       type: "module",
@@ -230,8 +244,12 @@ try {
     executableName: variant.executableName,
     appBundleId: variant.bundleId,
     appVersion: metadata.version,
+    extendInfo: {
+      NSMicrophoneUsageDescription:
+        "Colony uses your microphone to turn speech into message drafts.",
+    },
     protocols:
-      variant.production || variant.canary
+      variant.production || variant.canary || variant.port
         ? [{ name: variant.name, schemes: ["buzz"] }]
         : [],
     electronVersion: metadata.devDependencies.electron,
@@ -246,6 +264,16 @@ try {
     ...signing,
   });
   const app = path.join(bundle, `${variant.name}.app`);
+  await verifyModel(
+    path.join(
+      app,
+      "Contents",
+      "Resources",
+      "native",
+      "dictation",
+      modelManifest.filename,
+    ),
+  );
   // Verify node-pty unpacked from asar with executable helper.
   const prebuildDirName = `darwin-${process.arch}`;
   const unpackedBase = path.join(

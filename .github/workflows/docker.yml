@@ -56,7 +56,7 @@ name: Docker image
 # deploy lane can pull. Per-PR image builds stay off.
 on:
   push:
-    branches: ["develop"]
+    branches: ["develop", "canary/upstream-port"]
     tags: ["relay-v[0-9]*"]
   workflow_dispatch:
     inputs:

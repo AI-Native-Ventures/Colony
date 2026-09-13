@@ -1,3 +1,4 @@
+import { installDictationPermissions } from "./dictation-permissions.mjs";
 import { Cleanup } from "./cleanup.mjs";
 import { createHash } from "node:crypto";
 import { SignInImport } from "./browser-import/manager.mjs";
@@ -634,10 +635,7 @@ async function boot() {
     },
   );
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  window.webContents.session.setPermissionRequestHandler(
-    (_wc, _permission, callback) => callback(false),
-  );
-  window.webContents.session.setPermissionCheckHandler(() => false);
+  installDictationPermissions(window.webContents, trusted);
 
   const dispatch = async (event, type, payload = {}) => {
     if (

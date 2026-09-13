@@ -147,9 +147,25 @@ export function orgMembersFromSources(
   trustedHeads: readonly ManagedAgentHead[],
   hidden: HiddenRosterPubkeys = {},
 ): { members: OrgChartMember[]; unrankedAgents: UnrankedAgent[] } {
-  const employeesByRole = new Map<string, { rank: OrgMember["rank"] }>();
+  // `pubkey` and `provisioned` travel with the rank so
+  // `resolveManagedAgentRank` can tell "this role is filled" from "Colony
+  // holds this role", which are different answers for every head but the
+  // holder's own.
+  const employeesByRole = new Map<
+    string,
+    {
+      rank: OrgMember["rank"];
+      pubkey?: string;
+      provisioned?: string | null;
+    }
+  >();
   for (const head of heads) {
-    if (head.role) employeesByRole.set(head.role, { rank: head.rank });
+    if (head.role)
+      employeesByRole.set(head.role, {
+        rank: head.rank,
+        pubkey: head.pubkey,
+        provisioned: head.provisioned,
+      });
   }
 
   const members = new Map<string, OrgChartMember>();
