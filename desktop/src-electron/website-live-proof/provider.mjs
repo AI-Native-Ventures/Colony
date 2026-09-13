@@ -79,31 +79,36 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
         assert.ok(calls < MAX_REQUESTS && Date.now() < expires && !closed);
         calls += 1;
         upstream = await fetchImpl(ENDPOINT, {
-        method: "POST",
-        redirect: "error",
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          messages: body.messages,
-          ...(body.tools ? { tools: body.tools } : {}),
-          ...(body.tool_choice ? { tool_choice: body.tool_choice } : {}),
-          stream: false,
-          max_tokens: MAX_OUTPUT_TOKENS,
-          reasoning: { effort: "high" },
-          provider: { allow_fallbacks: false },
-        }),
-      });
+          method: "POST",
+          redirect: "error",
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: MODEL,
+            messages: body.messages,
+            ...(body.tools ? { tools: body.tools } : {}),
+            ...(body.tool_choice ? { tool_choice: body.tool_choice } : {}),
+            stream: false,
+            max_tokens: MAX_OUTPUT_TOKENS,
+            reasoning: { effort: "high" },
+            provider: { allow_fallbacks: false },
+          }),
+        });
         upstreamStatus = upstream.status;
         if (upstream.status !== 429 || attempt === 2) break;
         const retryAfter = upstream.headers.get("retry-after");
         const seconds = retryAfter === null ? 10 : Number(retryAfter);
-        assert.ok(Number.isFinite(seconds) && seconds >= 0 && seconds <= 30, "Rate limit exceeds bounded retry window");
+        assert.ok(
+          Number.isFinite(seconds) && seconds >= 0 && seconds <= 30,
+          "Rate limit exceeds bounded retry window",
+        );
         await upstream.body?.cancel();
-        await delay(Math.max(1, seconds) * 1000, undefined, { signal: controller.signal });
+        await delay(Math.max(1, seconds) * 1000, undefined, {
+          signal: controller.signal,
+        });
       }
       assert.ok(upstream.ok, `Provider status ${upstream.status}`);
       const result = await upstream.json();
