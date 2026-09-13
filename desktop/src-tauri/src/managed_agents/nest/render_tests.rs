@@ -428,8 +428,10 @@ fn test_upsert_marker_in_code_block() {
     );
 
     // The real markers appended at the end must be at line-start (column 0).
+    // Colony's regenerated marker uses a comma, not upstream's em dash
+    // (see `nest.rs`'s BEGIN_MARKER format string and `nest_agents.md`).
     let begin_pos = result
-        .find("<!-- BEGIN BUZZ MANAGED — regenerated")
+        .find("<!-- BEGIN BUZZ MANAGED, regenerated")
         .expect("regenerated BEGIN marker must be present");
     assert!(
         begin_pos == 0 || result.as_bytes()[begin_pos - 1] == b'\n',

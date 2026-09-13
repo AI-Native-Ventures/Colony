@@ -39,4 +39,3 @@ pub(crate) async fn query_last_messages(
     }
     Ok(messages)
 }
-

@@ -11,9 +11,9 @@ use crate::{
 // Split out to keep this file under the desktop file-size ratchet.
 #[path = "channels_last_messages.rs"]
 mod last_messages;
-use last_messages::{last_message_filter, query_last_messages};
 #[cfg(test)]
 pub(super) use last_messages::last_message_filter_batches;
+use last_messages::{last_message_filter, query_last_messages};
 
 // ── Reads (pure-nostr via /query) ────────────────────────────────────────────
 

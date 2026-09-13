@@ -629,6 +629,11 @@ export const MessageRow = React.memo(
             pubkey={message.pubkey}
             role={profilePopoverRole}
             botIdenticonValue={message.author}
+            // The trigger wrapper is a flex item whose `min-width: auto`
+            // refuses to shrink below the nowrap width of its truncating
+            // child, so a long author name overflowed the header row
+            // (upstream #7550).
+            triggerClassName="min-w-0 max-w-full"
           >
             <button
               className="truncate rounded leading-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
