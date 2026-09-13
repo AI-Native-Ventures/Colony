@@ -18,6 +18,19 @@
 # =============================================================================
 set -euo pipefail
 
+# Durable relay identity. Without one the relay falls back to an ephemeral
+# key, and every relay-signed protocol action refuses: the interrupt runtime
+# declines its whole sweep tick, and the ask broker cannot emit the kind-44302
+# withdrawal that closes an escalated ask. e2e_interrupts documents the
+# requirement in its module header and fails with "escalating must close the
+# prior ask with exactly one withdrawal, got []" without it.
+#
+# Test-only, deliberately fixed so the relay identity is stable across a run
+# and reproducible locally. This is a throwaway relay on a throwaway database
+# with BUZZ_REQUIRE_AUTH_TOKEN=false; it is no more a secret than the
+# buzz:buzz_dev credentials above it. Never reuse it for a real deployment.
+: "${BUZZ_TEST_RELAY_PRIVATE_KEY:=0000000000000000000000000000000000000000000000000000000000000001}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -103,7 +116,13 @@ export PGSCHEMA_PLAN_DB=buzz
 export PGSCHEMA_PLAN_USER=buzz
 export PGSCHEMA_PLAN_PASSWORD=buzz_dev
 
+# The stub downloads pgschema on first use; retry that fetch on its own so a
+# transient GitHub Releases error is not reported as a schema failure.
+./scripts/ci-prefetch-hermit-pkg.sh pgschema
 ./bin/pgschema apply --file schema/schema.sql --auto-approve
+# pgschema does not manage extensions; see scripts/create-required-extensions.sql.
+docker exec -i -e PGPASSWORD="${PGPASSWORD}" buzz-postgres \
+  psql -U "${PGUSER}" -d "${PGDATABASE}" -v ON_ERROR_STOP=1 < scripts/create-required-extensions.sql
 docker exec -i -e PGPASSWORD="${PGPASSWORD}" buzz-postgres \
   psql -U "${PGUSER}" -d "${PGDATABASE}" -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
 ok "Schema applied"
@@ -151,32 +170,15 @@ fi
 # ── Start relay ──────────────────────────────────────────────────────────────
 
 log "Starting relay..."
-
-TEST_RELAY_PRIVATE_KEY="${BUZZ_RELAY_PRIVATE_KEY:-$(openssl rand -hex 32)}"
-
-# Optional NIP-43 membership gating: exported by callers that need a
-# membership-gated relay (e.g. the mesh lifecycle smoke). All three must be
-# set together — the relay fails fast otherwise.
-MEMBERSHIP_ENV=()
-if [[ "${BUZZ_REQUIRE_RELAY_MEMBERSHIP:-}" == "true" ]]; then
-  MEMBERSHIP_ENV+=(
-    BUZZ_REQUIRE_RELAY_MEMBERSHIP=true
-    RELAY_OWNER_PUBKEY="${RELAY_OWNER_PUBKEY:?RELAY_OWNER_PUBKEY required with BUZZ_REQUIRE_RELAY_MEMBERSHIP=true}"
-  )
-  : "${BUZZ_RELAY_PRIVATE_KEY:?BUZZ_RELAY_PRIVATE_KEY required with BUZZ_REQUIRE_RELAY_MEMBERSHIP=true}"
-  log "Membership gating enabled (NIP-43)"
-fi
-
 nohup env \
   DATABASE_URL=postgres://buzz:buzz_dev@localhost:5432/buzz \
   REDIS_URL=redis://localhost:6379 \
   RELAY_URL=ws://localhost:3000 \
   BUZZ_BIND_ADDR=0.0.0.0:3000 \
-  BUZZ_RELAY_PRIVATE_KEY="${TEST_RELAY_PRIVATE_KEY}" \
   BUZZ_REQUIRE_AUTH_TOKEN=false \
   BUZZ_RECONCILE_CHANNELS=true \
   BUZZ_GIT_PROBE_WRITERS=8 \
-  ${MEMBERSHIP_ENV[@]+"${MEMBERSHIP_ENV[@]}"} \
+  BUZZ_RELAY_PRIVATE_KEY="${BUZZ_TEST_RELAY_PRIVATE_KEY}" \
   "./target/${CARGO_PROFILE}/buzz-relay" > /tmp/buzz-relay.log 2>&1 &
 echo $! > /tmp/buzz-relay.pid
 

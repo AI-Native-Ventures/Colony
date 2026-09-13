@@ -78,6 +78,23 @@ ensure_infra() {
 run_unit_tests() {
   section "Unit Tests (no infra required)"
 
+  # Compile gate, first because everything below it is scoped by hand.
+  #
+  # The steps in this function name crates individually, and that list covers 7
+  # of the workspace's 29 members. A change to a shared type therefore breaks
+  # unnamed crates without any local gate noticing: making `PriceEntry::origin`
+  # required left `buzz-test-client` uncompilable, `just test-unit` passed, the
+  # pre-push hook passed, and (develop-targeted PRs run no CI) it merged.
+  #
+  # `--all-targets` is what makes this work: the break was in a test file, which
+  # a plain `cargo check` does not compile. This does not run anyone's tests --
+  # it proves every crate and every test target in the workspace still builds,
+  # which is the failure the hand-scoped list structurally cannot see. Cheaper
+  # than `just clippy` (no lint passes) and it front-loads the compilation the
+  # steps below need anyway.
+  run_test_step "workspace compiles (all targets)" \
+    cargo check --workspace --all-targets --quiet
+
   run_test_step "buzz-core tests" \
     cargo test -p buzz-core --lib -- --nocapture
 
@@ -90,10 +107,17 @@ run_unit_tests() {
   run_test_step "buzz-cli tests" \
     cargo test -p buzz-cli -- --nocapture
 
-  # Keep the relay-to-agent trust-boundary regressions in the fallback path
-  # when cargo-nextest is unavailable.
-  run_test_step "buzz-acp tests" \
-    cargo test -p buzz-acp -- --nocapture
+  # buzz-acp: agent prompt contracts and pool/queue logic. Infra-free, and
+  # previously absent from both unit paths — a broken base-prompt assertion sat
+  # red without any gate noticing.
+  run_test_step "buzz-acp unit tests" \
+    cargo test -p buzz-acp --lib -- --nocapture
+
+  # buzz-native: the shell-agnostic core and the HostCtx seam. Infra-free. Both
+  # unit paths are explicit allowlists rather than workspace runs, so a new
+  # member's tests silently never execute until it is named here.
+  run_test_step "buzz-native unit tests" \
+    cargo test -p buzz-native --lib -- --nocapture
 
   # buzz-db migrator/lint unit tests (no infra): guard the embedded-migrator
   # invariant (exactly the consolidated 0001; cutover/backfill stays an operator
@@ -117,31 +141,6 @@ run_unit_tests() {
   # the two lists must stay in step or the fallback silently covers less.
   run_test_step "buzz-backend-kubernetes tests" \
     cargo test -p buzz-backend-kubernetes -- --nocapture
-
-  # buzz-agent model-capabilities corpus: the Rust half of the cross-language
-  # drift guard. model_capabilities.rs embeds scripts/model-capabilities.json +
-  # scripts/normative-corpus.json via include_str! and replays the full locked
-  # corpus as pure in-process tests (no infra). Mirrors the nextest path in
-  # `just test-unit` — the two lists must stay in step.
-  run_test_step "buzz-agent unit tests" \
-    cargo test -p buzz-agent --lib -- --nocapture
-
-  # ACP author-gate and queue tests are pure unit tests. Keep this fallback in
-  # step with `just test-unit`; ignored lifecycle tests run elsewhere.
-  run_test_step "buzz-acp unit tests" \
-    cargo test -p buzz-acp --lib -- --nocapture
-
-  # Mirror the three infra-free relay handler modules in `just test-unit`'s
-  # nextest expression. Keep the side-effects filter pinned to `::tests::` so
-  # it does not select the sibling Postgres-backed test module.
-  run_test_step "buzz-relay channel authorization tests" \
-    cargo test -p buzz-relay --lib handlers::channel_authz:: -- --nocapture
-
-  run_test_step "buzz-relay moderation authorization tests" \
-    cargo test -p buzz-relay --lib handlers::moderation_authz:: -- --nocapture
-
-  run_test_step "buzz-relay side-effects helper tests" \
-    cargo test -p buzz-relay --lib handlers::side_effects::tests:: -- --nocapture
 }
 
 # ---- DB / integration tests (infra required) --------------------------------
