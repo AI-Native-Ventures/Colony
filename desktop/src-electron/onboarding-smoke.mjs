@@ -176,7 +176,10 @@ async function launch() {
     ),
     args: proxy.chromiumArgs.map((argument) =>
       liveWebsite && argument.startsWith("--host-resolver-rules=")
-        ? argument.replace("MAP * ~NOTFOUND", "EXCLUDE example.com, MAP * ~NOTFOUND")
+        ? argument.replace(
+            "MAP * ~NOTFOUND",
+            "EXCLUDE example.com, MAP * ~NOTFOUND",
+          )
         : argument,
     ),
     cwd: data,
