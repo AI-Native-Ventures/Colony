@@ -67,10 +67,10 @@ pub(crate) fn reconcile_agents_to_events(
 /// Reads `managed-agents.json` raw — no keyring hydration: the published
 /// projection ([`super::agent_events::agent_event_content`]) is the opt-IN
 /// no-secrets allowlist, so keys are never needed here. For each record it
-/// compares the freshly built event's content against the retained row at
-/// `(30177, owner, agent_pubkey)` and re-retains (marking `pending_sync = 1`)
-/// only when the row is absent or its content differs — an unchanged agent
-/// never churns `pending_sync`.
+/// compares the freshly built event's public content and tags against the
+/// retained row at `(30177, owner, agent_pubkey)` and re-retains (marking
+/// `pending_sync = 1`) only when the row is absent or its public projection
+/// differs — an unchanged agent never churns `pending_sync`.
 ///
 /// Returns the number of agents (re)written to the retention store.
 #[cfg(test)]
@@ -172,9 +172,10 @@ fn same_relay_community(a: &str, b: &str) -> bool {
 }
 
 /// Retain `record`'s kind:30177 identity record, marking it `pending_sync`
-/// for the flush loop, when its projection differs from the retained head.
-/// Returns `Ok(true)` when a row was (re)written and `Ok(false)` when the
-/// retained content already matches (a true no-op — no `pending_sync` churn).
+/// for the flush loop, when its public projection differs from the retained
+/// head. Returns `Ok(true)` when a row was (re)written and `Ok(false)` when
+/// the retained content and public tags already match (a true no-op — no
+/// `pending_sync` churn).
 ///
 /// This is the single content-diff + monotonic-bump engine shared by the
 /// boot-time reconcile above and the interactive edit paths
@@ -204,7 +205,18 @@ pub(crate) fn retain_agent_record(
         .map_err(|e| format!("failed to sign event for '{}': {e}", record.name))?;
 
     let content = event.content.clone();
-    if existing.as_ref().is_some_and(|row| row.content == content) {
+    // The manager reporting line is encoded as a tag rather than content.
+    // Compare the complete signed public projection so a rank/manager repair
+    // cannot be mistaken for a no-op and leave the old head on the relay.
+    let tags_match = existing.as_ref().is_some_and(|row| {
+        nostr::Event::from_json(&row.raw_event)
+            .map(|retained| retained.tags == event.tags)
+            .unwrap_or(false)
+    });
+    if existing
+        .as_ref()
+        .is_some_and(|row| row.content == content && tags_match)
+    {
         return Ok(false);
     }
 

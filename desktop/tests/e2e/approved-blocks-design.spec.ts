@@ -92,11 +92,11 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     test(`approved ${manifest.handle}: actual channel and thread in ${theme}`, async ({
       page,
     }, info) => {
-      expect(approvedCoreManifests).toHaveLength(25);
+      expect(approvedCoreManifests).toHaveLength(26);
       expect(
         new Set(approvedCoreManifests.map(({ manifest }) => manifest.handle))
           .size,
-      ).toBe(25);
+      ).toBe(26);
       assertApprovedFixture(manifest);
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -247,7 +247,7 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     await expect(page.getByTestId("rich-preview-gallery")).toHaveCount(0);
     const catalog = page.getByTestId("blocks-workspace-catalog");
     const tiles = catalog.locator('[data-testid^="select-block-preview-"]');
-    await expect(tiles).toHaveCount(25);
+    await expect(tiles).toHaveCount(26);
     expect(
       (
         await tiles.evaluateAll((nodes) =>
@@ -263,7 +263,7 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     );
     await expect(catalog.locator("[data-block-catalog-handle]")).toHaveCount(1);
     await catalog.getByRole("button", { name: /^Composed\b/ }).click();
-    await expect(tiles).toHaveCount(14);
+    await expect(tiles).toHaveCount(15);
     await catalog.getByRole("button", { name: /^Foundation\b/ }).click();
     await expect(tiles).toHaveCount(11);
     await catalog.getByRole("button", { name: /^Custom\b/ }).click();

@@ -75,6 +75,8 @@ pub mod thread_tasks;
 pub mod usage;
 /// User profile persistence.
 pub mod user;
+/// Website Manager jobs: canonical review rows and once-only action claims.
+pub mod website_jobs;
 /// Workflow, run, and approval persistence.
 pub mod workflow;
 /// Relay-owned channel workspace tab state and driver compare-and-swap.
@@ -6209,13 +6211,68 @@ impl Db {
     }
 
     /// Apply a newer bundled version to an already-seeded employee
-    /// (see [`employees::update_provisioned_employee`]).
+    /// (see [`employees::update_provisioned_employee`]). `manager` is the
+    /// resolved reporting line, or `None` to leave the row's own alone.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_provisioned_employee(
         &self,
         community: CommunityId,
-        update: employees::ProvisionedEmployeeUpdate<'_>,
+        handle: &str,
+        display_name: &str,
+        role_id: &str,
+        rank: &str,
+        manager: Option<&[u8]>,
+        version: i32,
     ) -> Result<Option<employees::EmployeeRow>> {
-        employees::update_provisioned_employee(&self.pool, community, update).await
+        employees::update_provisioned_employee(
+            &self.pool,
+            community,
+            handle,
+            display_name,
+            role_id,
+            rank,
+            manager,
+            version,
+        )
+        .await
+    }
+
+    /// Adopt a workspace employee into a bundled entry, keeping its identity
+    /// (see [`employees::adopt_provisioned_employee`]).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn adopt_provisioned_employee(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+        provisioned_handle: &str,
+        provisioned_version: i32,
+        display_name: &str,
+        role_id: &str,
+        rank: &str,
+        manager: Option<&[u8]>,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::adopt_provisioned_employee(
+            &self.pool,
+            community,
+            pubkey,
+            provisioned_handle,
+            provisioned_version,
+            display_name,
+            role_id,
+            rank,
+            manager,
+        )
+        .await
+    }
+
+    /// Every active employee filling `role_id`, lowest pubkey first
+    /// (see [`employees::list_active_employees_by_role`]).
+    pub async fn list_active_employees_by_role(
+        &self,
+        community: CommunityId,
+        role_id: &str,
+    ) -> Result<Vec<employees::EmployeeRow>> {
+        employees::list_active_employees_by_role(&self.pool, community, role_id).await
     }
 
     /// File a job. `None` when this filing already produced one

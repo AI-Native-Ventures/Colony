@@ -247,8 +247,7 @@ fn preset_entry_stays_available_when_adapter_present_but_cli_absent() {
     // Wren's regression guard: today an `amp-acp` install without `amp`
     // is Available and selectable. Feeding underlying_cli through the
     // FULL classify_runtime predicate would flip this to CliMissing
-    // (unselectable, with backwards install copy) — the adapter-missing
-    // arm is the only one presets consume.
+    // (unselectable with backwards install copy); only the adapter-missing arm is consumed by presets.
     let entry = preset_catalog_entry(&ADAPTER_PRESET, |cmd| {
         (cmd == "amp-acp").then(|| PathBuf::from("/usr/local/bin/amp-acp"))
     });
@@ -260,8 +259,7 @@ fn preset_entry_stays_available_when_adapter_present_but_cli_absent() {
 
 #[test]
 fn preset_entry_without_underlying_cli_stays_simple() {
-    // Most presets use the vendor CLI directly, so an absent command is plain
-    // NotInstalled without the external-CLI flag.
+    // Most presets use the vendor CLI directly, so an absent command is plain NotInstalled without the external-CLI flag.
     let preset = PresetHarness {
         underlying_cli: None,
         ..ADAPTER_PRESET
@@ -284,6 +282,8 @@ fn persona_with_runtime(id: &str, runtime: Option<&str>) -> crate::managed_agent
         provider: None,
         name_pool: Vec::new(),
         is_builtin: false,
+        provisioned: None,
+        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

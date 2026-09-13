@@ -1,6 +1,7 @@
 import {
   CopyPlus,
   EllipsisVertical,
+  Plus,
   Pencil,
   Rocket,
   Share2,
@@ -18,6 +19,7 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { IdentityCardSkeleton } from "@/shared/ui/identity-card-skeleton";
 import { SectionHeader } from "@/shared/ui/PageHeader";
+import { Button } from "@/shared/ui/button";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { TeamIdentityCard } from "./TeamIdentityCard";
 import { IDENTITY_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
@@ -37,6 +39,7 @@ type TeamsSectionProps = {
   onAddToChannel: (team: AgentTeam) => void;
   onShare: (team: AgentTeam) => void;
   onImport: () => void;
+  onInstallWebsiteTeam: () => void;
 };
 
 export function TeamsSection({
@@ -52,11 +55,24 @@ export function TeamsSection({
   onAddToChannel,
   onShare,
   onImport,
+  onInstallWebsiteTeam,
 }: TeamsSectionProps) {
   return (
     <section className="relative space-y-4" data-testid="agents-library-teams">
       <div className={TEAM_CARD_COLUMN_CLASS}>
         <SectionHeader
+          action={
+            <Button
+              data-testid="install-website-manager-button"
+              onClick={onInstallWebsiteTeam}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <Plus />
+              Install Website Manager
+            </Button>
+          }
           title="Agent teams"
           description="Group agents that you can add to a channel together."
         />
@@ -143,7 +159,7 @@ export function TeamsSection({
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
-                        disabled={isPending}
+                        disabled={isPending || Boolean(team.provisioned)}
                         onClick={() => onDelete(team)}
                       >
                         <Trash2 className="h-4 w-4" />
@@ -163,6 +179,11 @@ export function TeamsSection({
                 teamName={team.name}
                 version={team.version}
               >
+                {team.provisioned ? (
+                  <p className="border-t border-border/20 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                    Provided by Colony
+                  </p>
+                ) : null}
                 {hasMissingPersonas ? (
                   <p className="border-t border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                     {missingPersonaCount} agent

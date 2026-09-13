@@ -19,6 +19,7 @@ mod host;
 mod huddle;
 mod identity_storage;
 mod initial_window;
+mod initial_window_reveal;
 mod key_backup;
 mod link_preview_tags;
 #[cfg(target_os = "macos")]
@@ -74,7 +75,6 @@ use huddle::{
     set_huddle_transcription_enabled, set_tts_enabled, set_voice_input_mode, speak_agent_message,
     start_huddle, start_stt_pipeline, HuddlePhase,
 };
-use initial_window::*;
 use managed_agents::{
     backfill_coordination_team_membership, backfill_persona_snapshots, ensure_nest,
     list_managed_agent_runtimes, put_managed_agent_runtime_lifecycle,
@@ -88,8 +88,6 @@ use shutdown::{hard_exit_after_mesh_shutdown, relaunch_after_mesh_shutdown};
 use shutdown::{is_restart_request, shut_down_app};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-#[cfg(target_os = "macos")]
-use tauri::Listener;
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 #[cfg(target_os = "macos")]
@@ -133,54 +131,7 @@ pub fn run() {
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
         )
-        .plugin(
-            tauri::plugin::Builder::<_, ()>::new("initial-window-reveal")
-                .on_webview_ready(|webview| {
-                    if webview.label() != "main" || electron_host::enabled() {
-                        return;
-                    }
-                    // macOS applies the restored geometry asynchronously. Wait
-                    // for several identical outer bounds and for React to
-                    // commit the startup surface before revealing it.
-                    let window = webview.window();
-
-                    #[cfg(target_os = "macos")]
-                    {
-                        set_initial_window_backing(&window);
-                        let (initial_render_tx, initial_render_rx) = tokio::sync::oneshot::channel();
-                        window
-                            .app_handle()
-                            .once(INITIAL_RENDER_READY_EVENT, move |_| {
-                                let _ = initial_render_tx.send(());
-                            });
-
-                        tauri::async_runtime::spawn(async move {
-                            wait_for_stable_initial_window_geometry(&window).await;
-
-                            if tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
-                                initial_render_rx,
-                            )
-                            .await
-                            .is_err()
-                            {
-                                eprintln!(
-                                    "buzz-desktop: initial render did not commit before reveal timeout"
-                                );
-                            }
-
-                            reveal_initial_window(&window);
-                            clear_initial_window_backing(&window).await;
-                        });
-                    }
-
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        reveal_initial_window(&window);
-                    }
-                })
-                .build(),
-        )
+        .plugin(initial_window_reveal::plugin())
         .plugin(native_websocket::init())
         .plugin(operator_console::init())
         .plugin(tauri_plugin_dialog::init())

@@ -15,7 +15,7 @@ use nostr::{Event, Timestamp};
 
 use crate::state::AppState;
 
-const CORE_BLOCK_ASSETS: [(&str, &str); 25] = [
+const CORE_BLOCK_ASSETS: [(&str, &str); 26] = [
     (
         "primitives/section.json",
         include_str!("core_blocks/primitives/section.json"),
@@ -111,6 +111,10 @@ const CORE_BLOCK_ASSETS: [(&str, &str); 25] = [
     (
         "composites/deliverable.json",
         include_str!("core_blocks/composites/deliverable.json"),
+    ),
+    (
+        "composites/website-job.json",
+        include_str!("core_blocks/composites/website-job.json"),
     ),
     (
         "composites/outreach-email.json",
@@ -252,7 +256,8 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use buzz_core::block::{
-        validate_instance, validate_manifest_instance, BlockManifest, BlockValidationState,
+        validate_instance, validate_manifest_instance, BlockInteraction, BlockManifest,
+        BlockValidationState,
     };
     use buzz_core::kind::{KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST};
     use buzz_db::event::EventQuery;
@@ -276,7 +281,7 @@ mod tests {
         "actions",
         "question",
     ];
-    const COMPOSITE_HANDLES: [&str; 14] = [
+    const COMPOSITE_HANDLES: [&str; 15] = [
         "lead-card",
         "approval",
         "agent-proposal",
@@ -290,6 +295,7 @@ mod tests {
         "initiative",
         "handover",
         "deliverable",
+        "website-job",
         "outreach-email",
     ];
 
@@ -314,7 +320,7 @@ mod tests {
     ///
     /// Editing a manifest therefore fails this test until the timestamp moves
     /// with it. Update both fields together: that is the point, not a chore.
-    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 25] = [
+    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 26] = [
         (
             "actions",
             1785369600,
@@ -439,6 +445,11 @@ mod tests {
             "report",
             1785369601,
             "86f1ca1ddb874158926dce81aa308dde42fdcc81abf1ee3b55777215257b5834",
+        ),
+        (
+            "website-job",
+            1785369600,
+            "df62e00412b314d4b036d07bcf547e0f7a9dbc562e013a6d3832f0c51bb7ad6f",
         ),
     ];
 
@@ -1204,13 +1215,13 @@ mod tests {
     #[test]
     fn loads_twenty_five_unique_valid_manifests_and_examples() {
         let manifests = core_block_manifests().expect("Core manifests should validate");
-        assert_eq!(manifests.len(), 25);
+        assert_eq!(manifests.len(), 26);
 
         let handles: BTreeSet<_> = manifests
             .iter()
             .map(|manifest| manifest.handle.as_str())
             .collect();
-        assert_eq!(handles.len(), 25);
+        assert_eq!(handles.len(), 26);
 
         let expected: BTreeSet<_> = PRIMITIVE_HANDLES
             .into_iter()
@@ -1239,6 +1250,54 @@ mod tests {
                 });
             }
         }
+    }
+
+    /// The website-job composite is the trusted face of the owner-decision
+    /// path: both reserved actions must resolve attention, and an instance
+    /// shaped by its schema must satisfy the broker's job binding.
+    #[test]
+    fn website_job_manifest_is_trusted_and_binds_the_job_instance() {
+        let manifest = core_block_manifests()
+            .expect("Core manifests")
+            .into_iter()
+            .find(|manifest| manifest.handle == "website-job")
+            .expect("website-job is bundled");
+        assert_eq!(manifest.validation.state, BlockValidationState::Tested);
+        assert!(manifest.validation.requires_attention);
+
+        let ids: BTreeSet<&str> = manifest
+            .actions
+            .iter()
+            .map(|action| action.id.as_str())
+            .collect();
+        assert!(ids.contains("website.approve"));
+        assert!(ids.contains("website.request-changes"));
+        for action in &manifest.actions {
+            match &action.interaction {
+                BlockInteraction::Signed {
+                    action_id,
+                    resolves_attention,
+                } => {
+                    assert!(resolves_attention, "{} must resolve attention", action.id);
+                    assert_eq!(action_id, &action.id);
+                }
+                other => panic!("{} must be signed, got {other:?}", action.id),
+            }
+        }
+
+        let assets = raw_assets();
+        let manifest_content = manifest_for_handle(&assets, "website-job");
+        let example = manifest
+            .examples
+            .first()
+            .expect("website-job has a preview example");
+        crate::website_authority::require_job_instance_data(
+            &crate::blocks::InstanceData::Inline(example.data.clone()),
+            manifest_content,
+            "thread-task:acme",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        )
+        .expect("the example instance satisfies the broker's job binding");
     }
 
     #[test]
@@ -1532,8 +1591,8 @@ mod tests {
             })
             .await
             .expect("stored heads");
-        assert_eq!(manifests.len(), 25);
-        assert_eq!(heads.len(), 25);
+        assert_eq!(manifests.len(), 26);
+        assert_eq!(heads.len(), 26);
 
         let mut newer_manifest = core_block_manifests()
             .expect("bundled manifests")

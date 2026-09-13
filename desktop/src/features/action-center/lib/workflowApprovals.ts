@@ -54,9 +54,9 @@ export function selectOwnerWorkflowApprovalSources({
   const sources: ActionWorkflowSource[] = [];
   workflows.forEach((workflow, index) => {
     const run = latestRuns[index];
-    if (!run || run.status !== "waiting_approval") return;
+    if (run?.status !== "waiting_approval") return;
     const approval = pendingApprovals[index];
-    if (!approval || approval.status !== "pending") return;
+    if (approval?.status !== "pending") return;
     if (!approverSpecNamesPubkey(approval.approverSpec, ownerPubkey)) return;
     sources.push({ kind: "workflow", workflow, run, approval });
   });

@@ -1,0 +1,79 @@
+name: Format diff
+# On-demand formatter run for a branch whose author cannot run the repo's
+# formatters locally (for example an agent-written branch on a machine that
+# must not run local tooling). It applies the same fix recipes the pre-commit
+# hook runs (`just fmt`, `just desktop-tauri-fmt`, `just desktop-fix`,
+# `just web-fix`) on a GitHub runner and uploads the resulting `git diff` as
+# an artifact. It never pushes: a human or orchestrator applies the patch and
+# commits it with their own sign-off, so DCO and authorship stay intact.
+
+on:
+  workflow_dispatch:
+  # `workflow_dispatch` only resolves workflows that exist on the default
+  # branch, so agent branches also trigger it on push. The job only uploads a
+  # patch; it never writes to the repository.
+  push:
+    branches:
+      - "codex/**"
+      - "agent/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: format-diff-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Run formatters and upload the diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - name: Install JS dependencies
+        run: just desktop-install-ci
+      - name: Rust formatting
+        run: |
+          just fmt
+          just desktop-tauri-fmt
+      - name: Desktop and web biome fixes
+        run: |
+          (cd desktop && pnpm exec biome check --write . || true)
+          (cd web && pnpm exec biome check --write . || true)
+      - name: Biome fixes it will only apply unsafely
+        # `--write` alone skips every fix biome marks unsafe, so a rule like
+        # `style/useTemplate` fails the build with a fix nobody can apply
+        # through this job. These land in the same patch, which a human reads
+        # before committing, so the unsafe rewrite is still reviewed.
+        run: |
+          (cd desktop && pnpm exec biome check --write --unsafe . || true)
+          (cd web && pnpm exec biome check --write --unsafe . || true)
+      - name: Regenerate generated desktop files
+        # native-inventory.json is generated from desktop/src-tauri and CI
+        # refuses a stale copy; regenerating it here puts the exact generator
+        # output into the same patch as the formatter changes.
+        run: (cd desktop && pnpm generate:native-inventory)
+      - name: Report remaining error-level biome diagnostics
+        # `just desktop-check` caps output at 20 diagnostics and warnings can
+        # crowd out the errors that actually fail the job; this prints every
+        # error-level diagnostic left after the fixes above, read-only.
+        run: |
+          (cd desktop && pnpm exec biome check . --diagnostic-level=error --max-diagnostics=500 || true)
+          (cd web && pnpm exec biome check . --diagnostic-level=error --max-diagnostics=500 || true)
+      - name: Collect the diff
+        run: |
+          git --no-pager diff --stat
+          git diff > format.patch
+          wc -c format.patch
+      - name: Upload the patch
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: format-patch
+          path: format.patch
+          if-no-files-found: error

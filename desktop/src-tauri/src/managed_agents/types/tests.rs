@@ -535,6 +535,8 @@ fn sample_persona() -> AgentDefinition {
         provider: Some("openai".to_string()),
         name_pool: vec!["Nimble".to_string()],
         is_builtin: false,
+        provisioned: None,
+        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: Some("team-1".to_string()),

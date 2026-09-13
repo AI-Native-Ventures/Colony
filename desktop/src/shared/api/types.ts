@@ -336,6 +336,10 @@ export type ManagedAgent = {
    */
   runtime: string | null;
   teamId?: string | null;
+  /**
+   * Recipe id when this agent is provided by Colony, else null. Provisioned
+   * agents cannot be deleted by the owner; the recipe upgrades them.
+   */
   relayUrl: string;
   acpCommand: string;
   /** Resolved/effective harness command (persona-wins, override-honored). */
@@ -758,6 +762,13 @@ export type AgentTeam = {
   personaIds: string[];
   leadPersonaId: string | null;
   isBuiltin: boolean;
+  /**
+   * Recipe id when this team is provided by Colony, else null/absent.
+   * Provisioned teams cannot be deleted; the recipe upgrades their content.
+   */
+  provisioned?: string | null;
+  /** Recipe version that last wrote the provisioned content. */
+  provisionedVersion?: string | null;
   /** Absolute path to the team's backing directory (if directory-backed). */
   sourceDir: string | null;
   /** Whether sourceDir is a symlink to an external directory. */
@@ -870,79 +881,8 @@ export type {
   UserNotesResponse,
 } from "./socialTypes";
 
-export type ThreadSummary = {
-  replyCount: number;
-  descendantCount: number;
-  lastReplyAt: number | null;
-  participants: string[];
-};
+export * from "./forumTypes";
 
-export type ForumPost = {
-  eventId: string;
-  pubkey: string;
-  content: string;
-  kind: number;
-  createdAt: number;
-  channelId: string;
-  tags: string[][];
-  threadSummary: ThreadSummary | null;
-};
-
-export type ForumPostsResponse = {
-  posts: ForumPost[];
-  nextCursor: number | null;
-};
-
-export type ThreadReply = {
-  eventId: string;
-  pubkey: string;
-  content: string;
-  kind: number;
-  createdAt: number;
-  channelId: string;
-  tags: string[][];
-  parentEventId: string | null;
-  rootEventId: string | null;
-  depth: number;
-};
-
-export type ForumThreadResponse = {
-  post: ForumPost;
-  replies: ThreadReply[];
-  totalReplies: number;
-  nextCursor: string | null;
-};
-
-/**
- * Forward keyset cursor for the server-side thread read (`get_thread_replies`).
- *
- * The event-id tiebreak is load-bearing: thread replies routinely share a
- * `createdAt` second (bursty threads), so a timestamp-only cursor would skip
- * every tied reply past the page limit. The pair `(createdAt, eventId)` orders
- * replies unambiguously and lets paging resume strictly after the last event.
- */
-export type ThreadCursor = {
-  createdAt: number;
-  eventId: string;
-};
-
-export type ThreadRepliesResponse = {
-  /** The reply subtree (chronological, oldest first), depth >= 1. Excludes the root event (relay keys on `root_event_id`, which a root row lacks); the caller already holds the root. */
-  events: RelayEvent[];
-  /** Present only when a full page was returned — pass back to fetch the next page. */
-  nextCursor: ThreadCursor | null;
-};
-
-/**
- * Composite backward keyset cursor for channel-timeline paging via the bridge
- * (`getChannelMessagesBefore`).
- *
- * The event-id tiebreak is load-bearing for the dense-second case: the relay
- * orders `created_at DESC, id ASC` and advances past a second denser than one
- * page with `id > eventId`. A bare `createdAt` (`until`) cursor cannot escape
- * such a second — it re-returns the same slice forever, leaving older history
- * unreachable. `(createdAt, eventId)` moves strictly older every page.
- */
 export type ChannelPageCursor = {
   createdAt: number;
   eventId: string;

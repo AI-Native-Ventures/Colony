@@ -575,6 +575,8 @@ pub async fn confirm_agent_snapshot_import(
             provider: snapshot.definition.provider.clone(),
             name_pool: snapshot.definition.name_pool.clone(),
             is_builtin: false,
+            provisioned: None,
+            provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

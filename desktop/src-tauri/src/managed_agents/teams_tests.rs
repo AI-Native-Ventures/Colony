@@ -22,6 +22,8 @@ pub(crate) fn team(id: &str, name: &str) -> TeamRecord {
         persona_ids: Vec::new(),
         lead_persona_id: None,
         is_builtin: false,
+        provisioned: None,
+        provisioned_version: None,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,
@@ -167,6 +169,19 @@ fn validate_team_deletion_rejects_built_ins() {
 
     let err = validate_team_deletion(&built_in).unwrap_err();
     assert_eq!(err, "Built-in teams cannot be deleted.");
+}
+
+#[test]
+fn validate_team_deletion_rejects_provisioned_teams() {
+    let mut provided = team("website-team:00000000:website-manager", "Website Manager");
+    provided.provisioned = Some("website-manager".to_string());
+    provided.provisioned_version = Some("0.1.0".to_string());
+
+    let err = validate_team_deletion(&provided).unwrap_err();
+    assert!(
+        err.contains("Website Manager") && err.contains("cannot be deleted"),
+        "the refusal names the record: {err}"
+    );
 }
 
 #[test]
@@ -396,6 +411,8 @@ fn migration_pristine_fizz_is_purged() {
         persona_ids: vec!["builtin:fizz".to_string()],
         lead_persona_id: None,
         is_builtin: true,
+        provisioned: None,
+        provisioned_version: None,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,
@@ -423,6 +440,8 @@ fn migration_customized_fizz_is_demoted_to_user_team() {
         persona_ids: vec!["builtin:fizz".to_string(), "extra:persona".to_string()],
         lead_persona_id: None,
         is_builtin: true,
+        provisioned: None,
+        provisioned_version: None,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,

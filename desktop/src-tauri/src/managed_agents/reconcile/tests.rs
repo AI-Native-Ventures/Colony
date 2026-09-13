@@ -465,3 +465,49 @@ fn retain_agent_record_is_noop_when_unchanged() {
         "no pending_sync churn for an unchanged record"
     );
 }
+
+#[test]
+fn manager_tag_edit_republishes_even_when_content_is_unchanged() {
+    let dir = TempDir::new().unwrap();
+    let keys = nostr::Keys::generate();
+    let conn = open_retention_db(&dir.path().join("retention.db")).unwrap();
+    let pubkey = "7".repeat(64);
+    let mut record = sample_record(&pubkey, "managed-agent");
+    record.manager = Some("a".repeat(64));
+
+    assert!(retain_agent_record(&conn, &keys, &record).unwrap());
+    let first = get_retained_event(
+        &conn,
+        KIND_MANAGED_AGENT,
+        &keys.public_key().to_hex(),
+        &pubkey,
+    )
+    .unwrap()
+    .unwrap();
+    mark_synced(
+        &conn,
+        first.kind,
+        &first.pubkey,
+        &first.d_tag,
+        first.created_at,
+        &first.content,
+    )
+    .unwrap();
+
+    record.manager = Some("b".repeat(64));
+    assert!(
+        retain_agent_record(&conn, &keys, &record).unwrap(),
+        "a manager-only public edit must queue a replacement"
+    );
+    let replacement = get_retained_event(
+        &conn,
+        KIND_MANAGED_AGENT,
+        &keys.public_key().to_hex(),
+        &pubkey,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(replacement.pending_sync);
+    assert!(replacement.raw_event.contains(&"b".repeat(64)));
+    assert!(replacement.created_at > first.created_at);
+}

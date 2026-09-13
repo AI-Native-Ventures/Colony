@@ -99,6 +99,8 @@ pub(super) fn coordination_team() -> TeamRecord {
         persona_ids: vec!["builtin:fizz".to_string()],
         lead_persona_id: Some("builtin:fizz".to_string()),
         is_builtin: true,
+        provisioned: None,
+        provisioned_version: None,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,

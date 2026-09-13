@@ -26,6 +26,8 @@ fn custom_persona(id: &str, display_name: &str) -> AgentDefinition {
         provider: None,
         name_pool: Vec::new(),
         is_builtin: false,
+        provisioned: None,
+        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,
@@ -435,6 +437,20 @@ fn validate_persona_deletion_rejects_builtins() {
     let err = validate_persona_deletion(&persona, false).unwrap_err();
 
     assert_eq!(err, "Built-in agents cannot be deleted.");
+}
+
+#[test]
+fn validate_persona_deletion_rejects_provisioned_personas() {
+    let mut persona = custom_persona("website-manager-avery", "Avery");
+    persona.provisioned = Some("website-manager".to_string());
+    persona.provisioned_version = Some("0.1.0".to_string());
+
+    let err = validate_persona_deletion(&persona, false).unwrap_err();
+
+    assert!(
+        err.contains("Avery") && err.contains("cannot be deleted"),
+        "the refusal names the record: {err}"
+    );
 }
 
 #[test]

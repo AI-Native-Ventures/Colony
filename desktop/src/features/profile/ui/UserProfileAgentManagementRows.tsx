@@ -47,7 +47,8 @@ export function UserProfileAgentManagementRows({
     !onDuplicateAgent &&
     !onExportAgent &&
     !canArchiveAgent &&
-    !canDeleteAgent
+    !canDeleteAgent &&
+    !managedAgent?.provisioned
   ) {
     return null;
   }
@@ -75,12 +76,20 @@ export function UserProfileAgentManagementRows({
       {canArchiveAgent ? (
         <ProfileArchiveAgentRow archiveActions={archiveActions} />
       ) : null}
-      {canDeleteAgent ? (
+      {canDeleteAgent && !managedAgent?.provisioned ? (
         <ProfileDeleteAgentRow
           isPending={isDeletePending}
           managedAgent={managedAgent}
           onDelete={onDeleteAgent}
         />
+      ) : null}
+      {managedAgent?.provisioned ? (
+        <p
+          className="px-4 py-3 text-xs text-muted-foreground"
+          data-testid="user-profile-provided-by-colony"
+        >
+          Provided by Colony
+        </p>
       ) : null}
     </PanelSectionGroup>
   );

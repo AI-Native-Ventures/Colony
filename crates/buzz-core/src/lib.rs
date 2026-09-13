@@ -87,6 +87,8 @@ pub mod tenant;
 pub mod usage_record;
 /// Schnorr signature and event ID verification.
 pub mod verification;
+/// Website manager protocol: preview manifests, review records, and decisions.
+pub mod website;
 
 pub use error::VerificationError;
 pub use event::StoredEvent;

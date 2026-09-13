@@ -283,7 +283,7 @@ export function PowerCreditsPurchase({
             {phase === "opening"
               ? "Opening checkout…"
               : chosen
-                ? "Pay " + formatPrice(priceOf(chosen, currency), currency)
+                ? `Pay ${formatPrice(priceOf(chosen, currency), currency)}`
                 : "Choose an amount"}
           </Button>
           <p className="onb-simple-note">

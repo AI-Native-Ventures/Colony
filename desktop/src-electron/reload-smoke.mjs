@@ -46,7 +46,7 @@ export async function verifyReload(page) {
       return subscription;
     }, url);
   try {
-    const before = await connect(base + "/before");
+    const before = await connect(`${base}/before`);
     await page.waitForFunction(() =>
       window.__reloadProofMessages.some(
         (m) =>
@@ -72,7 +72,7 @@ export async function verifyReload(page) {
       0,
       "renderer reload must close old native sockets",
     );
-    const after = await connect(base + "/after");
+    const after = await connect(`${base}/after`);
     assert.notEqual(before, after);
     await page.waitForFunction(() =>
       window.__reloadProofMessages.some(

@@ -19,6 +19,15 @@ import type { RelayEvent } from "@/shared/api/types";
 import { BlockFallback, type BlockFallbackState } from "./BlockFallback";
 import { BlockRenderer } from "./BlockRenderer";
 
+/**
+ * Bespoke presentation for the core `website-job` composite. Loaded lazily so
+ * ordinary message rows never pay for the website integration chunk and no
+ * static import cycle exists between Blocks and websiteIntegration.
+ */
+const WebsiteJobComposite = React.lazy(
+  () => import("@/features/websiteIntegration/WebsiteJobComposite"),
+);
+
 export type BlockActionViewState = {
   completedActionIds: ReadonlySet<string>;
   pendingActionId?: string;
@@ -291,7 +300,7 @@ export function BlockMessage({ message }: { message: TimelineMessage }) {
   const questionActionIds = collectQuestionActionIds(
     manifestResult.value.manifest.tree,
   );
-  return (
+  const genericRenderer = (
     <BlockRenderer
       completedActionIds={actionState.completedActionIds}
       data={dataQuery.data.value}
@@ -307,6 +316,22 @@ export function BlockMessage({ message }: { message: TimelineMessage }) {
       trust={manifestResult.value.trust}
     />
   );
+  // A trusted website job delegates its card body to the website presentation
+  // (the generic tree stays the fallback it receives). Untrusted instances
+  // never reach this point.
+  if (
+    manifestResult.value.trust === "core" &&
+    manifestResult.value.manifest.handle === "website-job"
+  ) {
+    return (
+      <React.Suspense
+        fallback={<BlockFallback state="loading" text={message.body} />}
+      >
+        <WebsiteJobComposite fallback={genericRenderer} message={message} />
+      </React.Suspense>
+    );
+  }
+  return genericRenderer;
 }
 
 export default BlockMessage;

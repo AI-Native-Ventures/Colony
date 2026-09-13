@@ -1,0 +1,60 @@
+# Website Manager proof contract
+
+The approved visual and product contract is [the design specification](2026-09-10-website-manager-design.md). The primary agent now owns implementation and integration directly, following the owner's 2026-09-13 takeover instruction. Automated checks, builds and tests run in GitHub CI, not on the owner's Mac.
+
+## Proof stages
+
+Keep implementation, automated checks, rendered acceptance, real agent work, merge, deployment and installed-app adoption separate. The current implementation and hosted observations are recorded below; a case is complete only when its required exact-head evidence passes.
+
+| Case | Required observation | Evidence to retain |
+| --- | --- | --- |
+| Brief | A supplied URL and ordinary-language request produce one job in the current community/channel/thread. The large inline block and adjacent thread follow the approved design. | Root event, job/task identity, screenshot at reference width |
+| Work | The manager delegates factual research, a fused design/build and independent review. Stage changes correspond to recorded worker work. | Job filings, outcomes/checkpoints and thread replies |
+| Review | Before and redesign use real captured/generated artifacts. Desktop/mobile switch and expansion work. The displayed version identifies saved source and preview artifacts. | Screenshot of each view, immutable artifact references and digests |
+| Revision | Owner feedback starts actual delegated revision work once. The old version remains inspectable; a new revision returns to review. | Signed request, job outcome, both versions and rendered difference |
+| Approval | The owner's decision identifies the exact reviewed revision. An old, duplicate or racing action cannot approve newer work. An agent cannot impersonate owner approval. | Accepted and rejected action/receipt cases |
+| Handover | Approved source/assets, review record and a domain/access request draft are available in the same thread. No production publish or message to a third party occurs. | Handover artifact and action history |
+| Recovery | Reload during work and after review recovers the same job, version and action state without another dispatch. Lease recovery does not duplicate a completed stage. | Before/after IDs, job history and restart evidence |
+| Isolation | Switching communities does not carry preview state, approval authority, pending actions or artifacts into another community. | Two-community test with matching scope assertions |
+| Preview failure | Missing/invalid artifacts, blocked embedding or interrupted loads display recoverable errors without fabricated content or successful-review claims. | Failure screenshot and diagnostic code |
+| Visual parity | Brief, Working, Review, Revision and Handover match the approved spacing, typography, tinted panels, role identity and substantial inline preview. | Five distinct rendered states at matching widths |
+
+## Reviewer rules
+
+- A test fixture may render sample website content, but production code must never fall back to the concept's website, copy, stage status, reply counts or approval state.
+- A mutable public URL alone does not establish the reviewed bytes. Preserve captured original material, versioned redesign artifacts and the source/content identity used for approval.
+- Website content is untrusted input. A preview must not inherit Colony's authenticated browser session, privileged preload, filesystem access, popups or navigation authority.
+- Reuse the existing task/job broker, signed Blocks actions and immutable manifests wherever they meet the contract. Do not introduce a separate workflow engine or generic agent-authored HTML renderer.
+- Consume the shared Blocks work from PR #682 after it lands; coordinate any necessary extension at that boundary.
+- Report a failed or unproven row explicitly. Do not replace the approved experience with a smaller implementation and mark the phase complete.
+
+## Additional acceptance findings from source review
+
+- Switching immutable revisions must never display the preceding capture under the new version label, including the first render before effects run.
+- The native host must receive full element bounds and the independent visible clip rectangle. Clipping must not resize the website CSS viewport or paint over channel headers, composers, menus or dialogs.
+- Both desktop and mobile previews must fit available width and height while retaining the real 1440x900 or390x844 CSS viewport. A portrait preview that remains partly hidden at every scroll position fails acceptance.
+- The expanded preview must hide the inline native view and remain usable with app zoom and a small window. Faked view bounds are source-level test evidence only; actual Electron rendering is required.
+- QA rows must come from the actual verified reviewer report. Reference presence, matching-shaped hashes, a boolean pass flag and a screenshot alone do not establish content, navigation, layout or functional checks.
+- Team setup must install actual editable runtime skills, persist community-scoped identities and hierarchy, and inherit existing Power defaults. Provisioned core employees must exist, cannot be deleted, adopt the current role holder, and receive updated bundled configuration during reconciliation; unrelated customized agents remain preserved. A pack in the repository or local team card alone is not installation proof.
+
+## Historical checkpoint — 2026-09-10
+
+DeepSeek V4.1 Flash via OpenRouter, reasoning max, is writing the implementation. Root is reviewing and orchestrating. Native artifact loader and pure review-contract source have been drafted and received source review; remaining corrections are included in subsequent worker tasks. UI source currently includes preview controls/surface and work-stage presentation, with remaining review/handover/starter components in progress. Backend persistence and actual Electron hosting are in progress.
+
+No feature commit, PR, GitHub test result, rendered five-state acceptance, installed runtime adoption or real website-job proof has passed at this checkpoint. Shared Blocks PR682 remains a separate dependency; its source will be consumed after it lands. No local CI has been run.
+
+## Earlier evidence checkpoint — 2026-09-13
+
+PR #691 is open as a draft on `codex/website-manager`. The latest PR-pushed head examined here is `6aa4c1aef834c117ac10afa45861c36b05ab7399`; its format run passed and its native preview proof passed, but its CI run still has failed Rust/Desktop gates and failed smoke shards while Desktop E2E and Blocks Live remain in progress. A source-reviewed follow-up, `358e24b6f2c4a49740eae8d5bfcbd56d1ec65baa`, contains the bounded lint fixes and provider-start fence on the temporary formatter branch; it is not yet the PR head. The earlier evidence candidate `22fa9860d924922e2a490282e934c35389f5f531` carries the visual/native corrections, immutable public-fixture relay lifecycle coverage, and bundled employee runbook/install work. Its exact mock UI evidence reports 10 Website Manager specs passing on their first attempt and 10 distinct rendered screenshots; the hosted relay evidence at `91208cba01d72b3225e2be1c3120be8e2488afbd` records 7 passing cases. Those results are evidence for their exact source heads and do not establish the current candidate's complete proof. The UI fixtures and private Blossom lifecycle fixture use synthetic or test-owned content; they do not prove a managed employee reply, native authenticated artifact rendering, or a deployed website. Shared Blocks PR #682 has merged.
+
+The exact-head GitHub `Website preview native proof` run `34721349265` for pushed head `6aa4c1aef834c117ac10afa45861c36b05ab7399` completed successfully; this is host proof only. The earlier exact-head run `34718298558` for `22fa9860d924922e2a490282e934c35389f5f531` completed with `complete=true`, all 16 required checks passing, desktop/mobile geometry recorded, and `clip.status=proven` (retained in `/private/tmp/colony-preview-22fa9860-proof/proof.json`). This supersedes the earlier failed clip run `34707121191`; the earlier failure showed the nested native `View` did not clip an overflowing `WebContentsView` child. The GitHub job `Desktop Smoke E2E (6)` (job `103619890873`) in run `34718298572` also completed successfully, including the Website Manager smoke step and the 10-case rendered fixture report described above. This is bounded job evidence; the overall CI run still has separate failures or pending checks. The packaged managed Website Manager job and authenticated/live end-to-end flow remain unproven.
+
+Native first-job run `34718298557` completed successfully for PR head `22fa9860d924922e2a490282e934c35389f5f531`. Its retained `account-proof.json` reports the canonical task completed, one task and instruction, recovery before the task, real packaged ACP/shell/signed CLI/relay/gateway execution, 10 deterministic provider calls matched to 10 debits totaling `28000` nanoUSD with zero holds, and complete cleanup. The package manifest records compiled source revision `6f36a9bb9993dbd408d3da5f59705a2105bd2af1`; that merge checkout revision is distinct from the PR head and must be retained in any later kit or proof record. This proves the isolated native onboarding fixture and its metering/cleanup path. The provider responses are deterministic and the fixture is synthetic, so it does not prove a real managed Website request, Website employee replies, rendered artifact QA, or live publication. The feature-gated tenant-scoped private Blossom invocation remains separate evidence. CI, rendered acceptance, installed runtime adoption and release state must be checked against the exact pushed head before any completion claim.
+
+## Direct recovery checkpoint — 2026-09-13
+
+The primary agent took over the code directly. The original worktree at `/private/tmp/colony-website-manager-20260910` retains the uncommitted browser-evidence work unchanged. Recovery uses `/private/tmp/colony-691-direct-recovery`, based on PR head `0b4bb533ddf3da3514383cb52662a69941254942`, with `develop` at `29f8fa86c` integrated without rewriting history.
+
+The last completed CI run, `34725991875`, passed Rust Lint, Unit Tests, Desktop Core, Website smoke shard 6, and multiple other suites. Remaining failures included onboarding tests skipping the explicit verified-Power Continue action, Website handover fixtures omitting required revision-bound stage evidence, and a semantic retry test expecting the prior rather than current revision in its receipt. Native first-job run `34725991859` failed during onboarding; current develop supplies its updated account/probe flow.
+
+Recovery restores the actual onboarding sequence, retains the newer choice-first assertions, supplies signed builder work bound to the handed-over manifest, and corrects the duplicate receipt expectation. These are source corrections awaiting fresh GitHub execution. No test or build ran locally. The PR remains draft; merge, real managed Website work, and release remain unproven. Background evidence-grant integration and native proof-kit export remain paused at their previously reported approval boundaries.

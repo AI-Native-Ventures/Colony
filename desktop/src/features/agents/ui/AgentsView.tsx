@@ -1,5 +1,6 @@
 import * as React from "react";
 import { EllipsisVertical, OctagonX, Settings2 } from "lucide-react";
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
   consumePendingSnapshotImport,
   subscribeSnapshotImport,
@@ -20,6 +21,19 @@ import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
 import { TeamsSection } from "./TeamsSection";
 import { PeopleSection } from "./PeopleSection";
+import {
+  isInstallCommunityActive,
+  WebsiteTeamInstallDialog,
+  type WebsiteTeamOpenChannelRequest,
+} from "@/features/websiteTeam";
+import { loadActiveCommunityId } from "@/features/communities/communityStorage";
+import { useCommunities } from "@/features/communities/useCommunities";
+import {
+  loadDraftEntry,
+  persistDraftEntry,
+} from "@/features/messages/lib/useDrafts";
+import { getRelayWsUrl } from "@/shared/api/tauri";
+import { getIdentity } from "@/shared/api/tauriIdentity";
 import { UnassignedAgentsBanner } from "./UnassignedAgentsBanner";
 import { UnifiedAgentsSection } from "./UnifiedAgentsSection";
 import { useManagedAgentActions } from "./useManagedAgentActions";
@@ -40,6 +54,8 @@ import { PageHeader } from "@/shared/ui/PageHeader";
 import { getInheritedAgentDefaults } from "./bakedEnvHelpers";
 
 export function AgentsView() {
+  const { goChannel, goSettings } = useAppNavigation();
+  const { activeCommunity } = useCommunities();
   const { openPersonaProfilePanel, openProfilePanel } = useProfilePanel();
   const { globalConfig } = useGlobalAgentConfig();
   const { data: bakedEnv } = useBakedBuildEnvQuery({ enabled: true });
@@ -51,6 +67,68 @@ export function AgentsView() {
   const fullAiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const compactActionsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const [isAiDefaultsOpen, setIsAiDefaultsOpen] = React.useState(false);
+  const [isWebsiteTeamInstallOpen, setIsWebsiteTeamInstallOpen] =
+    React.useState(false);
+
+  const openWebsiteTeamChannel = React.useCallback(
+    async (request: WebsiteTeamOpenChannelRequest): Promise<boolean> => {
+      const expectedCommunityId = request.communityId;
+      if (
+        !expectedCommunityId ||
+        loadActiveCommunityId() !== expectedCommunityId ||
+        activeCommunity?.id !== expectedCommunityId
+      ) {
+        return false;
+      }
+      const [identity, relayUrl] = await Promise.all([
+        getIdentity(),
+        getRelayWsUrl(),
+      ]);
+      if (
+        loadActiveCommunityId() !== expectedCommunityId ||
+        activeCommunity?.id !== expectedCommunityId ||
+        identity.pubkey.trim().toLowerCase() !==
+          request.ownerPubkey.trim().toLowerCase() ||
+        !isInstallCommunityActive(relayUrl, request)
+      ) {
+        return false;
+      }
+
+      const existingDraft = loadDraftEntry(request.channelId);
+      const existingContent = existingDraft?.content ?? "";
+      const draftContent = existingContent.includes(request.draftContent)
+        ? existingContent
+        : existingContent.trim().length > 0
+          ? `${existingContent}${existingContent.endsWith("\n") ? "\n" : "\n\n"}${request.draftContent}`
+          : request.draftContent;
+      const mentionRefs = [...(existingDraft?.mentionRefs ?? [])];
+      for (const mentionRef of request.mentionRefs) {
+        const alreadyMentioned = mentionRefs.some(
+          (existingRef) =>
+            "pubkey" in existingRef &&
+            existingRef.pubkey.trim().toLowerCase() ===
+              mentionRef.pubkey.trim().toLowerCase(),
+        );
+        if (!alreadyMentioned) mentionRefs.push(mentionRef);
+      }
+      persistDraftEntry(
+        request.channelId,
+        draftContent,
+        request.channelId,
+        existingDraft?.pendingImeta ?? [],
+        existingDraft?.spoileredAttachmentUrls ?? [],
+        mentionRefs,
+      );
+      const savedDraft = loadDraftEntry(request.channelId);
+      if (!savedDraft?.content.includes(request.draftContent)) {
+        return false;
+      }
+      setIsWebsiteTeamInstallOpen(false);
+      await goChannel(request.channelId);
+      return true;
+    },
+    [activeCommunity?.id, goChannel],
+  );
   function openUnifiedCatalog() {
     personas.prepareCreate();
     personas.openCatalog();
@@ -290,6 +368,7 @@ export function AgentsView() {
               onImport={() => {
                 teamImportInputRef.current?.click();
               }}
+              onInstallWebsiteTeam={() => setIsWebsiteTeamInstallOpen(true)}
               personas={personas.libraryPersonas}
               teams={teamActions.teams}
             />
@@ -303,6 +382,16 @@ export function AgentsView() {
         onOpenChange={setAiDefaultsDialogOpen}
         open={isAiDefaultsOpen}
         returnFocusRef={aiDefaultsTriggerRef}
+      />
+
+      <WebsiteTeamInstallDialog
+        onOpenChange={setIsWebsiteTeamInstallOpen}
+        onOpenChannel={openWebsiteTeamChannel}
+        onOpenCompanySettings={() => {
+          setIsWebsiteTeamInstallOpen(false);
+          void goSettings("company");
+        }}
+        open={isWebsiteTeamInstallOpen}
       />
 
       {agents.agentToAddToChannel ? (

@@ -71,6 +71,7 @@ import {
   KIND_AGENT_OBSERVER_FRAME,
   KIND_BLOCK_ACTION,
   KIND_BLOCK_RECEIPT,
+  KIND_WEBSITE_ACTION,
   KIND_CHANNEL_THREAD_SUMMARY,
   KIND_CHANNEL_WINDOW_BOUNDS,
   KIND_DM_VISIBILITY,
@@ -104,6 +105,7 @@ import type {
   RawAcpAuthMethodsResult,
   RawConnectAcpRuntimeResult,
 } from "@/shared/api/tauriAgentAuth";
+import type { WebsiteTeamRecipe } from "@/shared/api/tauriWebsiteTeam";
 import type {
   RawAcpRuntimeCatalogEntry,
   RawInstallRuntimeResult,
@@ -301,6 +303,8 @@ type E2eConfig = {
     >;
     /** Reject successive kind-40010 publications, then resume. */
     blockActionPublishErrors?: string[];
+    /** Reject successive kind-40027 website BeginWork publications, then resume. */
+    websiteActionPublishErrors?: string[];
     /** Delay kind-40010 relay acknowledgements after live delivery. */
     blockActionPublishDelayMs?: number;
     /** Outcomes for successive trusted local Agent Proposal executions. */
@@ -4815,6 +4819,94 @@ function getManagedAgentRelayMembership(pubkey: string) {
 
 function getConfig(): E2eConfig | undefined {
   return window.__BUZZ_E2E__;
+}
+
+function mockWebsiteTeamRecipe(): WebsiteTeamRecipe {
+  return {
+    id: "website-manager",
+    name: "Website Manager",
+    version: "0.1.2",
+    teamSlug: "website-manager",
+    outcome:
+      "Installs a four-person website studio that researches your site, redesigns and builds it, then checks the result independently on desktop and mobile.",
+    examplePrompt: "Improve my website",
+    integrationNote:
+      "Team setup is complete when the status shows the team, personas, and agents published. Next, open the selected channel and mention Avery with the real website brief and HTTPS URL. The composer creates or attaches the task when this community has company context; without it, the message stays ordinary until company setup is complete. Avery then publishes a validated website-job Block in that thread, creates the job from its returned event ids, and begins work.",
+    personas: [
+      {
+        slug: "avery",
+        personaId: "website-manager-avery",
+        displayName: "Avery",
+        roleId: "website-manager",
+        roleTitle: "Website Manager",
+        tier: "leader",
+        colorIndex: 0,
+        skills: ["website-team-workflow", "website-owner-review"],
+      },
+      {
+        slug: "ren",
+        personaId: "website-manager-ren",
+        displayName: "Ren",
+        roleId: "website-researcher",
+        roleTitle: "Website Researcher",
+        tier: "worker",
+        colorIndex: 1,
+        skills: ["website-research"],
+      },
+      {
+        slug: "jules",
+        personaId: "website-manager-jules",
+        displayName: "Jules",
+        roleId: "website-designer-builder",
+        roleTitle: "Website Designer-builder",
+        tier: "worker",
+        colorIndex: 2,
+        skills: ["website-direction-build", "website-handover"],
+      },
+      {
+        slug: "vera",
+        personaId: "website-manager-vera",
+        displayName: "Vera",
+        roleId: "website-reviewer",
+        roleTitle: "Website Reviewer",
+        tier: "worker",
+        colorIndex: 3,
+        skills: ["website-independent-review"],
+      },
+    ],
+    skills: [
+      {
+        name: "website-team-workflow",
+        description: "Run the six-stage website method.",
+        version: 1,
+      },
+      {
+        name: "website-owner-review",
+        description: "Gate exact-version owner decisions.",
+        version: 1,
+      },
+      {
+        name: "website-handover",
+        description: "Assemble the delivery bundle.",
+        version: 1,
+      },
+      {
+        name: "website-research",
+        description: "Build a cited research dossier.",
+        version: 1,
+      },
+      {
+        name: "website-direction-build",
+        description: "Implement an evidence-grounded direction.",
+        version: 1,
+      },
+      {
+        name: "website-independent-review",
+        description: "Review the exact revision independently.",
+        version: 1,
+      },
+    ],
+  };
 }
 
 function readStoredIdentityOverride(): TestIdentity | undefined {
@@ -9689,8 +9781,28 @@ function upsertMockManagedAgentRuntime(
 // exactly one agent+relay runtime and rejects non-local agents.
 function handleManagedAgentRuntimeAction(
   action: "start" | "stop" | "restart",
-  args: { pubkey: string; relayUrl: string },
+  args: {
+    pubkey: string;
+    relayUrl: string;
+    expectedOwnerPubkey?: string;
+  },
 ): MockManagedAgentRuntimeRow {
+  if (args.expectedOwnerPubkey !== undefined) {
+    const normalizeRelay = (value: string) =>
+      value.trim().replace(/\/+$/, "").toLowerCase();
+    const activeOwner = normalizePubkey(
+      getActiveIdentity(getConfig())?.pubkey ?? "",
+    );
+    const activeRelay = mockAppliedRelayWsUrl ?? getRelayWsUrl(getConfig());
+    if (
+      normalizePubkey(args.expectedOwnerPubkey) !== activeOwner ||
+      normalizeRelay(args.relayUrl) !== normalizeRelay(activeRelay)
+    ) {
+      throw new Error(
+        "The account or business changed while starting the Website coordinator.",
+      );
+    }
+  }
   const agent = getMockManagedAgent(args.pubkey);
   if (agent.backend.type !== "local") {
     throw new Error("managed runtime pairs require a local agent");
@@ -9711,9 +9823,39 @@ function isRelayMeshManagedAgent(agent: MockManagedAgent): boolean {
 async function handleStartManagedAgent(
   args: {
     pubkey: string;
+    expectedOwnerPubkey?: string;
+    expectedRelayUrl?: string;
   },
   config?: E2eConfig,
 ): Promise<RawManagedAgent> {
+  if (
+    args.expectedOwnerPubkey !== undefined ||
+    args.expectedRelayUrl !== undefined
+  ) {
+    if (
+      args.expectedOwnerPubkey === undefined ||
+      args.expectedRelayUrl === undefined
+    ) {
+      throw new Error(
+        "Starting a Website teammate requires the original account and business.",
+      );
+    }
+    const normalizeRelay = (value: string) =>
+      value.trim().replace(/\/+$/, "").toLowerCase();
+    const activeOwner = normalizePubkey(
+      getActiveIdentity(getConfig())?.pubkey ?? "",
+    );
+    const activeRelay = mockAppliedRelayWsUrl ?? getRelayWsUrl(getConfig());
+    if (
+      normalizePubkey(args.expectedOwnerPubkey) !== activeOwner ||
+      normalizeRelay(args.expectedRelayUrl) !== normalizeRelay(activeRelay)
+    ) {
+      throw new Error(
+        "The account or business changed while starting the Website coordinator.",
+      );
+    }
+  }
+
   const startError = config?.mock?.startManagedAgentErrors?.shift();
   if (startError) {
     throw new Error(startError);
@@ -11469,6 +11611,14 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["OK", event.id, false, blockActionError]);
       return;
     }
+    const websiteActionError =
+      event.kind === KIND_WEBSITE_ACTION
+        ? getConfig()?.mock?.websiteActionPublishErrors?.shift()
+        : null;
+    if (websiteActionError) {
+      sendWsText(socket.handler, ["OK", event.id, false, websiteActionError]);
+      return;
+    }
 
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
@@ -12713,12 +12863,13 @@ export function maybeInstallE2eTauriMocks() {
         const isLocked =
           !mockIdentityLockedCleared &&
           activeConfig?.mock?.identityLocked === true;
-        if (identity) {
+        const activeIdentity = getActiveIdentity(activeConfig);
+        if (activeIdentity) {
           return {
-            pubkey: identity.pubkey,
-            display_name: identity.username,
-            lost: false,
-            locked: false,
+            pubkey: activeIdentity.pubkey,
+            display_name: activeIdentity.username,
+            lost: isLost,
+            locked: isLocked,
           };
         }
 
@@ -13470,6 +13621,14 @@ export function maybeInstallE2eTauriMocks() {
           path: "/tmp/buzz/REPOS/buzz",
           cloned: false,
         };
+      case "website_team_recipe":
+        return mockWebsiteTeamRecipe();
+      case "website_team_install_status":
+        return null;
+      case "install_website_team":
+        throw new Error(
+          "Website Team installation requires the native desktop host.",
+        );
       case "get_relay_ws_url":
         return mockAppliedRelayWsUrl ?? getRelayWsUrl(activeConfig);
       case "get_default_relay_url":
@@ -14088,7 +14247,11 @@ export function maybeInstallE2eTauriMocks() {
       case "start_managed_agent_runtime":
         return handleManagedAgentRuntimeAction(
           "start",
-          payload as { pubkey: string; relayUrl: string },
+          payload as {
+            pubkey: string;
+            relayUrl: string;
+            expectedOwnerPubkey?: string;
+          },
         );
       case "stop_managed_agent_runtime":
         return handleManagedAgentRuntimeAction(
@@ -14455,6 +14618,39 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleAddChannelMembers>[0],
           activeConfig,
         );
+      case "add_website_team_member": {
+        const args = payload as {
+          channelId: string;
+          pubkey: string;
+          role?: RawChannelMember["role"];
+          expectedOwnerPubkey: string;
+          expectedRelayUrl: string;
+        };
+        const expectedOwner = normalizePubkey(args.expectedOwnerPubkey);
+        const activeOwner = normalizePubkey(
+          getActiveIdentity(activeConfig)?.pubkey ?? "",
+        );
+        const normalizeRelay = (value: string) =>
+          value.trim().replace(/\/+$/, "").toLowerCase();
+        if (
+          !expectedOwner ||
+          expectedOwner !== activeOwner ||
+          normalizeRelay(args.expectedRelayUrl) !==
+            normalizeRelay(getRelayWsUrl(activeConfig))
+        ) {
+          throw new Error(
+            "The account or business changed while adding the Website teammate.",
+          );
+        }
+        return handleAddChannelMembers(
+          {
+            channelId: args.channelId,
+            pubkeys: [args.pubkey],
+            role: args.role,
+          },
+          activeConfig,
+        );
+      }
       case "remove_channel_member":
         return handleRemoveChannelMember(
           payload as Parameters<typeof handleRemoveChannelMember>[0],
@@ -14890,16 +15086,17 @@ export function maybeInstallE2eTauriMocks() {
           signedAction: JSON.stringify(action),
         };
       }
-      case "sign_event":
+      case "sign_event": {
         window.__BUZZ_E2E_SIGNED_EVENTS__?.push({
           content: (payload as { content: string }).content,
           createdAt: (payload as { createdAt?: number }).createdAt,
           kind: (payload as { kind: number }).kind,
           tags: (payload as { tags: string[][] }).tags,
         });
-        if (identity) {
+        const signingIdentity = getActiveIdentity(activeConfig);
+        if (signingIdentity) {
           return JSON.stringify(
-            await signWithIdentity(identity, {
+            await signWithIdentity(signingIdentity, {
               kind: (payload as { kind: number }).kind,
               content: (payload as { content: string }).content,
               createdAt: (payload as { createdAt?: number }).createdAt,
@@ -14917,6 +15114,7 @@ export function maybeInstallE2eTauriMocks() {
             (payload as { createdAt?: number }).createdAt,
           ),
         );
+      }
       case "nip44_encrypt_to_self":
         return (payload as { plaintext: string }).plaintext;
       case "nip44_decrypt_from_self":

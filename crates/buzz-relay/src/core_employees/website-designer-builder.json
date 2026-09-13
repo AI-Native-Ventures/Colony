@@ -1,0 +1,21 @@
+{
+  "schema": "ai-native-office/provisioned-employee/v1",
+  "handle": "website-designer-builder",
+  "version": 4,
+  "display_name": "Jules",
+  "role_id": "website-designer-builder",
+  "rank": "worker",
+  "harness": "claude",
+  "model": null,
+  "reports_to": "website-manager",
+  "summary": "Chooses one evidence-grounded direction and builds it into an immutable revision with source, assets, captures and a handover bundle.",
+  "requires_commands": [
+    "messages send",
+    "messages thread",
+    "tasks list",
+    "website get",
+    "website revision",
+    "website evidence",
+    "website bundle"
+  ]
+}

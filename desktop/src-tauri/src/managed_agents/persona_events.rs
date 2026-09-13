@@ -234,6 +234,8 @@ pub fn persona_from_event(event: &nostr::Event) -> Result<AgentDefinition, Strin
         provider: content.provider,
         name_pool: content.name_pool,
         is_builtin: false,
+        provisioned: None,
+        provisioned_version: None,
         is_active: true,
         shared: event_is_shared(event),
         source_team: None,

@@ -41,7 +41,7 @@ test("non-200 bridge errors retain bounded redacted reasons without changing str
   assert.doesNotMatch(JSON.stringify(actual), /private|secret|never-export/);
   assert.ok(actual.message.length <= 500);
   const text = await capture(
-    "Failed to buffer body\nBearer private-token\t" + "x".repeat(600),
+    `Failed to buffer body\nBearer private-token\t${"x".repeat(600)}`,
     observeEventResponse,
     413,
   );

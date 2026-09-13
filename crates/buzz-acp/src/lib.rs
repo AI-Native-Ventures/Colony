@@ -40,7 +40,7 @@ pub use acp::{AcpClient, EnvVar, McpServer, SystemPromptTransport};
 use anyhow::Result;
 use buzz_core::kind::{
     KIND_BLOCK_ACTION, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
-    KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE, KIND_WEBSITE_ACTION,
 };
 use buzz_core::observer::{
     decrypt_observer_payload, encrypt_observer_payload, OBSERVER_FRAME_TELEMETRY,
@@ -3169,6 +3169,25 @@ async fn tokio_main() -> Result<()> {
                                     channel_id = %buzz_event.channel_id,
                                     event_id = %buzz_event.event.id,
                                     "dropping malformed or differently addressed Block action"
+                                );
+                                continue;
+                            }
+
+                            // Website begin-work actions are addressed through
+                            // their coordinator `p` tag. Parse the complete
+                            // action before queueing so malformed, differently
+                            // addressed, and coordinator-self-authored actions
+                            // cannot wake an ACP session, even in `all` mode.
+                            if kind_u32 == KIND_WEBSITE_ACTION
+                                && !queue::website_begin_work_targets_processor(
+                                    &buzz_event.event,
+                                    &pubkey_hex,
+                                )
+                            {
+                                tracing::debug!(
+                                    channel_id = %buzz_event.channel_id,
+                                    event_id = %buzz_event.event.id,
+                                    "dropping malformed or differently addressed Website beginWork"
                                 );
                                 continue;
                             }

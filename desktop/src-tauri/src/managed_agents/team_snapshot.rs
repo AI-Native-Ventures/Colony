@@ -241,6 +241,8 @@ mod tests {
             persona_ids: vec![],
             lead_persona_id: None,
             is_builtin: false,
+            provisioned: None,
+            provisioned_version: None,
             source_dir: None,
             is_symlink: false,
             symlink_target: None,

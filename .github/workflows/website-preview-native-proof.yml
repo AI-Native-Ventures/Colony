@@ -1,0 +1,138 @@
+name: Website preview native proof
+# Real-Electron proof for the isolated website preview host. It mounts a
+# fixture artifact through real View/WebContentsView/session objects and
+# measures rendered CSS geometry, denial behavior, lifecycle, and, when the
+# OS permits window capture, container clipping. This is host-fixture proof:
+# it does not prove packaged Colony adoption, relay integration, or that the
+# production loader fetched a remote artifact.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - desktop/src-electron/website-preview/**
+      - desktop/src-electron/worker-evidence/**
+      - desktop/src-electron/main.mjs
+      - desktop/src-electron/preload.cjs
+      - desktop/src/shared/api/websitePreview.ts
+      - desktop/src/shared/api/electronNativeBridge.ts
+      - .github/workflows/website-preview-native-proof.yml
+
+permissions:
+  contents: read
+concurrency:
+  group: website-preview-native-proof-${{ github.ref }}
+  cancel-in-progress: ${{ github.base_ref != 'main' }}
+
+jobs:
+  proof:
+    name: Real Electron preview host
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - name: Install renderer dependencies
+        run: just desktop-install-ci
+      - name: Validate proof syntax and host source tests
+        run: |
+          node --check desktop/src-electron/website-preview/proof.mjs
+          pnpm --dir desktop electron:test
+      - name: Run real Electron preview host proof
+        env:
+          COLONY_PREVIEW_PROOF_DIR: ${{ runner.temp }}/colony-website-preview-proof
+        run: pnpm --dir desktop exec electron src-electron/website-preview/proof.mjs
+      - name: Report proof and reject any incomplete or failed check
+        if: always()
+        env:
+          PROOF: ${{ runner.temp }}/colony-website-preview-proof/proof.json
+        run: |
+          test -f "$PROOF"
+          # Print the raw record first so a partial or malformed file is
+          # visible in the log before any assertion can fail.
+          jq . "$PROOF" || true
+          required_checks='[
+            "geometry.desktopCssViewport",
+            "geometry.desktopMediaQuery",
+            "interaction.inlineScript",
+            "interaction.inlineHandler",
+            "interaction.secondPageNavigation",
+            "interaction.secondPageInlineScript",
+            "interaction.secondPageInlineHandler",
+            "geometry.mobileCssViewport",
+            "geometry.mobileMediaQuery",
+            "denial.externalNavigation",
+            "denial.popup",
+            "denial.permission",
+            "denial.network",
+            "isolation.crossEntryNavigation",
+            "isolation.distinctPartitions",
+            "lifecycle.closed"
+          ]'
+          jq --argjson required "$required_checks" '
+            ($required | sort) as $requiredNames
+            | ((.checks? // []) | map(.name) | sort) as $actualNames
+            | {
+                complete,
+                phase,
+                clip: .clip.status,
+                geometry,
+                checkCount: ($actualNames | length),
+                checkNames: $actualNames,
+                missing: ($requiredNames - $actualNames),
+                unexpected: ($actualNames - $requiredNames),
+                failures: [(.checks? // [])[]? | select(.ok != true) | .name]
+              }
+          ' "$PROOF" || true
+          jq -e --argjson required "$required_checks" '
+            .schema == "colony.website-preview-host-proof/1"
+            and .complete == true
+            and ((.checks? | type) == "array")
+            and ((.checks | length) > 0)
+            and (([.checks[]? | .name] | sort) == ($required | sort))
+            and (([.checks[]? | select(.ok != true)] | length) == 0)
+            and ((.geometry? | type) == "object")
+            and ((.geometry.desktop? | type) == "object")
+            and ((.geometry.mobile? | type) == "object")
+            and (.geometry.desktop.width == 1440)
+            and (.geometry.mobile.width == 390)
+            and (.geometry.desktop.height == 900)
+            and (.geometry.mobile.height == 844)
+            and ((.geometry.desktop.wrapperFrame? | type) == "object")
+            and ((.geometry.mobile.wrapperFrame? | type) == "object")
+            and (.geometry.desktop.wrapperFrame.width == 1440)
+            and (((.geometry.desktop.wrapperFrame.height - 900) | abs) <= 0.02)
+            and (.geometry.desktop.wrapperFrame.styleWidthPx == 1440)
+            and (((.geometry.desktop.wrapperFrame.styleHeightPx - 900) | abs) <= 0.02)
+            and (.geometry.mobile.wrapperFrame.width == 390)
+            and (((.geometry.mobile.wrapperFrame.height - 844) | abs) <= 0.02)
+            and (.geometry.mobile.wrapperFrame.styleWidthPx == 390)
+            and (((.geometry.mobile.wrapperFrame.styleHeightPx - 844) | abs) <= 0.02)
+            and ((.geometry.desktop.fitted? | type) == "object")
+            and ((.geometry.mobile.fitted? | type) == "object")
+            and ((.geometry.desktop.fitted.width? | type) == "number")
+            and ((.geometry.desktop.fitted.height? | type) == "number")
+            and ((.geometry.mobile.fitted.width? | type) == "number")
+            and ((.geometry.mobile.fitted.height? | type) == "number")
+            and ((.geometry.desktop.expectedCssHeight? | type) == "number")
+            and ((.geometry.mobile.expectedCssHeight? | type) == "number")
+            and ((.geometry.desktop.tolerance? | type) == "number")
+            and ((.geometry.mobile.tolerance? | type) == "number")
+            and (.geometry.desktop.tolerance == 0)
+            and (.geometry.mobile.tolerance == 0)
+            and (.geometry.desktop.expectedCssHeight == 900)
+            and (.geometry.mobile.expectedCssHeight == 844)
+            and ((.clip? | type) == "object")
+            and (.clip.status == "proven" or .clip.status == "unavailable")
+            and (.clip.detail != null)
+          ' "$PROOF" > /dev/null
+      - name: Preserve preview host proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: colony-website-preview-host-proof
+          path: ${{ runner.temp }}/colony-website-preview-proof
+          if-no-files-found: warn

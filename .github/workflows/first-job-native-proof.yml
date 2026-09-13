@@ -50,6 +50,8 @@ jobs:
         run: node --check desktop/src-electron/onboarding-fixture/work.mjs
       - name: Validate proof authority and service contract
         run: node --test desktop/src-electron/onboarding-fixture/native-publish-diagnostics.test.mjs desktop/src-electron/onboarding-fixture/failure-diagnostics.test.mjs desktop/src-electron/onboarding-fixture/provider.test.mjs desktop/src-electron/onboarding-fixture/native-team.test.mjs desktop/src-electron/onboarding-fixture/team-recovery.test.mjs desktop/src-electron/onboarding-fixture/instruction.test.mjs desktop/src-electron/onboarding-fixture/task-head.test.mjs desktop/src-electron/onboarding-fixture/tool-result.test.mjs
+      - name: Verify worker evidence authority and browser transport
+        run: node --test desktop/src-electron/worker-evidence/*.test.mjs desktop/src-electron/browser/managed-workers.test.mjs desktop/src-electron/browser/mcp.test.mjs
       - name: Install PostgreSQL build prerequisite
         run: brew install openssl@3
       - name: Restore pinned native service tools
@@ -99,4 +101,30 @@ jobs:
             ${{ runner.temp }}/colony-first-job-proof
             desktop/electron-dist/**/manifest.json
           if-no-files-found: warn
+          retention-days: 7
+      - name: Assemble portable native proof kit from build outputs
+        if: success()
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version desktop/package.json)
+          MANIFEST="desktop/electron-dist/${VERSION}-release-arm64-onboarding-fixture/manifest.json"
+          KIT="$RUNNER_TEMP/colony-native-proof-kit"
+          mkdir -p "$KIT/bin" "$KIT/services"
+          cp "$(jq -er .zip "$MANIFEST")" "$KIT/"
+          cp "$MANIFEST" "$KIT/package-manifest.json"
+          cp target/release/buzz-relay target/release/buzz-admin "$KIT/bin/"
+          cp -R "$COLONY_FIXTURE_TOOLS/bin" "$COLONY_FIXTURE_TOOLS/postgres" "$KIT/services/"
+          cp "$COLONY_FIXTURE_TOOLS/service-sources.json" "$KIT/services/"
+          git rev-parse HEAD > "$KIT/source-revision.txt"
+          # Explicit build-output allowlist: never copy fixture runtime state,
+          # databases, keys, browser profiles, environment files or credentials.
+          cd "$KIT"
+          find . -type f ! -name SHA256SUMS -exec shasum -a 256 {} \; > SHA256SUMS
+      - name: Preserve approved portable native proof kit
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: colony-native-proof-kit
+          path: ${{ runner.temp }}/colony-native-proof-kit
+          if-no-files-found: error
           retention-days: 7

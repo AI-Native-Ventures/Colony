@@ -96,6 +96,8 @@ fn persona(id: &str, runtime: Option<&str>, prompt: &str) -> AgentDefinition {
         provider: None,
         name_pool: vec![],
         is_builtin: false,
+        provisioned: None,
+        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,

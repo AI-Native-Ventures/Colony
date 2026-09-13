@@ -57,6 +57,7 @@ import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
 import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
 import { VideoReviewTimecodeButton } from "@/shared/ui/VideoReviewTimecodeButton";
 import { MessageActionBar } from "./MessageActionBar";
+import { WebsiteMessageAttachment } from "@/features/websiteIntegration/websiteAttachments";
 import { editMessage } from "@/shared/api/tauri";
 import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
 import { toast } from "sonner";
@@ -655,6 +656,13 @@ export const MessageRow = React.memo(
         <SentFromThreadLine channelId={channelId} tags={message.tags} />
         <ReplyModelRequestLabel tags={message.tags} />
         {renderBody()}
+        <WebsiteMessageAttachment
+          channelId={channelId}
+          currentPubkey={currentPubkey}
+          layoutVariant={layoutVariant}
+          message={message}
+          profiles={profiles}
+        />
         {/* Block messages render their own instance and own everything under
             it, so the tile strip stays out of them. */}
         {isBlockMessage(message) ? null : (

@@ -14,8 +14,17 @@ import {
   listManagedAgents,
   updateManagedAgent,
 } from "@/shared/api/tauri";
-import { startManagedAgent } from "@/shared/api/tauriManagedAgents";
+import {
+  addWebsiteTeamMember,
+  type WebsiteTeamMembershipScope,
+} from "@/shared/api/tauriWebsiteTeam";
+import {
+  startManagedAgent,
+  type ManagedAgentStartScope,
+} from "@/shared/api/tauriManagedAgents";
 import type {
+  AddChannelMembersInput,
+  AddChannelMembersResult,
   AcpRuntime,
   ChannelRole,
   ManagedAgent,
@@ -36,9 +45,31 @@ export type AttachManagedAgentToChannelInput = {
 
 export type AttachManagedAgentToChannelResult = {
   agent: ManagedAgent;
+  /** The agent is confirmed in the channel, including an idempotent retry. */
+  joined: boolean;
+  /** The current attempt added the agent; false when it was already present. */
+  newlyAdded: boolean;
   membershipAdded: boolean;
   started: boolean;
 };
+
+/**
+ * A start/deploy failure after the membership write succeeded.
+ *
+ * Website setup reports the membership separately from runtime readiness, so
+ * callers can offer a safe retry without losing the fact that the agent
+ * already joined. Generic callers still receive an ordinary rejected promise
+ * with the same message when they do not inspect this subtype.
+ */
+export class ManagedAgentStartError extends Error {
+  readonly attachment: AttachManagedAgentToChannelResult;
+
+  constructor(message: string, attachment: AttachManagedAgentToChannelResult) {
+    super(message);
+    this.name = "ManagedAgentStartError";
+    this.attachment = attachment;
+  }
+}
 
 export type EnsureChannelAgentPresetInput = {
   runtime: ChannelAgentRuntime;
@@ -104,14 +135,37 @@ export type CreateChannelManagedAgentsResult = {
   failures: CreateChannelManagedAgentBatchFailure[];
 };
 
-export async function attachManagedAgentToChannel(
+/**
+ * Returns true only for the relay's idempotent duplicate-membership response.
+ * Other per-member errors must continue to stop the attach operation.
+ */
+export function isAlreadyMemberError(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized === "already a member" || normalized === "already a member."
+  );
+}
+
+type AddChannelMembers = (
+  input: AddChannelMembersInput,
+) => Promise<AddChannelMembersResult>;
+
+type StartManagedAgent = (
+  pubkey: string,
+  scope?: ManagedAgentStartScope,
+) => Promise<ManagedAgent>;
+
+async function attachManagedAgentToChannelWithMembership(
   channelId: string,
   input: AttachManagedAgentToChannelInput,
-) {
+  addMembers: AddChannelMembers,
+  startAgent: StartManagedAgent = startManagedAgent,
+  startScope?: ManagedAgentStartScope,
+): Promise<AttachManagedAgentToChannelResult> {
   const role = input.role ?? "bot";
   const ensureRunning = input.ensureRunning ?? true;
   const agentPubkey = normalizePubkey(input.agent.pubkey);
-  const membershipResult = await addChannelMembers({
+  const membershipResult = await addMembers({
     channelId,
     pubkeys: [input.agent.pubkey],
     role,
@@ -119,12 +173,17 @@ export async function attachManagedAgentToChannel(
   const membershipError = membershipResult.errors.find(
     (error) => normalizePubkey(error.pubkey) === agentPubkey,
   );
-  if (membershipError) {
+  // The desired postcondition already holds when the member is present. The
+  // relay reports that state as a per-member error, so preserve idempotent
+  // retry behavior while keeping all other errors fatal.
+  if (membershipError && !isAlreadyMemberError(membershipError.error)) {
     throw new Error(membershipError.error);
   }
   const membershipAdded = membershipResult.added.some(
     (pubkey) => normalizePubkey(pubkey) === agentPubkey,
   );
+  const joined = membershipAdded || membershipError !== undefined;
+  const newlyAdded = membershipAdded;
 
   let agent = input.agent;
   let started = false;
@@ -133,30 +192,87 @@ export async function attachManagedAgentToChannel(
     // Running agents (local or provider) auto-discover new channel membership
     // via the harness's membership notifications — no restart needed. Only
     // not-yet-running agents need a start/deploy call before the first mention
-    // can reach them. For a local agent the status check and the start are both
-    // pair-scoped to the active community: `agent.status` reflects that
-    // community's (agent, relay) pair, and `startManagedAgent` spawns that same
-    // pair — so this ensures the pair the caller is attaching to, never
-    // another community's.
+    // can reach them. Website callers pass their captured owner/relay scope to
+    // provider starts; generic channel callers retain the existing active-
+    // community start behavior.
     const isRemote = input.agent.backend.type === "provider";
-    if (isRemote && input.agent.status !== "deployed") {
-      agent = await startManagedAgent(input.agent.pubkey);
-      started = true;
-    } else if (
-      !isRemote &&
-      input.agent.status !== "running" &&
-      input.agent.status !== "deployed"
-    ) {
-      agent = await startManagedAgent(input.agent.pubkey);
-      started = true;
+    try {
+      if (isRemote && input.agent.status !== "deployed") {
+        agent = await startAgent(input.agent.pubkey, startScope);
+        started = true;
+      } else if (
+        !isRemote &&
+        input.agent.status !== "running" &&
+        input.agent.status !== "deployed"
+      ) {
+        agent = await startAgent(input.agent.pubkey, startScope);
+        started = true;
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not start agent.";
+      throw new ManagedAgentStartError(message, {
+        agent,
+        joined,
+        newlyAdded,
+        membershipAdded,
+        started: false,
+      });
     }
   }
 
   return {
     agent,
+    joined,
+    newlyAdded,
     membershipAdded,
     started,
   } satisfies AttachManagedAgentToChannelResult;
+}
+
+/** Attach a generic managed agent through the active community API. */
+export async function attachManagedAgentToChannel(
+  channelId: string,
+  input: AttachManagedAgentToChannelInput,
+): Promise<AttachManagedAgentToChannelResult> {
+  return attachManagedAgentToChannelWithMembership(
+    channelId,
+    input,
+    addChannelMembers,
+  );
+}
+
+/**
+ * Attach a Website teammate using the install's captured owner and relay.
+ * Generic channel callers retain their active-community behavior; only the
+ * Website path gets the stricter native scope fence.
+ */
+export async function attachWebsiteManagedAgentToChannel(
+  channelId: string,
+  input: AttachManagedAgentToChannelInput,
+  scope: WebsiteTeamMembershipScope,
+): Promise<AttachManagedAgentToChannelResult> {
+  return attachManagedAgentToChannelWithMembership(
+    channelId,
+    input,
+    async ({ channelId: targetChannelId, pubkeys, role }) => {
+      const [pubkey] = pubkeys;
+      if (pubkeys.length !== 1 || !pubkey) {
+        throw new Error(
+          "Website setup can attach exactly one teammate at a time.",
+        );
+      }
+      return addWebsiteTeamMember({
+        channelId: targetChannelId,
+        pubkey,
+        role,
+        expectedOwnerPubkey: scope.expectedOwnerPubkey,
+        expectedRelayUrl: scope.expectedRelayUrl,
+      });
+    },
+    startManagedAgent,
+    scope,
+  );
 }
 
 function buildChannelAgentName(runtimeId: string, runtimeLabel: string) {

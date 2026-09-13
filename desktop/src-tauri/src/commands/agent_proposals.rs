@@ -504,7 +504,7 @@ pub async fn execute_agent_proposal(
             definition_id,
             agent_pubkey,
         }) => {
-            if start_managed_agent(agent_pubkey.clone(), app.clone(), state.clone())
+            if start_managed_agent(agent_pubkey.clone(), None, None, app.clone(), state.clone())
                 .await
                 .is_err()
             {
@@ -631,6 +631,8 @@ mod tests {
             provider: None,
             name_pool: Vec::new(),
             is_builtin: false,
+            provisioned: None,
+            provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

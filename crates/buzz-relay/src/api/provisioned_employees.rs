@@ -515,10 +515,10 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
-    async fn the_chief_of_staff_takes_the_office_from_a_workspace_agent_holding_the_role() {
-        // Colony holds this office. An agent the workspace created keeps its
-        // name, its record and its history; it stops being the executive.
-        let host = format!("cos-replace-{}.test", Uuid::new_v4());
+    async fn an_existing_workspace_chief_of_staff_keeps_the_office() {
+        // Reuse the owner's existing Chief of Staff instead of creating a
+        // second identity. Newly seeded teammates report to that same Chief.
+        let host = format!("cos-existing-{}.test", Uuid::new_v4());
         let (state, db, pool) = release_test_state(&host).await;
         let community = crate::tenant::bind_community(&db, &host)
             .await
@@ -548,10 +548,15 @@ mod tests {
 
         seed(&state, community).await;
 
-        // Ours is seeded rather than standing down.
-        let (chief, _) = seeded_line(&db, community, "chief-of-staff").await;
+        assert!(
+            db.find_provisioned_employee(community, "chief-of-staff")
+                .await
+                .expect("query the Chief of Staff")
+                .is_none(),
+            "an existing Chief must not cause a duplicate to be seeded"
+        );
 
-        // And it is what the escalation path resolves to, not the Scout.
+        // Escalations continue to resolve to the existing Chief.
         let tenant = crate::tenant::bind_community(&db, &host)
             .await
             .expect("bind community");
@@ -560,14 +565,9 @@ mod tests {
             .expect("resolution succeeds")
             .expect("an executive resolves");
         assert_eq!(
-            resolved.to_bytes().to_vec(),
-            chief,
-            "the provisioned Chief of Staff holds the office"
-        );
-        assert_ne!(
             resolved,
             scout.public_key(),
-            "the workspace's own agent no longer ranks as the executive"
+            "the existing Chief of Staff remains the executive"
         );
 
         // The Scout's record is untouched: we do not edit a user's events.
@@ -579,11 +579,14 @@ mod tests {
         )
         .await;
         assert!(
-            !stored.is_empty(),
+            stored
+                .iter()
+                .any(|event| event.id == head.id && event.content == head.content),
             "the workspace's own head is neither deleted nor rewritten"
         );
 
-        // Sales reports to ours, which is the point of taking the office.
+        // Newly seeded teammates report to the existing Chief.
+        let chief = scout.public_key().to_bytes();
         assert_eq!(
             seeded_line(&db, community, "sales").await.1.as_deref(),
             Some(chief.as_slice()),

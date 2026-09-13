@@ -83,6 +83,8 @@ fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord
             persona_ids: team.persona_ids.iter().map(|s| s.to_string()).collect(),
             lead_persona_id: team.lead_persona_id.map(str::to_string),
             is_builtin: true,
+            provisioned: None,
+            provisioned_version: None,
             source_dir: None,
             is_symlink: false,
             symlink_target: None,
@@ -184,9 +186,15 @@ pub(super) fn merge_teams_impl(
     // Demote any stored team flagged as built-in whose id is no longer in
     // built_ins (e.g. a built-in that has been retired). The record stays so
     // existing references keep working; it becomes a user-owned custom team
-    // they can edit or delete.
+    // they can edit or delete. Provisioned teams are exempt: they carry
+    // `is_builtin` so ordering treats them as ours, but their id is the
+    // recipe's, not a code-shipped built-in, and demoting them here would
+    // silently undo that on the next load.
     for record in stored.iter_mut() {
-        if record.is_builtin && built_in_team_order(built_ins, &record.id).is_none() {
+        if record.is_builtin
+            && record.provisioned.is_none()
+            && built_in_team_order(built_ins, &record.id).is_none()
+        {
             record.is_builtin = false;
             record.updated_at = now.to_string();
             changed = true;
@@ -201,6 +209,12 @@ pub(super) fn merge_teams_impl(
 /// next load, so blocking the delete avoids a confusing "keeps coming
 /// back" UX.
 pub fn validate_team_deletion(team: &TeamRecord) -> Result<(), String> {
+    if let Some(handle) = team.provisioned.as_deref() {
+        return Err(super::provisioned::provisioned_delete_refusal(
+            &team.name, handle,
+        ));
+    }
+
     if team.is_builtin {
         return Err("Built-in teams cannot be deleted.".to_string());
     }

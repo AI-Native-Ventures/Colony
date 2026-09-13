@@ -204,6 +204,9 @@ enum Cmd {
     /// Open and manage channel workspace tabs
     #[command(subcommand)]
     Workspace(WorkspaceCmd),
+    /// Create, inspect, and advance Website Manager jobs
+    #[command(subcommand)]
+    Website(WebsiteCmd),
     /// Read the Colony company profile and request owner-authorized changes
     #[command(subcommand)]
     Company(CompanyCmd),
@@ -1947,6 +1950,240 @@ pub enum WorkspaceTabsCmd {
 }
 
 #[derive(Subcommand)]
+pub enum WebsiteCmd {
+    /// Read the current website job head(s) for a channel
+    Get {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id to filter on
+        #[arg(long)]
+        task: Option<String>,
+        /// Job UUID to filter on
+        #[arg(long)]
+        job: Option<String>,
+    },
+    /// List website job heads in a channel
+    List {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Maximum heads to read
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+    /// Create a website job for an existing task and review-card instance
+    Create {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id
+        #[arg(long)]
+        task: String,
+        /// Root event id of the owner-authored thread
+        #[arg(long)]
+        thread: String,
+        /// Coordinator-authored website-job Block instance event id
+        #[arg(long)]
+        instance: String,
+        /// Active website-job Block manifest event id
+        #[arg(long)]
+        manifest: String,
+        /// Coordinator managed-agent pubkey
+        #[arg(long)]
+        coordinator: String,
+        /// Public HTTPS source reference
+        #[arg(long = "source-url")]
+        source_url: String,
+        /// Persona allowed to record research evidence (repeatable)
+        #[arg(long)]
+        research: Vec<String>,
+        /// Persona allowed to add revisions (repeatable)
+        #[arg(long)]
+        build: Vec<String>,
+        /// Persona allowed to record QA (repeatable)
+        #[arg(long)]
+        review: Vec<String>,
+    },
+    /// Move the draft job into active work
+    #[command(name = "begin-work")]
+    BeginWork {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id
+        #[arg(long)]
+        task: String,
+        /// Root event id of the job thread
+        #[arg(long)]
+        thread: String,
+        /// Observed head generation; read from the head when omitted
+        #[arg(long)]
+        generation: Option<u64>,
+    },
+    /// Record a new immutable revision from a JSON file
+    Revision {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id
+        #[arg(long)]
+        task: String,
+        /// Root event id of the job thread
+        #[arg(long)]
+        thread: String,
+        /// Observed head generation; read from the head when omitted
+        #[arg(long)]
+        generation: Option<u64>,
+        /// RevisionSubmission JSON file
+        #[arg(long)]
+        file: String,
+    },
+    /// Package a built static site into a revision payload
+    Bundle {
+        /// Built static-site output directory
+        #[arg(long)]
+        dir: String,
+        /// Editable source directory or existing archive
+        #[arg(long)]
+        source: String,
+        /// Before capture PNG
+        #[arg(long)]
+        before: String,
+        /// Desktop capture PNG
+        #[arg(long)]
+        desktop: String,
+        /// Mobile capture PNG
+        #[arg(long)]
+        mobile: String,
+        /// Manifest entrypoint path
+        #[arg(long, default_value = "index.html")]
+        entrypoint: String,
+        /// Public HTTPS source reference passthrough (required by the revision contract)
+        #[arg(long = "source-url")]
+        source_url: String,
+        /// Write the JSON payload to this path as well as stdout
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Record independent QA from a reviewer report file
+    Qa {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id
+        #[arg(long)]
+        task: String,
+        /// Root event id of the job thread
+        #[arg(long)]
+        thread: String,
+        /// Observed head generation; read from the head when omitted
+        #[arg(long)]
+        generation: Option<u64>,
+        /// Revision under review
+        #[arg(long)]
+        revision: u32,
+        /// Whether the reviewer passed the revision
+        #[arg(long)]
+        passed: bool,
+        /// Public HTTPS URL of the QA report artifact
+        #[arg(long = "report-url")]
+        report_url: String,
+        /// Path to the exact QA report bytes
+        #[arg(long = "report-file")]
+        report_file: String,
+        /// Reuse an existing signed task report instead of publishing one
+        #[arg(long = "report-event")]
+        report_event: Option<String>,
+    },
+    /// Attach signed stage evidence
+    Evidence {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id
+        #[arg(long)]
+        task: String,
+        /// Root event id of the job thread
+        #[arg(long)]
+        thread: String,
+        /// Observed head generation; read from the head when omitted
+        #[arg(long)]
+        generation: Option<u64>,
+        /// Stage: brief, research, designBuild, review, revision, approval, handover
+        #[arg(long)]
+        stage: String,
+        /// Revision the evidence belongs to
+        #[arg(long)]
+        revision: Option<u32>,
+        /// Evidence kind: jobOutcome, jobCheckpoint, taskReport, workEvent
+        #[arg(long)]
+        kind: String,
+        /// Signed evidence event id
+        #[arg(long)]
+        event: String,
+    },
+    /// Freeze the current revision for owner review
+    Ready {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id
+        #[arg(long)]
+        task: String,
+        /// Root event id of the job thread
+        #[arg(long)]
+        thread: String,
+        /// Observed head generation; read from the head when omitted
+        #[arg(long)]
+        generation: Option<u64>,
+    },
+    /// Owner or coordinator requesting a new revision
+    #[command(name = "request-changes")]
+    RequestChanges {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id
+        #[arg(long)]
+        task: String,
+        /// Root event id of the job thread
+        #[arg(long)]
+        thread: String,
+        /// Observed head generation; read from the head when omitted
+        #[arg(long)]
+        generation: Option<u64>,
+        /// Revision to send back
+        #[arg(long)]
+        revision: u32,
+        /// Manifest hash of the revision
+        #[arg(long)]
+        hash: String,
+        /// Change feedback
+        #[arg(long)]
+        note: String,
+    },
+    /// Record the approved revision's source and assets from a JSON file
+    Handover {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Canonical CompanyTask id
+        #[arg(long)]
+        task: String,
+        /// Root event id of the job thread
+        #[arg(long)]
+        thread: String,
+        /// Observed head generation; read from the head when omitted
+        #[arg(long)]
+        generation: Option<u64>,
+        /// WebsiteHandover JSON file
+        #[arg(long)]
+        file: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum CanvasCmd {
     /// Get the canvas document for a channel
     Get {
@@ -3654,6 +3891,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Invites(sub) => commands::invites::dispatch(sub, &client).await,
         Cmd::Credits(sub) => commands::credits::dispatch(sub, &client).await,
         Cmd::Workspace(sub) => commands::workspace::dispatch(sub, &client).await,
+        Cmd::Website(sub) => commands::website::dispatch(sub, &client).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
         Cmd::Emoji(sub) => commands::emoji::dispatch(sub, &client).await,
@@ -4347,6 +4585,7 @@ mod tests {
             "tasks",
             "upload",
             "users",
+            "website",
             "workflows",
             "workspace",
         ];
@@ -4576,6 +4815,22 @@ mod tests {
                 "style-set"
             ]
         );
+        assert_eq!(
+            names(&cmd, "website"),
+            vec![
+                "begin-work",
+                "bundle",
+                "create",
+                "evidence",
+                "get",
+                "handover",
+                "list",
+                "qa",
+                "ready",
+                "request-changes",
+                "revision"
+            ]
+        );
         assert_eq!(names(&cmd, "workspace"), vec!["tabs"]);
     }
 
@@ -4600,6 +4855,7 @@ mod tests {
             ("social", 7),
             ("upload", 1),
             ("users", 5),
+            ("website", 11),
             ("workflows", 8),
             ("workspace", 1),
         ];

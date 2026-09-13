@@ -17,6 +17,13 @@ export type AgentPersona = {
   provider: string | null;
   namePool: string[];
   isBuiltIn: boolean;
+  /**
+   * Recipe id when this persona is provided by Colony, else null/absent.
+   * Provisioned personas cannot be deleted and are upgraded by the recipe.
+   */
+  provisioned?: string | null;
+  /** Recipe version that last wrote the provisioned content. */
+  provisionedVersion?: string | null;
   isActive: boolean;
   /** Whether this persona is discoverable in the active community catalog. */
   shared: boolean;

@@ -208,6 +208,8 @@ fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
             provider: None,
             name_pool: persona.name_pool.iter().map(|s| s.to_string()).collect(),
             is_builtin: true,
+            provisioned: None,
+            provisioned_version: None,
             is_active: persona.default_active,
             shared: false,
             source_team: None,
@@ -342,9 +344,13 @@ fn merge_personas(mut stored: Vec<AgentDefinition>, now: &str) -> (Vec<AgentDefi
     // longer in BUILT_IN_PERSONAS (e.g. a built-in that has been retired).
     // The record stays so existing managed-agent and team references keep
     // working; the user can delete it from the catalog like any custom
-    // persona once they no longer need it.
+    // persona once they no longer need it. Provisioned records are exempt:
+    // they carry `is_builtin` so ordering and mention behaviour treat them
+    // as ours, but their id is the recipe's, not a code-shipped built-in,
+    // and demoting them here would silently undo that on the next load.
     for record in stored.iter_mut() {
-        if record.is_builtin && built_in_order(&record.id).is_none() {
+        if record.is_builtin && record.provisioned.is_none() && built_in_order(&record.id).is_none()
+        {
             record.is_builtin = false;
             record.updated_at = now.to_string();
             changed = true;
@@ -431,6 +437,13 @@ pub fn validate_persona_deletion(
     persona: &AgentDefinition,
     referenced_by_team: bool,
 ) -> Result<(), String> {
+    if let Some(handle) = persona.provisioned.as_deref() {
+        return Err(super::provisioned::provisioned_delete_refusal(
+            &persona.display_name,
+            handle,
+        ));
+    }
+
     if persona.is_builtin {
         return Err("Built-in agents cannot be deleted.".to_string());
     }
@@ -590,6 +603,8 @@ mod chief_of_staff_prompt_tests {
                 provider: None,
                 name_pool: Vec::new(),
                 is_builtin: true,
+                provisioned: None,
+                provisioned_version: None,
                 is_active: true,
                 shared: false,
                 source_team: None,
@@ -633,6 +648,8 @@ mod chief_of_staff_prompt_tests {
             provider: None,
             name_pool: Vec::new(),
             is_builtin: true,
+            provisioned: None,
+            provisioned_version: None,
             is_active: true,
             shared: false,
             source_team: None,

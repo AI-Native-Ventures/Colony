@@ -37,7 +37,7 @@ use std::collections::HashSet;
 use anyhow::Result;
 use buzz_core::kind::{
     KIND_BLOCK_ACTION, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
-    KIND_STREAM_MESSAGE, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    KIND_STREAM_MESSAGE, KIND_WEBSITE_ACTION, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
 use nostr::EventId;
 use serde::{Deserialize, Serialize};
@@ -541,12 +541,17 @@ fn setup_event_targets_agent(event: &nostr::Event, agent_pubkey_hex: &str) -> bo
     let kind = event.kind.as_u16() as u32;
     let supported = matches!(
         kind,
-        KIND_STREAM_MESSAGE | KIND_WORKFLOW_APPROVAL_REQUESTED | KIND_BLOCK_ACTION
+        KIND_STREAM_MESSAGE
+            | KIND_WORKFLOW_APPROVAL_REQUESTED
+            | KIND_BLOCK_ACTION
+            | KIND_WEBSITE_ACTION
     );
     supported
         && event_mentions_agent(event, agent_pubkey_hex)
         && (kind != KIND_BLOCK_ACTION
             || crate::queue::block_action_targets_processor(event, agent_pubkey_hex))
+        && (kind != KIND_WEBSITE_ACTION
+            || crate::queue::website_begin_work_targets_processor(event, agent_pubkey_hex))
 }
 
 fn mentions_rule(kinds: Vec<u32>) -> filter::SubscriptionRule {

@@ -101,6 +101,16 @@ pub(crate) mod thread_task_broker;
 pub mod tunnel;
 /// Webhook secret generation and constant-time comparison.
 pub mod webhook_secret;
+/// Authority checks for Website Manager actions against canonical state.
+mod website_authority;
+/// Relay-owned Website Manager job broker (actions, heads, receipts, decisions).
+pub mod website_broker;
+/// Event construction and persistence primitives for the website broker.
+mod website_events;
+/// Assigned-agent evidence and authority checks for Website Manager actions.
+mod website_evidence;
+/// Bounded, DNS-pinned artifact fetch for Website Manager actions.
+pub(crate) mod website_fetch;
 /// Workflow action sink — relay-side implementation of [`buzz_workflow::ActionSink`].
 pub mod workflow_sink;
 /// Relay-owned channel workspace-tab ownership broker.

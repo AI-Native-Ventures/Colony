@@ -282,7 +282,10 @@ export const firstJobNativeActions: Pick<
   resolveWork: resolveFirstJobWork,
   validateWork: createFirstJobWorkValidator({
     assertCurrent: assertFirstJobScope,
-    loadTask: (taskId) => companyRepository.getTask(taskId),
+    // The attach receipt confirms the relay accepted the Task write. Read
+    // through the bounded post-action coordinate path so a transient read
+    // miss can be distinguished from an invalid or missing current Task.
+    loadTask: (taskId) => companyRepository.getTaskAfterAction(taskId),
     listAgents: listManagedAgents,
   }),
   prepareMessage: createFirstJobMessagePreparer({

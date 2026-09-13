@@ -7,6 +7,7 @@ import { nativeProofReader, verifySigned } from "./native-team.mjs";
 import {
   readPendingAttempt,
   readRenderedCompany,
+  readRenderedTask,
   waitForTeamPreview,
 } from "./diagnostics.mjs";
 import {
@@ -37,7 +38,9 @@ export async function completeFixtureWork({
   relay,
   provider,
   directory,
-  bundle,
+  // Callers pass the built bundle for symmetry with the other fixtures; this
+  // one reads the package through `directory` instead.
+  bundle: _bundle,
   proofDirectory,
   repositoryModuleUrls = [],
   onProgress = () => {},
@@ -397,6 +400,7 @@ export async function completeFixtureWork({
       const taskFailure = await reader
         .failureEvidence()
         .catch(() => ({ unavailable: true }));
+      const pendingAttempt = await readPendingAttempt(page, account);
       onEvidence({
         taskFailure,
         ...(await approved.readApprovalEvidence()),
@@ -404,7 +408,14 @@ export async function completeFixtureWork({
           page,
           repositoryModuleUrls,
         ),
-        pendingAttempt: await readPendingAttempt(page, account),
+        failedStartTaskRead: pendingAttempt.taskId
+          ? await readRenderedTask(
+              page,
+              pendingAttempt.taskId,
+              repositoryModuleUrls,
+            )
+          : { unavailable: "task-id-not-retained" },
+        pendingAttempt,
         quotaRetries,
         unstaffed,
       });

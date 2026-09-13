@@ -223,6 +223,33 @@ pub async fn find_active_employee_by_role(
     row.map(row_to_employee).transpose()
 }
 
+/// Every active employee filling `role_id`, lowest pubkey first.
+///
+/// [`find_active_employee_by_role`] answers the same question for the cases
+/// that only need one row. This variant exists because role resolution has to
+/// stay deterministic when more than one row somehow holds a role: callers
+/// take the first entry and log the collision, so the same pass always picks
+/// the same colleague instead of whatever the planner returns first.
+/// `employees_active_role_uniq` should make a second row impossible; this is
+/// the read-side guard against a state the schema says cannot exist.
+pub async fn list_active_employees_by_role(
+    pool: &PgPool,
+    community: CommunityId,
+    role_id: &str,
+) -> Result<Vec<EmployeeRow>> {
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {EMPLOYEE_COLUMNS} \
+         FROM employees WHERE community_id = $1 AND role_id = $2 AND status = 'active' \
+         ORDER BY pubkey"
+    )))
+    .bind(community.as_uuid())
+    .bind(role_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(row_to_employee).collect()
+}
+
 /// Every active employee of a community, oldest first.
 pub async fn list_active_employees(
     pool: &PgPool,
@@ -318,25 +345,24 @@ pub struct NewProvisionedEmployee<'a> {
     pub display_name: &'a str,
     /// One of `worker`, `leader`, `executive`.
     pub rank: &'a str,
+    /// The agent this employee reports to (32 raw bytes), written to the same
+    /// `manager` column an ordinary hire uses. `None` means top of the chart.
+    pub manager: Option<&'a [u8]>,
     /// The bundled entry being seeded.
     pub provisioned_handle: &'a str,
     /// The bundled version doing the seeding.
     pub provisioned_version: i32,
-    /// The agent this employee reports to (32 raw bytes), or `None` when the
-    /// role it reports to is unfilled. Seeding resolves this against the
-    /// payroll; see `core_employees::resolve_reporting_line`.
-    pub manager: Option<&'a [u8]>,
 }
 
 /// Seed one provisioned employee.
 ///
 /// Returns `Ok(None)` when the row was not written, which is the ordinary
 /// outcome rather than a fault: the handle is already seeded for this
-/// community, or a user's own employee already holds the role. Seeding runs
-/// on every relay start and on every community provisioning, so settling
-/// quietly is the point. `ON CONFLICT DO NOTHING` covers both the
-/// provisioned-handle index and the active-role index, so a user's employee
-/// is never displaced by a seed.
+/// community, or a concurrent pass won the same race. Callers resolve a role
+/// already held by a workspace employee through
+/// [`adopt_provisioned_employee`] before reaching this insert, so a user's
+/// employee is never displaced by a seed. `ON CONFLICT DO NOTHING` covers both
+/// the provisioned-handle index and the active-role index.
 pub async fn insert_provisioned_employee(
     pool: &PgPool,
     community: CommunityId,
@@ -345,7 +371,7 @@ pub async fn insert_provisioned_employee(
     let now = Utc::now().timestamp();
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO employees (community_id, pubkey, sealed_key, role_id, display_name, \
-                                rank, provisioned_handle, provisioned_version, manager, status, \
+                                rank, manager, provisioned_handle, provisioned_version, status, \
                                 created_at, updated_at) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'active',$10,$10) \
          ON CONFLICT DO NOTHING \
@@ -357,9 +383,9 @@ pub async fn insert_provisioned_employee(
     .bind(employee.role_id)
     .bind(employee.display_name)
     .bind(employee.rank)
+    .bind(employee.manager)
     .bind(employee.provisioned_handle)
     .bind(employee.provisioned_version)
-    .bind(employee.manager)
     .bind(now)
     .fetch_optional(pool)
     .await?;
@@ -391,42 +417,26 @@ pub async fn find_provisioned_employee(
 }
 
 /// Apply a newer bundled version to an already-seeded employee: its display
-/// name, role, rank and version, never its identity.
+/// name, role, rank, manager and version, never its identity.
 ///
 /// The key is deliberately untouched. A bumped version is the same colleague
 /// with an updated brief, so rewriting its pubkey would orphan every message
 /// it has ever sent and every job it has ever done.
-/// Borrowed input for [`update_provisioned_employee`], for the same reason
-/// [`NewProvisionedEmployee`] exists: the update would otherwise take eight
-/// positional arguments, four of them strings, which is a swap waiting to
-/// happen.
-#[derive(Debug, Clone, Copy)]
-pub struct ProvisionedEmployeeUpdate<'a> {
-    /// The bundled entry being updated.
-    pub handle: &'a str,
-    /// The name this employee goes by.
-    pub display_name: &'a str,
-    /// Stable role slug this employee fills.
-    pub role_id: &'a str,
-    /// One of `worker`, `leader`, `executive`.
-    pub rank: &'a str,
-    /// The bundled version doing the update.
-    pub version: i32,
-    /// The agent this employee reports to, or `None` to leave the stored
-    /// line alone.
-    pub manager: Option<&'a [u8]>,
-}
-
-/// Apply a newer bundled version to an already-seeded employee: its display
-/// name, role, rank, reporting line and version, never its identity.
 ///
-/// The key is deliberately untouched. A bumped version is the same colleague
-/// with an updated brief, so rewriting its pubkey would orphan every message
-/// it has ever sent and every job it has ever done.
+/// `manager` is the resolved reporting line, or `None` to leave whatever the
+/// row already holds. The leave-when-absent shape is deliberate: a bundle
+/// that names no manager owns no manager edge, so a reporting line the
+/// workspace set before the row was provisioned survives every later version.
+#[allow(clippy::too_many_arguments)]
 pub async fn update_provisioned_employee(
     pool: &PgPool,
     community: CommunityId,
-    update: ProvisionedEmployeeUpdate<'_>,
+    handle: &str,
+    display_name: &str,
+    role_id: &str,
+    rank: &str,
+    manager: Option<&[u8]>,
+    version: i32,
 ) -> Result<Option<EmployeeRow>> {
     let now = Utc::now().timestamp();
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -434,23 +444,79 @@ pub async fn update_provisioned_employee(
             display_name = $3, \
             role_id = $4, \
             rank = $5, \
-            provisioned_version = $6, \
-            -- COALESCE, not assignment: a pass that cannot resolve the role
-            -- (unfilled, or held by the wrong rank) must not erase a line an
-            -- earlier pass legitimately set.
-            manager = COALESCE($7, manager), \
+            manager = COALESCE($6, manager), \
+            provisioned_version = $7, \
             status = 'active', \
             updated_at = $8 \
          WHERE community_id = $1 AND provisioned_handle = $2 \
          RETURNING {EMPLOYEE_COLUMNS}"
     )))
     .bind(community.as_uuid())
-    .bind(update.handle)
-    .bind(update.display_name)
-    .bind(update.role_id)
-    .bind(update.rank)
-    .bind(update.version)
-    .bind(update.manager)
+    .bind(handle)
+    .bind(display_name)
+    .bind(role_id)
+    .bind(rank)
+    .bind(manager)
+    .bind(version)
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_employee).transpose()
+}
+
+/// Adopt a workspace employee into a bundled entry: the same identity, now
+/// carrying the handle and version, with the bundle's display name, role and
+/// rank applied.
+///
+/// Adoption is how a role already filled by the workspace's own employee
+/// becomes a provisioned employee. The pubkey never changes, so every message,
+/// thread and delegation the employee already owns survives; what changes is
+/// provenance and config, not identity. Stamping `provisioned_handle` is what
+/// makes the ordinary delete/edit guards apply from the next call onward, so
+/// the workspace cannot keep a half-adopted row.
+///
+/// `manager` is the resolved reporting line, or `None` to leave the row's
+/// existing manager alone (see [`update_provisioned_employee`]).
+///
+/// Returns `Ok(None)` when the row did not move: it no longer exists, it was
+/// already provisioned under this or another handle, or `pubkey` names no
+/// active row. The caller settles on that rather than minting a second
+/// identity for the role.
+#[allow(clippy::too_many_arguments)]
+pub async fn adopt_provisioned_employee(
+    pool: &PgPool,
+    community: CommunityId,
+    pubkey: &[u8],
+    provisioned_handle: &str,
+    provisioned_version: i32,
+    display_name: &str,
+    role_id: &str,
+    rank: &str,
+    manager: Option<&[u8]>,
+) -> Result<Option<EmployeeRow>> {
+    let now = Utc::now().timestamp();
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE employees SET \
+            provisioned_handle = $3, \
+            provisioned_version = $4, \
+            display_name = $5, \
+            role_id = $6, \
+            rank = $7, \
+            manager = COALESCE($8, manager), \
+            status = 'active', \
+            updated_at = $9 \
+         WHERE community_id = $1 AND pubkey = $2 AND provisioned_handle IS NULL \
+         RETURNING {EMPLOYEE_COLUMNS}"
+    )))
+    .bind(community.as_uuid())
+    .bind(pubkey)
+    .bind(provisioned_handle)
+    .bind(provisioned_version)
+    .bind(display_name)
+    .bind(role_id)
+    .bind(rank)
+    .bind(manager)
     .bind(now)
     .fetch_optional(pool)
     .await?;

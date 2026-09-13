@@ -191,6 +191,8 @@ pub async fn create_team(input: CreateTeamRequest, app: AppHandle) -> Result<Tea
             persona_ids: input.persona_ids,
             lead_persona_id: input.lead_persona_id,
             is_builtin: false,
+            provisioned: None,
+            provisioned_version: None,
             source_dir: None,
             is_symlink: false,
             symlink_target: None,
@@ -286,7 +288,9 @@ pub async fn update_team(input: UpdateTeamRequest, app: AppHandle) -> Result<Tea
         let updated = team.clone();
         save_teams(&app, &teams)?;
         // Built-in teams are not owner-authored — never publish them.
-        if !updated.is_builtin {
+        // Provisioned teams are owner-authored in effect: the installer
+        // published their head, and an edit here has to reach the relay.
+        if !updated.is_builtin || updated.provisioned.is_some() {
             retain_team_pending(&app, &state, &updated);
         }
         Ok(updated)

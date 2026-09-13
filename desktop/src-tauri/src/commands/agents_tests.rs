@@ -88,6 +88,8 @@ fn persona_record(id: &str, model: Option<&str>, provider: Option<&str>) -> Agen
         provider: provider.map(str::to_string),
         name_pool: vec![],
         is_builtin: false,
+        provisioned: None,
+        provisioned_version: None,
         is_active: true,
         shared: false,
         source_team: None,
@@ -825,4 +827,98 @@ fn profile_in_sync_when_role_matches() {
         None,
         Some("chief-of-staff")
     ));
+}
+
+#[test]
+fn a_provisioned_agent_is_refused_before_the_remote_guard() {
+    let mut record = bare_agent_record(None, None, None);
+    record.name = "Avery".to_string();
+    record.provisioned = Some("website-manager".to_string());
+
+    // The provisioned refusal is its own door, checked at the delete command
+    // before the remote-deployment guard, so forcing a remote delete cannot
+    // reach an agent this app provides.
+    let err =
+        crate::managed_agents::provisioned::refuse_delete_if_provisioned(&record).unwrap_err();
+
+    assert!(
+        err.contains("Avery") && err.contains("cannot be deleted"),
+        "the refusal names the agent: {err}"
+    );
+    assert!(validate_managed_agent_deletion(&record, true).is_ok());
+}
+
+#[test]
+fn validate_managed_agent_deletion_rejects_unforced_remote_agents() {
+    let mut record = bare_agent_record(None, None, None);
+    record.backend = BackendKind::Provider {
+        id: "test-provider".to_string(),
+        config: serde_json::json!({}),
+    };
+    record.backend_agent_id = Some("remote-agent-1".to_string());
+
+    let err = validate_managed_agent_deletion(&record, false).unwrap_err();
+    assert_eq!(
+        err,
+        "cannot delete a deployed remote agent without force_remote_delete: true"
+    );
+    assert!(validate_managed_agent_deletion(&record, true).is_ok());
+}
+
+#[test]
+fn scoped_provider_start_requires_the_captured_owner_and_community_record() {
+    use crate::managed_agents::BackendKind;
+
+    let owner = "a".repeat(64);
+    let scope = ManagedAgentStartScope::capture(
+        owner.clone(),
+        "wss://relay.example/".to_string(),
+        &owner,
+        "wss://relay.example",
+    )
+    .expect("the captured Website scope is valid");
+    let mut record = bare_agent_record(None, None, None);
+    record.backend = BackendKind::Provider {
+        id: "provider".to_string(),
+        config: serde_json::json!({}),
+    };
+    record.owner_pubkey = Some(owner.clone());
+    record.relay_url = "wss://relay.example/".to_string();
+
+    assert!(scope.check_record(&record, "wss://relay.example").is_ok());
+
+    record.owner_pubkey = Some("b".repeat(64));
+    assert!(scope.check_record(&record, "wss://relay.example").is_err());
+    record.owner_pubkey = Some(owner);
+    record.relay_url = "wss://other.example".to_string();
+    assert!(scope.check_record(&record, "wss://relay.example").is_err());
+
+    record.relay_url = "ws://relay.example".to_string();
+    assert!(scope.check_record(&record, "wss://relay.example").is_err());
+}
+
+#[test]
+fn scoped_provider_start_rejects_malformed_or_changed_scope() {
+    let owner = "a".repeat(64);
+    assert!(ManagedAgentStartScope::capture(
+        "A".repeat(63),
+        "wss://relay.example".to_string(),
+        &owner,
+        "wss://relay.example",
+    )
+    .is_err());
+    assert!(ManagedAgentStartScope::capture(
+        owner.clone(),
+        "wss://relay.example".to_string(),
+        &"b".repeat(64),
+        "wss://relay.example",
+    )
+    .is_err());
+    assert!(ManagedAgentStartScope::capture(
+        owner,
+        "wss://relay.example".to_string(),
+        &"a".repeat(64),
+        "wss://other.example",
+    )
+    .is_err());
 }

@@ -34,6 +34,7 @@ use buzz_sdk::{
     thread_task::{thread_key, thread_task_id, ThreadSlot},
 };
 use nostr::Event;
+use uuid::Uuid;
 
 use buzz_core::tenant::TenantContext;
 
@@ -692,6 +693,170 @@ pub(crate) async fn write_task_head(
         .await;
     }
     Ok(inserted)
+}
+
+/// Reconcile one website job's canonical thread task, widening assignment
+/// from the owner's installed teams and reopening the task when needed.
+///
+/// Why this exists: the relay mints a thread task with only the mentioned
+/// agent as assignee and the team lead as QA, but a website job needs its
+/// research, builder, and independent reviewer assigned so delegated work is
+/// actually dispatched and a single reviewer report cannot close the task
+/// early. Rather than weakening any task gate, this path only ever widens the
+/// assignment of a task the same owner already holds:
+///
+/// - authority: the task is either still claimed by the job's pinned owner in
+///   `thread_open_tasks`, or it is a relay-minted `thread-task:` head bound to
+///   this job's owner-authored thread root in this channel.
+/// - scope: every added persona must be a member of a team the owner
+///   published (the verified installed team), and the replacement is validated
+///   with the same `validate_task` contract as any other task write.
+/// - the head is relay-authored, exactly like every other thread task head;
+///   no agent gains owner keys and no platform-wide gate changes.
+///
+/// `reopen` additionally clears its completion reports (a revision request is
+/// new work, not a stale completion). A completed task is bounced back to
+/// `ready` with the validated reason and `bounceCount + 1`, and its thread
+/// slot is re-claimed so dispatch can find it.
+///
+/// Idempotent: when the assignment already covers every participant, the QA
+/// persona already matches, and no reopen is needed, it returns the current
+/// task without writing a head, so `apply_create` may call it again after a
+/// lost race without side effects.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn reconcile_website_task(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    job_owner: &[u8],
+    task_id: &str,
+    channel_id: Uuid,
+    thread_root: &str,
+    participants: &[String],
+    qa_persona: &str,
+    reopen: bool,
+) -> Result<CompanyTask, String> {
+    let Some(previous_event) = load_head(tenant, state, KIND_TASK, task_id).await? else {
+        return Err("the canonical company task does not exist".to_owned());
+    };
+    let task = buzz_sdk::company::parse_task_event(&previous_event)
+        .map_err(|error| format!("the canonical company task is unreadable: {error}"))?;
+
+    let owner_hex = hex::encode(job_owner);
+    let slot_owner =
+        buzz_db::thread_tasks::find_thread_task_owner(state.db.pool(), tenant.community(), task_id)
+            .await
+            .map_err(|error| format!("database error reading the task slot: {error}"))?;
+    match slot_owner {
+        Some(slot_owner) => {
+            if slot_owner.to_ascii_lowercase() != owner_hex {
+                return Err("the canonical task belongs to a different owner".to_owned());
+            }
+        }
+        None => {
+            let relay_minted = task.id.starts_with(THREAD_TASK_PREFIX);
+            if !relay_minted
+                || task.thread_root.as_deref() != Some(thread_root)
+                || task.source_channel_id != channel_id.to_string()
+            {
+                return Err(
+                    "the canonical task is not a relay-minted thread task for this job".to_owned(),
+                );
+            }
+        }
+    }
+
+    let owner_key = nostr::PublicKey::from_slice(job_owner)
+        .map_err(|_| "the job owner pubkey is invalid".to_owned())?;
+    let teams = load_team_refs(tenant, state, &owner_key).await?;
+    let installed: std::collections::BTreeSet<&str> = teams
+        .iter()
+        .flat_map(|team| team.persona_ids.iter().map(String::as_str))
+        .collect();
+    for persona in participants
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(qa_persona))
+    {
+        if !installed.contains(persona) {
+            return Err(format!(
+                "persona {persona} is not part of the owner's installed team"
+            ));
+        }
+    }
+
+    let mut replacement = task.clone();
+    for persona in participants {
+        if !replacement
+            .assignee_persona_ids
+            .iter()
+            .any(|id| id == persona)
+        {
+            replacement.assignee_persona_ids.push(persona.clone());
+        }
+    }
+    replacement.qa_persona_id = qa_persona.to_owned();
+    let reopening = reopen && replacement.status == TaskStatus::Completed;
+    if reopen && replacement.status == TaskStatus::Cancelled {
+        return Err(
+            "the canonical task was cancelled; reopen it before requesting a revision".to_owned(),
+        );
+    }
+    if reopen {
+        // A reviewer may have reported the prior revision while the shared
+        // task was still active. That report is complete for the old
+        // revision, so it must not suppress the same reviewer's report for
+        // the new one. Completed tasks take the bounce path below; active
+        // tasks keep their status while still starting a fresh report round.
+        replacement.reported_complete_by.clear();
+    }
+    if reopening {
+        // A revision request is a genuine bounce, not an un-complete: the
+        // existing completed-to-ready arm requires a reason and a bounce
+        // counter advanced by exactly one, and `validate_task` enforces both.
+        replacement.status = TaskStatus::Ready;
+        replacement.bounce_reason = Some(buzz_core::company::BounceReason::FreeText(
+            "website revision requested".to_owned(),
+        ));
+        replacement.bounce_count = replacement.bounce_count.saturating_add(1);
+    }
+    if replacement == task {
+        return Ok(task);
+    }
+    replacement.updated_at = replacement
+        .updated_at
+        .max(task.updated_at)
+        .saturating_add(1);
+
+    let company = load_company(tenant, state).await?;
+    validate_task(&replacement, &company, None, &teams)
+        .map_err(|error| format!("the reconciled task assignment is invalid: {error}"))?;
+    write_task_head(tenant, state, &previous_event, &replacement).await?;
+
+    if reopening {
+        let channel = channel_id.to_string();
+        let thread_key = format!("root:{thread_root}");
+        let slot = if replacement.hidden {
+            DbThreadSlot::Chat
+        } else {
+            DbThreadSlot::Work
+        };
+        state
+            .db
+            .claim_thread_task(
+                tenant.community(),
+                ThreadSlotKey {
+                    channel_id: &channel,
+                    thread_key: &thread_key,
+                    owner_pubkey: &owner_hex,
+                    slot,
+                },
+                &replacement.id,
+                false,
+            )
+            .await
+            .map_err(|error| format!("failed to re-claim the thread task slot: {error}"))?;
+    }
+    Ok(replacement)
 }
 
 /// Move a claim made before its thread had a root onto the real root.

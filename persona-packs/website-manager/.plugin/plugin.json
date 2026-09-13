@@ -1,0 +1,24 @@
+{
+  "$schema": "https://open-plugin-spec.org/schema/v1/plugin.json",
+  "id": "ai-native-ventures.website-manager",
+  "name": "Website Manager",
+  "version": "0.1.0",
+  "description": "A four-person website studio: Avery manages, Ren researches the business and site, Jules designs and builds, Vera reviews independently.",
+  "keywords": ["team", "website", "design", "research", "review", "studio"],
+  "personas": [
+    "personas/avery.persona.md",
+    "personas/ren.persona.md",
+    "personas/jules.persona.md",
+    "personas/vera.persona.md"
+  ],
+  "pack_instructions": "instructions.md",
+  "defaults": {
+    "triggers": {
+      "mentions": true,
+      "keywords": [],
+      "all_messages": false
+    },
+    "thread_replies": true,
+    "broadcast_replies": false
+  }
+}

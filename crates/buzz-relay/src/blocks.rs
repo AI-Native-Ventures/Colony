@@ -795,7 +795,7 @@ fn manifest_is_tested(manifest: &ManifestEnvelope) -> bool {
         == Some("tested")
 }
 
-async fn stored_manifest(
+pub(crate) async fn stored_manifest(
     tenant: &TenantContext,
     state: &AppState,
     event_id: &[u8],
@@ -990,7 +990,7 @@ fn validate_approval_hash_binding(
     Ok(())
 }
 
-async fn manifest_is_trusted_active(
+pub(crate) async fn manifest_is_trusted_active(
     tenant: &TenantContext,
     state: &AppState,
     manifest: &ManifestEnvelope,

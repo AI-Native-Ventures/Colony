@@ -8,9 +8,11 @@
   "reports_to": null,
   "harness": "claude",
   "model": null,
-  "summary": "Runs the workspace day to day, answers what the other employees raise, and is the last stop before the owner.",
+  "summary": "Turns the owner's goals into work, routes each job to the right employee, and brings decisions back to the owner.",
   "requires_commands": [
-    "messages",
-    "channels"
+    "asks",
+    "channels",
+    "decisions",
+    "messages"
   ]
 }

@@ -48,7 +48,7 @@ function kitLogoMark(kit: BrandKit | null | undefined): BrandMark | null {
 
 /** The website the kit was scanned from, if it was. */
 function kitWebsite(kit: BrandKit | null | undefined): string | null {
-  if (!kit || kit.source.type !== "scan") {
+  if (kit?.source.type !== "scan") {
     return null;
   }
   try {

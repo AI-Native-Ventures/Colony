@@ -18,6 +18,8 @@ export type RawPersona = {
   provider?: string | null;
   name_pool?: string[];
   is_builtin: boolean;
+  provisioned?: string | null;
+  provisioned_version?: string | null;
   is_active?: boolean;
   shared?: boolean;
   source_team?: string | null;
@@ -50,6 +52,8 @@ export function fromRawPersona(persona: RawPersona): AgentPersona {
     provider: persona.provider ?? null,
     namePool: persona.name_pool ?? [],
     isBuiltIn: persona.is_builtin,
+    provisioned: persona.provisioned ?? null,
+    provisionedVersion: persona.provisioned_version ?? null,
     isActive: persona.is_active ?? true,
     shared: persona.shared ?? false,
     sourceTeam: persona.source_team ?? null,

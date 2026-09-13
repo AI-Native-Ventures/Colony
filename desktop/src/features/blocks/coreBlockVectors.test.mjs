@@ -57,12 +57,12 @@ function assertContains(set, expected, label) {
   }
 }
 
-test("starter block vectors pin the seven bundled composite contracts", async () => {
+test("starter block vectors pin the eight bundled composite contracts", async () => {
   const manifests = new Map();
   for (const handle of BLOCK_STARTER_COMPOSITE_HANDLES) {
     manifests.set(handle, await readStarterManifest(handle));
   }
-  assert.equal(manifests.size, 7);
+  assert.equal(manifests.size, 8);
 
   const lead = manifests.get("lead-card");
   assertContains(
