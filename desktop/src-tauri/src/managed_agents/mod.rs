@@ -63,7 +63,7 @@ pub(crate) fn lock_path_mutex() -> std::sync::MutexGuard<'static, ()> {
 }
 
 pub use backend::*;
-pub use coordination::*;
+pub(crate) use coordination::*;
 pub use discovery::*;
 pub use env_vars::*;
 #[cfg(windows)]
