@@ -6,7 +6,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   createOnboardingFixtureProvider,
+  extractLatestPromptEventId,
   FIRST_JOB_BRIEF,
+  SCOUT_SETUP_REPLY,
 } from "./provider.mjs";
 import { assertCreditsProof } from "./credits-proof.mjs";
 
@@ -98,7 +100,7 @@ test("concurrent HTTP handlers have unique IDs; mutable counter baseline reprodu
   // Hosted negative control restores only the old late reads of the shared counter.
   const url = new URL("./provider.mjs", import.meta.url);
   const source = await readFile(url, "utf8");
-  assert.equal(source.split("${requestNumber}").length - 1, 3);
+  assert.equal(source.split("${requestNumber}").length - 1, 4);
   const baseline = source
     .replaceAll("${requestNumber}", "${calls}")
     .replace(
@@ -194,7 +196,7 @@ test("final settlement requires distinct exact intents and debits, not a matchin
   );
 });
 
-async function probeRequest(provider, content) {
+async function probeRequest(provider, content, extra = []) {
   return fetch(`${provider.httpUrl}/v1/chat/completions`, {
     method: "POST",
     signal: AbortSignal.timeout(5000),
@@ -204,13 +206,14 @@ async function probeRequest(provider, content) {
     },
     body: JSON.stringify({
       model: "deepseek/deepseek-v4-flash",
-      messages: [{ role: "user", content }],
+      messages: [{ role: "user", content }, ...extra],
+      tools: [{ type: "function", function: { name: "buzz__shell" } }],
     }),
   });
 }
 const probe =
-  "Colony connection test. Reply in this thread with a short greeting and this verification code: 11111111-1111-4111-8111-111111111111. Do not use tools or start any other work.";
-test("explicit bounded connection probe echoes nonce, records debit evidence and never emits tools", async () => {
+  "Colony connection test. Reply in this thread with a short greeting and this verification code: 11111111-1111-4111-8111-111111111111. Use your messaging tool to post exactly one reply in this thread. Do not use other tools or start any other work.";
+test("bounded connection probe posts one correlated reply and checks actual tool acceptance", async () => {
   const provider = await createOnboardingFixtureProvider();
   try {
     provider.authorizeConnectionTest();
@@ -220,17 +223,44 @@ test("explicit bounded connection probe echoes nonce, records debit evidence and
     );
     const response = await probeRequest(
       provider,
-      `${earlier}\nEarlier failed request.\n${probe}`,
+      `Event ID: ${"a".repeat(64)}\nChannel: Welcome (#33333333-3333-4333-8333-333333333333)\nContent: ${earlier}\nEvent ID: ${"b".repeat(64)}\nChannel: Welcome (#44444444-4444-4444-8444-444444444444)\nContent: ${probe}`,
     );
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.match(
-      body.choices[0].message.content,
-      /11111111-1111-4111-8111-111111111111/,
+    const call = body.choices[0].message.tool_calls[0];
+    const { command } = JSON.parse(call.function.arguments);
+    assert.equal(
+      command,
+      `buzz messages send --channel 44444444-4444-4444-8444-444444444444 --reply-to ${"b".repeat(64)} --content 'Hello, your Colony connection is ready. 11111111-1111-4111-8111-111111111111'`,
     );
-    assert.equal(body.choices[0].message.tool_calls, undefined);
-    assert.equal(provider.tools.length, 0);
-    assert.equal(provider.probeRequests.length, 1);
+    const toolResult = {
+      role: "tool",
+      tool_call_id: call.id,
+      content: JSON.stringify({
+        exit_code: 0,
+        timed_out: false,
+        stdout: JSON.stringify({ accepted: true, event_id: "c".repeat(64) }),
+        stderr: "",
+      }),
+    };
+    const followup = await probeRequest(provider, probe, [toolResult]);
+    assert.equal(followup.status, 200);
+    assert.equal(
+      (await followup.json()).choices[0].message.tool_calls,
+      undefined,
+    );
+    const completed = await probeRequest(provider, probe, [
+      toolResult,
+      { role: "user", content: "You have stopped. Is the task complete?" },
+    ]);
+    assert.equal(completed.status, 200);
+    assert.equal(
+      (await completed.json()).choices[0].message.content,
+      '{"complete":true}',
+    );
+    assert.equal(provider.tools.length, 1);
+    assert.equal(provider.probeRequests.length, 3);
+    assert.equal(provider.toolResults[0].accepted, true);
     assert.equal(provider.requests[0].stage, "connection-test");
     provider.finishConnectionTest();
     assert.equal((await probeRequest(provider, probe)).status, 500);
@@ -253,5 +283,122 @@ test("unauthorized and unrelated pre-approval model work is rejected", async () 
     } finally {
       await provider.close();
     }
+  }
+});
+
+test("approved Scout setup uses the signed approval event and publishes one reply", async () => {
+  const provider = await createOnboardingFixtureProvider();
+  const rootId = "a".repeat(64);
+  const channelId = "22222222-2222-4222-8222-222222222222";
+  const acknowledgementId = "b".repeat(64);
+  const replyId = "c".repeat(64);
+  const prompt = {
+    role: "user",
+    content: `Event ID: ${acknowledgementId}\nChannel: ${channelId}\nRoot: ${rootId}\nTags: colony:scout-onboarding-approval:v1`,
+  };
+  try {
+    assert.equal(
+      extractLatestPromptEventId([
+        { role: "user", content: `Event ID: ${rootId}` },
+        prompt,
+      ]),
+      acknowledgementId,
+    );
+    provider.authorizeScoutSetup({ rootId, channelId });
+    const first = await fetch(`${provider.httpUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer synthetic-onboarding-provider",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-flash",
+        messages: [prompt],
+        tools: [{ function: { name: "buzz__shell" } }],
+      }),
+    });
+    assert.equal(first.status, 200);
+    const firstBody = await first.json();
+    const toolCallId = firstBody.choices[0].message.tool_calls[0].id;
+    const second = await fetch(`${provider.httpUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer synthetic-onboarding-provider",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-flash",
+        messages: [
+          prompt,
+          firstBody.choices[0].message,
+          {
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: JSON.stringify({
+              stdout: JSON.stringify({ accepted: true, event_id: replyId }),
+              stderr: "",
+              exit_code: 0,
+              timed_out: false,
+            }),
+          },
+        ],
+        tools: [{ function: { name: "buzz__shell" } }],
+      }),
+    });
+    assert.equal(second.status, 200);
+    assert.equal(
+      (await second.json()).choices[0].message.content,
+      SCOUT_SETUP_REPLY,
+    );
+    const completed = await fetch(`${provider.httpUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer synthetic-onboarding-provider",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-flash",
+        messages: [
+          prompt,
+          firstBody.choices[0].message,
+          {
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: JSON.stringify({
+              stdout: JSON.stringify({ accepted: true, event_id: replyId }),
+              stderr: "",
+              exit_code: 0,
+              timed_out: false,
+            }),
+          },
+          { role: "assistant", content: SCOUT_SETUP_REPLY },
+          {
+            role: "user",
+            content:
+              "You have stopped. Before this turn ends, answer one question about the request below, and nothing else.",
+          },
+        ],
+      }),
+    });
+    assert.equal(completed.status, 200);
+    assert.equal(
+      (await completed.json()).choices[0].message.content,
+      '{"complete":true}',
+    );
+    provider.assertHealthy();
+    assert.equal(provider.setupRequests.length, 3);
+    assert.equal(provider.scoutSetup.ackEventId, acknowledgementId);
+    assert.equal(provider.scoutSetup.replyEventId, replyId);
+    assert.equal(provider.scoutSetup.completed, true);
+    assert.deepEqual(
+      provider.requests.map(({ stage, completion }) => ({ stage, completion })),
+      [
+        { stage: "scout-onboarding", completion: false },
+        { stage: "scout-onboarding", completion: false },
+        { stage: "scout-onboarding", completion: true },
+      ],
+    );
+  } finally {
+    await provider.close();
   }
 });

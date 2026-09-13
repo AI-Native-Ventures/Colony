@@ -1,15 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
+import { verifyEvent } from "nostr-tools/pure";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
-import { expectRetainedBusinessContext } from "../helpers/companyProfile";
 import {
   seedActiveIdentity,
   continueFounderBusiness,
 } from "../helpers/onboarding";
+import { fillFounderBusiness } from "../helpers/simpleFounder";
 import {
-  fillFounderBusiness,
-  openFounderBusiness,
-} from "../helpers/simpleFounder";
+  parseScoutOnboardingRoot,
+  ROOT_PROTOCOL,
+} from "../../src/features/onboarding/channelOnboardingRuntime/protocol";
 
 /** Additional-business completion and live balance remain independent. */
 
@@ -20,6 +21,74 @@ const ZERO_BALANCE = {
   currency: "USD" as const,
   status: "depleted" as const,
 };
+
+const PRE_APPROVAL_SETUP_COMMANDS = [
+  "attach_thread_task",
+  "create_managed_agent",
+  "create_team",
+  "create_user_task",
+  "execute_agent_proposal",
+  "publish_note",
+  "send_managed_agent_channel_message",
+  "send_stream_message",
+  "set_canvas",
+  "set_thread_canvas",
+  "start_managed_agent",
+  "start_managed_agent_runtime",
+  "update_company_profile",
+];
+
+async function expectChoiceFirstRoot(
+  page: Page,
+  commandCountBeforeChoiceHandoff: number,
+  expected: {
+    ownerPubkey: string;
+    relayUrl: string;
+    businessName: string;
+    businessDescription: string;
+  },
+) {
+  const retained = await page.evaluate(() => ({
+    published: window.__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [],
+    signedProfileUpdates: window.__BUZZ_E2E_COMMAND_PAYLOADS__?.filter(
+      (entry) => entry.command === "sign_community_profile_update",
+    ),
+    commands: window.__BUZZ_E2E_COMMANDS__ ?? [],
+  }));
+  const roots = retained.published.filter((event) =>
+    event.tags.some(
+      (tag) => tag[0] === "client" && tag[1] === ROOT_PROTOCOL.marker,
+    ),
+  );
+  expect(roots).toHaveLength(1);
+  const root = roots[0];
+  expect(root?.kind).toBe(ROOT_PROTOCOL.kind);
+  if (!root) throw new Error("Missing signed Scout onboarding root");
+  expect(verifyEvent(root)).toBe(true);
+  const payload = parseScoutOnboardingRoot(root.tags);
+  expect(payload).not.toBeNull();
+  if (!payload) throw new Error("The Scout onboarding root was not readable");
+  expect(payload).toMatchObject({
+    ownerPubkey: expected.ownerPubkey,
+    relayUrl: expected.relayUrl,
+    seed: {
+      businessName: expected.businessName,
+      businessDescription: expected.businessDescription,
+      website: "",
+      websiteState: "none",
+    },
+  });
+  expect(payload.requestId).toMatch(
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i,
+  );
+  expect(retained.signedProfileUpdates ?? []).toHaveLength(0);
+  const postHandoffCommands = retained.commands.slice(
+    commandCountBeforeChoiceHandoff,
+  );
+  for (const command of PRE_APPROVAL_SETUP_COMMANDS) {
+    expect(postHandoffCommands).not.toContain(command);
+  }
+}
 
 /**
  * A community that has just been created by a signed-in founder: it exists,
@@ -127,13 +196,17 @@ test("a created community connects its detected subscription and chooses a model
   await model.selectOption("claude-test-model");
   await expect(openColony).toBeEnabled();
   await openColony.click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const commandCountBeforeChoiceHandoff = await page.evaluate(
+    () => window.__BUZZ_E2E_COMMANDS__?.length ?? 0,
+  );
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
-  await expectRetainedBusinessContext(page, {
+  await expectChoiceFirstRoot(page, commandCountBeforeChoiceHandoff, {
     ownerPubkey: TEST_IDENTITIES.tyler.pubkey,
     relayUrl: RELAY_URL,
-    name: "Second Company",
-    summary: "A second company with its own operating context.",
+    businessName: "Second Company",
+    businessDescription: "A second company with its own operating context.",
   });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
 });
@@ -207,12 +280,27 @@ test("a zero balance never stands between a second company and its workspace", a
   await page.goto("/");
 
   await fillSecondBusiness(page);
-  await openFounderBusiness(page);
-  await expectRetainedBusinessContext(page, {
+  await continueFounderBusiness(page);
+  const openColony = page.getByRole("button", {
+    name: "Test connection",
+    exact: true,
+  });
+  await expect(openColony).toBeEnabled();
+  await openColony.click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const commandCountBeforeChoiceHandoff = await page.evaluate(
+    () => window.__BUZZ_E2E_COMMANDS__?.length ?? 0,
+  );
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
+  await expect(page.locator(".onb-canvas")).toHaveCount(0, {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("app-top-chrome")).toBeVisible();
+  await expectChoiceFirstRoot(page, commandCountBeforeChoiceHandoff, {
     ownerPubkey: TEST_IDENTITIES.tyler.pubkey,
     relayUrl: RELAY_URL,
-    name: "Second Company",
-    summary: "A second company with its own operating context.",
+    businessName: "Second Company",
+    businessDescription: "A second company with its own operating context.",
   });
   // Zero credits do not insert a payment step between context and Welcome.
   await expect(page.getByTestId("onboarding-credits-later")).toHaveCount(0);

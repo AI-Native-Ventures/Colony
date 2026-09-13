@@ -9,10 +9,16 @@ import { SettingsOptionRow } from "./SettingsOptionGroup";
 
 /** The same static gradients used by the workspace, selectable in Appearance. */
 export function WorkspacePatternSetting() {
-  const { accentColor, gradientPattern, isDark, setGradientPattern } =
-    useTheme();
-  const palette =
-    deriveWorkspaceAppearance(accentColor)[isDark ? "dark" : "light"];
+  const {
+    accentColor,
+    gradientPattern,
+    customGradient,
+    isDark,
+    setGradientPattern,
+  } = useTheme();
+  const palette = deriveWorkspaceAppearance(accentColor, customGradient)[
+    isDark ? "dark" : "light"
+  ];
   return (
     <SettingsOptionRow
       className="items-start"

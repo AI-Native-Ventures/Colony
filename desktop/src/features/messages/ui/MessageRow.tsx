@@ -52,6 +52,7 @@ import type {
 } from "./MessageRowProps";
 import type { TimelineMessage } from "@/features/messages/types";
 import { parseFirstJobSuggestion } from "@/features/onboarding/firstJobSuggestion";
+import { parseScoutOnboardingRoot } from "@/features/onboarding/channelOnboardingRuntime/protocol";
 import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
 import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
 import { VideoReviewTimecodeButton } from "@/shared/ui/VideoReviewTimecodeButton";
@@ -69,6 +70,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 const FirstJobSuggestion = React.lazy(
   () => import("@/features/onboarding/ui/FirstJobSuggestion"),
+);
+const ScoutOnboardingMessage = React.lazy(
+  () => import("@/features/onboarding/ui/ScoutOnboardingMessage"),
 );
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
@@ -402,6 +406,19 @@ export const MessageRow = React.memo(
                 >
                   {markdown}
                 </FirstJobSuggestion>
+              </React.Suspense>
+            );
+          }
+          if (parseScoutOnboardingRoot(message.tags)) {
+            return (
+              <React.Suspense fallback={markdown}>
+                <ScoutOnboardingMessage
+                  channelId={channelId}
+                  currentPubkey={currentPubkey}
+                  message={message}
+                >
+                  {markdown}
+                </ScoutOnboardingMessage>
               </React.Suspense>
             );
           }

@@ -51,6 +51,7 @@ export async function openFounderBusiness(page: Page) {
   await page
     .getByRole("button", { name: "Test connection", exact: true })
     .click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
