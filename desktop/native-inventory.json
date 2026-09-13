@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 530,
+    "rust_total": 532,
     "tauri_coupled": 209,
-    "portable": 321,
+    "portable": 323,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -268,6 +268,7 @@
       "src-tauri/src/commands/ledger/usage_records.rs",
       "src-tauri/src/commands/link_preview_rate_limit.rs",
       "src-tauri/src/commands/link_preview_youtube.rs",
+      "src-tauri/src/commands/managed_agent_definition.rs",
       "src-tauri/src/commands/media_animated.rs",
       "src-tauri/src/commands/media_audio.rs",
       "src-tauri/src/commands/media_audio_tests.rs",
@@ -392,6 +393,7 @@
       "src-tauri/src/managed_agents/coordination_enrol_tests.rs",
       "src-tauri/src/managed_agents/coordination_tests.rs",
       "src-tauri/src/managed_agents/custom_harnesses.rs",
+      "src-tauri/src/managed_agents/definition_validation.rs",
       "src-tauri/src/managed_agents/discovery.rs",
       "src-tauri/src/managed_agents/discovery/auth_status_cache.rs",
       "src-tauri/src/managed_agents/discovery/bounded_command.rs",

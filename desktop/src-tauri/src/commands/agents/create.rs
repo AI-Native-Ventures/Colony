@@ -34,6 +34,14 @@ pub(crate) async fn create_managed_agent_with_preparation(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    // Reject a definition that cannot be reviewed faithfully (#4220). Colony's
+    // create path lives in this module rather than inline in `agents.rs`, so
+    // the boundary check belongs here.
+    crate::commands::managed_agent_definition::validate_create_definition(
+        &name,
+        requested_persona_id.as_deref(),
+        &input,
+    )?;
     if let Some(parallelism) = input.parallelism {
         if !(1..=32).contains(&parallelism) {
             return Err("parallelism must be between 1 and 32".to_string());

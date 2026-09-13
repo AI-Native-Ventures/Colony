@@ -5,6 +5,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, State};
 
 use super::agent_model_process::run_agent_models_command;
+use super::managed_agent_definition::apply_model_provider_prompt_update;
 // Production discovery uses the process-env variant; tests use map-only helpers.
 #[cfg(test)]
 use super::agent_models_env::env_value;
@@ -640,35 +641,6 @@ async fn discover_databricks_models(
     }))
 }
 
-/// Apply an `UpdateManagedAgentRequest`'s model/provider/system_prompt patch
-/// to `record`, enforcing the linked-instance write guard: a definition-linked
-/// record's model/provider/prompt are definition-authoritative (see
-/// `effective_config::resolve_linked`), so writes to these three fields are
-/// silently dropped for a linked instance rather than persisting a byte the
-/// resolver will never read. Definition-less instances accept the patch
-/// as-is. Extracted so the guard is exercised by both `update_managed_agent`
-/// and its regression tests — a test that reimplements this check instead of
-/// calling it can go green after the real guard is deleted.
-fn apply_model_provider_prompt_update(
-    record: &mut crate::managed_agents::ManagedAgentRecord,
-    model: Option<Option<String>>,
-    provider: Option<Option<String>>,
-    system_prompt: Option<Option<String>>,
-) {
-    if record.persona_id.is_some() {
-        return;
-    }
-    if let Some(model_update) = model {
-        record.model = model_update;
-    }
-    if let Some(provider_update) = provider {
-        record.provider = provider_update;
-    }
-    if let Some(prompt_update) = system_prompt {
-        record.system_prompt = prompt_update;
-    }
-}
-
 /// Update mutable fields on an existing managed agent record.
 ///
 /// Does NOT auto-restart the agent. Runtime config changes (system prompt,
@@ -720,7 +692,7 @@ pub async fn update_managed_agent(
             input.model,
             input.provider,
             input.system_prompt,
-        );
+        )?;
         if let Some(parallelism) = input.parallelism {
             record.parallelism = parallelism;
         }

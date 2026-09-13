@@ -40,6 +40,7 @@ mod join_policy;
 pub mod ledger;
 mod legacy_storage;
 mod link_preview;
+mod managed_agent_definition;
 pub(crate) mod media;
 mod media_animated;
 mod media_audio;
