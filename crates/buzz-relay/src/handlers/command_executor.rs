@@ -183,7 +183,16 @@ async fn persist_command_event(
                     "conflict: workflow update was superseded; refresh and try again".into(),
                 ))
             }
-            ParameterizedReplaceStatus::Superseded => Ok(PersistResult::AlreadyStored),
+            ParameterizedReplaceStatus::Superseded => {
+                // A different head owns this coordinate, so nothing was stored
+                // and no domain mutation ran. Reporting it as `AlreadyStored`
+                // tells the client its event landed when no row was touched —
+                // the exact `buzz workflows update` failure the split above
+                // exists to prevent.
+                Ok(PersistResult::Superseded {
+                    winner_event_id: result.winner_event_id.unwrap_or_default(),
+                })
+            }
             ParameterizedReplaceStatus::RevisionMissing => Err(IngestError::Rejected(
                 "conflict: workflow revision does not exist".into(),
             )),

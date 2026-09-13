@@ -2890,7 +2890,7 @@ async fn emit_initial_ref_state(
         .map_err(|e| anyhow::anyhow!("build_ref_state_event: {e}"))?;
     let (stored, inserted) = state
         .db
-        .replace_parameterized_event(tenant.community(), &event, &owner_hex, None)
+        .replace_parameterized_event(tenant.community(), &event, owner_hex, None)
         .await?;
     if inserted {
         // Routed through the guarded send path for uniformity; the access gate

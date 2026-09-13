@@ -44,6 +44,14 @@ pub struct ParameterizedReplaceResult {
     pub event: StoredEvent,
     /// Whether and why the coordinate accepted the event.
     pub status: ParameterizedReplaceStatus,
+    /// Raw id of the event that won the coordinate, set only for
+    /// [`ParameterizedReplaceStatus::Superseded`].
+    ///
+    /// Callers report a superseded write as not stored and name the winner, so
+    /// collapsing it into "already stored" would tell a client its event landed
+    /// while no row was touched. Carrying the id here keeps that distinction
+    /// available to the relay.
+    pub winner_event_id: Option<Vec<u8>>,
 }
 
 impl ParameterizedReplaceResult {
@@ -61,6 +69,24 @@ impl ParameterizedReplaceResult {
                 status == ParameterizedReplaceStatus::Inserted,
             ),
             status,
+            winner_event_id: None,
+        }
+    }
+
+    fn superseded(
+        event: &nostr::Event,
+        received_at: DateTime<Utc>,
+        channel_id: Option<Uuid>,
+        winner_event_id: Vec<u8>,
+    ) -> Self {
+        Self {
+            winner_event_id: Some(winner_event_id),
+            ..Self::new(
+                event,
+                received_at,
+                channel_id,
+                ParameterizedReplaceStatus::Superseded,
+            )
         }
     }
 }
@@ -240,11 +266,18 @@ pub(crate) async fn replace_parameterized_event_in_transaction_impl(
                 || (created_at == *accepted_ts && incoming_id >= accepted_id.as_slice())
         });
     if dominated {
-        return Ok(ParameterizedReplaceResult::new(
+        // The live head wins when there is one; otherwise the hard-delete
+        // watermark is what dominated the write.
+        let winner_event_id = existing
+            .as_ref()
+            .or(watermark.as_ref())
+            .map(|(_, accepted_id)| accepted_id.clone())
+            .unwrap_or_default();
+        return Ok(ParameterizedReplaceResult::superseded(
             event,
             received_at,
             channel_id,
-            ParameterizedReplaceStatus::Superseded,
+            winner_event_id,
         ));
     }
 

@@ -6288,7 +6288,7 @@ mod tests {
         .expect("sign catalog receipt");
         CatalogBatch {
             action,
-            head: head,
+            head,
             receipt,
             d_tag: d_tag.to_owned(),
         }
@@ -6388,7 +6388,7 @@ mod tests {
         .expect("sign company receipt");
         CompanyBatch {
             action,
-            head: head,
+            head,
             receipt,
             d_tag: d_tag.to_owned(),
         }
