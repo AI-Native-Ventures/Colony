@@ -1,0 +1,655 @@
+name: Colony Desktop Port
+
+# The port desktop lane: a side-by-side Colony build cut from
+# `canary/upstream-port` when triggered, published to its own rolling prerelease and updating
+# on its own channel. Stable installs never see it and it never sees stable.
+# The two channels share the production relay, so they differ in the code they
+# run, never in the data they see.
+#
+# Not to be confused with linux-canary.yml, windows-canary.yml,
+# macos-intel-canary.yml or signed-macos-canary.yml. Those are CI build
+# canaries: they prove the tree still compiles on a platform CI does not
+# otherwise cover. This one ships an app to people.
+#
+# What makes it side-by-side rather than an upgrade-in-place of stable:
+#   productName  Colony Port            (Finder, Dock, menu bar)
+#   identifier   ventures.ainative.colony.port
+#                                         (app support, prefs, keychain)
+#   relay        wss://relay-canary.colony.ainative.ventures  (canary, separate)
+#   updater      .../colony-port-latest/latest.json
+#   version      <desktop package.json version>-port.<run_number>
+  # All of it comes from the `--port` variant in
+# desktop/scripts/electron-package-config.mjs, so the port app is packaged by the
+# same script as the stable Electron app and differs only in the fields above.
+# Signing is deliberately identical to stable: the same ad-hoc Apple identity
+# and the same updater keypair. A second updater keypair would be a second
+# one-way door to lose.
+#
+# This lane ships the Electron shell. It used to run `tauri build`, which meant
+# the port a tester installed was a different application from the one
+# production ships. An installed Tauri port app cannot auto-update into the
+# Electron port app: its updater downloads an archive whose bundle identifier no
+# longer matches, so the first Electron port is a manual install, once.
+#
+# Version ordering is semver: 0.11.7-port.43 > 0.11.7-port.42, and
+# 0.11.8-port.1 > 0.11.7-port.99. run_number is monotonic per workflow, so
+# the port channel only ever moves forward even when the base version does
+# not change. Stable 0.11.7 sorts above 0.11.7-port.42, but no port install
+# polls the stable endpoint, so the two channels never cross.
+#
+# Triggers: workflow_dispatch only against `canary/upstream-port`. A port build is
+# never automatic: it requires a manual trigger so every release is intentional.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or sha to build the port from"
+        required: false
+        default: canary/upstream-port
+      force:
+        description: "Build even when the ref has not moved since the last port"
+        type: boolean
+        default: false
+      allow_relay_skew:
+        description: "Publish even though the relay half of this ref is not live yet (only when every relay change is backward compatible)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Build and verify without writing anything to colony-releases; the app and manifest are uploaded as a run artifact instead"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never cancel a port build mid-publish: the rolling release is overwritten in
+# place, and a run killed between the archive upload and the manifest upload
+# leaves every port install pointed at an asset that does not exist.
+concurrency:
+  group: colony-desktop-port
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RELEASES_REPO: AI-Native-Ventures/colony-releases
+
+  # One rolling prerelease tag carries everything: the dmg a human downloads,
+  # the signed archive the updater fetches, and latest.json itself. Stable
+  # splits these across an immutable v<version> release and the rolling
+  # colony-desktop-latest one because its versioned releases are the product
+  # A port has no history worth keeping: only a current build. The rolling
+  # prerelease carries the DMG, the signed archive, and latest.json.
+  PORT_ROLLING_TAG: colony-port-latest
+
+  # Compiled into every port binary, so it can never change without
+  # stranding the installs that already trust it.
+  UPDATER_ENDPOINT: https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-port-latest/latest.json
+
+  # Port builds talk to the CANARY relay (`relay-canary.colony.ainative.ventures`),
+  # deliberately separate from the production relay.
+  #
+  # The port is a beta-access channel that tests against the canary relay: a
+  # feature before it reaches production. A separate relay would give testers a
+  # separate, empty world, so the channel can be used for real work and the
+  # workspace, team and credits a tester already owns are preserved.
+  #
+  # The trade is that `canary/upstream-port` may carry relay-side changes
+  # the production relay has not been promoted yet, and a port desktop would
+  # then call endpoints and event kinds the live canary relay does not serve.
+  # The `relay-parity` job below is what keeps that from shipping: it refuses
+  # the build instead of publishing an app whose relay half is missing.
+  #
+  # The binary gate further down refuses to publish a build that does not have
+  # this exact string compiled in.
+  COLONY_PORT_RELAY_WS_URL: wss://relay-canary.colony.ainative.ventures
+  COLONY_PORT_RELAY_HTTP_URL: https://relay-canary.colony.ainative.ventures
+
+  # Explicit distribution policy, exactly as the stable macOS lane declares it.
+  # Never inferred from whether Apple secrets happen to be configured.
+  COLONY_MACOS_SIGNING: ad-hoc
+
+jobs:
+  decide:
+    name: Decide whether the port moved
+    if: github.repository == 'AI-Native-Ventures/Colony'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      sha: ${{ steps.check.outputs.sha }}
+      prev_sha: ${{ steps.check.outputs.prev_sha }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.ref || 'canary/upstream-port' }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      # The skip check runs on a hosted runner rather than inside the Mac job
+      # so that an unchanged `canary/upstream-port` costs nothing on the shared build Mac,
+      # which is also somebody's development machine.
+      - name: Compare HEAD against the last published port
+        id: check
+        env:
+          # colony-releases is public, so the repo-scoped GITHUB_TOKEN can read
+          # its releases. The App token is minted later, in the publishing job,
+          # where write access is actually needed.
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SOURCE_REF: ${{ inputs.ref || 'canary/upstream-port' }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse HEAD)
+          BASE_VERSION=$(node -p "require('./desktop/package.json').version")
+          VERSION="${BASE_VERSION}-port.${GITHUB_RUN_NUMBER}"
+          {
+            echo "sha=$SHA"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+          # The previous port's source commit is recorded in the rolling
+          # release body, written by the last step of the publishing job. It is
+          # written only after every verification passes, so a run that built
+          # and then failed to publish correctly does not suppress tomorrow's
+          # rebuild.
+          BODY=$(gh release view "$PORT_ROLLING_TAG" --repo "$RELEASES_REPO" --json body --jq .body 2>/dev/null || true)
+          PREV=$(printf '%s\n' "$BODY" | sed -n 's/^port-sha: \([0-9a-f]\{40\}\).*/\1/p' | tail -1)
+          echo "prev_sha=${PREV}" >> "$GITHUB_OUTPUT"
+
+          if [ "$FORCE" = "true" ]; then
+            REASON="force requested"
+            SHOULD=true
+          elif [ "$DRY_RUN" = "true" ]; then
+            REASON="dry run requested"
+            SHOULD=true
+          elif [ -z "$PREV" ]; then
+            REASON="no previous port recorded on ${PORT_ROLLING_TAG}"
+            SHOULD=true
+          elif [ "$PREV" = "$SHA" ]; then
+            REASON="${SOURCE_REF} is still at ${SHA}, unchanged since the last port"
+            SHOULD=false
+          else
+            REASON="${SOURCE_REF} moved ${PREV} -> ${SHA}"
+            SHOULD=true
+          fi
+
+          echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Colony Port"
+            echo
+            echo "- ref: \`${SOURCE_REF}\`"
+            echo "- HEAD: \`${SHA}\`"
+            echo "- previous port: \`${PREV:-none}\`"
+            echo "- version: \`${VERSION}\`"
+            echo "- build: **${SHOULD}** (${REASON})"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "build=${SHOULD}: ${REASON}"
+
+  relay-parity:
+    name: Relay parity with canary relay
+    needs: decide
+    # A dry run publishes nothing, so there is nothing for this gate to
+    # protect: no port install ever sees the build. It stays mandatory for
+    # every real run, which is the only way an app reaches a person.
+    if: needs.decide.outputs.should_build == 'true' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.ref || 'canary/upstream-port' }}
+          # Both checks below walk history back to `main`, so the default
+          # shallow clone is not enough.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Port desktop talks to the canary relay (see the env block).
+      # That only holds while the relay half of this ref is already live.
+      # Two ways it can stop holding, and they fail differently:
+      #
+      #   A. `canary/upstream-port` carries relay source `main` does not. The change is not
+      #      promoted, so it is certainly not deployed.
+      #   B. `main` carries relay source that is promoted but not released and
+      #      deployed. A works fine and the relay is still behind.
+      #
+      # Both end the same way for a tester - an event kind the relay rejects,
+      # a route that 404s - so both are checked.
+      - name: Refuse relay source the production relay has not been promoted
+        env:
+          ALLOW_SKEW: ${{ inputs.allow_relay_skew }}
+        run: |
+          set -euo pipefail
+          # The crates that decide what the relay actually serves. Agent-side
+          # and client-side crates (buzz-cli, buzz-agent, buzz-acp,
+          # buzz-dev-mcp, buzz-test-client, sprig) are deliberately absent:
+          # they ship inside the desktop build, so a port carries its own
+          # copy and no skew is possible.
+          PATHS="migrations \
+            crates/buzz-relay \
+            crates/buzz-core \
+            crates/buzz-db \
+            crates/buzz-auth \
+            crates/buzz-pubsub \
+            crates/buzz-search \
+            crates/buzz-media \
+            crates/buzz-audit \
+            crates/buzz-workflow"
+          # shellcheck disable=SC2086
+          AHEAD=$(git log --oneline origin/canary/upstream-port..HEAD -- $PATHS)
+          if [ -n "$AHEAD" ]; then
+            echo "Relay-side commits on this ref that main does not have:"
+            printf '%s\n' "$AHEAD"
+            if [ "${ALLOW_SKEW:-false}" = "true" ]; then
+              echo "::warning::Publishing anyway: allow_relay_skew was requested. Every commit listed above is a relay change the production relay does not serve. Only do this when you have confirmed each one is backward compatible with the deployed relay."
+            else
+              echo "::error::This ref changes the relay, and port desktop \
+          talks to the CANARY relay. Publishing would ship testers an app \
+          whose relay half does not exist yet. Promote these to main and \
+          deploy the relay first, or re-run with allow_relay_skew=true if you \
+          have confirmed every commit above is backward compatible."
+              exit 1
+            fi
+          else
+            echo "No relay-side commits ahead of main."
+          fi
+
+      - name: Refuse a relay version production has not deployed yet
+        env:
+          RELAY_HTTP_URL: ${{ env.COLONY_PORT_RELAY_HTTP_URL }}
+          ALLOW_SKEW: ${{ inputs.allow_relay_skew }}
+        run: |
+          set -euo pipefail
+          # NIP-11 is the relay telling us what it is running, which is the
+          # only claim that survives a green release that never deployed.
+          LIVE=$(curl -fsS --max-time 20 -H 'Accept: application/nostr+json' \
+            "$RELAY_HTTP_URL/" | node -e \
+            'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{process.stdout.write(String(JSON.parse(s).version??""))})')
+          REPO=$(node -e \
+            'const fs=require("fs");const t=fs.readFileSync("crates/buzz-relay/Cargo.toml","utf8");process.stdout.write((t.match(/^version\s*=\s*"([^"]+)"/m)||[])[1]??"")')
+          echo "relay version live: ${LIVE:-unknown}"
+          echo "relay version here: ${REPO:-unknown}"
+          if [ -z "$LIVE" ] || [ -z "$REPO" ]; then
+            echo "::error::Could not read both relay versions (live='${LIVE}', repo='${REPO}'). Refusing to guess."
+            exit 1
+          fi
+          if [ "$LIVE" != "$REPO" ]; then
+            if [ "${ALLOW_SKEW:-false}" = "true" ]; then
+              echo "::warning::Publishing anyway: allow_relay_skew was requested, against a live relay on ${LIVE} while this ref expects ${REPO}."
+            else
+              echo "::error::The production relay is running ${LIVE} but this \
+          ref expects ${REPO}. Deploy the relay before publishing a port \
+          that talks to it, or re-run with allow_relay_skew=true."
+              exit 1
+            fi
+          else
+            echo "Production relay is on the version this ref expects."
+          fi
+
+  publish-port-macos:
+    name: Publish port macOS (Apple Silicon)
+    needs: [decide, relay-parity]
+    # `always()` is what lets a dry run proceed while relay-parity is skipped.
+    # A real run still demands relay-parity success: with dry_run false the
+    # second half of this expression is the only way through.
+    if: |
+      always() && needs.decide.outputs.should_build == 'true' &&
+      (inputs.dry_run || needs.relay-parity.result == 'success')
+    # GitHub-hosted Apple Silicon, not the owner's Mac. This used to run on the
+    # self-hosted `colony-builder` runner for its warm cargo cache, but that
+    # machine is also somebody's development machine: under local load it drops
+    # offline and the port dies with no build error to read. This repository
+    # is public, so macos-15 minutes are free, and a nightly build that always
+    # runs beats a faster one that silently does not.
+    #
+    # The trade is wall clock: expect ~1 hour cold against ~20 minutes warm.
+    # The rust-cache step below narrows that on subsequent nights; timeout-
+    # minutes stays at 150 so a fully cold rebuild still has room.
+    #
+    # macOS aarch64 only in v1: Windows and Intel canaries would each need
+    # their own asset names and manifest entries, and nobody is testing on
+    # them yet.
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      VERSION: ${{ needs.decide.outputs.version }}
+      BUILD_SHA: ${{ needs.decide.outputs.sha }}
+      PREV_SHA: ${{ needs.decide.outputs.prev_sha }}
+      SOURCE_REF: ${{ inputs.ref || 'canary/upstream-port' }}
+    steps:
+      # Check out the exact sha the decide job resolved, not the branch name.
+      # A push landing between the two jobs would otherwise produce a build
+      # whose recorded sha is not the sha it was built from, and skip-if-
+      # unchanged would then skip a commit that was never built.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.decide.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Hermit owns the toolchain (rustc, cargo, node, pnpm, just), so the
+      # build uses the versions this ref pins rather than whatever a runner
+      # image happens to ship.
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      # Replaces the persistent cargo cache the self-hosted Mac used to
+      # provide. Its own shared-key, so the canary and the stable release do
+      # not evict each other's cache.
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+          shared-key: canary-macos
+
+      # A hosted runner starts with plenty of disk, so this is no longer the
+      # shared-machine guard it was: it is a cheap assertion that the image has
+      # not shrunk and that a restored cargo cache has not filled the volume. A
+      # cold build that dies 20 minutes in on ENOSPC reads like a build bug
+      # rather than a full disk.
+      - name: Check the runner has room to build
+        env:
+          MIN_FREE_GIB: "20"
+        run: |
+          set -euo pipefail
+          AVAIL_GIB=$(($(df -Pk . | awk 'NR==2 {print $4}') / 1024 / 1024))
+          echo "Free space on the build volume: ${AVAIL_GIB} GiB (minimum ${MIN_FREE_GIB} GiB)"
+          if [ "$AVAIL_GIB" -ge "$MIN_FREE_GIB" ]; then
+            exit 0
+          fi
+          echo "::error::Only ${AVAIL_GIB} GiB free on the build runner, and a port build needs at least ${MIN_FREE_GIB} GiB. Failing now instead of part way through the build."
+          df -h
+          exit 1
+
+      - name: Install dependencies
+        run: just desktop-install-ci
+
+      # Stamp the port version before packaging: electron-package.mjs reads
+      # desktop/package.json, so without this the bundle, the manifest and the
+      # published asset names would all disagree with the version this run
+      # decided on.
+      - name: Stamp the port version
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const file = "desktop/package.json";
+            const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+            pkg.version = process.env.VERSION;
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+          '
+          node -p "require('./desktop/package.json').version"
+
+      - name: Install temporary Apple signing credentials
+        if: env.COLONY_MACOS_SIGNING == 'developer-id'
+        env:
+          COLONY_APPLE_CERTIFICATE_P12: ${{ secrets.COLONY_APPLE_CERTIFICATE_P12 }}
+          COLONY_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.COLONY_APPLE_CERTIFICATE_PASSWORD }}
+          COLONY_APPLE_API_KEY_CONTENT: ${{ secrets.COLONY_APPLE_API_KEY }}
+        run: bash desktop/scripts/electron-signing-keychain.sh install
+
+      - name: Build the port Electron app
+        env:
+          # The packaged host embeds these at compile time. Without the relay
+          # it falls back to ws://localhost:3000, and without both updater
+          # values the updater plugin is compiled out entirely while every
+          # other artifact still looks correct. Both are pinned by the verify
+          # step below, against the compiled bytes.
+          BUZZ_RELAY_URL: ${{ env.COLONY_PORT_RELAY_WS_URL }}
+          BUZZ_RELAY_HTTP: ${{ env.COLONY_PORT_RELAY_HTTP_URL }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
+          COLONY_APPLE_SIGNING_IDENTITY: ${{ vars.COLONY_APPLE_SIGNING_IDENTITY }}
+          COLONY_APPLE_TEAM_ID: ${{ vars.COLONY_APPLE_TEAM_ID }}
+          COLONY_APPLE_API_KEY_ID: ${{ vars.COLONY_APPLE_API_KEY_ID }}
+          COLONY_APPLE_API_ISSUER: ${{ vars.COLONY_APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          echo "updater public key present: ${BUZZ_UPDATER_PUBLIC_KEY:+yes}"
+          echo "updater endpoint present:   ${BUZZ_UPDATER_ENDPOINT:+yes}"
+          # Fail-safe into community selection, exactly like stable, whatever
+          # the runner image happens to export.
+          unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+          unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+          SIGNING_ARGS=()
+          if [ "$COLONY_MACOS_SIGNING" = ad-hoc ]; then SIGNING_ARGS+=(--ad-hoc); fi
+          pnpm --dir desktop electron:package --production --port "${SIGNING_ARGS[@]}"
+
+      # Verifies the packaged bytes (product name, identifier, executable name,
+      # signature, the port updater endpoint and keyring service compiled
+      # into the host), runs the packaged smokes, then builds the dmg and the
+      # signed update archive. Exports DMG, ARCHIVE and ARCHIVE_SIG.
+      - name: Verify the port bundle and prepare the signed update archive
+        env:
+          COLONY_RELEASE_CHANNEL: port
+          COLONY_EXPECTED_RELAY_WS_URL: ${{ env.COLONY_PORT_RELAY_WS_URL }}
+          COLONY_APPLE_TEAM_ID: ${{ vars.COLONY_APPLE_TEAM_ID }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash desktop/scripts/electron-release-assets.sh
+
+      - name: Remove temporary Apple signing credentials
+        if: always() && env.COLONY_MACOS_SIGNING == 'developer-id'
+        run: bash desktop/scripts/electron-signing-keychain.sh cleanup
+
+      # The published archive keeps the version in its filename: a client that
+      # cached an older manifest must still be able to fetch the archive that
+      # manifest was signed for.
+      - name: Name the updater archive for publication
+        run: |
+          set -euo pipefail
+          VERSIONED="$(dirname "$ARCHIVE")/Colony_Port_${VERSION}_aarch64.app.tar.gz"
+          if [ "$ARCHIVE" != "$VERSIONED" ]; then
+            mv "$ARCHIVE" "$VERSIONED"
+            mv "$ARCHIVE_SIG" "${VERSIONED}.sig"
+          fi
+          echo "ARCHIVE=$VERSIONED" >> "$GITHUB_ENV"
+          echo "ARCHIVE_SIG=${VERSIONED}.sig" >> "$GITHUB_ENV"
+
+      # A dry run proves the whole lane from a branch without touching the
+      # channel real installs poll. It stops here and hands back the artifacts
+      # a publishing run would have uploaded.
+      - name: Stage the dry run artifacts
+        if: inputs.dry_run
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/port-dry-run"
+          mkdir -p "$OUT"
+          cp "$DMG" "$OUT/Colony_Port_${VERSION}_aarch64.dmg"
+          cp "$ARCHIVE" "$OUT/$(basename "$ARCHIVE")"
+          cp "$ARCHIVE_SIG" "$OUT/$(basename "$ARCHIVE_SIG")"
+          ARCHIVE_URL="https://github.com/${RELEASES_REPO}/releases/download/${PORT_ROLLING_TAG}/$(basename "$ARCHIVE")"
+          UPDATER_NOTES="Colony Port ${VERSION} (dry run from ${SOURCE_REF} at ${BUILD_SHA})" \
+            desktop/scripts/merge-latest-json.sh "$VERSION" - "$OUT/latest.json" \
+            "darwin-aarch64:${ARCHIVE_SIG}:${ARCHIVE_URL}"
+          cat "$OUT/latest.json"
+          echo "DRY_RUN_DIR=$OUT" >> "$GITHUB_ENV"
+          {
+            echo "### Colony Port ${VERSION} dry run"
+            echo
+            echo "Nothing was published. The app, its signed update archive and the"
+            echo "manifest this run would have uploaded are in the run artifact."
+            echo
+            echo "Dry run, relay parity skipped: this build is NOT publishable."
+            echo "A real port run requires the relay-parity gate to pass."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the dry run artifacts
+        if: inputs.dry_run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: colony-port-dry-run
+          path: ${{ env.DRY_RUN_DIR }}
+          if-no-files-found: error
+
+      # Minted after the long build so its one-hour lifetime cannot expire
+      # before the upload. Same App as the release tagger, scoped down to
+      # colony-releases only.
+      - name: Create release publisher token
+        if: ${{ !inputs.dry_run }}
+        id: publisher
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          private-key: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
+          owner: AI-Native-Ventures
+          repositories: colony-releases
+          permission-contents: write
+
+      - name: Publish the port build
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          STAGING=$(mktemp -d)
+          # Both names on every run: the versioned one is what latest.json
+          # points at (a client holding a cached manifest must still be able to
+          # fetch the archive that manifest was signed for), and the
+          # unversioned one is the fixed URL a human bookmarks. The rolling tag
+          # is a prerelease, so /releases/latest/download does NOT resolve to
+          # it and the download URL must name the tag explicitly.
+          cp "$DMG" "$STAGING/Colony_Port_${VERSION}_aarch64.dmg"
+          cp "$DMG" "$STAGING/Colony_Port_aarch64.dmg"
+          cp "$ARCHIVE" "$STAGING/$(basename "$ARCHIVE")"
+
+          if ! gh release view "$PORT_ROLLING_TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            gh release create "$PORT_ROLLING_TAG" --repo "$RELEASES_REPO" \
+              --prerelease --title "Colony Port" \
+              --notes "Rolling prerelease for the Colony Port channel. Publishing in progress."
+          fi
+
+          # Assets before the manifest: a latest.json that references an
+          # archive nobody has uploaded yet turns every port update check
+          # into a 404.
+          gh release upload "$PORT_ROLLING_TAG" --repo "$RELEASES_REPO" --clobber \
+            "$STAGING/Colony_Port_${VERSION}_aarch64.dmg" \
+            "$STAGING/Colony_Port_aarch64.dmg" \
+            "$STAGING/$(basename "$ARCHIVE")"
+
+      - name: Publish the port update manifest
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          STAGING=$(mktemp -d)
+          ARCHIVE_NAME=$(basename "$ARCHIVE")
+          ARCHIVE_URL="https://github.com/${RELEASES_REPO}/releases/download/${PORT_ROLLING_TAG}/${ARCHIVE_NAME}"
+
+          # Read the current manifest through the API, not the download URL:
+          # the CDN serves a stale copy for minutes after an upload. v1 is
+          # macOS-only so there is no other platform entry to preserve, but
+          # merging rather than generating keeps this lane on the same script
+          # as stable, so a future port platform gets carry-over for free.
+          desktop/scripts/fetch-latest-json.sh \
+            "$RELEASES_REPO" "$PORT_ROLLING_TAG" > "$STAGING/current.json"
+
+          UPDATER_NOTES="Colony Port ${VERSION} (built from ${SOURCE_REF} at ${BUILD_SHA})" \
+            desktop/scripts/merge-latest-json.sh "$VERSION" "@$STAGING/current.json" "$STAGING/latest.json" \
+            "darwin-aarch64:${ARCHIVE_SIG}:${ARCHIVE_URL}"
+
+          cat "$STAGING/latest.json"
+          gh release upload "$PORT_ROLLING_TAG" --repo "$RELEASES_REPO" --clobber \
+            "$STAGING/latest.json"
+
+      - name: Verify the port update manifest
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          # Read what was actually stored, not what the download CDN is still
+          # serving; a CDN read here fails on releases whose artifacts are
+          # completely correct.
+          MANIFEST=$(desktop/scripts/fetch-latest-json.sh \
+            "$RELEASES_REPO" "$PORT_ROLLING_TAG")
+          GOT_VERSION=$(echo "$MANIFEST" | jq -r '.version')
+          GOT_URL=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].url')
+          GOT_SIG=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].signature')
+          if [ "$GOT_VERSION" != "$VERSION" ]; then
+            echo "::error::Manifest says version $GOT_VERSION, expected $VERSION"
+            exit 1
+          fi
+          if [ "$GOT_SIG" != "$(cat "$ARCHIVE_SIG")" ]; then
+            echo "::error::Manifest signature does not match the signature this build produced"
+            exit 1
+          fi
+          # A download-URL check on purpose: this is what a client fetches, so
+          # it retries through CDN propagation.
+          EXPECTED=$(stat -f %z "$ARCHIVE")
+          for attempt in 1 2 3 4 5; do
+            SERVED=$(curl -sIL "$GOT_URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${SERVED:-0}" = "$EXPECTED" ]; then
+              echo "Manifest and archive agree: v${VERSION}, ${SERVED} bytes"
+              exit 0
+            fi
+            echo "Attempt $attempt: archive served ${SERVED:-none} bytes, expected $EXPECTED; retrying"
+            sleep 10
+          done
+          echo "::error::The archive the manifest points at is not the one this build produced"
+          exit 1
+
+      - name: Verify the port download
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          EXPECTED=$(stat -f %z "$DMG")
+          URL="https://github.com/${RELEASES_REPO}/releases/download/${PORT_ROLLING_TAG}/Colony_Port_aarch64.dmg"
+          for attempt in 1 2 3 4 5; do
+            GOT=$(curl -sIL "$URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${GOT:-0}" = "$EXPECTED" ]; then
+              echo "$URL serves the new dmg ($GOT bytes)"
+              exit 0
+            fi
+            echo "Attempt $attempt: got '${GOT:-none}' bytes, expected $EXPECTED; retrying"
+            sleep 10
+          done
+          echo "::error::$URL does not serve the freshly published dmg"
+          exit 1
+
+      # Last, deliberately. The recorded sha is what the decide job reads to
+      # skip an unchanged tree, so it must only be written once the build is
+      # published AND verified. Recording it earlier would let a run that
+      # failed halfway suppress the next night's rebuild of the same commit.
+      - name: Record the built sha on the rolling release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          NOTES=$(mktemp)
+          {
+            echo "Colony Port ${VERSION} for macOS (Apple Silicon)."
+            echo
+            echo "Built from \`${SOURCE_REF}\` at ${BUILD_SHA}."
+            echo
+            echo "Download: [Colony_Port_aarch64.dmg](https://github.com/${RELEASES_REPO}/releases/download/${PORT_ROLLING_TAG}/Colony_Port_aarch64.dmg)"
+            echo
+            echo "This is an early-access build from \`canary/upstream-port\`. It installs beside"
+            echo "the stable Colony app with its own local data and its own keychain"
+            echo "identity, but it talks to the same production relay"
+            echo "(${COLONY_PORT_RELAY_WS_URL}), so a workspace, its team and its"
+            echo "credits are the real ones."
+            echo
+            # Machine-readable, and parsed by this workflow's decide job. Keep
+            # the exact `port-sha: <40 hex>` shape at the start of a line.
+            echo "port-sha: ${BUILD_SHA}"
+            echo
+            if [ -n "$PREV_SHA" ] && git cat-file -e "${PREV_SHA}^{commit}" 2>/dev/null; then
+              echo "Changes since the previous port (${PREV_SHA}):"
+              git log --no-merges -n 100 --pretty='- %s' "${PREV_SHA}..${BUILD_SHA}"
+            else
+              echo "Recent changes:"
+              git log --no-merges --pretty='- %s' -25 "${BUILD_SHA}"
+            fi
+          } > "$NOTES"
+          gh release edit "$PORT_ROLLING_TAG" --repo "$RELEASES_REPO" \
+            --prerelease --title "Colony Port ${VERSION}" --notes-file "$NOTES"
+          cat "$NOTES" >> "$GITHUB_STEP_SUMMARY"
