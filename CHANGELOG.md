@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- feat(desktop): simplify Appearance to Default and Custom, with two saved gradient colors while preserving the default palette and workspace background choices.
+
+- feat(onboarding): show four clear setup steps, require a successful agent reply before entry, and let owners review memories from selected local AI history.
+
 - fix(onboarding): retry a slow or rate-limited relay read during first-job approval instead of failing the setup.
 - feat(desktop): pick the reasoning effort for a subscription teammate, with each model's own options and its own default read from the provider.
 - fix(desktop): the Model you choose for a teammate is the model that runs; a stale BUZZ_ACP_MODEL saved on an older agent no longer overrides it silently.

@@ -44,6 +44,7 @@ export function CommunityThemeController() {
     accent: theme.accentColor,
     followSystem: theme.followSystem,
     gradientPattern: theme.gradientPattern,
+    customGradient: theme.customGradient,
   });
 
   const currentPreferenceRef = useRef<CommunityThemePreference>({
@@ -52,6 +53,7 @@ export function CommunityThemeController() {
     accent: theme.accentColor,
     followSystem: theme.followSystem,
     gradientPattern: theme.gradientPattern,
+    customGradient: theme.customGradient,
   });
   currentPreferenceRef.current = {
     version: 1,
@@ -59,6 +61,7 @@ export function CommunityThemeController() {
     accent: theme.accentColor,
     followSystem: theme.followSystem,
     gradientPattern: theme.gradientPattern,
+    customGradient: theme.customGradient,
   };
 
   const applyPreference = useCallback(
@@ -197,6 +200,7 @@ export function CommunityThemeController() {
       accent: theme.accentColor,
       followSystem: theme.followSystem,
       gradientPattern: theme.gradientPattern,
+      customGradient: theme.customGradient,
     };
     const persistenceAction = communityThemePersistenceAction(
       expectedAppliedRef.current,
@@ -220,6 +224,7 @@ export function CommunityThemeController() {
     theme.accentColor,
     theme.followSystem,
     theme.gradientPattern,
+    theme.customGradient,
   ]);
 
   return null;

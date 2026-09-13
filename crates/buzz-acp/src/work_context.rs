@@ -1774,4 +1774,24 @@ mod base_prompt_tests {
             "the base prompt must say what to do when the work has no initiative"
         );
     }
+
+    /// Agents wrote captions, prospect emails and pages as if the audience
+    /// already knew the business: abstract copy that only reads to someone
+    /// familiar with "us". The rule has to name the audience of the
+    /// deliverable, not the person who asked for it.
+    #[test]
+    fn the_prompt_tells_agents_to_write_for_an_audience_that_never_heard_of_us() {
+        assert!(
+            BASE_PROMPT.contains("### Write for the audience, who has never heard of us"),
+            "the base prompt must carry the audience rule"
+        );
+        assert!(
+            BASE_PROMPT.contains("the person who asked is not the reader"),
+            "the base prompt must separate the asker from the audience"
+        );
+        assert!(
+            BASE_PROMPT.contains("Never write as if the reader already knows us"),
+            "the base prompt must forbid copy that assumes familiarity"
+        );
+    }
 }

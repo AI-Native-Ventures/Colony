@@ -69,6 +69,10 @@ const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 /** Serve the OpenAI-compatible upstream consumed by the real local credits gateway. */
 export async function createOnboardingFixtureProvider() {
   let context;
+  let probeAuthorized = false;
+  let probeNonce;
+  let probeTool;
+  const probeRequests = [];
   let error;
   let calls = 0;
   const requests = [];
@@ -91,6 +95,137 @@ export async function createOnboardingFixtureProvider() {
         assert.ok(Buffer.byteLength(raw) <= 4 * 1024 * 1024);
       }
       const body = JSON.parse(raw);
+      if (!context && probeAuthorized) {
+        const prompt = JSON.stringify(body.messages);
+        const nonce = [
+          ...prompt.matchAll(
+            /Colony connection test\. Reply in this thread with a short greeting and this verification code: ([a-f0-9-]{36})\. Use your messaging tool to post exactly one reply in this thread\. Do not use other tools or start any other work\./g,
+          ),
+        ].at(-1)?.[1];
+        assert.ok(
+          nonce,
+          "Only the exact onboarding verification prompt is authorized",
+        );
+        assert.ok(
+          !probeNonce || probeNonce === nonce,
+          "One verification turn per authorization",
+        );
+        assert.ok(probeRequests.length < 3, "Bounded verification call budget");
+        probeNonce = nonce;
+        const completion =
+          typeof body.messages.at(-1)?.content === "string" &&
+          body.messages.at(-1).content.startsWith("You have stopped.");
+        let message;
+        if (!probeTool) {
+          assert.equal(completion, false);
+          const blocks = body.messages.flatMap((entry) =>
+            typeof entry.content === "string"
+              ? entry.content.split("Event ID: ").slice(1)
+              : [],
+          );
+          const block = blocks.findLast((value) =>
+            value.includes(`verification code: ${nonce}.`),
+          );
+          assert.ok(block, "Verification must have a real event coordinate");
+          const eventId = block.match(/^([a-f0-9]{64})\n/)?.[1];
+          const channel = block.match(/\nChannel: ([^\n]+)/)?.[1];
+          const channelId = channel?.match(
+            /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/,
+          )?.[0];
+          assert.ok(
+            eventId && channelId,
+            "Bounded channel and reply coordinates",
+          );
+          const name = body.tools?.find((tool) =>
+            tool.function.name.endsWith("__shell"),
+          )?.function.name;
+          assert.ok(
+            name,
+            "The actual managed agent exposes its messaging shell",
+          );
+          const command = `buzz messages send --channel ${channelId} --reply-to ${eventId} --content ${quote(`Hello, your Colony connection is ready. ${nonce}`)}`;
+          probeTool = {
+            actor: "scout",
+            stage: "connection-test",
+            command,
+            toolCallId: `onboarding-call-${requestNumber}`,
+          };
+          tools.push(probeTool);
+          message = {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: probeTool.toolCallId,
+                type: "function",
+                function: {
+                  name,
+                  arguments: JSON.stringify({ command, timeout_ms: 15000 }),
+                },
+              },
+            ],
+          };
+        } else {
+          const result = readFixtureShellResult(
+            body.messages,
+            probeTool.toolCallId,
+          );
+          assert.equal(result.exitCode, 0);
+          assert.equal(result.timedOut, false);
+          assert.equal(
+            result.accepted,
+            true,
+            "Verification reply must be accepted by the real relay",
+          );
+          if (
+            !toolResults.some((entry) => entry.toolCallId === result.toolCallId)
+          )
+            toolResults.push({
+              actor: "scout",
+              stage: "connection-test",
+              ...result,
+            });
+          message = {
+            role: "assistant",
+            content: completion
+              ? '{"complete":true}'
+              : "Posted the verification reply.",
+          };
+        }
+        const responseId = `onboarding-${requestNumber}`;
+        const usage = {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+        };
+        const record = {
+          actor: "scout",
+          stage: "connection-test",
+          completion,
+          model: body.model,
+          responseId,
+          usage,
+        };
+        requests.push(record);
+        probeRequests.push(record);
+        response.setHeader("Content-Type", "application/json");
+        response.end(
+          JSON.stringify({
+            id: responseId,
+            object: "chat.completion",
+            model: body.model,
+            usage,
+            choices: [
+              {
+                index: 0,
+                message,
+                finish_reason: message.tool_calls ? "tool_calls" : "stop",
+              },
+            ],
+          }),
+        );
+        return;
+      }
       assert.ok(
         context,
         "No model calls are allowed before explicit staffing and Start",
@@ -257,6 +392,21 @@ export async function createOnboardingFixtureProvider() {
   return {
     httpUrl: `http://127.0.0.1:${server.address().port}`,
     requests,
+    probeRequests,
+    authorizeConnectionTest() {
+      assert.equal(context, undefined);
+      assert.equal(probeAuthorized, false);
+      assert.equal(
+        calls,
+        0,
+        "No upstream call before explicit probe authorization",
+      );
+      probeAuthorized = true;
+    },
+    finishConnectionTest() {
+      assert.ok(probeRequests.length > 0);
+      probeAuthorized = false;
+    },
     get receivedCallCount() {
       return calls;
     },

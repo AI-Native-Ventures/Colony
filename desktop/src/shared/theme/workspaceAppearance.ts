@@ -1,3 +1,4 @@
+import { customGradientStops, type CustomGradient } from "./customGradient";
 import { hexToHsl } from "./adaptive-theme";
 
 /** The static background treatments offered in Colony Appearance. */
@@ -58,7 +59,10 @@ function hslToHex(hue: number, saturation: number, lightness: number): string {
 }
 
 /** One accent supplies the chrome and quieter, opaque reading surfaces. */
-export function deriveWorkspaceAppearance(accent: string): {
+export function deriveWorkspaceAppearance(
+  accent: string,
+  custom?: CustomGradient,
+): {
   light: WorkspacePalette;
   dark: WorkspacePalette;
 } {
@@ -70,7 +74,7 @@ export function deriveWorkspaceAppearance(accent: string): {
   const companion =
     hue >= 290 || hue < 45 ? 32 : hue >= 90 && hue <= 180 ? 210 : hue - 40;
   const tint = (h: number, s: number, l: number) => hslToHex(h, s * chroma, l);
-  return {
+  const palettes = {
     light: {
       chromeStart: tint(hue, 65, 86),
       chromeMiddle: tint(companion, 75, 86),
@@ -94,6 +98,27 @@ export function deriveWorkspaceAppearance(accent: string): {
       mutedForeground: tint(hue, 14, 72),
     },
   };
+  const stops = custom ? customGradientStops(custom) : null;
+  if (stops) {
+    for (const mode of ["light", "dark"] as const) {
+      const top = stops[mode === "light" ? "lightTop" : "darkTop"];
+      const bottom = stops[mode === "light" ? "lightBottom" : "darkBottom"];
+      palettes[mode].chromeStart = top;
+      palettes[mode].chromeMiddle = `#${[1, 3, 5]
+        .map((offset) =>
+          Math.round(
+            (Number.parseInt(top.slice(offset, offset + 2), 16) +
+              Number.parseInt(bottom.slice(offset, offset + 2), 16)) /
+              2,
+          )
+            .toString(16)
+            .padStart(2, "0"),
+        )
+        .join("")}`;
+      palettes[mode].chromeEnd = bottom;
+    }
+  }
+  return palettes;
 }
 
 /** Shared by the native app surface and its Appearance previews. */
@@ -123,8 +148,9 @@ export function applyWorkspaceAppearance(
   root: HTMLElement,
   accent: string,
   pattern: WorkspaceGradientPattern,
+  custom?: CustomGradient,
 ): void {
-  const palettes = deriveWorkspaceAppearance(accent);
+  const palettes = deriveWorkspaceAppearance(accent, custom);
   root.dataset.workspaceGradient = pattern;
   for (const mode of ["light", "dark"] as const) {
     const palette = palettes[mode];

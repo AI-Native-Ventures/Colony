@@ -66,10 +66,8 @@ test("creating a community starts the founder walk at the company screen", async
   await expect(page.getByTestId("onboarding-account")).toHaveCount(0);
   await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
   const steps = page.getByTestId("onboarding-step-counter");
-  await expect(steps.locator('[aria-current="step"]')).toHaveText(
-    "1 · Business",
-  );
-  await expect(steps).toContainText("2 · Power");
+  await expect(steps.locator('[aria-current="step"]')).toHaveText("1Business");
+  await expect(steps).toContainText("2Connect and test");
   // The request is recorded, so a relaunch halfway through the walk resumes
   // it instead of dropping the person back on the choice screen.
   await expect

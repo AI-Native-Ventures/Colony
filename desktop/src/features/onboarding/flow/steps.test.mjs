@@ -10,14 +10,19 @@ import {
   backStep,
 } from "./steps.ts";
 
-test("three steps keep recovery inside account setup", () => {
+test("four steps keep recovery inside account setup", () => {
   const visibility = { invitesEnabled: false, creditsNeeded: true };
-  assert.deepEqual(visibleSteps(visibility), ["account", "company", "brain"]);
+  assert.deepEqual(visibleSteps(visibility), [
+    "account",
+    "company",
+    "brain",
+    "history",
+  ]);
   assert.deepEqual(stepPosition("recovery", visibility), {
     index: 0,
-    total: 3,
+    total: 4,
   });
-  assert.deepEqual(stepPosition("company", visibility), { index: 1, total: 3 });
+  assert.deepEqual(stepPosition("company", visibility), { index: 1, total: 4 });
   assert.equal(nextStep("account", EMPTY_ANSWERS), "recovery");
   assert.equal(nextStep("recovery", EMPTY_ANSWERS), "company");
   assert.equal(nextStep("company", EMPTY_ANSWERS), "brain");
@@ -59,5 +64,5 @@ test("power resumes only after explicit business confirmation", () => {
     "recovery",
   );
   assert.equal(resumeStep({ ...confirmed, account: null }), "account");
-  assert.equal(nextStep("brain", confirmed), "done");
+  assert.equal(nextStep("brain", confirmed), "history");
 });
