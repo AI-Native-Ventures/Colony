@@ -315,6 +315,7 @@ export async function completeFixtureOnboarding({
     [["h", channelId]],
   );
   const setup = await completeFixtureScoutSetup({
+    directory: path.dirname(path.dirname(recoveryPath)),
     page,
     invoke,
     relay,

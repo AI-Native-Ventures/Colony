@@ -265,3 +265,45 @@ export async function proveFixtureTeamRecovery({
     evidence: await reader.failureEvidence(),
   });
 }
+
+/** Observe the real outbox drain before taking a reload baseline; never publish here. */
+export async function waitForSetupPublication({
+  directory,
+  account,
+  readRelayRecords,
+}) {
+  const { retentionPath } = recoveryScope(directory, account);
+  await exactFile(retentionPath);
+  const deadline = Date.now() + 75_000;
+  while (Date.now() < deadline) {
+    const db = new DatabaseSync(retentionPath, { readOnly: true });
+    let rows;
+    try {
+      db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=1000;");
+      rows = db
+        .prepare(
+          "SELECT pending_sync,raw_event FROM persona_events WHERE pubkey=?",
+        )
+        .all(account.ownerPubkey);
+    } finally {
+      db.close();
+    }
+    const records = await readRelayRecords();
+    const ids = new Set(records.map((record) => record.id));
+    const setupRows = rows.filter((row) =>
+      [30175, 30176, 30177, 30179, 30190].includes(JSON.parse(row.raw_event).kind),
+    );
+    if (
+      setupRows.length > 0 &&
+      setupRows.every(
+        (row) => row.pending_sync === 0 && ids.has(JSON.parse(row.raw_event).id),
+      )
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  assert.fail(
+    "Setup records must be acknowledged by the relay before testing reload",
+  );
+}

@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { verifyEvent } from "nostr-tools/pure";
 import { expect } from "@playwright/test";
+import { waitForSetupPublication } from "./team-recovery.mjs";
 import { FIRST_JOB_BRIEF, SCOUT_SETUP_REPLY } from "./provider.mjs";
 import { waitForAnimations } from "../../tests/helpers/animations.ts";
 
@@ -390,6 +391,7 @@ async function assertScoutReadyLayout(page) {
 
 /** Complete the owner-confirmed setup and return its signed records. */
 export async function completeFixtureScoutSetup({
+  directory,
   page,
   invoke,
   relay,
@@ -541,6 +543,11 @@ export async function completeFixtureScoutSetup({
     0,
     "Scout setup does not dispatch a business job",
   );
+  await waitForSetupPublication({
+    directory,
+    account: { ownerPubkey, relayUrl },
+    readRelayRecords: () => readRelaySetupRecords(relay, communityHost),
+  });
   const approvedRelaySetupRecords = await readRelaySetupRecords(
     relay,
     communityHost,
