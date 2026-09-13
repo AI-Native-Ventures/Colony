@@ -4926,14 +4926,19 @@ mod tests {
         let agent_pubkey_hex = keys.public_key().to_hex();
         let text = serde_json::to_string(&json!(["EVENT", subscription_id, event]))
             .expect("serialize relay frame");
+        // Colony routes asks through their own queue and pins the relay; the
+        // upstream helper (#7010) predates both, so give it throwaways.
+        let (ask_tx, _ask_rx) = mpsc::channel::<Event>(4);
+        let relay_pin = RelayPin::new("wss://relay.example.com").expect("pinnable test relay");
         handle_ws_message(
             Message::Text(text.into()),
             ws,
             event_tx,
+            &ask_tx,
             observer_control_tx,
             state,
             &keys,
-            "wss://relay.example.com",
+            &relay_pin,
             &agent_pubkey_hex,
             None,
         )
