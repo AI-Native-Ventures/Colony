@@ -340,11 +340,8 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys, personas: &[String]) -
     let lead = format!("lead-{}", &suffix[..12]);
     let mut persona_ids = vec![lead.clone()];
     persona_ids.extend(personas.iter().cloned());
-    // Named for the coordination slug on purpose: a send that mentions no
-    // agent has no persona to resolve a team from, and the coordination team
-    // is what `owning_team_for_chat` falls back to. A company without one
-    // cannot charge unaddressed chat anywhere, which is a company setup
-    // question rather than something this suite should paper over.
+    // Retain a legacy coordination team in these fixtures to prove existing
+    // membership does not take ownership of a direct assignment.
     let team = CompanyTeamRef {
         id: format!("team-{}-company-coordination", &suffix[..12]),
         lead_persona_id: lead,
@@ -1206,6 +1203,28 @@ async fn a_direct_agent_task_needs_no_team_and_rejects_an_unknown_persona() {
     assert_eq!(task.assignee_persona_ids, vec![persona]);
     let replay = attached_task(&mut client, &owner, &relay, &action).await;
     assert_eq!(replay.id, task.id);
+
+    seed_member(&agent, "member", Some(&owner)).await;
+    let mut agent_client = BuzzTestClient::connect(&relay_url(), &agent)
+        .await
+        .expect("agent");
+    let report = EventBuilder::new(
+        Kind::Custom(KIND_TASK_REPORT as u16),
+        serde_json::json!({ "schema": "colony.task-report/v1", "note": null }).to_string(),
+    )
+    .tags([Tag::parse(["task", task.id.as_str()]).expect("task tag")])
+    .sign_with_keys(&agent)
+    .expect("report");
+    assert!(
+        send_past_transport_stall(&mut agent_client, report, "direct completion")
+            .await
+            .accepted
+    );
+    let closed = await_status(&mut client, &relay, &task.id, TaskStatus::Completed).await;
+    assert_eq!(closed.reported_complete_by, task.assignee_persona_ids);
+    assert_eq!(closed.owning_team_id, None);
+    assert_eq!(closed.qa_persona_id, None);
+
     let unknown = request(
         &format!("unknown-{}", Uuid::new_v4().simple()),
         "unknown-send",

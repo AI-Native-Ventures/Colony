@@ -496,6 +496,8 @@ const TASK_FIELDS: Record<string, FieldKind> = {
  * values before the exact-shape check instead of refusing every older head.
  */
 const TASK_FIELD_DEFAULTS: Record<string, unknown> = {
+  owningTeamId: null,
+  qaPersonaId: null,
   dependsOn: [],
   subject: null,
   stage: null,

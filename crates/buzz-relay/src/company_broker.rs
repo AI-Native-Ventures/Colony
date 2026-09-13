@@ -786,7 +786,11 @@ async fn validate_payload_against_state(
                 }
                 None => None,
             };
-            let teams = load_team_refs(tenant, state, &action_author).await?;
+            let teams = if task.owning_team_id.is_some() || task.reviewer_team_id.is_some() {
+                load_team_refs(tenant, state, &action_author).await?
+            } else {
+                Vec::new()
+            };
             if task.owning_team_id.is_none() {
                 let mut personas = task.assignee_persona_ids.clone();
                 personas.extend(task.qa_persona_id.iter().cloned());

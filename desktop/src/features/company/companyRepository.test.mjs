@@ -1396,3 +1396,16 @@ test("direct task heads reject explicit, duplicate and malformed team tags", () 
     assert.equal(parseTaskHead(event, RELAY_PUBKEY).ok, false);
   }
 });
+
+test("direct task readers default omitted optional ownership like Rust", () => {
+  const { owningTeamId, qaPersonaId, ...record } = TASK;
+  const event = head(30181, record, [
+    ["d", record.id],
+    ["cost-centre", record.costCentreId],
+    ["initiative", record.initiativeId],
+  ]);
+  const result = parseTaskHead(event, RELAY_PUBKEY);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.value.owningTeamId, null);
+  assert.equal(result.value.qaPersonaId, null);
+});
