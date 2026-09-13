@@ -32,7 +32,7 @@ pub(crate) const COORDINATION_TEAM_SLUG: &str = "company-coordination";
 pub struct ImplicitTaskPlan {
     /// The stable Task identifier.
     pub task_id: String,
-    /// The single team accountable for it.
+    /// Optional team explicitly accountable for it. Direct chat has none.
     pub owning_team_id: Option<String>,
     /// The action to sign and publish.
     pub action: Box<CompanyAction>,
@@ -270,7 +270,7 @@ pub struct UserTaskRequest<'a> {
 pub struct UserTaskPlan {
     /// The stable Task identifier.
     pub task_id: String,
-    /// The single team accountable for it.
+    /// Optional team explicitly accountable for it. Direct chat has none.
     pub owning_team_id: Option<String>,
     /// The action to sign and publish.
     pub action: Box<CompanyAction>,

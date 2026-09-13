@@ -113,5 +113,7 @@ changes alone cannot establish that the installed app can send successfully.
 
 ## Current proof state
 
-Product direction approved; source dependency mapping completed. No application
-code changed, no tests run, and no live send repair claimed by this document.
+Implementation is on `codex/standalone-agent-work`. Desktop contract regressions
+were observed failing before the fix and passing afterward. Focused desktop tests
+and type checking pass. Hosted Rust/integration validation and packaged/live
+message, response, and Credits evidence remain required.

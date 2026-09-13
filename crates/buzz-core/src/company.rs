@@ -378,8 +378,7 @@ pub struct CompanyTask {
     /// team's own job. `None` means the owning team reviews itself, which is
     /// the only thing this contract could express before this field existed.
     ///
-    /// Accountability is unchanged: `owning_team_id` still names the single
-    /// team accountable for delivery. This names who holds the gate in front
+    /// When team-owned, `owning_team_id` names the team accountable for delivery. This names who holds the gate in front
     /// of it, which is a different question — a pipeline stage that declares
     /// a `reviewerTeamId` is saying exactly that the team doing the work
     /// must not be the team that signs it off.
@@ -711,7 +710,7 @@ pub struct AgentWorkContext {
     pub task_id: String,
     /// Optional initiative containing the task.
     pub initiative_id: Option<String>,
-    /// Team accountable for the task.
+    /// Optional team accountable for the task. Direct work is scoped to the workspace.
     pub owning_team_id: Option<String>,
     /// Cost centre charged for the turn.
     pub cost_centre_id: String,

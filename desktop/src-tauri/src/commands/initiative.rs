@@ -345,16 +345,9 @@ struct PersonaBackfillOutcome {
 /// `personas`, and `teams` in place; the caller only needs to persist whatever
 /// the returned outcome flags as changed.
 ///
-/// An agent with an existing `persona_id` is untouched (cheap read). One with
-/// none gets a persona minted from its own identity — never a shared builtin
-/// like `builtin:fizz`, which would misattribute its work to a different
-/// employee — linked onto the record, and enrolled as a member of the
-/// coordination team for `relay_url`, the community this send arrived in.
-/// Membership matters, not just a coordination team
-/// existing: `owning_team_for_chat`'s ambiguous-work fallback would resolve
-/// even without it (see `fresh_install_has_a_coordination_team_for_ambiguous_chat_work`
-/// below), but only a real member gets `assignee_persona_ids` populated on
-/// the Task it creates.
+/// An agent with an existing `persona_id` is untouched. A legacy agent gets
+/// its own stable persona, without creating a team or changing memberships.
+/// The relay validates the resulting direct assignment against its roster.
 ///
 /// Only remaining failure: `pubkey_normalized` matches no agent record at
 /// all. That case is genuinely un-repairable, so it keeps the exact error
@@ -650,9 +643,8 @@ pub struct UserTaskResult {
 /// title, are still two Tasks a human meant to create separately - see
 /// [`buzz_sdk_pkg::implicit_task::user_task_id`].
 ///
-/// `owning_team_id` and `cost_centre_id` default to the company's
-/// coordination team and internal cost centre when omitted, so a caller never
-/// has to resolve either before a human can create a Task.
+/// Omitted team ownership creates workspace work. The cost centre defaults
+/// to the company's internal cost centre.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_user_task(
