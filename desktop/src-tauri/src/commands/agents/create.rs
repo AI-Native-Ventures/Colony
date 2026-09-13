@@ -304,6 +304,7 @@ pub(crate) async fn create_managed_agent_with_preparation(
         // The role two members' instances share, inherited from the linked
         // definition (docs/design/role-agents.html).
         let mut record = crate::managed_agents::ManagedAgentRecord {
+            superseded_by: None,
             // An agent created here is the workspace's own, never provisioned.
             provisioned: None,
             provisioned_version: None,
