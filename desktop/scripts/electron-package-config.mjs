@@ -4,15 +4,23 @@ export const ELECTRON_BETA_RELAY = Object.freeze({
   http: "https://relay.colony.ainative.ventures",
 });
 
+/** The port channel talks only to the canary relay, never to production. */
+export const ELECTRON_PORT_RELAY = Object.freeze({
+  websocket: "wss://relay-canary.colony.ainative.ventures",
+  http: "https://relay-canary.colony.ainative.ventures",
+});
+
 /**
  * Provision the branded, installable beta independently of a developer's
  * current relay. Local overrides remain available through electron:dev.
+ * A port build is the one channel that embeds a different relay.
  */
-export function electronBetaBuildEnv(env) {
+export function electronBetaBuildEnv(env, { port = false } = {}) {
+  const relay = port ? ELECTRON_PORT_RELAY : ELECTRON_BETA_RELAY;
   const configured = {
     ...env,
-    BUZZ_RELAY_URL: ELECTRON_BETA_RELAY.websocket,
-    BUZZ_RELAY_HTTP: ELECTRON_BETA_RELAY.http,
+    BUZZ_RELAY_URL: relay.websocket,
+    BUZZ_RELAY_HTTP: relay.http,
   };
   // Signup uses this root's account API; a fresh identity must not join the
   // root community before onboarding provisions its own business.

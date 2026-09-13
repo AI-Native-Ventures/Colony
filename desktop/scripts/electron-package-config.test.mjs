@@ -6,6 +6,7 @@ import {
   PORT_KEYRING_SERVICE,
   electronBetaBuildEnv,
   ELECTRON_BETA_RELAY,
+  ELECTRON_PORT_RELAY,
   electronPackageVariant,
 } from "./electron-package-config.mjs";
 
@@ -109,6 +110,23 @@ test("a canary cannot be built as a fixture, a debug build or a candidate", () =
   // Ad-hoc stays explicit, and a local canary is allowed to ask for it.
   assert.throws(() => electronPackageVariant(["--ad-hoc"]), /requires/);
   assert.equal(electronPackageVariant(["--canary", "--ad-hoc"]).canary, true);
+});
+
+test("the port build embeds the canary relay, never production's", () => {
+  const env = electronBetaBuildEnv(
+    { BUZZ_RELAY_URL: "wss://relay.colony.ainative.ventures" },
+    { port: true },
+  );
+  assert.equal(env.BUZZ_RELAY_URL, ELECTRON_PORT_RELAY.websocket);
+  assert.equal(env.BUZZ_RELAY_HTTP, ELECTRON_PORT_RELAY.http);
+  assert.equal(
+    electronBetaBuildEnv({}).BUZZ_RELAY_URL,
+    ELECTRON_BETA_RELAY.websocket,
+  );
+  assert.equal(
+    electronBetaBuildEnv({}, { port: false }).BUZZ_RELAY_URL,
+    ELECTRON_BETA_RELAY.websocket,
+  );
 });
 
 test("the port is a separate app from stable and canary, never a renamed one", () => {
