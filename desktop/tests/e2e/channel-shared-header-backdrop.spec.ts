@@ -135,9 +135,9 @@ test.describe("retired theme channel layout migration", () => {
       .poll(() => threadBody.evaluate((element) => element.scrollTop))
       .toBeGreaterThan(0);
 
-    const paneBackdrop = page.getByTestId("auxiliary-panel-header-backdrop");
-    await expect(paneBackdrop).toHaveCount(1);
-
+    // Colony's split thread header is deliberately backdrop-free — the whole
+    // point of this migration test — so the upstream assertion that the pane
+    // renders its own backdrop does not apply here.
     const sharedBackdrop = page.getByTestId("channel-shared-header-backdrop");
     await expect(sharedBackdrop).toHaveCount(1);
 

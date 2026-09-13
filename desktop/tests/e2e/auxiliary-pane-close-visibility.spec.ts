@@ -96,18 +96,25 @@ test.describe("auxiliary pane close visibility", () => {
     const backdrop = page.getByTestId("channel-shared-header-backdrop");
     await expect(backdrop).toHaveCount(1);
 
-    // The pane is an isolated stacking context (`isolate`) that sits over the
-    // channel timeline. Its close button paints correctly only when the pane's
-    // own stacking level clears the shared-header backdrop it overlaps. Assert
-    // the pane both establishes that context and outranks the backdrop.
-    const pane = page.getByTestId("message-thread-panel");
-    const [paneIsolation, paneZIndex, backdropZIndex] = await Promise.all([
-      pane.evaluate((element) => getComputedStyle(element).isolation),
-      pane.evaluate((element) => Number(getComputedStyle(element).zIndex)),
-      backdrop.evaluate((element) => Number(getComputedStyle(element).zIndex)),
-    ]);
+    // Upstream asserts `isolation: isolate` and a z-index on
+    // `message-thread-panel`; in Colony that stacking context belongs to
+    // `RightAuxiliaryPane`, which only wraps the panel in split layout, so the
+    // panel itself carries neither. What the fix has to guarantee either way is
+    // that the backdrop does not swallow the close button, so this hit-tests
+    // the button's own centre point.
+    const closeBox = await closeButton.boundingBox();
+    if (!closeBox) throw new Error("Expected the close button to have a box");
+    const topElementOwnsClose = await page.evaluate(
+      ({ x, y }) => {
+        const hit = document.elementFromPoint(x, y);
+        return Boolean(hit?.closest('[data-testid="auxiliary-panel-close"]'));
+      },
+      {
+        x: closeBox.x + closeBox.width / 2,
+        y: closeBox.y + closeBox.height / 2,
+      },
+    );
 
-    expect(paneIsolation).toBe("isolate");
-    expect(paneZIndex).toBeGreaterThan(backdropZIndex);
+    expect(topElementOwnsClose).toBe(true);
   });
 });
