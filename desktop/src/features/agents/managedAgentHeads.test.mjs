@@ -463,4 +463,3 @@ test("a role held by a workspace's own hire behaves exactly as before", () => {
     "executive",
   );
 });
-
