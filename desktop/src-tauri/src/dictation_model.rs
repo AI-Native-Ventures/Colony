@@ -32,7 +32,7 @@ pub(crate) fn verified_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         }
         hash.update(&buffer[..count]);
     }
-    if format!("{:x}", hash.finalize()) != manifest.sha256 {
+    if hex::encode(hash.finalize()) != manifest.sha256 {
         return Err("The offline dictation model is damaged. Please reinstall Colony.".into());
     }
     Ok(path)
