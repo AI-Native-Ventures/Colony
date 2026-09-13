@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { startBootWarm } from "@/features/agents/acpRuntimesQuery";
 import { setDesktopAppBadge } from "@/features/notifications/lib/desktop";
+import { useForegroundQueryRefresh } from "@/features/workflows/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import { useRelayResumeTriggers } from "@/shared/api/useRelayResumeTriggers";
 
@@ -22,6 +23,7 @@ export function useAppShellLifecycleEffects({
   // Event-driven reconnect: network online / focus / visibility short-circuit
   // the backoff timer when the relay session is degraded (CMD+R gap G1).
   useRelayResumeTriggers();
+  useForegroundQueryRefresh();
 
   // Warm the ACP runtime catalog once at app launch. The shared runtime-catalog
   // cache is in-memory only, so it starts cold every boot; the cheap discovery

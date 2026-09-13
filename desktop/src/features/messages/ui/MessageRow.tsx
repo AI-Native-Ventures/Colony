@@ -37,6 +37,7 @@ import {
 } from "@/shared/constants/kinds";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
 import { cn } from "@/shared/lib/cn";
+import { useMeasuredCssVariable } from "@/shared/layout/useMeasuredCssVariable";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
@@ -53,9 +54,7 @@ import type {
 import type { TimelineMessage } from "@/features/messages/types";
 import { parseFirstJobSuggestion } from "@/features/onboarding/firstJobSuggestion";
 import { parseScoutOnboardingRoot } from "@/features/onboarding/channelOnboardingRuntime/protocol";
-import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
-import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
-import { VideoReviewTimecodeButton } from "@/shared/ui/VideoReviewTimecodeButton";
+import { VideoReviewCommentMarkdown } from "@/shared/ui/VideoReviewCommentMarkdown";
 import { MessageActionBar } from "./MessageActionBar";
 import { editMessage } from "@/shared/api/tauri";
 import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
@@ -177,6 +176,19 @@ export const MessageRow = React.memo(
     } = useReactionHandler(message, onToggleReaction);
     const { openReminder, activeReminderEventIds } = useRemindLater();
     const hasActiveReminder = activeReminderEventIds.has(message.id);
+    // The hover/focus action rail is absolutely positioned over the row, so it
+    // takes no layout space of its own. Measure its rendered footprint and
+    // reserve it in the message-header row (see `headerNode`) so a long author
+    // name ellipsizes before the rail instead of painting underneath it. The
+    // reservation is unconditional — the rail appears on hover AND
+    // focus-within, and padding must not reflow the header mid-interaction.
+    const articleRef = React.useRef<HTMLElement | null>(null);
+    const actionRailMeasureRef = useMeasuredCssVariable({
+      cssVariable: "--message-action-rail-width",
+      dimension: "inline",
+      resetValue: "0px",
+      targetRef: articleRef,
+    });
     const handleRemindLater = React.useCallback(
       (msg: TimelineMessage) => {
         openReminder({
@@ -245,7 +257,6 @@ export const MessageRow = React.memo(
     const bodyOffsetClass = emojiOnly ? "mt-1" : "-mt-0.5";
 
     const { nonDmChannelNames: channelNames } = useChannelNavigation();
-    const openVideoReviewAt = useOpenVideoReviewAt();
 
     const indentRem = getThreadReplyIndentRem(message.depth);
     const descendantGuideOffsetRem = connectDescendants
@@ -359,12 +370,14 @@ export const MessageRow = React.memo(
             );
           }
 
-          const reviewRootEventId = videoReviewCommentRootId;
-          const reviewTimecode = reviewRootEventId
-            ? parseVideoReviewTimecode(message.body)
-            : null;
+          // A video-review comment renders its timecode inside the first
+          // Markdown line (upstream #5748); everything else keeps Colony's
+          // long-prose disclosure wrapper.
+          const ProseComponent = videoReviewCommentRootId
+            ? VideoReviewCommentMarkdown
+            : MessageProse;
           const markdown = (
-            <MessageProse
+            <ProseComponent
               scopeKey={`${channelId}:${message.id}:${layoutVariant}`}
               channelNames={channelNames}
               className={cn(
@@ -380,7 +393,7 @@ export const MessageRow = React.memo(
                 message,
                 isKnownAgentPubkey,
               )}
-              content={reviewTimecode?.text ?? message.body}
+              content={message.body}
               messageId={message.id}
               linkPreviewsSuppressed={linkPreviewsSuppressed}
               linkPreviewTags={message.tags}
@@ -392,6 +405,7 @@ export const MessageRow = React.memo(
               mentionPubkeysByName={mentionPubkeysByName}
               searchQuery={searchQuery}
               snapshotSharedBy={snapshotSharedBy}
+              videoReviewCommentRootId={videoReviewCommentRootId}
               videoReviewContext={videoReviewContext}
             />
           );
@@ -421,23 +435,7 @@ export const MessageRow = React.memo(
               </React.Suspense>
             );
           }
-          if (!reviewRootEventId || !reviewTimecode || !openVideoReviewAt) {
-            return markdown;
-          }
-
-          return (
-            <div className="flex min-w-0 items-start gap-1.5">
-              <VideoReviewTimecodeButton
-                surface="message"
-                timecode={reviewTimecode.timecode}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openVideoReviewAt(reviewRootEventId, reviewTimecode.seconds);
-                }}
-              />
-              <div className="min-w-0 flex-1">{markdown}</div>
-            </div>
-          );
+          return markdown;
         }
       }
     };
@@ -557,6 +555,7 @@ export const MessageRow = React.memo(
       >
         <MessageActionBar
           channelId={channelId}
+          ref={actionRailMeasureRef}
           isFollowingThread={isFollowingThread}
           isUnread={isUnread}
           message={message}
@@ -622,12 +621,19 @@ export const MessageRow = React.memo(
       ) : null;
 
     const headerNode = isDisplayedAsContinuation ? null : (
-      <MessageHeaderRow className="colony-message-header">
+      // pe reserves the measured action-rail footprint (0px until measured) so
+      // header content ends before the rail's left edge in every rail state.
+      <MessageHeaderRow className="colony-message-header pe-[var(--message-action-rail-width,0px)]">
         {message.pubkey ? (
           <UserProfilePopover
             pubkey={message.pubkey}
             role={profilePopoverRole}
             botIdenticonValue={message.author}
+            // The trigger wrapper is a flex item whose `min-width: auto`
+            // refuses to shrink below the nowrap width of its truncating
+            // child, so a long author name overflowed the header row
+            // (upstream #7550).
+            triggerClassName="min-w-0 max-w-full"
           >
             <button
               className="truncate rounded leading-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
@@ -887,6 +893,7 @@ export const MessageRow = React.memo(
           data-open-thread-root={isOpenThreadRoot || undefined}
           data-testid="message-row"
           onAnimationEnd={handleEntranceAnimationEnd}
+          ref={articleRef}
         >
           {isThreadReplyLayout ? (
             <>

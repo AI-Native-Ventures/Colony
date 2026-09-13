@@ -55,7 +55,11 @@ import {
   starterPersonaName,
 } from "@/shared/constants/starterPersonas";
 import type { ConnectionState } from "@/shared/api/relayClientShared";
-import type { ChannelTemplate, RelayEvent } from "@/shared/api/types";
+import type {
+  ChannelTemplate,
+  FeedItemCategory,
+  RelayEvent,
+} from "@/shared/api/types";
 import { getMarkdownParseCount } from "@/shared/ui/markdown/nodeCache";
 import { syncAgentTurnsFromEvents } from "@/features/agents/activeAgentTurnsStore";
 import { recordTimeoutFromRejection } from "@/features/moderation/lib/timeoutStore";
@@ -467,6 +471,10 @@ type E2eConfig = {
     /** Reject successive mock `join_channel` calls, then resume. */
     joinChannelErrors?: string[];
     channelsReadDelayMs?: number;
+    /** Return not-modified for this many reads before resuming full payloads. */
+    channelsNotModifiedResponses?: number;
+    /** When true, a matching knownHash returns a not-modified channel payload. */
+    honorChannelsKnownHash?: boolean;
     /** Number of seeded rows in the deep-history fixture. Defaults to 600. */
     deepHistoryMessageCount?: number;
     feedReadError?: string;
@@ -495,6 +503,13 @@ type E2eConfig = {
     /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
      *  deliver live reply/aux events while an older response is in flight. */
     threadRepliesDelayMs?: number;
+    /** Hold every `get_thread_replies` response until
+     *  `__BUZZ_E2E_RELEASE_THREAD_REPLIES__()` is called. Unlike
+     *  `threadRepliesDelayMs` (a timer that self-heals inside Playwright's
+     *  auto-retry window), this is a manual gate: the thread-aux backfill
+     *  provably never lands until the test releases it, so a spec can assert
+     *  the panel's head state before any backfill can heal it. */
+    deferThreadReplies?: boolean;
     usersBatchDelayMs?: number;
     /** Delay (ms) applied to continuation channel-window requests so e2e
      *  tests can observe the in-flight prepend window. 0/undefined = instant. */
@@ -549,6 +564,10 @@ type E2eConfig = {
     nostrBindSignDelayMs?: number;
     /** Reject successive mock WebSocket connect attempts, then resume. */
     websocketConnectErrors?: string[];
+    /** Deliver AUTH synchronously, before the mock connect command resolves. */
+    websocketAuthBeforeConnectResolves?: boolean;
+    /** Stall the first AUTH signing command forever; later attempts complete. */
+    stallFirstAuthSigning?: boolean;
     stallWebsocketSends?: boolean;
     userSearchDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
@@ -928,7 +947,7 @@ type RawFeedItem = {
   // backend always emits the key, as `null` when unknown.
   channel_type?: string | null;
   tags: string[][];
-  category: "mention" | "needs_action" | "activity" | "agent_activity";
+  category: FeedItemCategory;
 };
 
 type RawHomeFeedResponse = {
@@ -1625,6 +1644,12 @@ declare global {
     __BUZZ_E2E_RELEASE_INSTALL__?: (runtimeId: string) => number;
     /** Number of installs currently held, keyed by runtime id. */
     __BUZZ_E2E_INSTALL_PENDING__?: Record<string, number>;
+    /** Flush every `get_thread_replies` call held by `deferThreadReplies`.
+     *  Returns the number of held requests released. */
+    __BUZZ_E2E_RELEASE_THREAD_REPLIES__?: () => number;
+    /** Number of `get_thread_replies` calls currently held by
+     *  `deferThreadReplies`. */
+    __BUZZ_E2E_THREAD_REPLIES_PENDING__?: () => number;
   }
 }
 
@@ -1749,6 +1774,7 @@ type DeferredGetEvent = {
   run: () => Promise<string>;
 };
 let deferredGetEventQueue: DeferredGetEvent[] = [];
+let deferredThreadRepliesQueue: Array<() => void> = [];
 let deferNextChannelsRead = false;
 let deferredChannelsReadResolve: (() => void) | null = null;
 
@@ -2040,6 +2066,12 @@ function buildMockConfigSurface(pubkey: string): {
   sources: Record<string, unknown>;
 } {
   // Oh My Pi running — mixed origins, override on model
+  // The `writeVia` payloads below are camelCase because that is what the
+  // backend emits — pinned by `wire_format_matches_typescript_contract` in
+  // `desktop/src-tauri/src/managed_agents/config_bridge/types.rs`. This mock
+  // agreed with `api/types.ts` while the real serializer emitted `env_key` /
+  // `config_id` / `config_key`, so a test against it certified a contract
+  // nothing produced. Change these only alongside that Rust test.
   const ompSurface = {
     runtimeId: "omp",
     runtimeLabel: "Oh My Pi",
@@ -3147,7 +3179,9 @@ const mockChannels: MockChannel[] = [
     description: "Casual forum for async discussions",
     topic: null,
     purpose: null,
-    last_message_at: null,
+    // Authoritative forum-post recency returned by get_channels. This must come
+    // from the native 45001/45003 query, not the stream-only 9/40002 query.
+    last_message_at: isoMinutesAgo(10),
     archived_at: null,
     created_by: ALICE_PUBKEY,
     topic_set_by: null,
@@ -3158,7 +3192,7 @@ const mockChannels: MockChannel[] = [
     max_members: null,
     nip29_group_id: null,
     created_minutes_ago: 900,
-    updated_minutes_ago: 900,
+    updated_minutes_ago: 10,
     members: [
       createMockMember(ALICE_PUBKEY, "owner", 900),
       createMockMember(MOCK_IDENTITY_PUBKEY, "member", 750),
@@ -3769,6 +3803,7 @@ const mockChannelHistoryCloses: string[] = [];
 let mockWebsocketUnavailable = false;
 let mockAppliedRelayWsUrl: string | null = null;
 const relayWebsocketConnectAttemptStarts: number[] = [];
+let mockAuthSigningAttempts = 0;
 let mockWebsocketSendMutexWedged = false;
 let mockClosedChannelLiveSubscription = false;
 const realSockets = new Map<number, WebSocket>();
@@ -5948,6 +5983,11 @@ async function handleGetThreadReplies(
   if (delayMs > 0) {
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
   }
+  if (config?.mock?.deferThreadReplies) {
+    await new Promise<void>((resolve) => {
+      deferredThreadRepliesQueue.push(resolve);
+    });
+  }
 
   return { events: page, next_cursor: nextCursor };
 }
@@ -6223,6 +6263,47 @@ function buildMockChannelWindowBounds(
  * This is the window read-model surface the overhaul introduced; without it the
  * relay-mode bridge has no handler and the timeline renders empty.
  */
+async function handleGetChannelReconnectRepair(
+  args: {
+    channelId: string;
+    since: number;
+    limit: number;
+    until?: number | null;
+    beforeId?: string | null;
+  },
+  config: E2eConfig | undefined,
+): Promise<RelayEvent[]> {
+  const kinds = new Set([
+    5, 7, 9, 9005, 40001, 40002, 40003, 40008, 40010, 40011, 40099, 45001,
+    45003, 48100, 48101, 48102, 48103,
+  ]);
+  const filter: Record<string, unknown> = {
+    "#h": [args.channelId],
+    kinds: [...kinds],
+    since: args.since,
+    limit: args.limit,
+  };
+  if (args.until != null) filter.until = args.until;
+  if (args.beforeId != null) filter.before_id = args.beforeId;
+
+  if (getIdentity(config)) return relayQuery(config, [filter]);
+  return getMockMessageStore(args.channelId)
+    .filter(
+      (event) =>
+        kinds.has(event.kind) &&
+        event.created_at >= args.since &&
+        (args.until == null ||
+          event.created_at < args.until ||
+          (event.created_at === args.until &&
+            (args.beforeId == null || event.id > args.beforeId))),
+    )
+    .sort(
+      (left, right) =>
+        right.created_at - left.created_at || left.id.localeCompare(right.id),
+    )
+    .slice(0, args.limit);
+}
+
 async function handleGetChannelWindow(
   args: {
     channelId: string;
@@ -6948,7 +7029,10 @@ function buildLastMessages(
   return map;
 }
 
-async function handleGetChannels(config: E2eConfig | undefined) {
+async function handleGetChannels(
+  payload: unknown,
+  config: E2eConfig | undefined,
+) {
   const channelsReadDelayMs = config?.mock?.channelsReadDelayMs ?? 0;
   if (channelsReadDelayMs > 0) {
     await new Promise((resolve) =>
@@ -6965,15 +7049,25 @@ async function handleGetChannels(config: E2eConfig | undefined) {
 
   const identity = getIdentity(config);
   if (!identity) {
-    // The hash is constant ("mock-hash") and channels are always returned in
-    // full — the not-modified short-circuit is intentionally never exercised
-    // here: mock channel data mutates during tests (last_message_at updates on
-    // message emission) while the hash never changes, so honoring knownHash
-    // would wrongly short-circuit after mutations.
+    // The hash is constant ("mock-hash") and full lists remain the default:
+    // mock channel data mutates during tests while the hash does not. Focused
+    // snapshot specs can opt into the not-modified branch explicitly.
     const channels = listMockChannels(config);
+    const hash = "mock-hash";
+    const knownHash = (payload as { knownHash?: unknown } | null)?.knownHash;
+    const forcedNotModified =
+      (config?.mock?.channelsNotModifiedResponses ?? 0) > 0;
+    if (forcedNotModified && config?.mock) {
+      config.mock.channelsNotModifiedResponses =
+        (config.mock.channelsNotModifiedResponses ?? 1) - 1;
+    }
     return {
-      hash: "mock-hash",
-      channels,
+      hash,
+      channels:
+        forcedNotModified ||
+        (config?.mock?.honorChannelsKnownHash && knownHash === hash)
+          ? null
+          : channels,
       last_messages: buildLastMessages(channels),
     };
   }
@@ -10238,6 +10332,16 @@ async function handleSendChannelMessage(
     );
   }
 
+  // Mirror the WebSocket send path's failure injection so specs that route
+  // the first message through the acknowledged HTTP transport still exercise
+  // `sendMessageErrors`. The real command rejects on a relay `OK false`, which
+  // surfaces to callers as a thrown error carrying the relay reason.
+  const sendMessageError =
+    kind === 9 ? config?.mock?.sendMessageErrors?.shift() : null;
+  if (sendMessageError) {
+    throw new Error(sendMessageError);
+  }
+
   // NIP-92 imeta attachments. The real relay echoes these back on the stored
   // event; mirror that here so attachment renderers (FileCard, images, video)
   // have the imeta tags they key on. `null`/empty → no extra tags.
@@ -10852,9 +10956,14 @@ async function connectMockSocket(args: { onMessage: unknown }) {
     subscriptions: new Map(),
   });
 
-  window.setTimeout(() => {
+  if (getConfig()?.mock?.websocketAuthBeforeConnectResolves) {
     sendWsText(handler, ["AUTH", `mock-challenge-${wsId}`]);
-  }, 0);
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+  } else {
+    window.setTimeout(() => {
+      sendWsText(handler, ["AUTH", `mock-challenge-${wsId}`]);
+    }, 0);
+  }
 
   return wsId;
 }
@@ -11563,6 +11672,15 @@ export function maybeInstallE2eTauriMocks() {
     }
   }
   setGlobalAgentConfigCallCount = 0;
+  mockAuthSigningAttempts = 0;
+  deferredThreadRepliesQueue = [];
+  window.__BUZZ_E2E_RELEASE_THREAD_REPLIES__ = () => {
+    const queued = deferredThreadRepliesQueue.splice(0);
+    for (const release of queued) release();
+    return queued.length;
+  };
+  window.__BUZZ_E2E_THREAD_REPLIES_PENDING__ = () =>
+    deferredThreadRepliesQueue.length;
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
     ? {
         ...config.mock.globalAgentConfig,
@@ -13692,7 +13810,7 @@ export function maybeInstallE2eTauriMocks() {
         // Consume the one-shot before reading so only the intended request is held.
         const deferred = deferNextChannelsRead;
         deferNextChannelsRead = false;
-        const channels = handleGetChannels(activeConfig);
+        const channels = handleGetChannels(payload, activeConfig);
         if (deferred) {
           await new Promise<void>((resolve) => {
             deferredChannelsReadResolve = resolve;
@@ -14546,6 +14664,11 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleGetChannelMessagesBefore>[0],
           activeConfig,
         );
+      case "get_channel_reconnect_repair":
+        return handleGetChannelReconnectRepair(
+          payload as Parameters<typeof handleGetChannelReconnectRepair>[0],
+          activeConfig,
+        );
       case "get_channel_window":
         return handleGetChannelWindow(
           payload as Parameters<typeof handleGetChannelWindow>[0],
@@ -14975,6 +15098,13 @@ export function maybeInstallE2eTauriMocks() {
       case "nip44_decrypt_from_self":
         return (payload as { ciphertext: string }).ciphertext;
       case "create_auth_event":
+        mockAuthSigningAttempts++;
+        if (
+          getConfig()?.mock?.stallFirstAuthSigning &&
+          mockAuthSigningAttempts === 1
+        ) {
+          return new Promise<string>(() => {});
+        }
         if (identity) {
           return JSON.stringify(
             await signWithIdentity(identity, {

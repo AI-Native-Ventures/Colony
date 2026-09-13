@@ -182,7 +182,7 @@ start_relay_nohup() {
     ./scripts/ci-prefetch-hermit-pkg.sh pgschema
     ./bin/pgschema apply --file schema/schema.sql --auto-approve
     docker compose -p "${project}" -f "${compose_file}" exec -T postgres \
-      psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql
+      psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/reconcile-schema-after-pgschema.sql
   else
     warn "Backing services owned by ${owner}; reusing their database WITHOUT schema reset."
   fi

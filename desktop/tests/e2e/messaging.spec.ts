@@ -1,9 +1,16 @@
+import { readFileSync } from "node:fs";
+
 import { expect, test, type Locator } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { expectCornerRadiusPx, expectSmoothCorners } from "../helpers/css";
 import { openSettings } from "../helpers/settings";
+
+const LINK_PREVIEW_IMAGE = readFileSync(
+  new URL("../fixtures/github-pr-5629-og.png", import.meta.url),
+);
+const LINK_PREVIEW_IMAGE_DATA_URL = `data:image/png;base64,${LINK_PREVIEW_IMAGE.toString("base64")}`;
 
 async function waitForReadyComposerSnapshots(
   page: import("@playwright/test").Page,
@@ -208,8 +215,7 @@ test.beforeEach(async ({ page }, testInfo) => {
                       siteName: "GitHub",
                       description:
                         "A polished, stable preview for shared links.",
-                      imageDataUrl:
-                        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                      imageDataUrl: LINK_PREVIEW_IMAGE_DATA_URL,
                       imageDomain: "opengraph.githubassets.com",
                       faviconDataUrl:
                         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -418,7 +424,7 @@ test("long autolink wraps without widening the timeline", async ({ page }) => {
     .toBeLessThanOrEqual(0);
 });
 
-test("markdown tables overflow wide content and fill the message when narrow", async ({
+test("markdown tables wrap long prose and fill the message when narrow", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 900, height: 600 });
@@ -461,13 +467,15 @@ test("markdown tables overflow wide content and fill the message when narrow", a
   await expect(wideTable).toBeVisible();
   await expect(narrowTable).toBeVisible();
 
+  // Long prose should wrap, not force horizontal scrolling. Unavoidable
+  // many-column overflow is covered separately in markdown-tables.spec.ts.
   await expect
     .poll(() =>
       wideTable.evaluate(
         (element) => element.scrollWidth - element.clientWidth,
       ),
     )
-    .toBeGreaterThan(1);
+    .toBeLessThanOrEqual(1);
   await expect
     .poll(() =>
       narrowTable.evaluate((element) => {
@@ -523,6 +531,18 @@ test("sent link preview media uses the authenticated proxy in compact and rich c
   await expect
     .poll(() => compactThumbnail.evaluate((image) => image.naturalWidth))
     .toBe(40);
+
+  // The compact thumbnail sits flush against the card shell's left edge, so the
+  // shell's smooth-corner clip carves those corners. It must therefore carry
+  // the same treatment itself, or its right corners render as a plain arc
+  // against the shell's smoothed left corners. See the invariant in
+  // `shared/ui/smoothCorners.ts`.
+  const compactThumbnailFrame = compactPreview
+    .locator("[data-link-preview-thumbnail]")
+    .first();
+  await expectCornerRadiusPx(compactPreview, 16);
+  await expectCornerRadiusPx(compactThumbnailFrame, 16);
+  await expectSmoothCorners(compactThumbnailFrame);
 
   await openSettings(page, "appearance");
   await page.getByTestId("link-preview-style-trigger").click();
@@ -1337,6 +1357,57 @@ test("composer link preview embeds stay attachment-sized while loading and ready
     expect(ready).toEqual(initial);
     await page.getByTestId("composer-hide-link-previews").click();
     await expect(card).toHaveCount(0);
+  }
+});
+
+test("compact link preview image geometry truncates long titles to one line", async ({
+  page,
+}) => {
+  const previewUrl = "https://github.com/block/buzz/pull/3246?geometry=1";
+  // Colony serves link-preview media through the authenticated local proxy,
+  // not the relay origin upstream routes here.
+  await page.route("http://127.0.0.1:54321/media/**", (route) =>
+    route.fulfill({
+      body: LINK_PREVIEW_IMAGE,
+      contentType: "image/png",
+    }),
+  );
+  await page.setViewportSize({ width: 800, height: 700 });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await page.getByTestId("message-input").fill(previewUrl);
+  await waitForReadyComposerSnapshots(page);
+  await page.getByTestId("send-message").click();
+
+  const row = page.getByTestId("message-row").last();
+  const card = row.locator('[data-link-preview="github-pull-request"]');
+  const thumbnail = card.locator("[data-link-preview-thumbnail]");
+  const title = card.locator('[data-slot="attachment-title"]');
+  const image = thumbnail.locator("img");
+  await expect(card).toHaveAttribute("data-image-state", "image");
+  await expect(image).toBeVisible();
+  await expect
+    .poll(() => image.evaluate((element) => element.naturalWidth))
+    .toBeGreaterThan(0);
+  await expect(card).toHaveCSS("height", "64px");
+  await expect(thumbnail).toHaveCSS("height", "64px");
+  await expect(thumbnail).toHaveCSS("width", "104px");
+  await expect(title).toHaveText(
+    "Ship a wider horizontal preview with a two-line title that wraps cleanly",
+  );
+  await expect(title).toHaveCSS("white-space", "nowrap");
+  await expect
+    .poll(() =>
+      title.evaluate((element) => element.scrollWidth - element.clientWidth),
+    )
+    .toBeGreaterThan(1);
+
+  if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+    await waitForAnimations(page);
+    await row.screenshot({
+      animations: "disabled",
+      path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/recipient-compact-long-title.png`,
+    });
   }
 });
 

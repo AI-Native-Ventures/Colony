@@ -809,6 +809,7 @@ export function HomeView({
                 if (!selectedItem || !canDelete) return;
                 void deleteInboxMessage(selectedItem.id);
               }}
+              onDeleteMessage={deleteInboxMessage}
               onManageChannel={(channelId) => {
                 handleCloseProfilePanel();
                 setManagedChannelId(channelId);

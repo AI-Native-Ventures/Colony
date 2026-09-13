@@ -38,7 +38,7 @@ test("IF NOT EXISTS is matched on either side", () => {
 });
 
 test("partition children are not drift", () => {
-  // CI creates these with scripts/attach-schema-partitions.sql, so they are
+  // CI creates these with scripts/reconcile-schema-after-pgschema.sql, so they are
   // deliberately absent from schema.sql. Counting them would produce dozens of
   // false positives, one per month of `events_p2026_NN`.
   assert.deepEqual(

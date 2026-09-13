@@ -23,12 +23,17 @@ pub struct AllowlistEntry {
 impl Db {
     /// Check if a pubkey is in the allowlist for `community`.
     pub async fn is_pubkey_allowed(&self, community: CommunityId, pubkey: &[u8]) -> Result<bool> {
+        let mut connection = crate::observability::acquire_writer(
+            &self.pool,
+            crate::observability::WriterOperation::Authentication,
+        )
+        .await?;
         let row = sqlx::query(
             "SELECT COUNT(*) as cnt FROM pubkey_allowlist WHERE community_id = $1 AND pubkey = $2",
         )
         .bind(community.as_uuid())
         .bind(pubkey)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *connection)
         .await?;
         let cnt: i64 = row.try_get("cnt")?;
         Ok(cnt > 0)
@@ -36,10 +41,15 @@ impl Db {
 
     /// Check if the community allowlist has any entries (i.e. is enforcement active).
     pub async fn has_allowlist_entries(&self, community: CommunityId) -> Result<bool> {
+        let mut connection = crate::observability::acquire_writer(
+            &self.pool,
+            crate::observability::WriterOperation::Authentication,
+        )
+        .await?;
         let row =
             sqlx::query("SELECT COUNT(*) as cnt FROM pubkey_allowlist WHERE community_id = $1")
                 .bind(community.as_uuid())
-                .fetch_one(&self.pool)
+                .fetch_one(&mut *connection)
                 .await?;
         let cnt: i64 = row.try_get("cnt")?;
         Ok(cnt > 0)
@@ -53,6 +63,11 @@ impl Db {
         added_by: &[u8],
         note: Option<&str>,
     ) -> Result<bool> {
+        let mut connection = crate::observability::acquire_writer(
+            &self.pool,
+            crate::observability::WriterOperation::Authorization,
+        )
+        .await?;
         let result = sqlx::query(
             "INSERT INTO pubkey_allowlist (community_id, pubkey, added_by, note) VALUES ($1, $2, $3, $4) \
              ON CONFLICT DO NOTHING",
@@ -61,7 +76,7 @@ impl Db {
         .bind(pubkey)
         .bind(added_by)
         .bind(note)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
         Ok(result.rows_affected() > 0)
     }
@@ -72,22 +87,32 @@ impl Db {
         community: CommunityId,
         pubkey: &[u8],
     ) -> Result<bool> {
+        let mut connection = crate::observability::acquire_writer(
+            &self.pool,
+            crate::observability::WriterOperation::Authorization,
+        )
+        .await?;
         let result =
             sqlx::query("DELETE FROM pubkey_allowlist WHERE community_id = $1 AND pubkey = $2")
                 .bind(community.as_uuid())
                 .bind(pubkey)
-                .execute(&self.pool)
+                .execute(&mut *connection)
                 .await?;
         Ok(result.rows_affected() > 0)
     }
 
     /// List all pubkeys in the community allowlist.
     pub async fn list_allowlist(&self, community: CommunityId) -> Result<Vec<AllowlistEntry>> {
+        let mut connection = crate::observability::acquire_writer(
+            &self.pool,
+            crate::observability::WriterOperation::Authorization,
+        )
+        .await?;
         let rows = sqlx::query(
             "SELECT pubkey, added_by, added_at, note FROM pubkey_allowlist WHERE community_id = $1 ORDER BY added_at DESC",
         )
         .bind(community.as_uuid())
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *connection)
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());

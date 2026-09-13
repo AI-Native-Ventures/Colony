@@ -30,6 +30,22 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     .await
 }
 
+/// Run migrations only up to `target`, for tests that need a database frozen
+/// at a specific schema version.
+#[cfg(test)]
+pub(crate) async fn run_migrations_through(pool: &PgPool, target: i64) -> Result<()> {
+    with_exclusive_schema_destruction_lock(pool, |lock_conn| async move {
+        let outcome = async {
+            reject_legacy_nip_rs_cardinality_ambiguity(pool).await?;
+            MIGRATOR.run_to(target, pool).await?;
+            Ok(())
+        }
+        .await;
+        (lock_conn, outcome)
+    })
+    .await
+}
+
 async fn run_migrations_locked(pool: &PgPool) -> Result<()> {
     reject_legacy_nip_rs_cardinality_ambiguity(pool).await?;
     MIGRATOR.run(pool).await?;
@@ -42,6 +58,10 @@ async fn run_migrations_locked(pool: &PgPool) -> Result<()> {
     // guard, so migration fails closed if any is missing. (The fence probe
     // re-runs this same check at startup on non-migrating relays.)
     crate::replica_fence::verify_floor_guard_catalog(pool).await?;
+    // Migration 0073's roster fence is the mixed-version guard that keeps an
+    // old pod from overwriting a newer canonical kind:39002 snapshot. Same
+    // fail-closed rule as the floor guard above.
+    crate::channel_members::verify_channel_roster_fence_catalog(pool).await?;
     Ok(())
 }
 
@@ -62,11 +82,28 @@ where
     F: FnOnce(PgConnection) -> Fut,
     Fut: Future<Output = (PgConnection, Result<T>)>,
 {
-    let mut lock_conn = pool.acquire().await?.detach();
-    sqlx::query("SELECT pg_advisory_lock($1)")
-        .bind(SCHEMA_DESTRUCTION_LOCK_KEY)
+    let mut lock_conn = crate::observability::acquire_writer_with_legacy_metrics(
+        pool,
+        crate::observability::WriterOperation::Bootstrap,
+    )
+    .await?
+    .detach();
+    // This dedicated connection intentionally waits for the current migration
+    // or schema-destruction owner and may then run long DDL. Exempt those two
+    // phases from runtime lock/statement budgets. Keep the idle-in-transaction
+    // timeout: a client wedged idle mid-migration is still a lock holder that
+    // should be reaped. The detached connection is closed below and never
+    // returns these session settings to the pool.
+    sqlx::raw_sql("SET lock_timeout = 0; SET statement_timeout = 0")
         .execute(&mut lock_conn)
         .await?;
+    crate::observability::observe_advisory_lock(
+        crate::observability::LockType::MigrationSchemaSafety,
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(SCHEMA_DESTRUCTION_LOCK_KEY)
+            .execute(&mut lock_conn),
+    )
+    .await?;
     let (mut lock_conn, outcome) = op(lock_conn).await;
     let unlock = sqlx::query("SELECT pg_advisory_unlock($1)")
         .bind(SCHEMA_DESTRUCTION_LOCK_KEY)
@@ -257,7 +294,11 @@ async fn reject_legacy_nip_rs_cardinality_ambiguity(pool: &PgPool) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use std::{
+        collections::BTreeSet,
+        fs,
+        path::{Path, PathBuf},
+    };
 
     const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
 
@@ -735,7 +776,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 71);
+        assert_eq!(migrations.len(), 74);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1469,7 +1510,148 @@ mod tests {
         // The grant is stored, never recomputed: a price edit mid-flight must
         // not change what an already-paid purchase is worth.
         assert!(packs.contains("ADD COLUMN grant_nanousd BIGINT"));
+
+        // NIP-PMA private managed-agent FTS exclusion (0074): same
+        // wrap-the-existing-expression shape as 0014 so brownfield databases
+        // stop tokenizing private managed-agent ciphertext without a policy
+        // rewrite. (The migration itself still rewrites the events heap and
+        // rebuilds the GIN index - see the 0074 header for the cost.)
+        //
+        // Upstream's kind for this payload is 30179; here 30179 is
+        // KIND_COMPANY_PROFILE, which must stay searchable, and the private
+        // managed-agent definition is KIND_PRIVATE_MANAGED_AGENT = 30194.
+        assert_eq!(migrations[73].version, 74);
+        let private_agent_fts = migrations[73].sql.as_str();
+        assert!(private_agent_fts.contains("kind = 30194"));
+        assert!(private_agent_fts.contains("search_tsv"));
+        assert!(
+            !private_agent_fts.contains("30179"),
+            "30179 is KIND_COMPANY_PROFILE here and must remain indexed"
+        );
+        assert_eq!(
+            buzz_core::kind::KIND_PRIVATE_MANAGED_AGENT,
+            30194,
+            "the migration literal must track the registered kind"
+        );
+        assert!(!migrations[0].sql.as_str().contains("30194"));
+        // Colony's desired-state schema uses a positive allowlist rather than
+        // upstream's negative skip-set, so a fresh install already excludes the
+        // private managed-agent kind and schema.sql needs no change. Pin that.
+        assert!(desired_schema.contains("CASE WHEN kind IN (0, 9, 40002, 45001, 45003)"));
+        assert!(
+            !desired_schema.contains("30194"),
+            "the allowlist must never gain the private managed-agent kind"
+        );
+
+        // Mixed-version channel-roster fence: old canonical replacement writers
+        // acquire their replacement key before INSERT; this trigger then takes
+        // the membership key and validates the exact active pubkey/role p-tag set.
+        assert_eq!(migrations[72].version, 73);
+        let roster_fence = migrations[72].sql.as_str();
+        assert!(roster_fence.contains("CREATE TRIGGER trg_events_guard_channel_roster_snapshot"));
+        assert!(roster_fence.contains("NEW.kind <> 39002"));
+        assert!(roster_fence.contains("'buzz_channel_membership:'"));
+        assert!(roster_fence.contains("cm.removed_at IS NULL"));
+        assert!(roster_fence.contains("cm.role::text"));
+        assert!(roster_fence.contains("jsonb_array_length(roster_tag.tag_json) <> 4"));
+        assert!(roster_fence.contains("roster_tag.tag_json->>3"));
+        assert!(roster_fence.contains("snapshot_members IS DISTINCT FROM canonical_members"));
+        assert!(roster_fence.contains("ERRCODE = '23514'"));
+        // Fresh desired-state bootstrap must install the identical executable
+        // fence as migration 0073. CI and isolated relay startup use schema.sql
+        // without running migrations, so drift reopens rolling-deploy races.
+        fn extract_roster_fence(sql: &str) -> &str {
+            let fence_start = "CREATE OR REPLACE FUNCTION guard_channel_roster_snapshot()";
+            let fence_end = "    FOR EACH ROW EXECUTE FUNCTION guard_channel_roster_snapshot();";
+            let start = sql.find(fence_start).expect("roster fence function");
+            let relative_end = sql[start..].find(fence_end).expect("roster fence trigger");
+            &sql[start..start + relative_end + fence_end.len()]
+        }
+        assert_eq!(
+            extract_roster_fence(roster_fence),
+            extract_roster_fence(desired_schema)
+        );
+
+        // The single-row heartbeat table is updated continuously. Prevent
+        // autovacuum from truncating its heap so standby queries are not
+        // cancelled by the ACCESS EXCLUSIVE truncation lock replay.
+        assert_eq!(migrations[71].version, 72);
+        let heartbeat_vacuum = migrations[71].sql.as_str();
+        assert!(heartbeat_vacuum.contains("ALTER TABLE replica_heartbeat"));
+        assert!(heartbeat_vacuum.contains("vacuum_truncate = false"));
+        assert!(desired_schema.contains("vacuum_truncate = false"));
+
+        // pgschema intentionally reconciles DDL, not seed DML or table storage
+        // parameters. Its post-apply reconciliation must restore and verify
+        // both parts of the live heartbeat contract for fresh bootstraps.
+        let pgschema_reconciliation =
+            include_str!("../../../../scripts/reconcile-schema-after-pgschema.sql");
+        assert!(pgschema_reconciliation
+            .contains("ALTER TABLE replica_heartbeat SET (vacuum_truncate = false)"));
+        assert!(pgschema_reconciliation.contains("INSERT INTO replica_heartbeat (id) VALUES (1)"));
+        assert!(pgschema_reconciliation.contains("ON CONFLICT (id) DO NOTHING"));
+        assert!(pgschema_reconciliation.contains("pg_class"));
+        assert!(pgschema_reconciliation.contains("reloptions"));
     }
+
+    #[test]
+    fn every_pgschema_apply_runs_post_apply_reconciliation() {
+        fn files_under(root: &Path) -> Vec<PathBuf> {
+            let mut pending = vec![root.to_owned()];
+            let mut files = Vec::new();
+
+            while let Some(path) = pending.pop() {
+                for entry in fs::read_dir(&path)
+                    .unwrap_or_else(|error| panic!("could not read {}: {error}", path.display()))
+                {
+                    let path = entry.expect("directory entry").path();
+                    if path.is_dir() {
+                        pending.push(path);
+                    } else {
+                        files.push(path);
+                    }
+                }
+            }
+
+            files
+        }
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let roots = [
+            repo_root.join("scripts"),
+            repo_root.join(".github/workflows"),
+        ];
+        let mut apply_count = 0;
+
+        for path in roots.iter().flat_map(|root| files_under(root)) {
+            let Ok(contents) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let lines: Vec<_> = contents.lines().collect();
+
+            for (index, line) in lines.iter().enumerate() {
+                if !line.contains("./bin/pgschema apply") {
+                    continue;
+                }
+
+                apply_count += 1;
+                let following_lines = &lines[index + 1..(index + 7).min(lines.len())];
+                assert!(
+                    following_lines.iter().any(|line| line.contains(
+                        "scripts/reconcile-schema-after-pgschema.sql"
+                    )),
+                    "{} must run scripts/reconcile-schema-after-pgschema.sql immediately after pgschema apply",
+                    path.display()
+                );
+            }
+        }
+
+        assert!(
+            apply_count > 0,
+            "expected at least one pgschema apply caller"
+        );
+    }
+
     #[test]
     fn block_action_claim_migration_is_community_scoped() {
         let migration = MIGRATOR
@@ -2168,7 +2350,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
-    async fn populated_upgrade_preserves_search_policy_except_for_push_leases() {
+    async fn populated_upgrade_preserves_search_policy_except_for_private_kinds() {
         let pool = connect_test_pool().await;
         reset_public_schema(&pool).await;
         MIGRATOR
@@ -2184,7 +2366,7 @@ mod tests {
             .await
             .expect("insert community");
 
-        for (marker, kind) in [(1_u8, 1_i32), (2_u8, 30_350_i32)] {
+        for (marker, kind) in [(1_u8, 1_i32), (2_u8, 30_350_i32), (3_u8, 30_194_i32)] {
             sqlx::query(
                 "INSERT INTO events \
                  (community_id, id, pubkey, created_at, kind, tags, content, sig, received_at) \
@@ -2211,19 +2393,37 @@ mod tests {
         .fetch_all(&pool)
         .await
         .expect("read pre-push search behavior");
-        assert_eq!(before, vec![(1, true), (30_350, true)]);
+        assert_eq!(before, vec![(1, true), (30_194, true), (30_350, true)]);
+
+        // 0014 fixes 30350 only. A brownfield database that stopped short of
+        // 0074 still tokenized kind:30194 ciphertext - the gap 0074 closes.
+        MIGRATOR
+            .run_to(73, &pool)
+            .await
+            .expect("apply migrations through 73");
+        let pre_0074: Vec<(i32, Option<bool>)> = sqlx::query_as(
+            "SELECT kind, search_tsv @@ plainto_tsquery('simple', 'needle') \
+             FROM events ORDER BY kind",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read pre-0074 search behavior");
+        assert_eq!(
+            pre_0074,
+            vec![(1, Some(true)), (30_194, Some(true)), (30_350, None)]
+        );
 
         run_migrations(&pool)
             .await
-            .expect("apply push migrations to populated database");
+            .expect("apply remaining migrations to populated database");
         let after: Vec<(i32, Option<bool>)> = sqlx::query_as(
             "SELECT kind, search_tsv @@ plainto_tsquery('simple', 'needle') \
              FROM events ORDER BY kind",
         )
         .fetch_all(&pool)
         .await
-        .expect("read post-push search behavior");
-        assert_eq!(after, vec![(1, Some(true)), (30_350, None)]);
+        .expect("read post-upgrade search behavior");
+        assert_eq!(after, vec![(1, Some(true)), (30_194, None), (30_350, None)]);
     }
 
     #[tokio::test]

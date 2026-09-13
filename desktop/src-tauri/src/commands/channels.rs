@@ -8,6 +8,13 @@ use crate::{
     relay::{query_relay, relay_api_base_url_with_override, submit_event, submit_event_with_keys},
 };
 
+// Split out to keep this file under the desktop file-size ratchet.
+#[path = "channels_last_messages.rs"]
+mod last_messages;
+#[cfg(test)]
+pub(super) use last_messages::last_message_filter_batches;
+pub(super) use last_messages::{last_message_filter, query_last_messages};
+
 // ── Reads (pure-nostr via /query) ────────────────────────────────────────────
 
 // The relay-backed channel list computation (fetch_channels, DirectoryScope,

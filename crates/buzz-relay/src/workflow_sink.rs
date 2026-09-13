@@ -256,7 +256,7 @@ impl ActionSink for RelayActionSink {
 
             let channel = state
                 .db
-                .get_channel(tenant.community(), channel_uuid)
+                .get_channel_for_event_write(tenant.community(), channel_uuid)
                 .await
                 .map_err(|e| match &e {
                     buzz_db::DbError::ChannelNotFound(_) | buzz_db::DbError::NotFound(_) => {
@@ -312,13 +312,13 @@ impl ActionSink for RelayActionSink {
 
             let members = state
                 .db
-                .get_members(tenant.community(), channel_uuid)
+                .get_members_for_event_write(tenant.community(), channel_uuid)
                 .await
                 .map_err(|e| ActionSinkError::Database(e.to_string()))?;
             let member_pubkeys: Vec<Vec<u8>> = members.iter().map(|m| m.pubkey.clone()).collect();
             let users = state
                 .db
-                .get_users_bulk(tenant.community(), &member_pubkeys)
+                .get_users_bulk_for_event_write(tenant.community(), &member_pubkeys)
                 .await
                 .map_err(|e| ActionSinkError::Database(e.to_string()))?;
             let named_members: Vec<(String, String)> = users
@@ -970,18 +970,6 @@ mod integration_tests {
             .await
             .expect("add agent member");
 
-        let sink = RelayActionSink::new(&state);
-        let event_id_hex = sink
-            .send_message(
-                community,
-                &channel.id.to_string(),
-                "heads up @Robby — please take a look",
-                "heads up @Robby — please take a look",
-                &author_hex,
-            )
-            .await
-            .expect("send_message");
-
         let explicit_event_id_hex = execute_send_message_workflow(
             &state,
             community,
@@ -1013,7 +1001,7 @@ mod integration_tests {
                     .to_vec();
                 state
                     .db
-                    .get_event_by_id(community, &id_bytes)
+                    .get_event_by_id_for_event_write(community, &id_bytes)
                     .await
                     .expect("query event")
                     .expect("event persisted")
@@ -1265,7 +1253,7 @@ mod integration_tests {
             .to_vec();
         state
             .db
-            .get_event_by_id(community, &id_bytes)
+            .get_event_by_id_for_event_write(community, &id_bytes)
             .await
             .expect("query event")
             .expect("event persisted")

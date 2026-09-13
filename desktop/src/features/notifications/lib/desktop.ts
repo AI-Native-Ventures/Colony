@@ -216,6 +216,7 @@ export async function listenForDesktopNotificationActions(
 
   let pluginListener: { unregister: () => Promise<void> } | null = null;
   let nativeUnlisten: (() => void) | null = null;
+  let redrainUnlisten: (() => void) | null = null;
 
   if (isTauri()) {
     const usesMacActivationQueue = isMacPlatform();
@@ -285,6 +286,29 @@ export async function listenForDesktopNotificationActions(
         );
       }
     }
+
+    if (usesMacActivationQueue) {
+      // Belt and suspenders for block/buzz#3509: the Rust delegate queues the
+      // target before emitting, so a lost emit strands the activation with
+      // nothing re-draining it. macOS always foregrounds the app on a
+      // notification click, and WebKit delivers the resulting focus and
+      // visibility transitions independently of the Tauri event channel — use
+      // them to re-drain so a queued target is never stranded.
+      const redrain = () => {
+        void dispatchNativeActivations().catch((error) => {
+          console.error(
+            "Failed to drain macOS notification activations on focus",
+            error,
+          );
+        });
+      };
+      window.addEventListener("focus", redrain);
+      document.addEventListener("visibilitychange", redrain);
+      redrainUnlisten = () => {
+        window.removeEventListener("focus", redrain);
+        document.removeEventListener("visibilitychange", redrain);
+      };
+    }
   }
 
   return () => {
@@ -294,6 +318,7 @@ export async function listenForDesktopNotificationActions(
     );
     void pluginListener?.unregister();
     nativeUnlisten?.();
+    redrainUnlisten?.();
   };
 }
 
@@ -339,6 +364,33 @@ export async function requestDockBounce(): Promise<void> {
   }
 }
 
+/**
+ * How long the window-reveal invoke chain may run before callers proceed
+ * without it. macOS already foregrounds the app when a notification is
+ * clicked, so a reveal that never settles must not gate click-through
+ * routing (block/buzz#3509).
+ */
+const REVEAL_WINDOW_TIMEOUT_MS = 1_500;
+
+function resolveWithinTimeout(
+  operation: Promise<void>,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    operation.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function revealDesktopAppWindow(): Promise<void> {
   if (!isTauri()) {
     if (typeof window !== "undefined") {
@@ -348,9 +400,19 @@ export async function revealDesktopAppWindow(): Promise<void> {
   }
 
   try {
-    await unminimize();
-    await showWindow();
-    await setFocus();
+    // The reveal crosses the native bridge three times, and the try/catch
+    // only covers rejections — an invoke that never settles (seen while
+    // macOS is simultaneously foregrounding the app from a notification
+    // click) would strand callers that await this helper before navigating.
+    // Resolve after a timeout so navigation always proceeds.
+    await resolveWithinTimeout(
+      (async () => {
+        await unminimize();
+        await showWindow();
+        await setFocus();
+      })(),
+      REVEAL_WINDOW_TIMEOUT_MS,
+    );
   } catch {
     // Best effort only.
   }
