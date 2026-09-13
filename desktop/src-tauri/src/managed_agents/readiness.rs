@@ -1495,6 +1495,7 @@ mod tests {
             runtime_pid: None,
             backend: Default::default(),
             backend_agent_id: None,
+            provider_policy_pending: false,
             provider_binary_path: None,
             team_id: None,
             persona_team_dir: None,
@@ -1537,8 +1538,6 @@ mod tests {
             Some("claude-opus-4-5")
         );
     }
-
-    // ── provider-specific model fallback tests ────────────────────────────
 
     #[test]
     fn buzz_agent_databricks_v2_with_databricks_model_but_no_buzz_agent_model_is_ready() {

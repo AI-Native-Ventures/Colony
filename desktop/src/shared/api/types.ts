@@ -275,9 +275,9 @@ export type RelayMember = {
   addedBy: string | null;
   createdAt: string;
 };
-
 export type RelayAgent = {
   pubkey: string;
+  ownerPubkey: string | null;
   name: string;
   agentType: string;
   channels: string[];

@@ -57,6 +57,8 @@ mod web;
 pub mod webkit_rendering;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use colony_provisioning::*;
+#[doc(hidden)]
+pub use commands::print_agent_access_owner_only_probe_if_requested;
 use commands::*;
 use deep_link::{
     acknowledge_pending_community_deep_link, handle_deep_link_url,

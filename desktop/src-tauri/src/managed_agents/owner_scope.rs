@@ -93,6 +93,7 @@ mod tests {
     /// valid placeholder.
     fn record_with(owner_pubkey: Option<&str>, auth_tag: Option<&str>) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            provider_policy_pending: false,
             provisioned: None,
             provisioned_version: None,
             provisioned_requires_commands: Vec::new(),

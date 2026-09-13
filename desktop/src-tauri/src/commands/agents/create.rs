@@ -373,6 +373,7 @@ pub(crate) async fn create_managed_agent_with_preparation(
             runtime_pid: None,
             backend: input.backend.clone(),
             backend_agent_id: None,
+            provider_policy_pending: false,
             provider_binary_path,
             persona_team_dir: None,
             persona_name_in_team: None,
@@ -496,7 +497,7 @@ pub(crate) async fn create_managed_agent_with_preparation(
         &resolved_relay_url,
         &relay_ws_url_with_override(state),
     );
-    let profile_sync_error = (sync_managed_agent_profile(
+    let mut profile_sync_error = (sync_managed_agent_profile(
         state,
         &profile_relay_url,
         &agent_keys,
@@ -507,6 +508,12 @@ pub(crate) async fn create_managed_agent_with_preparation(
     )
     .await)
         .err();
+    // Publish the new agent's access policy straight away: a device that
+    // never sees this record must not fall back to treating channel
+    // membership as proof of access.
+    profile_sync_error =
+        super::super::agent_models::flush_managed_agent_policy(&app, state, profile_sync_error)
+            .await;
 
     let spawn_error = if input.spawn_after_create && input.backend != BackendKind::Local {
         if let BackendKind::Provider { ref id, ref config } = input.backend {
