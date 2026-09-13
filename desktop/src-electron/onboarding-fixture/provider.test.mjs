@@ -9,6 +9,65 @@ import {
 } from "./provider.mjs";
 import { assertCreditsProof } from "./credits-proof.mjs";
 
+for (const owningTeamId of [null, "real-team"]) {
+  test(`provider CLI delegation preserves ${owningTeamId ?? "direct"} task attribution`, async () => {
+    const provider = await createOnboardingFixtureProvider();
+    const team = {
+      scout: { pubkey: "a".repeat(64), prompt: "Coordinate the company." },
+      worker: { pubkey: "b".repeat(64), prompt: "Write useful content." },
+    };
+    const rootId = "c".repeat(64);
+    const channelId = "11111111-1111-4111-8111-111111111111";
+    provider.configure({
+      rootId,
+      channelId,
+      brief: FIRST_JOB_BRIEF,
+      readTeam: async () => team,
+      readTask: async () => ({
+        id: "real-task",
+        owningTeamId,
+        threadRoot: rootId,
+        sourceChannelId: channelId,
+      }),
+    });
+    try {
+      const response = await fetch(`${provider.httpUrl}/v1/chat/completions`, {
+        method: "POST",
+        signal: AbortSignal.timeout(5000),
+        headers: {
+          Authorization: "Bearer synthetic-onboarding-provider",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "deepseek/deepseek-v4-flash",
+          messages: [
+            {
+              role: "system",
+              content: `[Base Prompt]\nBase.\n\n[System]\n${team.scout.prompt}`,
+            },
+            {
+              role: "user",
+              content: `${FIRST_JOB_BRIEF}\n<colony-work-context>\nTask id: real-task\nOwning team: ${owningTeamId ?? "Direct assignment"}\n</colony-work-context>`,
+            },
+          ],
+          tools: [{ function: { name: "buzz__shell" } }],
+        }),
+      });
+      const body = await response.json();
+      provider.assertHealthy();
+      assert.equal(response.status, 200, JSON.stringify(body));
+      const command = JSON.parse(
+        body.choices[0].message.tool_calls[0].function.arguments,
+      ).command;
+      assert.match(command, /--task 'real-task'/);
+      if (owningTeamId) assert.match(command, /--team 'real-team'/);
+      else assert.doesNotMatch(command, /--team/);
+    } finally {
+      await provider.close();
+    }
+  });
+}
+
 async function concurrentResponses(createProvider) {
   const provider = await createProvider();
   let release;

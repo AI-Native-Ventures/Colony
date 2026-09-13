@@ -503,7 +503,10 @@ export async function createOnboardingFixtureProvider() {
         const task = await context.readTask();
         assert.equal(task.threadRoot, context.rootId);
         assert.equal(task.sourceChannelId, context.channelId);
-        const thread = `--channel ${context.channelId} --reply-to ${context.rootId} --task ${quote(task.id)} --team ${quote(task.owningTeamId)}`;
+        const teamFlag = task.owningTeamId
+          ? ` --team ${quote(task.owningTeamId)}`
+          : "";
+        const thread = `--channel ${context.channelId} --reply-to ${context.rootId} --task ${quote(task.id)}${teamFlag}`;
         if (stage === "delegate") {
           return `buzz messages send ${thread} --mention ${team.worker.pubkey} --content ${quote(`${context.brief}\n\nPrepare one distinct caption and matching visual brief for each weekday. Return all five pairs in this thread and mention the Chief of Staff for review.`)}`;
         }
