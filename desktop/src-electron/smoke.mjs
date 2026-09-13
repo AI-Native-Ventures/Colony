@@ -164,7 +164,11 @@ try {
         command: "auto_connect_default_relay_enabled",
       }),
     }));
-    assert.equal(relayConfig.relay, ELECTRON_BETA_RELAY.websocket);
+    // A port build embeds the canary relay; the release workflow says which
+    // relay it expects. Stable and canary keep the hosted account service.
+    const expectedRelay =
+      process.env.COLONY_EXPECTED_RELAY_WS_URL || ELECTRON_BETA_RELAY.websocket;
+    assert.equal(relayConfig.relay, expectedRelay);
     assert.equal(relayConfig.autoConnect, false);
     console.log("Packaged signup targets the hosted account service: PASS");
     const packagedState = await application.evaluate(({ app }) => ({

@@ -154,7 +154,19 @@ fn checked_out_branch(path: &Path) -> Option<String> {
 }
 
 fn display_path(path: &Path) -> String {
-    path.display().to_string()
+    let display = path.display().to_string();
+    // Rust canonicalization returns verbatim paths on Windows. Git for Windows
+    // normalizes their slashes and rejects the resulting //?/C:/ worktree path.
+    #[cfg(windows)]
+    {
+        if let Some(unc) = display.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{unc}");
+        }
+        if let Some(drive) = display.strip_prefix(r"\\?\") {
+            return drive.to_string();
+        }
+    }
+    display
 }
 
 /// Create — or reuse — the worktree an agent runs in.
@@ -320,6 +332,20 @@ where
 mod tests {
     use super::*;
     use std::fs;
+
+    #[cfg(windows)]
+    #[test]
+    fn git_paths_preserve_drive_and_unc_roots_without_verbatim_prefix() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\C:\repos\work")),
+            r"C:\repos\work"
+        );
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\work")),
+            r"\\server\share\work"
+        );
+        assert_eq!(display_path(Path::new(r"C:\repos\work")), r"C:\repos\work");
+    }
 
     /// A checkout named after its project dtag, with one commit on `main`.
     fn fixture_repo(root: &Path, dtag: &str) -> PathBuf {

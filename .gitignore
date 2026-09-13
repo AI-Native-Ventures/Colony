@@ -94,3 +94,5 @@ ds-bundle/
 .design-sync/node_modules
 prototypes/onboarding/ds/
 prototypes/onboarding/app.js
+desktop/src-tauri/resources/dictation/*.bin
+desktop/src-tauri/resources/dictation/*.partial

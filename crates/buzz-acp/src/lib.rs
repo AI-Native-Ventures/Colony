@@ -19,6 +19,10 @@ mod queue;
 mod relay;
 mod reply_model;
 mod setup_mode;
+#[cfg(unix)]
+mod subscription_bridge;
+#[cfg(not(unix))]
+#[path = "subscription_bridge_unsupported.rs"]
 mod subscription_bridge;
 mod subscription_provenance;
 mod thread_record;

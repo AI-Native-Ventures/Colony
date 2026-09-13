@@ -1,11 +1,14 @@
 import type { ComponentProps } from "react";
 
+import { DictationButton } from "./ComposerDictation";
+import type { ComposerDictationControl } from "../lib/useComposerDictation";
 import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerToolbar";
 
 type ComposerDockToolbarProps = ComponentProps<
   typeof MessageComposerToolbar
 > & {
   layoutMode: "dock" | "standalone";
+  dictation?: ComposerDictationControl;
 };
 
 /**
@@ -14,6 +17,7 @@ type ComposerDockToolbarProps = ComponentProps<
  */
 export function ComposerDockToolbar({
   layoutMode,
+  dictation,
   ...toolbarProps
 }: ComposerDockToolbarProps) {
   return (
@@ -24,7 +28,24 @@ export function ComposerDockToolbar({
           className="composer-dock-quiet-spacer shrink-0"
         />
       ) : null}
-      <MessageComposerToolbar {...toolbarProps} />
+      <MessageComposerToolbar
+        {...toolbarProps}
+        composerDisabled={
+          toolbarProps.composerDisabled || (dictation?.active ?? false)
+        }
+        formattingDisabled={
+          toolbarProps.formattingDisabled || (dictation?.active ?? false)
+        }
+        sendDisabled={toolbarProps.sendDisabled || (dictation?.active ?? false)}
+        dictationAction={
+          dictation && (
+            <DictationButton
+              control={dictation}
+              disabled={toolbarProps.composerDisabled || toolbarProps.isSending}
+            />
+          )
+        }
+      />
     </>
   );
 }
