@@ -507,23 +507,40 @@ try {
     proof.relayStartupDiagnostics = error.startupDiagnostics;
   if (liveWebsite && page && !page.isClosed()) {
     // Classify locally inside the isolated fixture. Never export log text.
-    proof.websiteAgentDiagnostics = await page.evaluate(async () => {
-      const invoke = (command, args = {}) => window.colonyDesktop.request("invoke", { command, args });
-      const agents = await invoke("list_managed_agents");
-      return Promise.all(agents.map(async (agent) => {
-        const log = await invoke("get_managed_agent_log", { pubkey: agent.pubkey, lineCount: 40 }).catch(() => null);
-        const content = String(log?.content ?? "");
-        return {
-          running: Number(agent.pid) > 0,
-          logAvailable: log !== null,
-          authenticationError: /unauthorized|authentication failed|invalid.*key|\b401\b/i.test(content),
-          creditError: /insufficient.*credit|budget.*exceeded|\b402\b/i.test(content),
-          connectionError: /connection refused|connection failed|dns|timed out/i.test(content),
-          modelError: /model.*not found|unsupported model|\b404\b/i.test(content),
-          toolError: /tool.*failed|unknown tool/i.test(content),
-        };
-      }));
-    }).catch(() => []);
+    proof.websiteAgentDiagnostics = await page
+      .evaluate(async () => {
+        const invoke = (command, args = {}) =>
+          window.colonyDesktop.request("invoke", { command, args });
+        const agents = await invoke("list_managed_agents");
+        return Promise.all(
+          agents.map(async (agent) => {
+            const log = await invoke("get_managed_agent_log", {
+              pubkey: agent.pubkey,
+              lineCount: 40,
+            }).catch(() => null);
+            const content = String(log?.content ?? "");
+            return {
+              running: Number(agent.pid) > 0,
+              logAvailable: log !== null,
+              authenticationError:
+                /unauthorized|authentication failed|invalid.*key|\b401\b/i.test(
+                  content,
+                ),
+              creditError:
+                /insufficient.*credit|budget.*exceeded|\b402\b/i.test(content),
+              connectionError:
+                /connection refused|connection failed|dns|timed out/i.test(
+                  content,
+                ),
+              modelError: /model.*not found|unsupported model|\b404\b/i.test(
+                content,
+              ),
+              toolError: /tool.*failed|unknown tool/i.test(content),
+            };
+          }),
+        );
+      })
+      .catch(() => []);
   }
   if (page && !page.isClosed()) {
     proof.nativePublishResponses = await readNativePublishObservations(page);
