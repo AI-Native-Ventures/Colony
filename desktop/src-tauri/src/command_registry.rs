@@ -176,6 +176,7 @@ macro_rules! app_invoke_handler {
             get_relay_discovery_support,
             resolve_oa_owner,
             list_relay_agents,
+            revalidate_relay_agents,
             list_managed_agents,
             adopt_provisioned_employees,
             list_managed_agent_runtimes,

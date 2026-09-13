@@ -550,10 +550,10 @@
     ]
   },
   "commands": {
-    "registered": 380,
-    "defined": 380,
+    "registered": 381,
+    "defined": 381,
     "by_reach": {
-      "frontend": 369,
+      "frontend": 370,
       "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
@@ -571,7 +571,7 @@
   },
   "params": {
     "AppHandle": 422,
-    "State": 273,
+    "State": 274,
     "Window": 7,
     "ipc::Request": 2,
     "ipc::Channel": 4
@@ -579,7 +579,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 419,
-      "State": 273,
+      "State": 274,
       "Window": 7,
       "ipc::Request": 2,
       "ipc::Channel": 4
@@ -721,6 +721,7 @@
     "src-tauri/src/commands/global_agent_config.rs": 2,
     "src-tauri/src/commands/project_git_diff.rs": 2,
     "src-tauri/src/commands/dms.rs": 2,
+    "src-tauri/src/commands/agent_discovery/relay_directory.rs": 2,
     "src-tauri/src/commands/project_terminal.rs": 2,
     "src-tauri/src/commands/window_chrome.rs": 2,
     "src-tauri/src/dictation.rs": 2,
@@ -750,7 +751,6 @@
     "src-tauri/src/commands/messages/markers.rs": 1,
     "src-tauri/src/commands/updater.rs": 1,
     "src-tauri/src/commands/agents_roster.rs": 1,
-    "src-tauri/src/commands/agent_discovery/relay_directory.rs": 1,
     "src-tauri/src/commands/observer_archive.rs": 1,
     "src-tauri/src/commands/openrouter_quota.rs": 1,
     "src-tauri/src/commands/clipboard.rs": 1,
@@ -3518,6 +3518,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1443",
         "src/shared/api/tauriManagedAgents.ts:118"
+      ]
+    },
+    "revalidate_relay_agents": {
+      "defining_file": "src-tauri/src/commands/agent_discovery/relay_directory.rs",
+      "module": "relay_directory",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriRelayAgents.ts:21"
       ]
     },
     "save_agent_card": {
