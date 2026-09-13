@@ -114,3 +114,11 @@ export type MessageComposerProps = {
   typingParentEventId?: string | null;
   typingRootEventId?: string | null;
 };
+
+/** Pre-edit composer snapshot restored when an edit is cancelled. */
+export type ComposerPreEditSnapshot = {
+  content: string;
+  pendingImeta: ImetaMedia[];
+  queuedAttachments: MediaUploadController["queuedAttachments"];
+  spoileredAttachmentUrls: Set<string>;
+};

@@ -71,67 +71,14 @@ const MEMBER_SEARCH_MIN_QUERY_LENGTH = 2;
 const MEMBER_ROW_INSET_DIVIDER_CLASS =
   "after:pointer-events-none after:absolute after:bottom-0 after:left-[3.75rem] after:right-0 after:h-px after:bg-border/60 after:content-[''] last:after:hidden";
 
-function formatAddCandidateName(user: UserSearchResult) {
-  return (
-    user.displayName?.trim() ||
-    user.nip05Handle?.trim() ||
-    truncatePubkey(user.pubkey)
-  );
-}
 const MEMBER_ROW_ESTIMATE_PX = 60;
-type AddMemberSearchCandidate = UserSearchResult & {
-  isManagedAgent?: boolean;
-  isMember?: boolean;
-  personaId?: string | null;
-};
-function addMemberCandidatePersonaId(
-  candidate: UserSearchResult,
-  managedAgentsByPubkey: ReadonlyMap<string, ManagedAgent>,
-) {
-  return managedAgentsByPubkey.get(normalizePubkey(candidate.pubkey))
-    ?.personaId;
-}
-function addMemberCandidateIsManagedAgent(
-  candidate: UserSearchResult,
-  managedAgentsByPubkey: ReadonlyMap<string, ManagedAgent>,
-) {
-  return managedAgentsByPubkey.has(normalizePubkey(candidate.pubkey));
-}
-function addMemberCandidateWithAgentMetadata(
-  candidate: UserSearchResult,
-  managedAgentsByPubkey: ReadonlyMap<string, ManagedAgent>,
-): AddMemberSearchCandidate {
-  return {
-    ...candidate,
-    isManagedAgent: addMemberCandidateIsManagedAgent(
-      candidate,
-      managedAgentsByPubkey,
-    ),
-    personaId: addMemberCandidatePersonaId(candidate, managedAgentsByPubkey),
-  };
-}
 
-function memberModalRoleRank(member: ChannelMember) {
-  if (member.role === "owner") return 0;
-  if (member.role === "admin") return 1;
-  return 2;
-}
-function compareMembersForModal(
-  currentPubkey: string | undefined,
-  left: ChannelMember,
-  right: ChannelMember,
-) {
-  const rankDelta = memberModalRoleRank(left) - memberModalRoleRank(right);
-  if (rankDelta !== 0) {
-    return rankDelta;
-  }
-
-  if (currentPubkey && left.pubkey === currentPubkey) return -1;
-  if (currentPubkey && right.pubkey === currentPubkey) return 1;
-
-  return formatMemberName(left).localeCompare(formatMemberName(right));
-}
-
+import {
+  addMemberCandidateWithAgentMetadata,
+  compareMembersForModal,
+  formatAddCandidateName,
+  type AddMemberSearchCandidate,
+} from "@/features/channels/ui/membersSidebarCandidates";
 type MembersSidebarProps = {
   channel: Channel | null;
   currentPubkey?: string;

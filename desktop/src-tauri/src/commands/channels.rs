@@ -8,6 +8,13 @@ use crate::{
     relay::{query_relay, relay_api_base_url_with_override, submit_event, submit_event_with_keys},
 };
 
+// Split out to keep this file under the desktop file-size ratchet.
+#[path = "channels_last_messages.rs"]
+mod last_messages;
+use last_messages::{last_message_filter, query_last_messages};
+#[cfg(test)]
+pub(super) use last_messages::last_message_filter_batches;
+
 // ── Reads (pure-nostr via /query) ────────────────────────────────────────────
 
 const DIRECTORY_PAGE_SIZE: usize = 500;
@@ -147,40 +154,6 @@ fn compute_channels_hash(channels: &[ChannelInfo]) -> String {
 
     let canonical = serde_json::to_string(&projections).unwrap_or_default();
     format!("{:016x}", fnv1a_64(canonical.as_bytes()))
-}
-
-// Keep this aligned with the relay's aggregate explicit-`#h` request bound.
-// Each filter carries one channel so the relay can use its channel_id index.
-const LAST_MESSAGE_QUERY_CHANNEL_BATCH_SIZE: usize = 128;
-// Human-visible channel activity that drives sidebar Recent ordering. Keep this
-// aligned with desktop/src/shared/constants/kinds.ts::CHANNEL_MESSAGE_EVENT_KINDS.
-const CHANNEL_RECENCY_EVENT_KINDS: [u16; 4] = [9, 40002, 45001, 45003];
-
-pub(super) fn last_message_filter(channel_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "kinds": CHANNEL_RECENCY_EVENT_KINDS,
-        "#h": [channel_id],
-        "limit": 1
-    })
-}
-
-pub(super) fn last_message_filter_batches(
-    filters: &[serde_json::Value],
-) -> Vec<&[serde_json::Value]> {
-    filters
-        .chunks(LAST_MESSAGE_QUERY_CHANNEL_BATCH_SIZE)
-        .collect()
-}
-
-async fn query_last_messages(
-    state: &AppState,
-    filters: &[serde_json::Value],
-) -> Result<Vec<nostr::Event>, String> {
-    let mut messages = Vec::with_capacity(filters.len());
-    for batch in last_message_filter_batches(filters) {
-        messages.extend(query_relay(state, batch).await?);
-    }
-    Ok(messages)
 }
 
 // ── Core fetch implementation ─────────────────────────────────────────────────

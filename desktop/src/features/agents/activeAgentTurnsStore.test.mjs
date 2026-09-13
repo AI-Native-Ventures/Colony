@@ -3,7 +3,6 @@ import { describe, it, beforeEach, afterEach, mock } from "node:test";
 
 import {
   syncAgentTurnsFromEvents,
-  syncActiveAgentTurnsFromObserver,
   getActiveTurnsForAgent,
   getActiveTurnsByChannel,
   resetActiveAgentTurnsStore,
@@ -12,8 +11,11 @@ import {
   restoreActiveAgentTurnsForCommunity,
   clearSavedCommunitySnapshot,
   clearActiveTurnsForAgent,
-  createActiveAgentTurnsObserverListener,
 } from "./activeAgentTurnsStore.ts";
+import {
+  createActiveAgentTurnsObserverListener,
+  syncActiveAgentTurnsFromObserver,
+} from "./activeAgentTurnsBridge.ts";
 import {
   injectObserverEventsForE2E,
   getAgentObserverSnapshot,

@@ -10,7 +10,6 @@ import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomple
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
 import {
   findSpoileredImetaMediaUrls,
-  type ImetaMedia,
   restoreImetaMediaDisplayLabels,
   stripImetaMediaLines,
 } from "@/features/messages/lib/imetaMediaMarkdown";
@@ -62,7 +61,11 @@ import { useDraftPersistLifecycle } from "./useDraftPersistSnapshot";
 import { submitMessageEdit } from "./submitMessageEdit";
 import { useManagedComposerLinkPreviews } from "./useComposerLinkPreviews";
 import { useComposerAutoSubmit } from "./useComposerAutoSubmit";
-import type { MessageComposerProps } from "./MessageComposer.types";
+import { useComposerReplyRecipients } from "./useComposerReplyRecipients";
+import type {
+  ComposerPreEditSnapshot,
+  MessageComposerProps,
+} from "./MessageComposer.types";
 function MessageComposerImpl(props: MessageComposerProps) {
   const {
     audienceContext = null,
@@ -106,10 +109,6 @@ function MessageComposerImpl(props: MessageComposerProps) {
     syncComposerContentFromEditor,
     syncContentRefFromEditorRef,
   } = useComposerContentState();
-  // Colony-only: the reply model derives its recipient set from the same
-  // link-preview content string, so it is retained here even though upstream
-  // dropped this state when the composer moved to the managed preview hook.
-  const [previewContent, setPreviewContent] = React.useState("");
   const {
     previewList: composerLinkPreviews,
     getReadyTags: getReadyLinkPreviewTags,
@@ -141,22 +140,18 @@ function MessageComposerImpl(props: MessageComposerProps) {
   });
   const effectiveDraftKeyRef = React.useRef(effectiveDraftKey);
   effectiveDraftKeyRef.current = effectiveDraftKey;
-  const preEditSnapshotRef = React.useRef<{
-    content: string;
-    pendingImeta: ImetaMedia[];
-    queuedAttachments: ReturnType<typeof useMediaUpload>["queuedAttachments"];
-    spoileredAttachmentUrls: Set<string>;
-  } | null>(null);
+  const preEditSnapshotRef = React.useRef<ComposerPreEditSnapshot | null>(null);
   const mentions = useMentions(channelId, undefined, profiles, {
     channelType,
   });
+  const { recipientPubkeys, trackPreviewContent } = useComposerReplyRecipients(
+    mentions,
+    channelType,
+  );
   const replyModel = useReplyModelSelection({
     scope: `${ownerPubkey}:${effectiveDraftKey ?? ""}:${audienceThreadRootId ?? ""}`,
     enabled: editTarget == null,
-    recipientPubkeys: [
-      ...mentions.extractMentionPubkeys(previewContent),
-      ...(channelType === "dm" ? mentions.memberPubkeys : []),
-    ],
+    recipientPubkeys,
   });
   const channelLinks = useChannelLinks();
   const customEmoji = useCustomEmoji();
@@ -283,7 +278,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     onLinkShortcut: () => onLinkShortcutRef.current?.() ?? false,
     onUpdate: ({ cursor, linkPreviewContent, text }) => {
       setComposerContentFromText(text);
-      setPreviewContent(linkPreviewContent);
+      trackPreviewContent(linkPreviewContent);
       updateLinkPreviewContent(linkPreviewContent);
       mentions.updateMentionQuery(text, cursor);
       channelLinks.updateChannelQuery(text, cursor);

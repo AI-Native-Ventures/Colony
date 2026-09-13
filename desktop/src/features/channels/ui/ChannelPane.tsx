@@ -25,7 +25,6 @@ import {
 import { buildVideoReviewPresentationByMessageId } from "@/features/messages/lib/videoReviewContext";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
-import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { ChannelWorkspaceDock } from "@/features/workspace/ui/ChannelWorkspaceDock";
 import { WorkspaceFocusThreadPane } from "@/features/workspace/ui/WorkspaceFocusThreadPane";
 import { WorkspaceLinkProvider } from "@/features/workspace/ui/WorkspaceLinkContext";
@@ -51,6 +50,10 @@ import {
 import { useWelcomeComposerBanner } from "@/features/channels/ui/useWelcomeComposerBanner";
 import { mentionsKnownAgent } from "@/features/channels/ui/ChannelPane.helpers";
 import { HUDDLE_TRANSCRIPT_ROOT_STYLE } from "@/features/channels/ui/ChannelPane.constants";
+import {
+  ChannelFindBarSlot,
+  ChannelSharedHeaderBackdrop,
+} from "@/features/channels/ui/ChannelPaneChrome";
 import { HuddleStartingView, HuddleTranscriptIntro } from "@/features/huddle";
 import { useChannelIntro } from "@/features/channels/ui/useChannelIntro";
 import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types";
@@ -553,16 +556,10 @@ export const ChannelPane = React.memo(function ChannelPane({
         data-colony-channel-layout={isHuddleTranscript ? undefined : "true"}
         style={isHuddleTranscript ? HUDDLE_TRANSCRIPT_ROOT_STYLE : undefined}
       >
-        {!isSinglePanelView && !isHuddleTranscript ? (
-          <div
-            aria-hidden="true"
-            className={cn(
-              "pointer-events-none absolute inset-x-0 top-0 z-30 bg-background/80 backdrop-blur-md supports-backdrop-filter:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-backdrop-filter:bg-background/55",
-              channelChrome.headerHeight,
-            )}
-            data-testid="channel-shared-header-backdrop"
-          />
-        ) : null}
+        <ChannelSharedHeaderBackdrop
+          heightClassName={channelChrome.headerHeight}
+          visible={!isSinglePanelView && !isHuddleTranscript}
+        />
 
         {!isSinglePanelView ? (
           <section
@@ -593,19 +590,10 @@ export const ChannelPane = React.memo(function ChannelPane({
             }
           >
             {isHuddleTranscript ? null : header}
-            {channelFind.isOpen ? (
-              <div className={cn("absolute inset-x-0 z-40", channelChrome.top)}>
-                <ChannelFindBar
-                  matchCount={channelFind.matchCount}
-                  matchIndex={channelFind.activeIndex}
-                  onClose={channelFind.close}
-                  onNext={channelFind.goToNext}
-                  onPrevious={channelFind.goToPrevious}
-                  onQueryChange={channelFind.setQuery}
-                  query={channelFind.query}
-                />
-              </div>
-            ) : null}
+            <ChannelFindBarSlot
+              find={channelFind}
+              topClassName={channelChrome.top}
+            />
             <div className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col">
               <MessageTimeline
                 ref={messageTimelineRef}

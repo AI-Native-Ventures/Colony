@@ -5,8 +5,6 @@ import {
   ExternalLink,
   LoaderCircle,
   Mail,
-  MoreHorizontal,
-  Trash2,
 } from "lucide-react";
 import * as React from "react";
 
@@ -34,6 +32,7 @@ import {
   type InboxDisplayMessage,
   InboxMessageRow,
 } from "@/features/home/ui/InboxMessageRow";
+import { InboxHeaderMoreMenu } from "@/features/home/ui/InboxHeaderMoreMenu";
 import type { TimelineMessage } from "@/features/messages/types";
 import { formatTime } from "@/features/messages/lib/dateFormatters";
 import {
@@ -64,12 +63,6 @@ import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { VideoReviewNavigationProvider } from "@/shared/ui/VideoReviewNavigation";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/shared/ui/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
@@ -790,7 +783,7 @@ function InboxMessageDetailPane({
                     />
                   ) : null}
                   {canDelete ? (
-                    <HeaderMoreMenu
+                    <InboxHeaderMoreMenu
                       isDeletingMessage={isDeletingMessage}
                       onDelete={onDelete}
                     />
@@ -1001,46 +994,5 @@ function InboxMessageDetailPane({
         </React.Suspense>
       ) : null}
     </section>
-  );
-}
-
-function HeaderMoreMenu({
-  isDeletingMessage,
-  onDelete,
-}: {
-  isDeletingMessage: boolean;
-  onDelete: () => void;
-}) {
-  const trigger = (
-    <Button
-      aria-label="More actions"
-      className="rounded-full text-muted-foreground"
-      size="icon"
-      type="button"
-      variant="ghost"
-    >
-      <MoreHorizontal />
-    </Button>
-  );
-
-  return (
-    <DropdownMenu modal={false}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent>More actions</TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
-          disabled={isDeletingMessage}
-          onClick={onDelete}
-        >
-          <Trash2 className="h-4 w-4" />
-          Delete message
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
