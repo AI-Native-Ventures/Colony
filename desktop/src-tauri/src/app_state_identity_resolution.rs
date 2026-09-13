@@ -216,7 +216,9 @@ pub(super) fn resolve_identity_with_stores(
         }
     }
 
-    recover_legacy_or_generate(store, legacy_store, legacy_path, data_dir)
+    // Nothing unreadable to clear: this branch is reached with an empty or
+    // unreachable keyring, not a keyring value that failed to parse.
+    recover_legacy_or_generate(store, legacy_store, legacy_path, data_dir, false)
 }
 
 /// Last-resort branch before minting a brand-new identity: the current

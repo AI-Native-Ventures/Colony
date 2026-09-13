@@ -741,7 +741,9 @@ mod tests {
     #[tokio::test]
     async fn archived_fetch_never_crosses_relays_mid_flight() {
         use crate::app_state::build_app_state;
-        use crate::relay_admission::{reset_rate_limit_gate, TEST_SERIAL};
+        use crate::relay_admission::reset_rate_limit_gate;
+        // Colony keeps the shared gate serializer inside `relay_admission::tests`.
+        use crate::relay_admission::tests::TEST_SERIAL;
         use axum::{routing::get, routing::post, Json, Router};
 
         let _serial = TEST_SERIAL.lock().await;
@@ -856,7 +858,9 @@ mod tests {
     #[tokio::test]
     async fn archive_core_fires_regen_only_on_accepted_submit() {
         use crate::app_state::build_app_state;
-        use crate::relay_admission::{reset_rate_limit_gate, TEST_SERIAL};
+        use crate::relay_admission::reset_rate_limit_gate;
+        // Colony keeps the shared gate serializer inside `relay_admission::tests`.
+        use crate::relay_admission::tests::TEST_SERIAL;
 
         let _serial = TEST_SERIAL.lock().await;
         reset_rate_limit_gate();
@@ -906,7 +910,9 @@ mod tests {
     #[tokio::test]
     async fn unarchive_core_fires_regen_only_on_accepted_submit() {
         use crate::app_state::build_app_state;
-        use crate::relay_admission::{reset_rate_limit_gate, TEST_SERIAL};
+        use crate::relay_admission::reset_rate_limit_gate;
+        // Colony keeps the shared gate serializer inside `relay_admission::tests`.
+        use crate::relay_admission::tests::TEST_SERIAL;
 
         let _serial = TEST_SERIAL.lock().await;
         reset_rate_limit_gate();
