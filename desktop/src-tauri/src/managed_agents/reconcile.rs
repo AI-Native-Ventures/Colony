@@ -249,7 +249,15 @@ pub(crate) fn retain_managed_agent_pending(
     record: &ManagedAgentRecord,
 ) {
     let result = (|| -> Result<(), String> {
-        let scope = crate::managed_agents::retention::active_retention_scope(app, state)?;
+        let Some(scope) =
+            crate::managed_agents::retention::retention_scope_for_record(app, state, record)?
+        else {
+            eprintln!(
+                "buzz-desktop: agent-retain: skipped unpinned record {}",
+                record.pubkey
+            );
+            return Ok(());
+        };
         let conn = open_retention_db(&scope.db_path)?;
         // Shared engine with the boot-time reconcile: projection content diff
         // (no republish for runtime-only churn) + monotonic created_at bump

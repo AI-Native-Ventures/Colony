@@ -88,6 +88,38 @@ pub fn active_retention_scope(app: &AppHandle, state: &AppState) -> Result<Reten
     })
 }
 
+/// Resolve the retention scope for a specific `record` — the scope of its
+/// own `relay_url`, not the currently active community. A blank pin must not
+/// publish anywhere; mirroring the comment on `record_belongs_to_active_relay`
+/// in `reconcile`: an unpinned record must not be retained under whichever
+/// relay happens to be connected.
+///
+/// Returns `None` when `record.relay_url` is blank, closing the leak that
+/// retained every unpinned agent into whichever community was open.
+pub fn retention_scope_for_record(
+    app: &AppHandle,
+    state: &AppState,
+    record: &crate::managed_agents::ManagedAgentRecord,
+) -> Result<Option<RetentionScope>, String> {
+    let pinned = record.relay_url.trim();
+    if pinned.is_empty() {
+        return Ok(None);
+    }
+    let owner_keys = state.signing_keys()?;
+    let base_dir = super::managed_agents_base_dir(app)?;
+    let db_path = scoped_retention_db_path(&base_dir, pinned, &owner_keys.public_key().to_hex());
+    let parent = db_path
+        .parent()
+        .ok_or_else(|| "retention scope path has no parent".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create retention scope directory: {error}"))?;
+    Ok(Some(RetentionScope {
+        db_path,
+        relay_url: pinned.to_string(),
+        owner_keys,
+    }))
+}
+
 /// Snapshot the active relay + owner, but only when it is the scope that owns
 /// events delivered by `arrival_relay_url`.
 ///
