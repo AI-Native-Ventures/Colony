@@ -17,8 +17,7 @@ test("Pi metadata replacement prompt produces a standalone system prompt card", 
         params: {
           _meta: {
             sessionTitle: "Pi fixture",
-            systemPrompt:
-              "[Base]\nBuzz base\n\n[System]\nPersona",
+            systemPrompt: "[Base]\nBuzz base\n\n[System]\nPersona",
           },
         },
       },
@@ -51,8 +50,7 @@ test("Pi metadata replace object produces a standalone system prompt card", () =
           _meta: {
             sessionTitle: "Pi fixture",
             systemPrompt: {
-              replace:
-                "[Base]\nBuzz base\n\n[System]\nPersona",
+              replace: "[Base]\nBuzz base\n\n[System]\nPersona",
             },
           },
         },

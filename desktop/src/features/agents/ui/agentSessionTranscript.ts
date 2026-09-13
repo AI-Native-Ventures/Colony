@@ -12,6 +12,13 @@ import {
   normalizeToolStatus,
 } from "./agentSessionToolCatalog";
 import { classifyTool } from "./agentSessionToolClassifier";
+import {
+  draftFrom,
+  pushItem,
+  replaceItem,
+  sealOpenMessages,
+  turnMapKey,
+} from "./agentSessionTranscriptDraft";
 import { asRecord, asString, titleCase } from "./agentSessionUtils";
 import {
   describeTurnStarted,
@@ -69,7 +76,7 @@ export function createEmptyTranscriptState(): TranscriptState {
  * call. Replaces the previous pattern of nested closures capturing bare `let`
  * bindings — all mutation now targets this explicit object.
  */
-type TranscriptDraft = {
+export type TranscriptDraft = {
   items: TranscriptItem[];
   itemsById: Map<string, TranscriptItem>;
   activeMessageKey: Map<string, string>;
@@ -83,61 +90,6 @@ type TranscriptDraft = {
   latestSessionId: string | null;
   changed: boolean;
 };
-
-function draftFrom(state: TranscriptState): TranscriptDraft {
-  return {
-    items: state.items,
-    itemsById: state.itemsById,
-    activeMessageKey: state.activeMessageKey,
-    sealedKeys: state.sealedKeys,
-    triggeringEventIdsByTurn: state.triggeringEventIdsByTurn,
-    pendingPermissions: state.pendingPermissions,
-    continuationSeq: state.continuationSeq,
-    latestSessionId: state.latestSessionId,
-    changed: false,
-  };
-}
-
-/** Lazily copy items + itemsById on first mutation so callers get new refs. */
-function ensureMutable(d: TranscriptDraft) {
-  if (!d.changed) {
-    d.items = [...d.items];
-    d.itemsById = new Map(d.itemsById);
-    d.changed = true;
-  }
-}
-
-function replaceItem(d: TranscriptDraft, id: string, updated: TranscriptItem) {
-  ensureMutable(d);
-  const idx = d.items.findIndex((it) => it.id === id);
-  if (idx !== -1) {
-    d.items[idx] = updated;
-  }
-  d.itemsById.set(id, updated);
-}
-
-function pushItem(d: TranscriptDraft, item: TranscriptItem) {
-  ensureMutable(d);
-  d.items.push(item);
-  d.itemsById.set(item.id, item);
-}
-
-function sealOpenMessages(d: TranscriptDraft) {
-  let copied = false;
-  for (const [, currentKey] of d.activeMessageKey) {
-    if (!d.sealedKeys.has(currentKey)) {
-      if (!copied) {
-        d.sealedKeys = new Set(d.sealedKeys);
-        copied = true;
-      }
-      d.sealedKeys.add(currentKey);
-    }
-  }
-}
-
-function turnMapKey(channelKey: string, turnKey: string | number | null) {
-  return `${channelKey}:${turnKey ?? "unknown"}`;
-}
 
 function rememberTriggeringEventIds(
   d: TranscriptDraft,
