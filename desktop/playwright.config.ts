@@ -112,6 +112,7 @@ export default defineConfig({
         "**/edit-agent.spec.ts",
         "**/agent-identity-redesign.spec.ts",
         "**/first-job-handoff.spec.ts",
+        "**/scout-channel-onboarding.spec.ts",
         "**/doctor-cta-screenshots.spec.ts",
         "**/pubkey-display-screenshots.spec.ts",
         "**/agent-rank-screenshots.spec.ts",

@@ -196,6 +196,14 @@ try {
       "newer Electron draft",
     );
   });
+  // Electron's DOMStorage flush API is synchronous (Electron 44 types expose
+  // `flushStorageData(): void`). Exercise the same persistence boundary as
+  // production before closing the fixture; do not rely on app.close() timing.
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window) throw new Error("Migration fixture window disappeared");
+    window.webContents.session.flushStorageData();
+  });
   await app.close();
   app = null;
   phase = "electron-relaunch";

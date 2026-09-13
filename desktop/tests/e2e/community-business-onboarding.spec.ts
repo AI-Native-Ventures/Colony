@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { verifyEvent } from "nostr-tools/pure";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import {
   seedActiveIdentity,
@@ -6,7 +7,10 @@ import {
 } from "../helpers/onboarding";
 import { fillFounderBusiness } from "../helpers/simpleFounder";
 import { waitForAnimations } from "../helpers/animations";
-import { expectRetainedBusinessContext } from "../helpers/companyProfile";
+import {
+  parseScoutOnboardingRoot,
+  ROOT_PROTOCOL,
+} from "../../src/features/onboarding/channelOnboardingRuntime/protocol";
 
 const OWNER = TEST_IDENTITIES.tyler.pubkey;
 const BASE_RELAY = "wss://alpha.colony.ainative.ventures";
@@ -182,14 +186,68 @@ test("a named owner creates from the real rail, resumes Business and Power, and 
   });
   await complete.click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const commandCountBeforeChoiceHandoff = await page.evaluate(
+    () => window.__BUZZ_E2E_COMMANDS__?.length ?? 0,
+  );
   await page.getByRole("button", { name: "Skip for now", exact: true }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
-  await expectRetainedBusinessContext(page, {
+  // Business completion hands the saved signup context to Scout's
+  // choice-first Welcome root. Company writes and agent/work setup wait for
+  // the later channel approval.
+  const retained = await page.evaluate(() => ({
+    published: window.__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [],
+    signedProfileUpdates: window.__BUZZ_E2E_COMMAND_PAYLOADS__?.filter(
+      (entry) => entry.command === "sign_community_profile_update",
+    ),
+    commands: window.__BUZZ_E2E_COMMANDS__ ?? [],
+  }));
+  const roots = retained.published.filter((event) =>
+    event.tags.some(
+      (tag) => tag[0] === "client" && tag[1] === ROOT_PROTOCOL.marker,
+    ),
+  );
+  expect(roots).toHaveLength(1);
+  const root = roots[0];
+  expect(root?.kind).toBe(ROOT_PROTOCOL.kind);
+  if (!root) throw new Error("Missing signed Scout onboarding root");
+  expect(verifyEvent(root)).toBe(true);
+  const payload = parseScoutOnboardingRoot(root.tags);
+  expect(payload).not.toBeNull();
+  if (!payload) throw new Error("The Scout onboarding root was not readable");
+  expect(payload).toMatchObject({
     ownerPubkey: OWNER,
     relayUrl: "wss://bravo.colony.ainative.ventures",
-    name: "Bravo Studio",
-    summary: "We design brands for service businesses.",
+    seed: {
+      businessName: "Bravo Studio",
+      businessDescription: "We design brands for service businesses.",
+      website: "",
+      websiteState: "none",
+    },
   });
+  const postHandoffCommands = retained.commands.slice(
+    commandCountBeforeChoiceHandoff,
+  );
+  expect(payload.requestId).toMatch(
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i,
+  );
+  expect(retained.signedProfileUpdates ?? []).toHaveLength(0);
+  for (const command of [
+    "attach_thread_task",
+    "create_managed_agent",
+    "create_team",
+    "create_user_task",
+    "execute_agent_proposal",
+    "publish_note",
+    "send_managed_agent_channel_message",
+    "send_stream_message",
+    "set_canvas",
+    "set_thread_canvas",
+    "start_managed_agent",
+    "start_managed_agent_runtime",
+    "update_company_profile",
+  ]) {
+    expect(postHandoffCommands).not.toContain(command);
+  }
   const state = await page.evaluate(
     ({ owner, relay }) => ({
       baseComplete: localStorage.getItem(
