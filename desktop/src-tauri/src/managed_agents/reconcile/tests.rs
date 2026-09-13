@@ -466,169 +466,125 @@ fn retain_agent_record_is_noop_when_unchanged() {
     );
 }
 
-/// Test (a): a record pinned to relay B retained while A is active lands
-/// in B's scope DB and A's active scope DB has no row from it.
-/// Tests the retention_scope_for_record and boot-reconcile scoping without
-/// requiring a live Tauri AppHandle by resolving scopes manually against
-/// a temporary base directory.
+/// Test (a): a record pinned to relay B is retained into B's scope database,
+/// and A's scope database (the one that was active) stays empty.
+///
+/// This fails on the unfixed code: `retain_managed_agent_pending` resolved the
+/// ACTIVE scope, so `retention_db_path_for_record` did not exist and the write
+/// landed in A's database. The path assertion pins the record's own pin as the
+/// only input to the choice, and the emptiness assertion on A is what the leak
+/// violated.
 #[test]
 fn record_pinned_to_b_retains_into_own_scope_db() {
+    use crate::managed_agents::retention::{
+        get_pending_sync, open_retention_db, retention_db_path_for_record, scoped_retention_db_path,
+    };
+
     let keys = nostr::Keys::generate();
     let base = tempfile::tempdir().unwrap();
     let owner = keys.public_key().to_hex();
     let pubkey = "a".repeat(64);
-    let pinned_relay = "wss://other.example.com";
-    let active_relay = "wss://localhost:3000";
-    let record = sample_record(&pubkey, "agent-b");
+    let pinned_relay = "wss://b.example";
+    let active_relay = "wss://a.example";
+    let mut record = sample_record(&pubkey, "agent-b");
+    record.relay_url = pinned_relay.to_string();
 
-    // Manually resolve the scope for B (the record's relay_url) and A (active).
-    let scope_b_path = crate::managed_agents::retention::scoped_retention_db_path(
-        base.path(),
-        pinned_relay,
-        &owner,
+    // The record's OWN pin decides the database, not whatever is active.
+    let scope_b_path = retention_db_path_for_record(base.path(), &owner, &record)
+        .expect("a pinned record must resolve a retention database");
+    assert_eq!(
+        scope_b_path,
+        scoped_retention_db_path(base.path(), pinned_relay, &owner),
+        "a record pinned to B must resolve B's scope database"
     );
-    let scope_a_path = crate::managed_agents::retention::scoped_retention_db_path(
-        base.path(),
-        active_relay,
-        &owner,
-    );
+    let scope_a_path = scoped_retention_db_path(base.path(), active_relay, &owner);
     assert_ne!(
         scope_b_path, scope_a_path,
-        "B and A scopes must have different DB paths"
+        "B and A scopes must have different database paths"
     );
 
-    std::fs::create_dir_all(scope_a_path.parent().unwrap()).unwrap();
+    // Retain through the shared engine, exactly as the retain path does.
     std::fs::create_dir_all(scope_b_path.parent().unwrap()).unwrap();
+    let conn_b = open_retention_db(&scope_b_path).unwrap();
+    assert!(
+        retain_agent_record(&conn_b, &keys, &record).unwrap(),
+        "a fresh record must retain into its own scope"
+    );
+    let pending_b = get_pending_sync(&conn_b).unwrap();
+    assert_eq!(pending_b.len(), 1, "B's scope database must hold the head");
+    assert_eq!(pending_b[0].kind, KIND_MANAGED_AGENT);
+    assert_eq!(pending_b[0].d_tag, pubkey);
 
-    // Open B's DB, retain the record there, and verify it lands.
-    {
-        let conn_b = crate::managed_agents::retention::open_retention_db(&scope_b_path).unwrap();
-        let event = crate::managed_agents::agent_events::build_agent_event(&record)
-            .unwrap()
-            .sign_with_keys(&keys)
-            .unwrap();
-        crate::managed_agents::retention::retain_event(
-            &conn_b,
-            &crate::managed_agents::retention::RetainedEvent {
-                kind: buzz_core_pkg::kind::KIND_MANAGED_AGENT,
-                pubkey: owner.clone(),
-                d_tag: pubkey.clone(),
-                content: event.content.clone(),
-                created_at: event.created_at.as_secs() as i64,
-                raw_event: event.as_json(),
-                pending_sync: true,
-            },
-        )
-        .unwrap();
-        let pending_b = crate::managed_agents::retention::get_pending_sync(&conn_b).unwrap();
-        assert_eq!(
-            pending_b.len(),
-            1,
-            "B's scope DB must have the retained row"
-        );
-    }
-
-    // A's DB must have no row with B's agent d_tag.
-    {
-        let conn_a = crate::managed_agents::retention::open_retention_db(&scope_a_path).unwrap();
-        let pending_a = crate::managed_agents::retention::get_pending_sync(&conn_a).unwrap();
+    // A's scope database was never touched: either it does not exist at all,
+    // or it holds nothing pending.
+    if scope_a_path.exists() {
+        let conn_a = open_retention_db(&scope_a_path).unwrap();
         assert!(
-            pending_a.iter().all(|r| r.d_tag != pubkey),
-            "A's scope DB must have no row whose d_tag matches B's agent"
+            get_pending_sync(&conn_a).unwrap().is_empty(),
+            "the active community's scope database must stay empty"
         );
     }
 }
 
-/// Test (b): a blank pin is skipped (no retention DB write anywhere).
+/// Test (b): a blank pin resolves no retention database at all, so an
+/// unassigned agent is published nowhere rather than into whichever community
+/// happens to be open. Whitespace is a blank pin too.
 #[test]
 fn blank_pin_skips_retention_for_unpinned_record() {
-    let keys = nostr::Keys::generate();
-    let _base = tempfile::tempdir().unwrap();
-    let _owner = keys.public_key().to_hex();
-    let pubkey = "b".repeat(64);
-    let mut record = sample_record(&pubkey, "unassigned-agent");
-    record.relay_url = String::new();
+    use crate::managed_agents::retention::retention_db_path_for_record;
 
-    // Verify the direct behavior: a blank pin has an empty trimmed relay,
-    // and the retention engine does not write to any active scope DB for it.
-    assert!(
-        record.relay_url.trim().is_empty(),
-        "record must have a blank pin"
-    );
+    let keys = nostr::Keys::generate();
+    let base = tempfile::tempdir().unwrap();
+    let owner = keys.public_key().to_hex();
+    let mut record = sample_record(&"b".repeat(64), "unassigned-agent");
+
+    for blank in ["", "   "] {
+        record.relay_url = blank.to_string();
+        assert!(
+            retention_db_path_for_record(base.path(), &owner, &record).is_none(),
+            "a blank pin ({blank:?}) must resolve no retention database"
+        );
+    }
 }
 
-/// Test (c): the flush skips a kind 30177 row whose local record is
-/// pinned to a different relay. Verified by checking the retention state
-/// and the belt conditions directly (the flush requires an AppHandle that
-/// does not match the mock runtime type in this environment).
+/// Test (c): the flush belt holds back a kind:30177 row whose local record is
+/// pinned to another community, and holds back nothing else. Without the belt
+/// every case below returns false, so the first assertion fails on the
+/// unfixed code.
 #[test]
 fn flush_belt_skips_30177_row_pinned_elsewhere() {
-    let keys = nostr::Keys::generate();
-    let owner = keys.public_key().to_hex();
+    use crate::managed_agents::persona_events::flush_row_pinned_elsewhere;
+
     let pubkey = "c".repeat(64);
-    let pinned_relay = "wss://other.example.com";
-    let active_relay = "wss://localhost:3000";
+    let active_relay = "wss://a.example";
+    let record_pinned_to = |relay: &str| {
+        let mut record = sample_record(&pubkey, "agent-c");
+        record.relay_url = relay.to_string();
+        vec![record]
+    };
 
-    // Build a retention DB with a pending 30177 row at the ACTIVE scope.
-    let base = tempfile::tempdir().unwrap();
-    let _scope_path = crate::managed_agents::retention::scoped_retention_db_path(
-        base.path(),
-        active_relay,
-        &owner,
-    );
-    std::fs::create_dir_all(_scope_path.parent().unwrap()).unwrap();
-    {
-        let conn = crate::managed_agents::retention::open_retention_db(&_scope_path).unwrap();
-        let event = crate::managed_agents::agent_events::build_agent_event(&sample_record(
-            &pubkey, "agent-c",
-        ))
-        .unwrap()
-        .sign_with_keys(&keys)
-        .unwrap();
-        crate::managed_agents::retention::retain_event(
-            &conn,
-            &crate::managed_agents::retention::RetainedEvent {
-                kind: buzz_core_pkg::kind::KIND_MANAGED_AGENT,
-                pubkey: owner.clone(),
-                d_tag: pubkey.clone(),
-                content: event.content.clone(),
-                created_at: event.created_at.as_secs() as i64,
-                raw_event: event.as_json(),
-                pending_sync: true,
-            },
-        )
-        .unwrap();
-    }
-
-    // Build managed-agents.json with the same agent pinned to a different relay.
-    let mut pinned_record = sample_record(&pubkey, "agent-c");
-    pinned_record.relay_url = pinned_relay.to_string();
-    let store_path = base.path().join("managed-agents.json");
-    std::fs::write(
-        &store_path,
-        serde_json::to_string(&vec![pinned_record.clone()]).unwrap(),
-    )
-    .unwrap();
-
-    // Verify the DB has the pending row and the store file names a different relay.
-    {
-        let conn = crate::managed_agents::retention::open_retention_db(&_scope_path).unwrap();
-        let pending = crate::managed_agents::retention::get_pending_sync(&conn).unwrap();
-        assert_eq!(pending.len(), 1, "DB has the 30177 pending row");
-    }
-
-    // Verify the belt conditions: the record's pin differs from the active relay.
-    let pinned_trimmed = pinned_record.relay_url.trim();
     assert!(
-        !pinned_trimmed.is_empty(),
-        "record must have a non-empty pin"
-    );
-    assert_ne!(
-        pinned_trimmed, active_relay,
-        "record is pinned to a different relay"
+        flush_row_pinned_elsewhere(&record_pinned_to("wss://b.example"), &pubkey, active_relay),
+        "a head pinned to B must not publish into A"
     );
     assert!(
-        !crate::managed_agents::reconcile::same_relay_community(pinned_trimmed, active_relay),
-        "belt must treat the pin as different from active relay"
+        !flush_row_pinned_elsewhere(&record_pinned_to(active_relay), &pubkey, active_relay),
+        "a head pinned to this community must publish"
+    );
+    assert!(
+        !flush_row_pinned_elsewhere(&record_pinned_to("ws://a.example"), &pubkey, active_relay),
+        "a scheme difference is the same community, not a foreign pin"
+    );
+    assert!(
+        !flush_row_pinned_elsewhere(&record_pinned_to(""), &pubkey, active_relay),
+        "a blank pin keeps today's behaviour and publishes"
+    );
+    assert!(
+        !flush_row_pinned_elsewhere(
+            &record_pinned_to("wss://b.example"),
+            &"d".repeat(64),
+            active_relay
+        ),
+        "a row with no matching local record publishes"
     );
 }
