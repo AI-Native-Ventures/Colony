@@ -1665,11 +1665,10 @@ pub mod tests {
             .execute(&observer)
             .await
             .expect("remove test audit row");
-        sqlx::query("DELETE FROM communities WHERE id = $1")
-            .bind(community_id)
-            .execute(&observer)
-            .await
-            .expect("remove test community");
+        // Community rows are permanent tombstones, and deleting one cascades
+        // into fenced child tables after the row is gone, which trips
+        // enforce_community_write_fence (migration 0059). Leave the host row in
+        // place; it is `audit-retry-<uuid>.example`, so reruns never collide.
     }
 
     #[test]
