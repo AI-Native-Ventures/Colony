@@ -274,11 +274,10 @@ fn migrate_teams_supersedes_future_dated_head() {
     let keys = nostr::Keys::generate();
     let pubkey = keys.public_key().to_hex();
 
-    // Two: this team, plus the coordination team this reconcile ensures for
-    // the community it is syncing.
+    // Only the stored team is published; sync creates no coordination team.
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        2
+        1
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();

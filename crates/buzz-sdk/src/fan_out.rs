@@ -341,14 +341,14 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
                 } else {
                     TaskStatus::Blocked
                 },
-                owning_team_id: stage.owning_team_id.clone(),
+                owning_team_id: Some(stage.owning_team_id.clone()),
                 assignee_persona_ids: Vec::new(),
                 // QA is the lead of whichever team holds the gate. With no
                 // reviewer team that is the owning team's lead, the same
                 // call `kickoff_action` makes ("the lead reviews the team's
                 // work"); with one, it is the reviewer team's lead, which is
                 // the entire point of a stage declaring a separate reviewer.
-                qa_persona_id: reviewing_team.lead_persona_id.clone(),
+                qa_persona_id: Some(reviewing_team.lead_persona_id.clone()),
                 reviewer_team_id: stage.reviewer_team_id.clone(),
                 cost_centre_id: request.cost_centre_id.to_string(),
                 commercial_purpose: request.commercial_purpose,
@@ -676,9 +676,9 @@ mod tests {
             initiative_id: None,
             title: "Already working lead-0".to_string(),
             status: TaskStatus::InProgress,
-            owning_team_id: "team-sales".to_string(),
+            owning_team_id: Some("team-sales".to_string()),
             assignee_persona_ids: Vec::new(),
-            qa_persona_id: "sales-lead".to_string(),
+            qa_persona_id: Some("sales-lead".to_string()),
             reviewer_team_id: None,
             cost_centre_id: "cc-sales".to_string(),
             commercial_purpose: CommercialPurpose::Sales,
@@ -749,9 +749,9 @@ mod tests {
             initiative_id: None,
             title: "Already worked lead-0".to_string(),
             status: TaskStatus::Completed,
-            owning_team_id: "team-sales".to_string(),
+            owning_team_id: Some("team-sales".to_string()),
             assignee_persona_ids: Vec::new(),
-            qa_persona_id: "sales-lead".to_string(),
+            qa_persona_id: Some("sales-lead".to_string()),
             reviewer_team_id: None,
             cost_centre_id: "cc-sales".to_string(),
             commercial_purpose: CommercialPurpose::Sales,
@@ -941,9 +941,9 @@ mod tests {
             .iter()
             .find(|task| task.stage.as_deref() == Some("build"))
             .expect("build task");
-        assert_eq!(build.owning_team_id, "team-sales");
+        assert_eq!(build.owning_team_id.as_deref(), Some("team-sales"));
         assert_eq!(build.reviewer_team_id.as_deref(), Some("team-qa"));
-        assert_eq!(build.qa_persona_id, "qa-lead");
+        assert_eq!(build.qa_persona_id.as_deref(), Some("qa-lead"));
 
         // The unreviewed stage is untouched: no reviewer team, and QA stays
         // the owning team's lead.
@@ -952,7 +952,7 @@ mod tests {
             .find(|task| task.stage.as_deref() == Some("send"))
             .expect("send task");
         assert_eq!(send.reviewer_team_id, None);
-        assert_eq!(send.qa_persona_id, "sales-lead");
+        assert_eq!(send.qa_persona_id.as_deref(), Some("sales-lead"));
     }
 
     /// Caught while planning rather than on submission: the Tasks a plan

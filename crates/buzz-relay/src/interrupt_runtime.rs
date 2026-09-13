@@ -947,6 +947,32 @@ async fn fetch_owner_authored_managed_agent_roster(
 /// The corroborating record is the employees ROW rather than a second event,
 /// which is stronger than the desktop's version of the same rule, because
 /// the row is the relay's own and an event is only ever evidence.
+pub(crate) async fn trusted_assignment_personas(
+    tenant: &TenantContext,
+    state: &AppState,
+) -> Result<std::collections::HashSet<String>, String> {
+    let payroll = active_payroll(tenant, state).await?;
+    let roster = fetch_role_holder_roster(tenant, state, &payroll, 10_000).await?;
+    Ok(roster
+        .into_iter()
+        .filter_map(|(pubkey, content)| {
+            if PublicKey::from_hex(&pubkey).is_err()
+                || content
+                    .get("is_active")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(false)
+            {
+                return None;
+            }
+            content
+                .get("persona_id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .map(str::to_owned)
+        })
+        .collect())
+}
+
 async fn fetch_role_holder_roster(
     tenant: &TenantContext,
     state: &AppState,
@@ -1931,7 +1957,13 @@ async fn process_stall_candidate(
         }
     }
 
-    let audience = match persona_pubkey_in_roster(roster, &task.qa_persona_id)? {
+    let qa_pubkey = task
+        .qa_persona_id
+        .as_deref()
+        .map(|qa| persona_pubkey_in_roster(roster, qa))
+        .transpose()?
+        .flatten();
+    let audience = match qa_pubkey {
         Some(pubkey) => pubkey,
         None => match unique_executive_in_roster(roster, payroll)? {
             Some(pubkey) => pubkey,

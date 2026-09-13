@@ -282,7 +282,7 @@ fn migrate_teams_in_dir_at(
     relay_url: &str,
 ) -> Result<u32, String> {
     use crate::managed_agents::{
-        ensure_coordination_team_for_relay, load_teams_readonly,
+        load_teams_readonly,
         persona_events::monotonic_created_at,
         retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
         team_events::build_team_event,
@@ -294,32 +294,9 @@ fn migrate_teams_in_dir_at(
     let pubkey = keys.public_key().to_hex();
 
     let teams_path = base_dir.join("teams.json");
-    // Read through the same merge every other reader uses, rather than
-    // deserializing teams.json raw.
-    //
-    // The coordination team is the one built-in the RELAY has to resolve, and
-    // publishing it used to depend on it already being in teams.json at the
-    // moment THIS scope first synced. Retention is scoped per
-    // (relay, owner), so a community whose scope synced before the record was
-    // written — or a device with no teams.json at all, which returned early
-    // here — got a scope with no coordination team and no second chance until
-    // something else happened to rewrite the file. Every Task minted from chat
-    // in that community then failed with "missing reference in
-    // task.owningTeamId".
-    //
-    // `load_teams_readonly` merges the built-ins and writes nothing. It no
-    // longer synthesises a coordination team on its own: one store serves
-    // every community, so which community a coordination team belongs to is
-    // not knowable from the store alone. Ensuring THIS relay's team here, in
-    // memory, keeps the guarantee while making it per community.
-    //
-    // In memory deliberately, and not written back: `load_teams_readonly`
-    // never writes (see `load_teams_readonly_absent_file_performs_no_write`),
-    // and a boot reconcile is the wrong place to start authoring the store.
-    // The interactive paths that do own it (`company_team_refs`, the hire
-    // hook) persist the same record the next time the user acts.
-    let mut records = load_teams_readonly(&teams_path)?;
-    ensure_coordination_team_for_relay(&mut records, relay_url, &crate::util::now_iso());
+    // Sync existing teams only. Direct work requires no team, so restoring a
+    // workspace must not invent a coordination team as a side effect.
+    let records = load_teams_readonly(&teams_path)?;
 
     if records.is_empty() {
         return Ok(0);

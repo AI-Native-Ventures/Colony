@@ -74,7 +74,7 @@ function ThreadTaskChip({
         channelName={channelName}
         execution={execution}
         ownerLabel={shortIdLabel(task.owningTeamId)}
-        qaLabel={task.qaPersonaId}
+        qaLabel={task.qaPersonaId ?? "Owner review"}
         reviewerLabel={
           task.reviewerTeamId ? shortIdLabel(task.reviewerTeamId) : null
         }

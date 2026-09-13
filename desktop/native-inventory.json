@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 516,
+    "rust_total": 517,
     "tauri_coupled": 206,
-    "portable": 310,
+    "portable": 311,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -255,6 +255,7 @@
       "src-tauri/src/commands/global_agent_config/restart_policy.rs",
       "src-tauri/src/commands/global_agent_config_scope_tests.rs",
       "src-tauri/src/commands/identity_key_backup_tests.rs",
+      "src-tauri/src/commands/initiative_agent_identity.rs",
       "src-tauri/src/commands/initiative_dispatch_binding.rs",
       "src-tauri/src/commands/initiative_scope_tests.rs",
       "src-tauri/src/commands/initiative_team_readiness_policy.rs",
@@ -548,7 +549,7 @@
     ]
   },
   "params": {
-    "AppHandle": 413,
+    "AppHandle": 412,
     "State": 271,
     "Window": 7,
     "ipc::Request": 1,
@@ -556,7 +557,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 410,
+      "AppHandle": 409,
       "State": 271,
       "Window": 7,
       "ipc::Request": 1,
@@ -575,7 +576,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 126,
+    ".state::<": 125,
     ".emit(": 48,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -2668,7 +2669,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/ledger/corrections.ts:89",
+        "src/features/ledger/corrections.ts:90",
         "src/parity/session/script.ts:1240"
       ]
     },

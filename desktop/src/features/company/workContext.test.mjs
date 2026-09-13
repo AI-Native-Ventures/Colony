@@ -291,3 +291,10 @@ test("a turn charged to the hidden chat task still tags the message", async () =
   assert.equal(context.hidden, true);
   assert.deepEqual(context.tags[0], ["task", TASK_ID]);
 });
+
+test("direct work carries a task reference without a fabricated team", () => {
+  assert.deepEqual(
+    workContextTags(task({ owningTeamId: null, qaPersonaId: null })),
+    [["task", TASK_ID]],
+  );
+});

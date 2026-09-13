@@ -39,7 +39,7 @@ export type WorkContextTags = string[][];
 export type ResolvedWorkContext = {
   taskId: string;
   initiativeId: string | null;
-  owningTeamId: string;
+  owningTeamId: string | null;
   /** Whether the turn was charged to the thread's hidden chat task. */
   hidden: boolean;
   tags: WorkContextTags;
@@ -98,7 +98,7 @@ export type WorkContextDependencies = {
 export function workContextTags(task: CompanyTask): WorkContextTags {
   const tags: WorkContextTags = [["task", task.id]];
   if (task.initiativeId) tags.push(["initiative", task.initiativeId]);
-  tags.push(["team", task.owningTeamId]);
+  if (task.owningTeamId) tags.push(["team", task.owningTeamId]);
   return tags;
 }
 

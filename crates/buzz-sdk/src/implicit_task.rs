@@ -32,8 +32,8 @@ pub(crate) const COORDINATION_TEAM_SLUG: &str = "company-coordination";
 pub struct ImplicitTaskPlan {
     /// The stable Task identifier.
     pub task_id: String,
-    /// The single team accountable for it.
-    pub owning_team_id: String,
+    /// Optional team explicitly accountable for it. Direct chat has none.
+    pub owning_team_id: Option<String>,
     /// The action to sign and publish.
     pub action: Box<CompanyAction>,
 }
@@ -130,7 +130,7 @@ pub fn plan_implicit_task(
     if channel_id.trim().is_empty() || send_id.trim().is_empty() {
         return Err("a chat task needs the channel and send it came from".to_string());
     }
-    let team = owning_team_for_chat(teams, agent_persona_id)?;
+
     let cost_centre_id = internal_cost_centre(company)?.to_owned();
     let task_id = chat_task_id(channel_id, send_id);
 
@@ -138,7 +138,7 @@ pub fn plan_implicit_task(
         Some(id) if !id.trim().is_empty() => CommercialPurpose::ClientDelivery,
         _ => CommercialPurpose::Administration,
     };
-    let assignees = if team.persona_ids.iter().any(|id| id == agent_persona_id) {
+    let assignees = if !agent_persona_id.is_empty() {
         vec![agent_persona_id.to_owned()]
     } else {
         Vec::new()
@@ -153,9 +153,9 @@ pub fn plan_implicit_task(
         // The agent is about to work on it, so anything else would be a status
         // the Task never actually passes through.
         status: TaskStatus::InProgress,
-        owning_team_id: team.id.clone(),
+        owning_team_id: None,
         assignee_persona_ids: assignees,
-        qa_persona_id: team.lead_persona_id.clone(),
+        qa_persona_id: None,
         reviewer_team_id: None,
         cost_centre_id,
         commercial_purpose,
@@ -189,6 +189,9 @@ pub fn plan_implicit_task(
         updated_at: now,
     };
 
+    validate_task(&task, company, None, teams)
+        .map_err(|error| format!("this direct task is invalid: {error}"))?;
+
     let action = CompanyAction {
         relay_pubkey: relay_pubkey.to_string(),
         operation: CompanyActionOperation::Create,
@@ -204,7 +207,7 @@ pub fn plan_implicit_task(
 
     Ok(ImplicitTaskPlan {
         task_id,
-        owning_team_id: team.id.clone(),
+        owning_team_id: None,
         action: Box::new(action),
     })
 }
@@ -270,8 +273,8 @@ pub struct UserTaskRequest<'a> {
 pub struct UserTaskPlan {
     /// The stable Task identifier.
     pub task_id: String,
-    /// The single team accountable for it.
-    pub owning_team_id: String,
+    /// Optional team explicitly accountable for it. Direct chat has none.
+    pub owning_team_id: Option<String>,
     /// The action to sign and publish.
     pub action: Box<CompanyAction>,
 }
@@ -297,16 +300,15 @@ pub fn plan_user_task(
         return Err("a task needs a title".to_string());
     }
 
-    let owning_team = match request.owning_team_id {
-        Some(id) => teams
-            .iter()
-            .find(|team| team.id == id)
-            .ok_or_else(|| "that team does not exist".to_string())?,
-        None => teams
-            .iter()
-            .find(|team| team.id.ends_with(COORDINATION_TEAM_SLUG))
-            .ok_or_else(|| "this company has no coordination team to default to".to_string())?,
-    };
+    let owning_team = request
+        .owning_team_id
+        .map(|id| {
+            teams
+                .iter()
+                .find(|team| team.id == id)
+                .ok_or_else(|| "that team does not exist".to_string())
+        })
+        .transpose()?;
 
     let cost_centre_id = match request.cost_centre_id {
         Some(id) => {
@@ -336,9 +338,9 @@ pub fn plan_user_task(
         // that says exactly that - the same one initiative kickoff uses for
         // the same reason.
         status: TaskStatus::Ready,
-        owning_team_id: owning_team.id.clone(),
+        owning_team_id: owning_team.map(|team| team.id.clone()),
         assignee_persona_ids: request.assignee_persona_ids.to_vec(),
-        qa_persona_id: owning_team.lead_persona_id.clone(),
+        qa_persona_id: owning_team.map(|team| team.lead_persona_id.clone()),
         reviewer_team_id: None,
         cost_centre_id,
         commercial_purpose,
@@ -384,7 +386,7 @@ pub fn plan_user_task(
 
     Ok(UserTaskPlan {
         task_id,
-        owning_team_id: owning_team.id.clone(),
+        owning_team_id: owning_team.map(|team| team.id.clone()),
         action: Box::new(action),
     })
 }
@@ -485,43 +487,22 @@ mod tests {
     }
 
     #[test]
-    fn the_only_team_the_agent_belongs_to_owns_the_work() {
-        let plan = plan(&[engineering()], None);
-        assert_eq!(
-            plan.owning_team_id,
-            "company-team:abc:horizonlabs:engineering"
-        );
-        let task = task_of(&plan);
-        assert_eq!(task.qa_persona_id, "company-role:abc:horizonlabs:cto");
-        assert_eq!(task.assignee_persona_ids, vec![AGENT.to_string()]);
-        assert!(task.implicit);
-        assert_eq!(task.initiative_id, None);
-    }
-
-    // Guessing between two teams would charge work to one that never took it.
-    #[test]
-    fn ambiguous_multi_team_work_falls_to_company_coordination() {
-        let plan = plan(&[engineering(), coordination()], None);
-        assert_eq!(
-            plan.owning_team_id,
-            "company-team:abc:horizonlabs:company-coordination"
-        );
-        assert_eq!(
-            task_of(&plan).qa_persona_id,
-            "company-role:abc:horizonlabs:chief-of-staff"
-        );
-    }
-
-    #[test]
-    fn an_agent_in_no_team_still_lands_on_coordination() {
-        let mut outsider = engineering();
-        outsider.persona_ids = vec!["company-role:abc:horizonlabs:engineer".to_string()];
-        outsider.lead_persona_id = "company-role:abc:horizonlabs:engineer".to_string();
-        let plan = plan(&[outsider, coordination()], None);
-        assert_eq!(
-            plan.owning_team_id,
-            "company-team:abc:horizonlabs:company-coordination"
-        );
+    fn direct_work_preserves_the_agent_regardless_of_team_membership() {
+        for teams in [
+            vec![],
+            vec![engineering()],
+            vec![engineering(), coordination()],
+        ] {
+            let plan = plan(&teams, None);
+            let task = task_of(&plan);
+            assert_eq!(plan.owning_team_id, None);
+            assert_eq!(task.qa_persona_id, None);
+            assert_eq!(task.assignee_persona_ids, vec![AGENT.to_string()]);
+            assert!(task.implicit);
+            assert_eq!(task.initiative_id, None);
+            buzz_core::company::validate_task(task, &company(), None, &teams)
+                .expect("direct work is valid without a team");
+        }
     }
 
     // Claiming a client's delivery cost for work nobody tied to a client would
@@ -672,24 +653,18 @@ mod tests {
     }
 
     #[test]
-    fn a_user_created_task_lands_on_coordination_and_starts_ready() {
+    fn a_user_created_task_is_workspace_work_and_starts_ready() {
         let assignees = Vec::new();
         let plan = user_plan(
             &[coordination()],
             user_request("req-0001", "Fix the footer", &assignees),
         );
-        assert_eq!(
-            plan.owning_team_id,
-            "company-team:abc:horizonlabs:company-coordination"
-        );
+        assert_eq!(plan.owning_team_id, None);
         let task = user_task_of(&plan);
         assert_eq!(task.status, TaskStatus::Ready);
         assert!(!task.implicit);
         assert_eq!(task.title, "Fix the footer");
-        assert_eq!(
-            task.qa_persona_id,
-            "company-role:abc:horizonlabs:chief-of-staff"
-        );
+        assert_eq!(task.qa_persona_id, None);
         assert_eq!(task.cost_centre_id, "cc-coordination");
         assert_eq!(task.source_channel_id, "engineering");
         assert_eq!(task.assignee_persona_ids, Vec::<String>::new());
@@ -734,12 +709,15 @@ mod tests {
         request.cost_centre_id = Some("cc-web");
         let plan = user_plan(&teams, request);
         assert_eq!(
-            plan.owning_team_id,
-            "company-team:abc:horizonlabs:engineering"
+            plan.owning_team_id.as_deref(),
+            Some("company-team:abc:horizonlabs:engineering")
         );
         let task = user_task_of(&plan);
         assert_eq!(task.cost_centre_id, "cc-web");
-        assert_eq!(task.qa_persona_id, "company-role:abc:horizonlabs:cto");
+        assert_eq!(
+            task.qa_persona_id.as_deref(),
+            Some("company-role:abc:horizonlabs:cto")
+        );
     }
 
     #[test]

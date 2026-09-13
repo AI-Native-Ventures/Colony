@@ -412,12 +412,6 @@ pub(crate) async fn create_managed_agent_with_preparation(
 
         save_managed_agents(&app, &records)?;
 
-        // Best-effort hire hook, which must never block agent creation: put
-        // the persona on the coordination team of the community hired into.
-        if let Some(persona_id) = requested_persona_id.as_deref() {
-            enrol_persona_in_coordination_team_after_hire(&app, persona_id, &resolved_relay_url);
-        }
-
         let record = records
             .iter()
             .find(|record| record.pubkey == pubkey)

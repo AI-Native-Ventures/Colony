@@ -930,7 +930,7 @@ pub enum LedgerCmd {
         #[arg(long)]
         cost_centre: String,
         #[arg(long)]
-        team: String,
+        team: Option<String>,
         /// clientDelivery, sales, marketing, administration, internalProduct, uncertain
         #[arg(long)]
         purpose: String,
@@ -947,7 +947,7 @@ pub enum LedgerCmd {
         #[arg(long)]
         cost_centre: String,
         #[arg(long)]
-        team: String,
+        team: Option<String>,
         #[arg(long)]
         purpose: String,
         #[arg(long)]

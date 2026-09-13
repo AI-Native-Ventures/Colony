@@ -75,7 +75,7 @@ fn existing_approved_persona_is_required_without_repair_or_reparenting() {
     assert!(scope.existing_persona(&agents, &teams, None).is_err());
     assert!(scope
         .existing_persona(&agents, &[], Some(&agent_key()))
-        .is_err());
+        .is_ok());
     for mutation in 0..6 {
         let mut changed = agents.clone();
         match mutation {
@@ -94,7 +94,7 @@ fn existing_approved_persona_is_required_without_repair_or_reparenting() {
     other_teams[0].relay_url = Some("wss://other.example".into());
     assert!(scope
         .existing_persona(&agents, &other_teams, Some(&agent_key()))
-        .is_err());
+        .is_ok());
 }
 
 #[test]

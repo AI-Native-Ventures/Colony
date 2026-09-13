@@ -340,17 +340,15 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys, personas: &[String]) -
     let lead = format!("lead-{}", &suffix[..12]);
     let mut persona_ids = vec![lead.clone()];
     persona_ids.extend(personas.iter().cloned());
-    // Named for the coordination slug on purpose: a send that mentions no
-    // agent has no persona to resolve a team from, and the coordination team
-    // is what `owning_team_for_chat` falls back to. A company without one
-    // cannot charge unaddressed chat anywhere, which is a company setup
-    // question rather than something this suite should paper over.
+    // Retain a legacy coordination team in these fixtures to prove existing
+    // membership does not take ownership of a direct assignment.
     let team = CompanyTeamRef {
         id: format!("team-{}-company-coordination", &suffix[..12]),
         lead_persona_id: lead,
         persona_ids,
     };
     publish_team(client, owner, &team).await;
+    publish_managed_agent(client, owner, &Keys::generate(), &team.lead_persona_id).await;
     let channel = create_channel(owner).await;
     Fixture {
         relay,
@@ -1165,4 +1163,72 @@ fn a_thread_attach_is_carried_by_the_company_action_kind() {
         KIND_COMPANY_ACTION,
         "an attach travels on the same envelope every company request does"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres"]
+async fn a_direct_agent_task_needs_no_team_and_rejects_an_unknown_persona() {
+    let owner = owner_keys();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("owner");
+    seed_member(&owner, "owner", None).await;
+    let relay = relay_self().await;
+    let channel = create_channel(&owner).await;
+    let agent = Keys::generate();
+    let persona = format!("standalone-{}", Uuid::new_v4().simple());
+    publish_managed_agent(&mut client, &owner, &agent, &persona).await;
+    let signer = owner.public_key().to_hex();
+    let request = |persona: &str, send: &str| {
+        plan_thread_attach(ThreadAttachRequest {
+            channel_id: &channel,
+            thread_root: None,
+            conversation_scope: false,
+            send_id: send,
+            mode: ThreadAttachMode::Open,
+            title: "Draft a reply",
+            agent_persona_id: Some(persona),
+            client_organization_id: None,
+            parent_task_id: None,
+            owner_pubkey: &signer,
+            relay_pubkey: &relay,
+            now: now(),
+        })
+        .expect("request")
+    };
+    let action = request(&persona, "direct-send");
+    let task = attached_task(&mut client, &owner, &relay, &action).await;
+    assert_eq!(task.owning_team_id, None);
+    assert_eq!(task.qa_persona_id, None);
+    assert_eq!(task.assignee_persona_ids, vec![persona]);
+    let replay = attached_task(&mut client, &owner, &relay, &action).await;
+    assert_eq!(replay.id, task.id);
+
+    seed_member(&agent, "member", Some(&owner)).await;
+    let mut agent_client = BuzzTestClient::connect(&relay_url(), &agent)
+        .await
+        .expect("agent");
+    let report = EventBuilder::new(
+        Kind::Custom(KIND_TASK_REPORT as u16),
+        serde_json::json!({ "schema": "colony.task-report/v1", "note": null }).to_string(),
+    )
+    .tags([Tag::parse(["task", task.id.as_str()]).expect("task tag")])
+    .sign_with_keys(&agent)
+    .expect("report");
+    assert!(
+        send_past_transport_stall(&mut agent_client, report, "direct completion")
+            .await
+            .accepted
+    );
+    let closed = await_status(&mut client, &relay, &task.id, TaskStatus::Completed).await;
+    assert_eq!(closed.reported_complete_by, task.assignee_persona_ids);
+    assert_eq!(closed.owning_team_id, None);
+    assert_eq!(closed.qa_persona_id, None);
+
+    let unknown = request(
+        &format!("unknown-{}", Uuid::new_v4().simple()),
+        "unknown-send",
+    );
+    let (outcome, _) = broker(&mut client, &owner, &relay, &unknown).await;
+    assert_ne!(outcome, CompanyReceiptOutcome::Applied);
 }

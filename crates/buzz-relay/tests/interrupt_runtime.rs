@@ -284,9 +284,9 @@ fn default_task(
         initiative_id: initiative_id.map(str::to_string),
         title: format!("Task {id}"),
         status,
-        owning_team_id: "web-team".to_string(),
+        owning_team_id: Some("web-team".to_string()),
         assignee_persona_ids: vec!["builtin:content".to_string()],
-        qa_persona_id: qa_persona_id.to_string(),
+        qa_persona_id: Some(qa_persona_id.to_string()),
         reviewer_team_id: None,
         cost_centre_id: "cc-1".to_string(),
         commercial_purpose: CommercialPurpose::Uncertain,
@@ -326,7 +326,10 @@ async fn store_task_head_at(
     let content = serde_json::to_string(task).expect("serialize task head content");
     let mut tags = vec![
         tag(&["d", &task.id]),
-        tag(&["team", &task.owning_team_id]),
+        tag(&[
+            "team",
+            task.owning_team_id.as_deref().expect("team fixture"),
+        ]),
         tag(&["cost-centre", &task.cost_centre_id]),
     ];
     if let Some(initiative_id) = &task.initiative_id {

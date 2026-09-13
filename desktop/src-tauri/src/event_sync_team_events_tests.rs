@@ -20,13 +20,6 @@ fn write_base_teams(base_dir: &Path, records: &serde_json::Value) {
 const SYNC_RELAY: &str = "wss://sync.example";
 const OTHER_RELAY: &str = "wss://other.example";
 
-/// The coordination team this reconcile guarantees for the community it is
-/// syncing, and which it must publish because the RELAY resolves
-/// `Task.owningTeamId` against it (`company_broker::load_team_refs`). Counted
-/// separately in every expectation below so a total never silently absorbs
-/// it.
-const ENSURED_COORDINATION_TEAM: u32 = 1;
-
 /// The id of the coordination team for `relay_url`, which is a per community
 /// coordinate now rather than one literal shared by every community.
 fn coordination_id(relay_url: &str) -> String {
@@ -74,7 +67,7 @@ fn migrate_teams_writes_signed_retention_rows() {
 
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        1 + ENSURED_COORDINATION_TEAM
+        1
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -114,10 +107,10 @@ fn migrate_teams_skips_builtins() {
     );
     let keys = nostr::Keys::generate();
 
-    // Only the coordination team, which is the one built-in the relay must see.
+    // No stored teams need publication.
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        ENSURED_COORDINATION_TEAM
+        0
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -153,7 +146,7 @@ fn migrate_teams_publishes_the_relay_coordination_team_despite_builtin() {
 
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        ENSURED_COORDINATION_TEAM
+        1
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -189,7 +182,7 @@ fn migrate_teams_publishes_only_this_relays_coordination_team() {
 
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        ENSURED_COORDINATION_TEAM
+        1
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -207,33 +200,30 @@ fn migrate_teams_publishes_only_this_relays_coordination_team() {
     );
 }
 
-/// A community this device has joined but never authored a team for still
-/// gets one, minted for its own relay rather than borrowed from a sibling
-/// community. `load_teams_readonly` no longer synthesises a coordination team
-/// on its own, so this reconcile is what guarantees it per scope.
+/// Restoring a scope with no local team must not create one.
 #[test]
-fn migrate_teams_publishes_a_coordination_team_for_a_fresh_scope() {
+fn migrate_teams_does_not_invent_a_team_for_a_fresh_scope() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
     use buzz_core_pkg::kind::KIND_TEAM;
-
     let base = tempfile::tempdir().unwrap();
     write_base_teams(
         base.path(),
         &serde_json::json!([stored_coordination_team(OTHER_RELAY)]),
     );
     let keys = nostr::Keys::generate();
-    let pubkey = keys.public_key().to_hex();
-
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        ENSURED_COORDINATION_TEAM
+        0
     );
-
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
-    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(SYNC_RELAY))
-        .unwrap()
-        .expect("a scope with no team of its own must still get one for its own relay");
-    assert!(row.pending_sync);
+    assert!(get_retained_event(
+        &conn,
+        KIND_TEAM,
+        &keys.public_key().to_hex(),
+        &coordination_id(SYNC_RELAY)
+    )
+    .unwrap()
+    .is_none());
 }
 
 /// A user team pinned to another community is not this community's to
@@ -252,7 +242,7 @@ fn migrate_teams_skips_user_teams_pinned_elsewhere() {
 
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        ENSURED_COORDINATION_TEAM
+        0
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -277,7 +267,7 @@ fn migrate_teams_publishes_unpinned_user_teams() {
 
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, OTHER_RELAY).unwrap(),
-        1 + ENSURED_COORDINATION_TEAM
+        1
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -296,7 +286,7 @@ fn migrate_teams_unchanged_second_run_is_noop() {
 
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        1 + ENSURED_COORDINATION_TEAM
+        1
     );
     // Second run republishes nothing, coordination team included: the
     // per-coordinate content compare still holds once it is retained.
@@ -318,7 +308,7 @@ fn migrate_teams_edited_team_re_retains_pending() {
 
     assert_eq!(
         migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        1 + ENSURED_COORDINATION_TEAM
+        1
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -354,95 +344,30 @@ fn migrate_teams_edited_team_re_retains_pending() {
 }
 
 #[test]
-fn migrate_teams_no_file_still_publishes_the_coordination_team() {
-    // Was `migrate_teams_no_file_is_noop`, asserting that a device with no
-    // teams.json published nothing. That was the bug: retention is scoped per
-    // (relay, owner), so a community whose scope synced before the store
-    // existed kept no coordination team, and every chat Task in it was refused
-    // with "missing reference in task.owningTeamId". The team is defined in
-    // code, so a missing file is not a reason to have none.
-    let base = tempfile::tempdir().unwrap();
-    let keys = nostr::Keys::generate();
-    assert_eq!(
-        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        ENSURED_COORDINATION_TEAM
-    );
-}
-
-/// A scope whose `teams.json` does not yet contain the coordination team must
-/// still get one published.
-///
-/// Retention is scoped per (relay, owner), and this reconcile runs per scope on
-/// workspace apply. It used to deserialize `teams.json` raw and return early
-/// when the file was absent, so whether a community ever got a coordination
-/// team depended on what the disk happened to hold the first time THAT scope
-/// synced. A community created before the record was written kept a scope with
-/// no coordination team, and every Task minted from chat in it was refused with
-/// "missing reference in task.owningTeamId" — observed on a real workspace
-/// whose scope synced at 01:07 against a teams.json that gained the record at
-/// 11:54.
-///
-/// Reading through `load_teams_readonly` merges the built-ins, so the team is
-/// guaranteed by the code that defines it rather than by file timing.
-#[test]
-fn migrate_teams_publishes_coordination_team_when_the_store_lacks_it() {
+fn migrate_teams_without_a_stored_team_publishes_nothing() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
     use buzz_core_pkg::kind::KIND_TEAM;
-
-    let base = tempfile::tempdir().unwrap();
-    // A store holding only the other built-in, exactly as a device looked
-    // before the coordination record was introduced.
-    write_base_teams(
-        base.path(),
-        &serde_json::json!([{
-            "id": "builtin-team:welcome",
-            "name": "Welcome Team",
-            "description": "A friendly starter trio ready to help you plan, create, and ship.",
-            "persona_ids": ["builtin:fizz", "builtin:honey", "builtin:bumble"],
-            "is_builtin": true,
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-01T00:00:00Z"
-        }]),
-    );
-    let keys = nostr::Keys::generate();
-    let pubkey = keys.public_key().to_hex();
-
-    assert_eq!(
-        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        ENSURED_COORDINATION_TEAM
-    );
-
-    let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
-    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(SYNC_RELAY))
+    for stored in [None, Some(serde_json::json!([]))] {
+        let base = tempfile::tempdir().unwrap();
+        if let Some(records) = &stored {
+            write_base_teams(base.path(), records);
+        }
+        let keys = nostr::Keys::generate();
+        assert_eq!(
+            migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+            0
+        );
+        let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
+        assert!(get_retained_event(
+            &conn,
+            KIND_TEAM,
+            &keys.public_key().to_hex(),
+            &coordination_id(SYNC_RELAY)
+        )
         .unwrap()
-        .expect("the coordination team must be published even when teams.json omits it");
-    assert!(row.pending_sync);
-    let event: nostr::Event = nostr::JsonUtil::from_json(&row.raw_event).unwrap();
-    assert!(event.verify().is_ok());
-}
-
-/// A device with no `teams.json` at all still publishes the coordination team.
-///
-/// The old early return on a missing file meant a fresh install's first
-/// community had no team to own chat work until something else wrote the store.
-#[test]
-fn migrate_teams_publishes_coordination_team_with_no_store_on_disk() {
-    use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use buzz_core_pkg::kind::KIND_TEAM;
-
-    let base = tempfile::tempdir().unwrap();
-    assert!(!base.path().join("teams.json").exists());
-    let keys = nostr::Keys::generate();
-    let pubkey = keys.public_key().to_hex();
-
-    assert_eq!(
-        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
-        ENSURED_COORDINATION_TEAM
-    );
-
-    let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
-    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(SYNC_RELAY))
-        .unwrap()
-        .expect("a device with no teams.json must still publish the coordination team");
-    assert!(row.pending_sync);
+        .is_none());
+        if stored.is_none() {
+            assert!(!base.path().join("teams.json").exists());
+        }
+    }
 }

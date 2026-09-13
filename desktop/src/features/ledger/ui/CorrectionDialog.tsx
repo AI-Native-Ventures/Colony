@@ -108,7 +108,7 @@ export function CorrectionDialog({
     clientOrganizationId: clientOrganizationId || null,
     commercialPurpose,
     costCentreId,
-    owningTeamId,
+    owningTeamId: owningTeamId.trim() || null,
     reason,
     taskId: taskId || null,
     usageRecordEventId: entry.eventId,
@@ -150,7 +150,7 @@ export function CorrectionDialog({
               value={costCentreId}
             />
           </Field>
-          <Field htmlFor={`${fieldId}-team`} label="Owning team">
+          <Field htmlFor={`${fieldId}-team`} label="Team (optional)">
             <Input
               onChange={(event) => setOwningTeamId(event.target.value)}
               id={`${fieldId}-team`}

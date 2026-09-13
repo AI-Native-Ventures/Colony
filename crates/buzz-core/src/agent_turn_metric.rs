@@ -246,7 +246,7 @@ mod tests {
         AgentWorkContext {
             task_id: "build-tennant-site".to_string(),
             initiative_id: Some("tennant-premium-site".to_string()),
-            owning_team_id: "web-team".to_string(),
+            owning_team_id: Some("web-team".to_string()),
             cost_centre_id: "web-delivery".to_string(),
             commercial_purpose: CommercialPurpose::ClientDelivery,
             cost_classification: CostClassification::Cogs,

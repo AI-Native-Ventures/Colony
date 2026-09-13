@@ -415,7 +415,7 @@ mod tests {
     fn assignment() -> RuleAssignment {
         RuleAssignment {
             cost_centre_id: "web-delivery".to_string(),
-            owning_team_id: "web-team".to_string(),
+            owning_team_id: Some("web-team".to_string()),
             commercial_purpose: CommercialPurpose::ClientDelivery,
             client_organization_id: Some("tennant-group".to_string()),
             task_id: None,

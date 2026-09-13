@@ -354,7 +354,7 @@ impl BounceReason {
     }
 }
 
-/// A unit of work owned by exactly one team.
+/// A unit of work assigned directly to agents or explicitly owned by a team.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompanyTask {
@@ -368,18 +368,17 @@ pub struct CompanyTask {
     pub title: String,
     /// Current task lifecycle state.
     pub status: TaskStatus,
-    /// The single team accountable for delivery.
-    pub owning_team_id: String,
+    /// The team accountable for delivery, when explicitly assigned to a team.
+    pub owning_team_id: Option<String>,
     /// Personas currently assigned to perform the task.
     pub assignee_persona_ids: Vec<String>,
-    /// Persona responsible for quality review.
-    pub qa_persona_id: String,
+    /// Optional independent reviewer. With no reviewer, the owner reviews the work.
+    pub qa_persona_id: Option<String>,
     /// Team that reviews this task's output, when review is not the owning
     /// team's own job. `None` means the owning team reviews itself, which is
     /// the only thing this contract could express before this field existed.
     ///
-    /// Accountability is unchanged: `owning_team_id` still names the single
-    /// team accountable for delivery. This names who holds the gate in front
+    /// When team-owned, `owning_team_id` names the team accountable for delivery. This names who holds the gate in front
     /// of it, which is a different question — a pipeline stage that declares
     /// a `reviewerTeamId` is saying exactly that the team doing the work
     /// must not be the team that signs it off.
@@ -711,8 +710,8 @@ pub struct AgentWorkContext {
     pub task_id: String,
     /// Optional initiative containing the task.
     pub initiative_id: Option<String>,
-    /// Team accountable for the task.
-    pub owning_team_id: String,
+    /// Optional team accountable for the task. Direct work is scoped to the workspace.
+    pub owning_team_id: Option<String>,
     /// Cost centre charged for the turn.
     pub cost_centre_id: String,
     /// Commercial reason for the work.
@@ -1229,13 +1228,15 @@ pub fn validate_task(
     teams: &[CompanyTeamRef],
 ) -> Result<(), CompanyContractError> {
     validate_company(company)?;
-    validate_teams(teams)?;
+    if task.owning_team_id.is_some() || task.reviewer_team_id.is_some() {
+        validate_teams(teams)?;
+    }
     validate_schema(&task.schema, TASK_SCHEMA, "task")?;
     validate_id(&task.id, "task.id")?;
     validate_optional_id(task.initiative_id.as_deref(), "task.initiativeId")?;
     validate_required_text(&task.title, "task.title", MAX_NAME_LEN)?;
-    validate_id(&task.owning_team_id, "task.owningTeamId")?;
-    validate_id(&task.qa_persona_id, "task.qaPersonaId")?;
+    validate_optional_id(task.owning_team_id.as_deref(), "task.owningTeamId")?;
+    validate_optional_id(task.qa_persona_id.as_deref(), "task.qaPersonaId")?;
     validate_id(&task.cost_centre_id, "task.costCentreId")?;
     validate_optional_id(
         task.client_organization_id.as_deref(),
@@ -1336,10 +1337,16 @@ pub fn validate_task(
         return Err(CompanyContractError::MissingReference("task.costCentreId"));
     }
 
-    let owning_team = teams
-        .iter()
-        .find(|team| team.id == task.owning_team_id)
-        .ok_or(CompanyContractError::MissingReference("task.owningTeamId"))?;
+    let owning_team = task
+        .owning_team_id
+        .as_deref()
+        .map(|id| {
+            teams
+                .iter()
+                .find(|team| team.id == id)
+                .ok_or(CompanyContractError::MissingReference("task.owningTeamId"))
+        })
+        .transpose()?;
     // QA must belong to whichever team actually reviews. The rule was never
     // "QA is an owning-team member" for its own sake — it is "QA is someone
     // in the pool that holds the gate", and before `reviewerTeamId` existed
@@ -1355,12 +1362,21 @@ pub fn validate_task(
                 .ok_or(CompanyContractError::MissingReference(
                     "task.reviewerTeamId",
                 ))?;
-            if !reviewer_team.persona_ids.contains(&task.qa_persona_id) {
+            if !task
+                .qa_persona_id
+                .as_ref()
+                .is_some_and(|qa| reviewer_team.persona_ids.contains(qa))
+            {
                 return Err(CompanyContractError::QaNotReviewerTeamMember);
             }
         }
         None => {
-            if !owning_team.persona_ids.contains(&task.qa_persona_id) {
+            if owning_team.is_some_and(|team| {
+                !task
+                    .qa_persona_id
+                    .as_ref()
+                    .is_some_and(|qa| team.persona_ids.contains(qa))
+            }) {
                 return Err(CompanyContractError::QaNotOwningTeamMember);
             }
         }
@@ -1372,7 +1388,7 @@ pub fn validate_task(
         if !assignees.insert(assignee.as_str()) {
             return Err(CompanyContractError::DuplicateAssignee);
         }
-        if !teams.iter().any(|team| team.persona_ids.contains(assignee)) {
+        if owning_team.is_some() && !teams.iter().any(|team| team.persona_ids.contains(assignee)) {
             return Err(CompanyContractError::AssigneeNotTeamMember);
         }
     }
@@ -1631,7 +1647,7 @@ impl AgentWorkContext {
     pub fn validate(&self) -> Result<(), CompanyContractError> {
         validate_id(&self.task_id, "workContext.taskId")?;
         validate_optional_id(self.initiative_id.as_deref(), "workContext.initiativeId")?;
-        validate_id(&self.owning_team_id, "workContext.owningTeamId")?;
+        validate_optional_id(self.owning_team_id.as_deref(), "workContext.owningTeamId")?;
         validate_id(&self.cost_centre_id, "workContext.costCentreId")?;
         validate_optional_id(
             self.client_organization_id.as_deref(),
@@ -1949,12 +1965,12 @@ mod tests {
                 initiative_id: Some("tennant-premium-site".to_string()),
                 title: "Build the Tennant Group website".to_string(),
                 status: TaskStatus::InProgress,
-                owning_team_id: "web-team".to_string(),
+                owning_team_id: Some("web-team".to_string()),
                 assignee_persona_ids: vec![
                     "frontend-engineer".to_string(),
                     "content-specialist".to_string(),
                 ],
-                qa_persona_id: "cto".to_string(),
+                qa_persona_id: Some("cto".to_string()),
                 reviewer_team_id: None,
                 cost_centre_id: "web-delivery".to_string(),
                 commercial_purpose: CommercialPurpose::ClientDelivery,
@@ -1986,9 +2002,9 @@ mod tests {
                 initiative_id: Some("tennant-premium-site".to_string()),
                 title: "Launch the Tennant Group campaign".to_string(),
                 status: TaskStatus::Ready,
-                owning_team_id: "marketing-team".to_string(),
+                owning_team_id: Some("marketing-team".to_string()),
                 assignee_persona_ids: vec!["content-specialist".to_string()],
-                qa_persona_id: "marketing-lead".to_string(),
+                qa_persona_id: Some("marketing-lead".to_string()),
                 reviewer_team_id: None,
                 cost_centre_id: "web-delivery".to_string(),
                 commercial_purpose: CommercialPurpose::ClientDelivery,
@@ -2213,11 +2229,11 @@ mod tests {
         assert!(validate_task(&blank_title, &company, Some(&initiative), &teams).is_err());
 
         let mut missing_team = base.clone();
-        missing_team.owning_team_id = "missing-team".to_string();
+        missing_team.owning_team_id = Some("missing-team".to_string());
         assert!(validate_task(&missing_team, &company, Some(&initiative), &teams).is_err());
 
         let mut qa_outside_team = base.clone();
-        qa_outside_team.qa_persona_id = "marketing-lead".to_string();
+        qa_outside_team.qa_persona_id = Some("marketing-lead".to_string());
         assert!(validate_task(&qa_outside_team, &company, Some(&initiative), &teams).is_err());
 
         let mut duplicate_assignee = base;
@@ -2239,7 +2255,7 @@ mod tests {
         let initiative = initiative_fixture();
         let teams = team_fixtures();
         let mut task = task_fixtures().remove(0);
-        task.qa_persona_id = "marketing-lead".to_string();
+        task.qa_persona_id = Some("marketing-lead".to_string());
 
         assert!(matches!(
             validate_task(&task, &company, Some(&initiative), &teams),
@@ -2260,7 +2276,7 @@ mod tests {
         let teams = team_fixtures();
         let mut task = task_fixtures().remove(0);
         task.reviewer_team_id = Some("marketing-team".to_string());
-        task.qa_persona_id = "cto".to_string();
+        task.qa_persona_id = Some("cto".to_string());
 
         assert!(matches!(
             validate_task(&task, &company, Some(&initiative), &teams),
@@ -2305,7 +2321,7 @@ mod tests {
         let teams = team_fixtures();
         let task = task_fixtures().remove(0);
 
-        assert_eq!(task.owning_team_id, "web-team");
+        assert_eq!(task.owning_team_id.as_deref(), Some("web-team"));
         assert!(task
             .assignee_persona_ids
             .contains(&"content-specialist".to_string()));
@@ -3279,5 +3295,26 @@ mod tests {
         assert!(json.get("reportedCompleteBy").is_none());
         assert!(json.get("hidden").is_none());
         assert!(json.get("parentTaskId").is_none());
+    }
+
+    #[test]
+    fn direct_task_needs_no_team_or_qa_persona() {
+        let mut task = task_fixtures().remove(0);
+        task.initiative_id = None;
+        task.owning_team_id = None;
+        task.qa_persona_id = None;
+        task.reviewer_team_id = None;
+        task.assignee_persona_ids = vec!["independent-agent".to_owned()];
+        validate_task(&task, &company_fixture(), None, &[]).expect("direct agent task");
+        let json = serde_json::to_value(&task).expect("task json");
+        assert!(json["owningTeamId"].is_null());
+        assert!(json["qaPersonaId"].is_null());
+        assert_eq!(
+            serde_json::from_value::<CompanyTask>(json).expect("round trip"),
+            task
+        );
+        task.assignee_persona_ids
+            .push("independent-agent".to_owned());
+        assert!(validate_task(&task, &company_fixture(), None, &[]).is_err());
     }
 }
