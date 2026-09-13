@@ -1380,9 +1380,12 @@ mod tests {
             .expect("real startup fence verification succeeds");
         let _ = crate::replica_fence::probe_once(&writer_pool, routed_db.fence()).await;
         routed_db.fence().force_open_for_tests(Utc::now());
-        // `Db::readiness_check` (writer/readiness attribution) arrives with the
-        // detailed readiness-metrics port (#7149); its assertion is restored there.
-        assert!(writer_db.ping().await);
+        assert_eq!(
+            writer_db
+                .readiness_check(tokio::time::Instant::now() + Duration::from_secs(1))
+                .await,
+            crate::DbReadinessOutcome::Success
+        );
         let _ = writer_db
             .lookup_community_by_host("pool-operation-matrix.invalid")
             .await;

@@ -483,6 +483,26 @@ pub struct DbPoolStats {
     pub max: u32,
 }
 
+/// Bounded outcome of the Postgres portion of a relay readiness check.
+///
+/// The variants deliberately separate waiting for a pooled connection from
+/// executing the health query. Callers may safely use the variant names as
+/// low-cardinality metric labels; detailed SQLx errors remain in logs rather
+/// than becoming labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbReadinessOutcome {
+    /// A writer-pool connection was acquired and `SELECT 1` succeeded.
+    Success,
+    /// No writer-pool connection became available before the readiness deadline.
+    PoolTimeout,
+    /// The writer pool returned a non-timeout acquisition error.
+    PoolError,
+    /// A connection was acquired, but `SELECT 1` exceeded the readiness deadline.
+    QueryTimeout,
+    /// A connection was acquired, but `SELECT 1` returned an error.
+    QueryError,
+}
+
 /// Configuration for the Postgres connection pool.
 #[derive(Debug, Clone)]
 pub struct DbConfig {
@@ -1123,6 +1143,50 @@ impl Db {
             .execute(&mut *connection)
             .await
             .is_ok()
+    }
+
+    /// Checks writer-pool acquisition and query execution against one deadline.
+    ///
+    /// Unlike [`Self::ping`], this preserves whether readiness was blocked while
+    /// borrowing a connection or failed after a connection had been acquired.
+    /// The query runs on the already-acquired connection so the two phases
+    /// cannot be collapsed into a second implicit pool acquisition.
+    pub async fn readiness_check(&self, deadline: tokio::time::Instant) -> DbReadinessOutcome {
+        self.readiness_check_sql(deadline, "SELECT 1").await
+    }
+
+    /// Production-bound seam for classifying failures after pool acquisition.
+    /// Tests vary only the SQL so timeout/error/cancellation paths execute the
+    /// same acquisition and classification code as [`Self::readiness_check`].
+    async fn readiness_check_sql(
+        &self,
+        deadline: tokio::time::Instant,
+        query: &'static str,
+    ) -> DbReadinessOutcome {
+        let mut connection = match observability::acquire_writer_until(
+            &self.pool,
+            observability::WriterOperation::Readiness,
+            deadline,
+        )
+        .await
+        {
+            Err(sqlx::Error::PoolTimedOut) => return DbReadinessOutcome::PoolTimeout,
+            Err(error) => {
+                tracing::debug!(error = %error, "Postgres readiness pool acquisition failed");
+                return DbReadinessOutcome::PoolError;
+            }
+            Ok(connection) => connection,
+        };
+
+        match tokio::time::timeout_at(deadline, sqlx::query(query).execute(&mut *connection)).await
+        {
+            Err(_) => DbReadinessOutcome::QueryTimeout,
+            Ok(Err(error)) => {
+                tracing::debug!(error = %error, "Postgres readiness query failed");
+                DbReadinessOutcome::QueryError
+            }
+            Ok(Ok(_)) => DbReadinessOutcome::Success,
+        }
     }
 
     /// Returns pool utilisation stats for metrics emission.

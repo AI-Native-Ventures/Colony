@@ -35,7 +35,7 @@ pub mod error;
 
 pub use runtime::{
     insert_mentions, insert_mentions_tx, migration, replica_fence, Db, DbConfig, DbPoolStats,
-    ReadSession,
+    DbReadinessOutcome, ReadSession,
 };
 
 /// Valid low-cardinality `(pool_role, operation)` pairs for pool-acquisition telemetry.

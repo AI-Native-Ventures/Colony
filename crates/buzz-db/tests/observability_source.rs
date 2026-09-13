@@ -65,13 +65,7 @@ fn p0_pool_acquisitions_use_typed_operation_pairs_without_other() {
     assert!(legacy_transaction.contains("acquire_writer_with_legacy_metrics("));
 
     let runtime = include_str!("../src/runtime/mod.rs");
-    // Upstream's deadline-bounded `Db::readiness_check_sql` is the only
-    // `acquire_writer_until` caller in the runtime; it arrives with the
-    // detailed readiness-metrics port (#7149). Colony's only deadline-bounded
-    // checkout today is the deletion serving-catalog readiness probe.
-    assert!(
-        include_str!("../src/store/deletion.rs").contains("observability::acquire_writer_until(")
-    );
+    assert!(runtime.contains("observability::acquire_writer_until("));
     assert!(runtime.contains("WriterOperation::Readiness"));
     assert!(runtime.contains("WriterOperation::EventWrite"));
     assert!(runtime.contains("ReaderOperation::Bootstrap"));
