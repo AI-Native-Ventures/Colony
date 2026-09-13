@@ -56,9 +56,15 @@ const CHANNELS = {
     identifier: "ventures.ainative.colony.canary",
     infoPlist: "Info.canary.plist",
   },
+  port: {
+    productName: "Colony Port",
+    identifier: "ventures.ainative.colony.port",
+    infoPlist: "Info.port.plist",
+  },
 };
 
 const CANARY_VERSION_PATTERN = /^\d+\.\d+\.\d+-canary\.\d+$/;
+const PORT_VERSION_PATTERN = /^\d+\.\d+\.\d+-port\.\d+$/;
 
 const srcTauriDir = resolve(process.cwd(), "src-tauri");
 const outputConfigPath = resolve(srcTauriDir, "tauri.release.conf.json");
@@ -148,6 +154,30 @@ if (channel === "canary") {
   releaseConfig.productName = productName;
   releaseConfig.identifier = identifier;
   releaseConfig.version = canaryVersion;
+  releaseConfig.bundle.macOS.infoPlist = infoPlist;
+}
+
+if (channel === "port") {
+  const { productName, identifier, infoPlist } = CHANNELS.port;
+  const basePlistPath = resolve(srcTauriDir, "Info.plist");
+  const basePlist = readFileSync(basePlistPath, "utf8");
+  const namePattern =
+    /(<key>CFBundle(?:DisplayName|Name)<\/key>\s*<string>)Colony(<\/string>)/g;
+  const matches = basePlist.match(namePattern) ?? [];
+  if (matches.length !== 2) {
+    throw new Error(
+      `Expected CFBundleDisplayName and CFBundleName to both read "Colony" in ${basePlistPath}, found ${matches.length}. Update this script rather than shipping a port that names itself Colony.`,
+    );
+  }
+  const portPlistPath = resolve(srcTauriDir, infoPlist);
+  writeFileSync(
+    portPlistPath,
+    basePlist.replace(namePattern, `$1${productName}$2`),
+  );
+  console.log(`Wrote ${portPlistPath}`);
+
+  releaseConfig.productName = productName;
+  releaseConfig.identifier = identifier;
   releaseConfig.bundle.macOS.infoPlist = infoPlist;
 }
 

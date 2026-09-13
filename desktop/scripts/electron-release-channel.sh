@@ -20,6 +20,13 @@ case "$CHANNEL" in
     APP_EXECUTABLE=colony-canary
     ASSET_PREFIX=Colony_Canary
     ;;
+  port)
+    CHANNEL_SUFFIX=-port
+    APP_NAME='Colony Port'
+    APP_BUNDLE_ID=ventures.ainative.colony.port
+    APP_EXECUTABLE=colony-port
+    ASSET_PREFIX=Colony_Port
+    ;;
   *)
     echo "::error::Unknown release channel $CHANNEL"
     exit 1

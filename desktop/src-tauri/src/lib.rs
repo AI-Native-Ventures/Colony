@@ -7,6 +7,8 @@ mod command_registry;
 mod commands;
 mod company;
 mod deep_link;
+mod dictation;
+mod dictation_model;
 mod discovery_credentials;
 mod discovery_worker;
 mod egress_guard;

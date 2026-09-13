@@ -4,6 +4,9 @@ export const STABLE_UPDATER_ENDPOINT =
 export const CANARY_UPDATER_ENDPOINT =
   "https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-canary-latest/latest.json";
 
+export const PORT_UPDATER_ENDPOINT =
+  "https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-port-latest/latest.json";
+
 /**
  * One endpoint per release channel. A build never carries another channel's.
  *
@@ -14,6 +17,7 @@ export const UPDATER_ENDPOINTS = Object.freeze({
   stable: STABLE_UPDATER_ENDPOINT,
   candidate: STABLE_UPDATER_ENDPOINT,
   canary: CANARY_UPDATER_ENDPOINT,
+  port: PORT_UPDATER_ENDPOINT,
 });
 
 /** Developer ID mode has no ad-hoc fallback. Never log credentials. */

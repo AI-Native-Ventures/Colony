@@ -10,7 +10,7 @@
       "wait": false
     },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "node scripts/stage-dictation-model.mjs && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -53,6 +53,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": { "resources/dictation/": "dictation/" },
     "externalBin": [
       "binaries/buzz-acp",
       "binaries/buzz-agent",

@@ -153,6 +153,18 @@
   padding: 0.875rem 1rem;
   vertical-align: top;
 }
+/* Preserve whole header words when neighbouring columns contain long prose. */
+.block-native-table th .block-native-copy {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.block-native-table th[data-numeric="true"] {
+  min-width: 4.5rem;
+  white-space: nowrap;
+}
+.block-native-table th[data-numeric="true"] .block-native-copy {
+  white-space: nowrap;
+}
 .block-native-table th {
   background: hsl(var(--muted) / 0.25);
 }
