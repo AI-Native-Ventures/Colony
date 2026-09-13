@@ -93,7 +93,7 @@ const launch = () =>
     },
     timeout: 30_000,
   });
-async function readState(page) {
+async function readState(page, expectedTheme) {
   await page.waitForURL(
     (url) =>
       url.protocol === "colony:" &&
@@ -104,6 +104,15 @@ async function readState(page) {
     () =>
       localStorage.getItem("colony.electron.webview-migration.v1") ===
       "complete",
+  );
+  // Import completion precedes React startup. Wait for the retired theme to
+  // resolve to Default and for the scoped controller to apply its preference.
+  await page.waitForFunction(
+    (theme) =>
+      localStorage.getItem("buzz-theme") === theme &&
+      document.documentElement.dataset.buzzTheme === theme &&
+      localStorage.getItem("buzz-accent-color") !== null,
+    expectedTheme,
   );
   return page.evaluate(() => ({
     communities: JSON.parse(localStorage.getItem("buzz-communities") ?? "[]"),
@@ -132,7 +141,7 @@ try {
   phase = "electron-import";
   app = await launch();
   let page = await app.firstWindow();
-  const migrated = await readState(page);
+  const migrated = await readState(page, "buzz-dark");
   const importSeed = await page.evaluate(() =>
     window.colonyDesktop.request("invoke", {
       command: "electron_frontend_migration_fixture",
@@ -151,18 +160,37 @@ try {
   assert.equal(migrated.active, "proof-bravo");
   assert.equal(migrated.ownerComplete, "true");
   assert.ok(migrated.draft.includes("Unsent migration proof"));
-  assert.equal(migrated.theme, "github-dark");
-  // CommunityThemeController re-applies the scoped appearance once identity and
-  // the active community resolve, and that apply rewrites buzz-theme even when
-  // nothing changed. An edit made before it lands is clobbered with the
-  // imported github-dark and then reads as a lost Electron edit on relaunch.
-  // The fixture never seeds buzz-accent-color and only that apply writes it,
-  // so its presence proves the controller's startup write has already landed.
-  await page.waitForFunction(
-    () => localStorage.getItem("buzz-accent-color") !== null,
-  );
+  assert.equal(migrated.theme, "buzz-dark");
+  // Edit after the scoped startup preference has settled, so this proves
+  // later Electron edits survive relaunch without importing the legacy store again.
+  // This offline storage fixture has no connected workspace UI. Update the
+  // authoritative scoped record as well as its global cache, just as a saved
+  // Appearance edit does; changing only the cache is intentionally overwritten.
   await page.evaluate(() => {
-    localStorage.setItem("buzz-theme", "github-light");
+    const owner =
+      "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+    const communities = JSON.parse(localStorage.getItem("buzz-communities"));
+    const active = communities.find(
+      (community) =>
+        community.id === localStorage.getItem("buzz-active-community-id"),
+    );
+    const scope = `${owner}:${encodeURIComponent(active.relayUrl.replace(/\/$/, ""))}`;
+    const key = `buzz-community-theme.v2:${scope}`;
+    const preference = JSON.parse(localStorage.getItem(key)) ?? {
+      version: 1,
+      accent: localStorage.getItem("buzz-accent-color"),
+      gradientPattern:
+        localStorage.getItem("buzz-workspace-gradient") ?? "soft-mesh",
+    };
+    const edited = JSON.stringify({
+      ...preference,
+      theme: "buzz",
+      followSystem: false,
+    });
+    localStorage.setItem(key, edited);
+    localStorage.setItem(`buzz-community-theme-outbox.v1:${scope}`, edited);
+    localStorage.setItem("buzz-theme", "buzz");
+    localStorage.setItem("buzz-follow-system", "false");
     localStorage.setItem(
       "buzz-drafts.v1:migration-proof",
       "newer Electron draft",
@@ -181,9 +209,9 @@ try {
   phase = "electron-relaunch";
   app = await launch();
   page = await app.firstWindow();
-  const resumed = await readState(page);
+  const resumed = await readState(page, "buzz");
   assert.equal(resumed.draft, "newer Electron draft");
-  assert.equal(resumed.theme, "github-light");
+  assert.equal(resumed.theme, "buzz");
   assert.deepEqual(resumed.communities, migrated.communities);
   await app.close();
   app = null;
@@ -217,6 +245,9 @@ try {
           rootMounted: !!document.querySelector("#root")?.children.length,
           status: document.querySelector("#status")?.textContent ?? null,
           migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
+          theme: localStorage.getItem("buzz-theme"),
+          renderedTheme: document.documentElement.dataset.buzzTheme,
+          followSystem: localStorage.getItem("buzz-follow-system"),
         }))
         .catch(() => ({ status: "The renderer was unavailable" }))
     : {

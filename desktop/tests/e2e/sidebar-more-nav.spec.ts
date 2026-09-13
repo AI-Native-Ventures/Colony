@@ -101,7 +101,7 @@ test.describe("the sidebar a fresh founder lands on", () => {
       await expect(page.getByTestId(testId)).toBeVisible();
     }
   });
-  test("non-Colony themes retain the existing flat navigation", async ({
+  test("retired themes migrate to the Default compact navigation", async ({
     page,
   }) => {
     await page.addInitScript(() => {
@@ -111,7 +111,17 @@ test.describe("the sidebar a fresh founder lands on", () => {
     await installMockBridge(page);
     await page.goto("/");
     await expect(page.getByTestId("sidebar-primary-menu")).toBeVisible();
-    await expect(page.getByTestId("sidebar-more-nav")).toHaveCount(0);
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-buzz-theme",
+      "buzz",
+    );
+    const more = page.getByTestId("sidebar-more-nav-label");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    for (const testId of GROUPED) {
+      await expect(page.getByTestId(testId)).toHaveCount(0);
+    }
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
     for (const testId of [...GROUPED, ...ALWAYS_OPEN]) {
       await expect(page.getByTestId(testId)).toBeVisible();
     }

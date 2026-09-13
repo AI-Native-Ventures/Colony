@@ -107,3 +107,45 @@ test("old and unknown pattern values safely default without losing valid choices
     assert.equal(parseWorkspaceGradientPattern(value), value);
   }
 });
+
+test("Custom changes both chrome colors in every pattern and Default restores all tokens", () => {
+  const accent = "#895AF6";
+  const custom = { enabled: true, color1: "#ff0000", color2: "#0000ff" };
+  const original = deriveWorkspaceAppearance(accent);
+  assert.deepEqual(
+    deriveWorkspaceAppearance(accent, { ...custom, enabled: false }),
+    original,
+  );
+  const changed = deriveWorkspaceAppearance(accent, custom);
+  assert.equal(changed.light.chromeStart, "#ffbdbd");
+  assert.equal(changed.light.chromeEnd, "#bdbdff");
+  assert.equal(changed.dark.chromeStart, "#400000");
+  assert.equal(changed.dark.chromeEnd, "#000040");
+  for (const mode of ["light", "dark"]) {
+    for (const token of ["content", "raised", "foreground", "mutedForeground"])
+      assert.equal(changed[mode][token], original[mode][token]);
+  }
+  const properties = new Map();
+  const root = {
+    dataset: {},
+    style: { setProperty: (key, value) => properties.set(key, value) },
+  };
+  for (const { value } of WORKSPACE_GRADIENT_PATTERNS) {
+    applyWorkspaceAppearance(root, accent, value);
+    const baseline = new Map(properties);
+    applyWorkspaceAppearance(root, accent, value, custom);
+    assert.equal(
+      properties.get("--buzz-workspace-gradient-light"),
+      workspaceGradientCss(value, changed.light),
+    );
+    assert.equal(
+      properties.get("--buzz-workspace-glass-dark"),
+      workspaceGradientCss(value, changed.dark, true),
+    );
+    applyWorkspaceAppearance(root, accent, value, {
+      ...custom,
+      enabled: false,
+    });
+    assert.deepEqual(properties, baseline);
+  }
+});
