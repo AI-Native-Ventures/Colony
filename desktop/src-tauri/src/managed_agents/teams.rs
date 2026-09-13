@@ -44,8 +44,15 @@ pub(super) struct BuiltInTeam {
 // alone. Their persona definitions are untouched, and an install that already
 // stored the three-member team keeps it, because merge_teams only seeds a
 // built-in team that is missing and never rewrites one that is already there.
+/// The one built-in team a person is meant to see.
+///
+/// Named rather than repeated as a literal because the Agents page now lists
+/// built-in teams by exception: this id and nothing else. Every other
+/// built-in, coordination teams included, is plumbing.
+pub(crate) const WELCOME_TEAM_ID: &str = "builtin-team:welcome";
+
 pub(super) const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
-    id: "builtin-team:welcome",
+    id: WELCOME_TEAM_ID,
     name: "Welcome Team",
     description: Some("Your Chief of Staff, ready to help you plan, create, and ship."),
     persona_ids: &["builtin:fizz"],
