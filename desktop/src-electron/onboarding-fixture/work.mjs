@@ -189,18 +189,6 @@ export async function completeFixtureWork({
   const config = await invoke("get_global_agent_config");
   assert.equal(config.credential_mode, "colony_credits");
   assert.equal(config.preferred_runtime, "buzz-agent");
-  const runtimeBaseUrl = `https://${proxy.businessHost}/gateway/openai/v1`;
-  // Explicit fixture-only global base; newly prepared workers must still inherit it.
-  const saved = await invoke("set_global_agent_config", {
-    config: {
-      ...config,
-      env_vars: { ...config.env_vars, OPENAI_COMPAT_BASE_URL: runtimeBaseUrl },
-    },
-    expectedOwnerPubkey: account.ownerPubkey,
-    expectedRelayUrl: account.relayUrl,
-  });
-  assert.equal(saved.failed_restart_count, 0);
-  assert.equal(saved.restarted_count, 0);
   const proposalReloadStartedAt = Date.now();
   await reloadWelcome();
   assert.equal(provider.receivedCallCount, preJobCalls);
@@ -305,7 +293,6 @@ export async function completeFixtureWork({
   const approved = {
     ...prepared,
     profileHead,
-    runtimeBaseUrl,
     readTask: reader.readTask,
     fixtureHttpRequests: {
       observer: "read-only SQL; native frontend retains real relay reads",
@@ -797,9 +784,6 @@ export async function completeFixtureWork({
       "real admin ledger seed in isolated database; no payment settlement tested",
     requests: provider.requests,
     tools: provider.tools,
-    fixtureRuntimeBaseUrl: approved.runtimeBaseUrl,
-    untouchedProviderDefault:
-      "not tested; explicit fixture gateway base approved",
     gatewayModelCalls: gatewayCalls.length,
     mintedRuntimeTokens: mintedTokens.length,
     creditsSettlement,
