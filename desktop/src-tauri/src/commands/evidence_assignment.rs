@@ -15,21 +15,18 @@
 //! Electron authority reads it again on every command and revokes the opaque
 //! capability when any scope, assignment, or worker-generation check changes.
 
-use buzz_core_pkg::{
-    company::TaskStatus,
-    website::WebsiteStatus,
-};
 use buzz_core_pkg::kind::{KIND_MANAGED_AGENT, KIND_TASK, KIND_WEBSITE_HEAD};
+use buzz_core_pkg::{company::TaskStatus, website::WebsiteStatus};
 use buzz_sdk_pkg::{
     company::parse_task_event,
     website::{parse_website_head, parse_website_head_identity},
 };
+use nostr::{Event, PublicKey};
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use nostr::{Event, PublicKey};
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
@@ -177,9 +174,7 @@ fn lower_hex_event_id(value: &str, label: &str) -> Result<String, String> {
 fn valid_lifecycle_stamp(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > MAX_IDENTIFIER_BYTES
-        || value
-            .chars()
-            .any(|character| character.is_control())
+        || value.chars().any(|character| character.is_control())
     {
         return Err(format!("{label} is invalid"));
     }
@@ -197,8 +192,8 @@ fn valid_browser_generation(value: &str) -> Result<(), String> {
 }
 
 fn checked_real_directory(path: &Path, label: &str) -> Result<PathBuf, String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("{label} is unavailable: {error}"))?;
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("{label} is unavailable: {error}"))?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(format!("{label} must be a real directory"));
     }
@@ -232,8 +227,9 @@ pub async fn resolve_evidence_workspace(
     valid_browser_generation(&request.browser_generation)?;
 
     let signing_owner = state.signing_keys()?.public_key();
-    let active_relay = buzz_core_pkg::relay::normalize_relay_url(&relay_ws_url_with_override(&state))
-        .map_err(|_| "the active evidence relay is invalid".to_owned())?;
+    let active_relay =
+        buzz_core_pkg::relay::normalize_relay_url(&relay_ws_url_with_override(&state))
+            .map_err(|_| "the active evidence relay is invalid".to_owned())?;
     if signing_owner != owner_pubkey || active_relay != relay_url {
         return Err("the active owner or relay changed during evidence access".to_owned());
     }
@@ -241,17 +237,20 @@ pub async fn resolve_evidence_workspace(
     let row = crate::commands::list_managed_agents(app.clone())
         .await?
         .into_iter()
-        .find(|candidate| candidate.pubkey.eq_ignore_ascii_case(&worker_pubkey.to_hex()))
+        .find(|candidate| {
+            candidate
+                .pubkey
+                .eq_ignore_ascii_case(&worker_pubkey.to_hex())
+        })
         .ok_or_else(|| "the evidence worker is not in the native roster".to_owned())?;
     // `list_managed_agents` applies the canonical effective-owner predicate
     // before exposing a row. Re-read both identity inputs after that await so
     // an account or relay switch cannot return a workspace selected under the
     // previous scope.
     let after_signing_owner = state.signing_keys()?.public_key();
-    let after_active_relay = buzz_core_pkg::relay::normalize_relay_url(
-        &relay_ws_url_with_override(&state),
-    )
-    .map_err(|_| "the active evidence relay is invalid".to_owned())?;
+    let after_active_relay =
+        buzz_core_pkg::relay::normalize_relay_url(&relay_ws_url_with_override(&state))
+            .map_err(|_| "the active evidence relay is invalid".to_owned())?;
     if signing_owner != after_signing_owner
         || active_relay != after_active_relay
         || after_signing_owner != owner_pubkey
@@ -276,10 +275,8 @@ pub async fn resolve_evidence_workspace(
         return Err("the evidence worker lifecycle changed".to_owned());
     }
 
-    let runtime_key = crate::managed_agents::ManagedAgentRuntimeKey::new(
-        worker_pubkey.to_hex(),
-        &relay_url,
-    )?;
+    let runtime_key =
+        crate::managed_agents::ManagedAgentRuntimeKey::new(worker_pubkey.to_hex(), &relay_url)?;
     let base = crate::managed_agents::managed_agents_base_dir(&app)?;
     let base = checked_real_directory(&base, "the managed-agent data directory")?;
     let isolated = checked_real_directory(&base.join("isolated"), "the isolated worker directory")?;
@@ -329,8 +326,9 @@ async fn capture_scope(
 ) -> Result<VerifiedScope, String> {
     let parsed = normalized_request(request)?;
     let owner = state.signing_keys()?.public_key();
-    let active_relay = buzz_core_pkg::relay::normalize_relay_url(&relay_ws_url_with_override(state))
-        .map_err(|_| "the active evidence relay is invalid".to_owned())?;
+    let active_relay =
+        buzz_core_pkg::relay::normalize_relay_url(&relay_ws_url_with_override(state))
+            .map_err(|_| "the active evidence relay is invalid".to_owned())?;
     if owner != parsed.owner_pubkey || active_relay != parsed.relay_url {
         return Err("the active owner or relay changed during evidence access".to_owned());
     }
@@ -437,12 +435,7 @@ fn validate_assignment_snapshot(
         })
         .cloned()
         .ok_or_else(|| "the assigned CompanyTask head was not found".to_owned())?;
-    verify_event(
-        &task_event,
-        KIND_TASK,
-        &scope.relay_pubkey,
-        "CompanyTask",
-    )?;
+    verify_event(&task_event, KIND_TASK, &scope.relay_pubkey, "CompanyTask")?;
     let task = parse_task_event(&task_event)
         .map_err(|error| format!("the assigned CompanyTask is unreadable: {error}"))?;
     if task.id != scope.task_id
@@ -471,7 +464,15 @@ fn validate_assignment_snapshot(
         &scope.relay_pubkey,
         "Website head",
     )?;
-    for name in ["d", "h", "task", "thread", "generation", "instance", "manifest"] {
+    for name in [
+        "d",
+        "h",
+        "task",
+        "thread",
+        "generation",
+        "instance",
+        "manifest",
+    ] {
         unique_scalar_tag(&website_event, name, "Website head")?;
     }
     let website_identity = parse_website_head_identity(&website_event)

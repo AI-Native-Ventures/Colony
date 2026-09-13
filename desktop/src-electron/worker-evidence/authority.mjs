@@ -327,7 +327,10 @@ export class EvidenceAuthority {
       throw new Error("The worker lifecycle changed during evidence access");
     }
     const finalAuthorization = acceptAssignment(finalAssignment, finalRow);
-    if (!finalAuthorization || !sameAssignment(finalAuthorization, authorization)) {
+    if (
+      !finalAuthorization ||
+      !sameAssignment(finalAuthorization, authorization)
+    ) {
       throw new Error("The job assignment changed during evidence access");
     }
 
@@ -398,7 +401,8 @@ export class EvidenceAuthority {
     const operation = this.issueAfterSnapshot(requested, current, row);
     this.pendingIssues.set(key, operation);
     return operation.finally(() => {
-      if (this.pendingIssues.get(key) === operation) this.pendingIssues.delete(key);
+      if (this.pendingIssues.get(key) === operation)
+        this.pendingIssues.delete(key);
     });
   }
 
@@ -450,7 +454,10 @@ export class EvidenceAuthority {
       throw new Error("Evidence access expired with the business context");
     }
     const row = findWorker(rows, binding.workerPubkey);
-    if (!isEligibleEvidenceWorker(row, binding.relayUrl) || !sameGeneration(row, binding)) {
+    if (
+      !isEligibleEvidenceWorker(row, binding.relayUrl) ||
+      !sameGeneration(row, binding)
+    ) {
       this.revoke(token);
       throw new Error("Evidence access expired with the worker lifecycle");
     }

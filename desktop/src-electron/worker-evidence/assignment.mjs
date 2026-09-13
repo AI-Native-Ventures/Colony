@@ -42,7 +42,8 @@ function eventId(value, label) {
 }
 
 function exact(actual, expected, label) {
-  if (actual !== expected) throw new Error(`${label} does not match evidence scope`);
+  if (actual !== expected)
+    throw new Error(`${label} does not match evidence scope`);
 }
 
 function object(value, label) {
@@ -59,7 +60,10 @@ function signedManifest(value, label) {
   } catch {
     throw new Error(`${label} URL is invalid`);
   }
-  if (typeof manifest.sha256 !== "string" || !SHA256_PATTERN.test(manifest.sha256))
+  if (
+    typeof manifest.sha256 !== "string" ||
+    !SHA256_PATTERN.test(manifest.sha256)
+  )
     throw new Error(`${label} hash is invalid`);
   return Object.freeze({ url, sha256: manifest.sha256 });
 }
@@ -99,11 +103,27 @@ export function validateRelayTaskAssignment(snapshot, expected) {
   };
 
   exact(relay(snapshot.relayUrl, "native relay"), scope.relayUrl, "relay");
-  exact(pubkey(snapshot.ownerPubkey, "native owner"), scope.ownerPubkey, "owner");
-  exact(pubkey(snapshot.workerPubkey, "native worker"), scope.workerPubkey, "worker");
+  exact(
+    pubkey(snapshot.ownerPubkey, "native owner"),
+    scope.ownerPubkey,
+    "owner",
+  );
+  exact(
+    pubkey(snapshot.workerPubkey, "native worker"),
+    scope.workerPubkey,
+    "worker",
+  );
   exact(uuid(snapshot.jobId, "native job id"), scope.jobId, "job");
-  exact(requireEvidenceId(snapshot.taskId, "native task id"), scope.taskId, "task");
-  exact(uuid(snapshot.channelId, "native channel id"), scope.channelId, "channel");
+  exact(
+    requireEvidenceId(snapshot.taskId, "native task id"),
+    scope.taskId,
+    "task",
+  );
+  exact(
+    uuid(snapshot.channelId, "native channel id"),
+    scope.channelId,
+    "channel",
+  );
   exact(
     requireEvidenceThreadRoot(snapshot.threadRoot),
     scope.threadRoot,
@@ -112,7 +132,10 @@ export function validateRelayTaskAssignment(snapshot, expected) {
 
   const taskEventId = eventId(snapshot.taskEventId, "task event id");
   const websiteEventId = eventId(snapshot.websiteEventId, "Website event id");
-  if (!Number.isSafeInteger(snapshot.websiteGeneration) || snapshot.websiteGeneration < 1)
+  if (
+    !Number.isSafeInteger(snapshot.websiteGeneration) ||
+    snapshot.websiteGeneration < 1
+  )
     throw new Error("Website generation is invalid");
 
   const task = object(snapshot.task, "canonical CompanyTask");
@@ -131,13 +154,21 @@ export function validateRelayTaskAssignment(snapshot, expected) {
   const website = object(snapshot.website, "canonical Website review");
   exact(uuid(website.jobId, "Website job id"), scope.jobId, "Website job");
   exact(website.taskId, scope.taskId, "Website task");
-  exact(uuid(website.channel, "Website channel"), scope.channelId, "Website channel");
+  exact(
+    uuid(website.channel, "Website channel"),
+    scope.channelId,
+    "Website channel",
+  );
   exact(
     requireEvidenceThreadRoot(website.threadRoot),
     scope.threadRoot,
     "Website thread",
   );
-  exact(pubkey(website.owner, "Website owner"), scope.ownerPubkey, "Website owner");
+  exact(
+    pubkey(website.owner, "Website owner"),
+    scope.ownerPubkey,
+    "Website owner",
+  );
   if (
     !Number.isSafeInteger(website.currentRevision) ||
     website.currentRevision < 0
@@ -184,7 +215,9 @@ export function createRelayTaskAssignmentResolver({ read }) {
     throw new Error("A native assignment reader is required");
   return async (scope = {}) => {
     if (scope.taskId === undefined || scope.channelId === undefined)
-      throw new Error("Evidence assignment requires a task and channel coordinate");
+      throw new Error(
+        "Evidence assignment requires a task and channel coordinate",
+      );
     const request = {
       relayUrl: scope.relayUrl,
       ownerPubkey: scope.ownerPubkey,

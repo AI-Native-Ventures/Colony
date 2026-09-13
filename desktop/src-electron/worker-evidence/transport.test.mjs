@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
-import {
-  EvidenceTransport,
-} from "./transport.mjs";
+import { EvidenceTransport } from "./transport.mjs";
 
 const PRIMARY_URL = "https://cdn.example.com/site/index.html";
 const REDIRECT_URL = "https://assets.example.com/site/index.html";
@@ -159,9 +157,7 @@ async function waitUntil(predicate, message) {
 }
 
 test("the protocol guard permits credential-free GETs and forwards no body or credentials", async (t) => {
-  const routes = new Map([
-    [PRIMARY_URL, () => response({ chunks: ["ok"] })],
-  ]);
+  const routes = new Map([[PRIMARY_URL, () => response({ chunks: ["ok"] })]]);
   const environment = await createTransport({ worldOptions: { routes } });
   t.after(() => environment.transport.close());
 
@@ -340,7 +336,10 @@ test("the ninth concurrent resource waits for a slot instead of returning a fals
     openResolvers[index](response({ chunks: ["a"] }));
   }
   const results = await Promise.all(pending);
-  assert.equal(results.every((result) => result.status === 200), true);
+  assert.equal(
+    results.every((result) => result.status === 200),
+    true,
+  );
   assert.deepEqual(environment.transport.stats(), {
     requests: 9,
     bytes: 9,
@@ -382,9 +381,7 @@ test("enforces per-resource, total-byte, and request-count limits", async (t) =>
   assert.equal(overRequestBudget.status, 429);
   assert.equal(environment.transport.stats().requests, 2);
 
-  const byteRoutes = new Map([
-    [goodUrl, () => response({ chunks: ["x"] })],
-  ]);
+  const byteRoutes = new Map([[goodUrl, () => response({ chunks: ["x"] })]]);
   const byteEnvironment = await createTransport({
     maxRequests: 4,
     maxBytes: 2,

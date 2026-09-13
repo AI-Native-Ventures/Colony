@@ -323,13 +323,13 @@ function WebsiteAttachmentInner({
     () => isWebsiteCompositeRendered(message.id),
     () => false,
   );
-  const managedAgentsQuery = useManagedAgentsQuery();
+  const _managedAgentsQuery = useManagedAgentsQuery();
   React.useEffect(() => {
     if (!communityId || !head || !relayUrl) return;
     void ensureWebsiteEvidenceGrants({ communityId, head, relayUrl }).catch(
       () => {},
     );
-  }, [communityId, head, managedAgentsQuery.data, relayUrl]);
+  }, [communityId, head, relayUrl]);
   if (!communityId || !head || !relayUrl) return null;
   if (surface === "channel") {
     return (

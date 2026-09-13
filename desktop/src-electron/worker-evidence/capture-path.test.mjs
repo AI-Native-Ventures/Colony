@@ -36,23 +36,17 @@ function entry(workspace) {
 }
 
 async function temporaryWorkspace() {
-  return realpath(await mkdtemp(path.join(os.tmpdir(), "colony-evidence-host-")));
+  return realpath(
+    await mkdtemp(path.join(os.tmpdir(), "colony-evidence-host-")),
+  );
 }
 
 test("capturePath delegates to the native writer and preserves its exact contract", async () => {
   const workspace = await temporaryWorkspace();
   const calls = [];
   try {
-    const capture = await host(async ({
-      ownerPubkey,
-      relayUrl,
-      workerPubkey,
-      expectedPid,
-      expectedStartNonce,
-      fileName,
-      bytesBase64,
-    }) => {
-      calls.push({
+    const capture = await host(
+      async ({
         ownerPubkey,
         relayUrl,
         workerPubkey,
@@ -60,14 +54,24 @@ test("capturePath delegates to the native writer and preserves its exact contrac
         expectedStartNonce,
         fileName,
         bytesBase64,
-      });
-      const bytes = Buffer.from(bytesBase64, "base64");
-      const directory = path.join(workspace, ".colony-evidence");
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      const filePath = path.join(directory, fileName);
-      await writeFile(filePath, bytes, { flag: "wx", mode: 0o600 });
-      return { path: filePath, bytes: bytes.length };
-    }).capturePath(entry(workspace), Buffer.from("png"));
+      }) => {
+        calls.push({
+          ownerPubkey,
+          relayUrl,
+          workerPubkey,
+          expectedPid,
+          expectedStartNonce,
+          fileName,
+          bytesBase64,
+        });
+        const bytes = Buffer.from(bytesBase64, "base64");
+        const directory = path.join(workspace, ".colony-evidence");
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        const filePath = path.join(directory, fileName);
+        await writeFile(filePath, bytes, { flag: "wx", mode: 0o600 });
+        return { path: filePath, bytes: bytes.length };
+      },
+    ).capturePath(entry(workspace), Buffer.from("png"));
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].ownerPubkey, "f".repeat(64));
@@ -75,7 +79,10 @@ test("capturePath delegates to the native writer and preserves its exact contrac
     assert.equal(calls[0].workerPubkey, "a".repeat(64));
     assert.equal(calls[0].expectedPid, 1234);
     assert.equal(calls[0].expectedStartNonce, "b".repeat(32));
-    assert.match(calls[0].fileName, /^job_with_untrusted_input-desktop-[a-f0-9]+\.png$/);
+    assert.match(
+      calls[0].fileName,
+      /^job_with-untrusted-input-desktop-[a-f0-9]+\.png$/,
+    );
     assert.equal(calls[0].bytesBase64, Buffer.from("png").toString("base64"));
     assert.deepEqual(await readFile(capture.path), Buffer.from("png"));
   } finally {

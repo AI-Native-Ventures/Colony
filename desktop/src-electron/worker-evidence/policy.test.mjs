@@ -44,7 +44,10 @@ test("evidence navigation accepts only public HTTPS GET requests", () => {
     true,
   );
   assert.equal(
-    isAllowedEvidenceRequest({ url: "blob:https://www.example.com/id", method: "GET" }),
+    isAllowedEvidenceRequest({
+      url: "blob:https://www.example.com/id",
+      method: "GET",
+    }),
     true,
   );
 });

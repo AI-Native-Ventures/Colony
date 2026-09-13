@@ -430,12 +430,7 @@ async function boot() {
           args: { request },
         }),
     }),
-    workspace: async ({
-      relayUrl,
-      ownerPubkey,
-      workerPubkey,
-      worker,
-    } = {}) => {
+    workspace: async ({ relayUrl, ownerPubkey, workerPubkey, worker } = {}) => {
       if (
         worker === null ||
         typeof worker !== "object" ||
@@ -506,7 +501,10 @@ async function boot() {
   resources.add(() => managedBrowser?.revokeEvidenceRenewals?.());
   resources.add(() => evidenceHost?.close?.());
 
-  async function issueEvidenceGrant(source = {}, { previousRenewalToken } = {}) {
+  async function issueEvidenceGrant(
+    source = {},
+    { previousRenewalToken } = {},
+  ) {
     if (source === null || typeof source !== "object" || Array.isArray(source))
       throw new Error("Evidence scope is invalid");
     const communityId = source.communityId ?? businessContext?.id;
@@ -515,12 +513,16 @@ async function boot() {
       ? normalizeRelay(source.relayUrl)
       : guard.context.relay;
     if (relayUrl !== guard.context.relay)
-      throw new Error("Evidence relay scope does not match the active business");
+      throw new Error(
+        "Evidence relay scope does not match the active business",
+      );
     if (
       source.ownerPubkey !== undefined &&
       String(source.ownerPubkey).toLowerCase() !== guard.context.ownerPubkey
     )
-      throw new Error("Evidence owner scope does not match the active identity");
+      throw new Error(
+        "Evidence owner scope does not match the active identity",
+      );
     const scope = {
       communityId: guard.context.id,
       relayUrl: guard.context.relay,
@@ -571,8 +573,7 @@ async function boot() {
     }
     if (managedBrowser.bindings.has(request?.token))
       return managedBrowser.request(request);
-    if (evidenceHost?.has(request?.token))
-      return evidenceHost.request(request);
+    if (evidenceHost?.has(request?.token)) return evidenceHost.request(request);
     return views.request(request);
   });
   resources.add(stopBroker);

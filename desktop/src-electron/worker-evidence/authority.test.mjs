@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  EvidenceAuthority,
-  isEligibleEvidenceWorker,
-} from "./authority.mjs";
+import { EvidenceAuthority, isEligibleEvidenceWorker } from "./authority.mjs";
 
 const CONTEXT = {
   id: "community-1",
@@ -81,7 +78,10 @@ test("evidence eligibility requires the authoritative isolated owner-only lifecy
 test("the native workspace resolver is required and record working_dir is ignored", async () => {
   const auth = authority(CONTEXT, [row({ working_dir: "/worker-controlled" })]);
   const grant = await auth.issue(JOB);
-  assert.equal(auth.bindings.get(grant.token).workspaceRoot, "/private/tmp/evidence-worker");
+  assert.equal(
+    auth.bindings.get(grant.token).workspaceRoot,
+    "/private/tmp/evidence-worker",
+  );
   assert.throws(
     () =>
       new EvidenceAuthority({
@@ -102,7 +102,9 @@ test("capability is bound to one job and worker generation", async () => {
   const grant = await auth.issue(JOB);
   assert.match(grant.token, /^[a-f0-9]{64}$/);
   assert.equal(grant.jobId, JOB.jobId);
-  await assert.doesNotReject(() => auth.validate(grant.token, { jobId: JOB.jobId }));
+  await assert.doesNotReject(() =>
+    auth.validate(grant.token, { jobId: JOB.jobId }),
+  );
   await assert.rejects(
     () => auth.validate(grant.token, { jobId: "other-job" }),
     /job scope mismatch/,
@@ -112,15 +114,11 @@ test("capability is bound to one job and worker generation", async () => {
 test("repeated issuance reuses the current fingerprint and supersedes stale generations", async () => {
   const currentRows = [row()];
   let fingerprint = "task-head:website-head:1:builtin:research";
-  const auth = authority(
-    CONTEXT,
-    currentRows,
-    () => ({
-      authorized: true,
-      workerPersonaId: "builtin:research",
-      fingerprint,
-    }),
-  );
+  const auth = authority(CONTEXT, currentRows, () => ({
+    authorized: true,
+    workerPersonaId: "builtin:research",
+    fingerprint,
+  }));
 
   const first = await auth.issue(JOB);
   const repeated = await auth.issue(JOB);
@@ -163,7 +161,7 @@ test("capability expires when the active business changes", async () => {
 test("capability requires an authoritative job assignment and workspace", async () => {
   const auth = authority(CONTEXT, [row()], () => false);
   await assert.rejects(() => auth.issue(JOB), /not assigned/);
-  const noWorkspace = authority(CONTEXT, [row({ working_dir: undefined })]);
+  const noWorkspace = authority(CONTEXT, [row()], undefined, () => null);
   await assert.rejects(() => noWorkspace.issue(JOB), /authorized workspace/);
 });
 

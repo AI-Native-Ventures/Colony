@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 534,
-    "tauri_coupled": 219,
-    "portable": 315,
+    "rust_total": 537,
+    "tauri_coupled": 221,
+    "portable": 316,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -50,6 +50,8 @@
       "src-tauri/src/commands/discovery_export.rs",
       "src-tauri/src/commands/dms.rs",
       "src-tauri/src/commands/engrams.rs",
+      "src-tauri/src/commands/evidence_assignment.rs",
+      "src-tauri/src/commands/evidence_capture.rs",
       "src-tauri/src/commands/export_util.rs",
       "src-tauri/src/commands/factory_worktree.rs",
       "src-tauri/src/commands/global_agent_config.rs",
@@ -265,6 +267,7 @@
       "src-tauri/src/commands/agent_proposals_tests.rs",
       "src-tauri/src/commands/agents_tests.rs",
       "src-tauri/src/commands/channels_tests.rs",
+      "src-tauri/src/commands/evidence_assignment_tests.rs",
       "src-tauri/src/commands/global_agent_config/restart_policy.rs",
       "src-tauri/src/commands/global_agent_config_scope_tests.rs",
       "src-tauri/src/commands/identity_key_backup_tests.rs",
@@ -546,11 +549,11 @@
     ]
   },
   "commands": {
-    "registered": 381,
-    "defined": 381,
+    "registered": 384,
+    "defined": 384,
     "by_reach": {
       "frontend": 369,
-      "NO CALLER FOUND": 10,
+      "NO CALLER FOUND": 13,
       "frontend-plugin-prefixed": 2
     },
     "no_caller": [
@@ -563,20 +566,23 @@
       "fetch_website_artifact_bytes",
       "operator_pubkey",
       "operator_sign_nip98",
-      "start_stt_pipeline"
+      "read_evidence_assignment",
+      "resolve_evidence_workspace",
+      "start_stt_pipeline",
+      "write_evidence_capture"
     ]
   },
   "params": {
-    "AppHandle": 426,
-    "State": 276,
+    "AppHandle": 428,
+    "State": 278,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 423,
-      "State": 276,
+      "AppHandle": 425,
+      "State": 278,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -594,7 +600,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 126,
+    ".state::<": 127,
     ".emit(": 48,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -721,6 +727,7 @@
     "src-tauri/src/commands/dms.rs": 2,
     "src-tauri/src/commands/project_terminal.rs": 2,
     "src-tauri/src/commands/window_chrome.rs": 2,
+    "src-tauri/src/commands/evidence_assignment.rs": 2,
     "src-tauri/src/commands/relay_reconnect.rs": 2,
     "src-tauri/src/huddle/transcription.rs": 2,
     "src-tauri/src/commands/personas/sharing.rs": 2,
@@ -763,7 +770,8 @@
     "src-tauri/src/commands/notifications.rs": 1,
     "src-tauri/src/commands/community_profile.rs": 1,
     "src-tauri/src/huddle/agents.rs": 1,
-    "src-tauri/src/commands/personas/update.rs": 1
+    "src-tauri/src/commands/personas/update.rs": 1,
+    "src-tauri/src/commands/evidence_capture.rs": 1
   },
   "detail": {
     "acknowledge_pending_community_deep_link": {
@@ -3295,6 +3303,13 @@
         "src/shared/api/tauriMedia.ts:76"
       ]
     },
+    "read_evidence_assignment": {
+      "defining_file": "src-tauri/src/commands/evidence_assignment.rs",
+      "module": "evidence_assignment",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
     "read_onboarding_history": {
       "defining_file": "src-tauri/src/commands/onboarding_history.rs",
       "module": "onboarding_history",
@@ -3483,6 +3498,13 @@
       "example_sites": [
         "src/app/useTrayMenu.ts:130"
       ]
+    },
+    "resolve_evidence_workspace": {
+      "defining_file": "src-tauri/src/commands/evidence_assignment.rs",
+      "module": "evidence_assignment",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "resolve_oa_owner": {
       "defining_file": "src-tauri/src/commands/identity_archive.rs",
@@ -4549,6 +4571,13 @@
       "example_sites": [
         "src/features/workspace/lib/webSessions.ts:333"
       ]
+    },
+    "write_evidence_capture": {
+      "defining_file": "src-tauri/src/commands/evidence_capture.rs",
+      "module": "evidence_capture",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     }
   }
 }

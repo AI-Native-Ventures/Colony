@@ -259,13 +259,17 @@ export function useWebsiteHeadsForCommunity(input: {
   const { communityId, channelIds, relaySelfPubkey } = input;
   const normalizedChannelIds = React.useMemo(
     () =>
-      [...new Set(channelIds.map((channelId) => channelId.trim().toLowerCase()))]
+      [
+        ...new Set(
+          channelIds.map((channelId) => channelId.trim().toLowerCase()),
+        ),
+      ]
         .filter(Boolean)
         .sort(),
     [channelIds],
   );
   const enabled = Boolean(communityId && relaySelfPubkey);
-  const [storeRevision, setStoreRevision] = React.useState(0);
+  const [_storeRevision, setStoreRevision] = React.useState(0);
 
   React.useEffect(() => {
     if (!enabled || !communityId || !relaySelfPubkey) return;
@@ -301,17 +305,12 @@ export function useWebsiteHeadsForCommunity(input: {
     return () => {
       disposed = true;
     };
-  }, [
-    communityId,
-    enabled,
-    normalizedChannelIds,
-    relaySelfPubkey,
-  ]);
+  }, [communityId, enabled, normalizedChannelIds, relaySelfPubkey]);
 
   return React.useMemo(() => {
     if (!communityId) return EMPTY_COMMUNITY_HEADS;
     return normalizedChannelIds.flatMap((channelId) =>
       websiteHeadsStore.channelHeads(communityId, channelId),
     );
-  }, [communityId, normalizedChannelIds, storeRevision]);
+  }, [communityId, normalizedChannelIds]);
 }

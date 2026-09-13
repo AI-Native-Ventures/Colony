@@ -12,7 +12,10 @@ export function useWebsiteEvidenceGrantReconciliation(
   const communityId = activeCommunity?.id ?? null;
   const relayUrl = activeCommunity?.relayUrl ?? null;
   const relaySelf = useRelaySelfQuery(Boolean(communityId)).data ?? null;
-  const channelIds = React.useMemo(() => channels.map((row) => row.id), [channels]);
+  const channelIds = React.useMemo(
+    () => channels.map((row) => row.id),
+    [channels],
+  );
   const heads = useWebsiteHeadsForCommunity({
     communityId,
     channelIds,
@@ -24,7 +27,9 @@ export function useWebsiteEvidenceGrantReconciliation(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const reconcile = async () => {
       await Promise.allSettled(
-        heads.map((head) => ensureWebsiteEvidenceGrants({ communityId, relayUrl, head })),
+        heads.map((head) =>
+          ensureWebsiteEvidenceGrants({ communityId, relayUrl, head }),
+        ),
       );
       // Workers may start after the head arrives. Native authority revalidates
       // assignment and process generation on every request and every use.

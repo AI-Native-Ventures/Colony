@@ -1,20 +1,17 @@
 use super::*;
 
+use buzz_core_pkg::kind::{KIND_TASK, KIND_WEBSITE_HEAD};
 use buzz_core_pkg::{
     block::canonical_json,
     company::{CommercialPurpose, CompanyTask, DoerKind, TaskStatus},
     website::{WebsiteReview, WebsiteReviewInit, WebsiteStatus},
 };
-use buzz_core_pkg::kind::{KIND_TASK, KIND_WEBSITE_HEAD};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 
 const TASK_ID: &str = "website-task";
-const THREAD_ROOT: &str =
-    "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-const INSTANCE_ID: &str =
-    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-const MANIFEST_ID: &str =
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const THREAD_ROOT: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+const INSTANCE_ID: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+const MANIFEST_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const RELAY_URL: &str = "wss://relay.example";
 
 struct AssignmentFixture {
@@ -72,10 +69,9 @@ fn task_for(scope: &VerifiedScope, status: TaskStatus) -> CompanyTask {
 fn signed_task_event(task: &CompanyTask, signer: &Keys) -> Event {
     let status = buzz_core_pkg::company::serde_enum_slug(&task.status)
         .expect("task status has a wire spelling");
-    let content = canonical_json(
-        &serde_json::to_value(task).expect("task serializes to a JSON value"),
-    )
-    .expect("task content canonicalizes");
+    let content =
+        canonical_json(&serde_json::to_value(task).expect("task serializes to a JSON value"))
+            .expect("task content canonicalizes");
     EventBuilder::new(Kind::Custom(KIND_TASK as u16), content)
         .tags([
             tag("d", &task.id),
@@ -106,11 +102,7 @@ fn website_for(scope: &VerifiedScope) -> WebsiteReview {
 /// Materialize the exact relay Website-head shape from the canonical review
 /// record. Website heads are relay-authored, so the SDK intentionally exposes
 /// parsers rather than an owner-side head builder.
-fn signed_website_event(
-    scope: &VerifiedScope,
-    website: &WebsiteReview,
-    signer: &Keys,
-) -> Event {
+fn signed_website_event(scope: &VerifiedScope, website: &WebsiteReview, signer: &Keys) -> Event {
     let content = canonical_json(
         &serde_json::to_value(website).expect("website review serializes to a JSON value"),
     )
@@ -241,13 +233,7 @@ fn assignment_events_require_the_expected_kind_author_and_signature() {
         "CompanyTask"
     )
     .is_ok());
-    assert!(verify_event(
-        &valid,
-        KIND_TASK,
-        &other_keys.public_key(),
-        "CompanyTask"
-    )
-    .is_err());
+    assert!(verify_event(&valid, KIND_TASK, &other_keys.public_key(), "CompanyTask").is_err());
     assert!(verify_event(
         &valid,
         KIND_WEBSITE_HEAD,
@@ -307,9 +293,8 @@ fn signed_assignment_snapshot_rejects_persona_scope_status_and_author_mismatches
 
     let wrong_thread = {
         let mut task = fixture.task.clone();
-        task.thread_root = Some(
-            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_owned(),
-        );
+        task.thread_root =
+            Some("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_owned());
         let mut candidate = events(&fixture);
         candidate[0] = signed_task_event(&task, &fixture.relay_keys);
         candidate

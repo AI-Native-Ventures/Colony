@@ -63,7 +63,8 @@ const evidenceTools = [
   },
   {
     name: "evidence_artifact_open",
-    description: "Open a host-verified immutable artifact or registered local build.",
+    description:
+      "Open a host-verified immutable artifact or registered local build.",
     inputSchema: schema({ source: { type: "object" }, viewport: string }),
   },
   {
@@ -73,12 +74,14 @@ const evidenceTools = [
   },
   {
     name: "evidence_snapshot",
-    description: "Read the isolated evidence page as a bounded accessibility tree.",
+    description:
+      "Read the isolated evidence page as a bounded accessibility tree.",
     inputSchema: schema({}),
   },
   {
     name: "evidence_click",
-    description: "Click a reference from the latest isolated evidence snapshot.",
+    description:
+      "Click a reference from the latest isolated evidence snapshot.",
     inputSchema: schema({ ref: string }),
   },
   {
@@ -93,7 +96,8 @@ const evidenceTools = [
   },
   {
     name: "evidence_capture_png",
-    description: "Capture the fixed viewport as a nonblank PNG in the worker workspace.",
+    description:
+      "Capture the fixed viewport as a nonblank PNG in the worker workspace.",
     inputSchema: schema({}),
   },
   {

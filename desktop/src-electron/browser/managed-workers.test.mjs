@@ -281,7 +281,7 @@ test("an authority-bound evidence grant can exist without a shared tab", async (
     assert.equal(result.token, evidenceToken);
     assert.equal(validations, 2);
     assert.deepEqual(
-      JSON.parse(await readFile(path.join(root, grantFilename(worker()))),
+      JSON.parse(await readFile(path.join(root, grantFilename(worker())))),
       {
         socketPath: "/tmp/test.sock",
         evidence: {
@@ -340,7 +340,7 @@ test("repeated authority delivery reuses the generation-scoped renewal", async (
     assert.equal(s.manager.evidenceRenewals.size, 1);
     assert.equal(validations, 4);
     assert.deepEqual(
-      JSON.parse(await readFile(path.join(root, grantFilename(worker()))),
+      JSON.parse(await readFile(path.join(root, grantFilename(worker())))),
       {
         socketPath: "/tmp/test.sock",
         evidence: {

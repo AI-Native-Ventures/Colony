@@ -35,7 +35,9 @@ function invalid(message) {
 /** Validate a server-owned community or job identifier. */
 export function requireEvidenceId(value, label) {
   if (typeof value !== "string" || !ID_PATTERN.test(value)) {
-    invalid(`${label} must be 1 to 192 letters, digits, dots, underscores, colons, or dashes`);
+    invalid(
+      `${label} must be 1 to 192 letters, digits, dots, underscores, colons, or dashes`,
+    );
   }
   return value;
 }
@@ -71,7 +73,10 @@ export function evidenceViewportSize(value) {
 
 /** Validate a public HTTPS navigation/resource URL before DNS resolution. */
 export function validateEvidenceUrl(value) {
-  if (typeof value === "string" && Buffer.byteLength(value, "utf8") > MAX_EVIDENCE_URL_BYTES) {
+  if (
+    typeof value === "string" &&
+    Buffer.byteLength(value, "utf8") > MAX_EVIDENCE_URL_BYTES
+  ) {
     invalid(`Evidence URL must be at most ${MAX_EVIDENCE_URL_BYTES} bytes`);
   }
   return validatePublicUrl(value);
@@ -108,7 +113,10 @@ export function evidenceResponseHeaders(contentType) {
   headers.set("content-security-policy", EVIDENCE_CONTENT_SECURITY_POLICY);
   headers.set("cross-origin-resource-policy", "cross-origin");
   headers.set("referrer-policy", "no-referrer");
-  headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), notifications=(), usb=()");
+  headers.set(
+    "permissions-policy",
+    "camera=(), microphone=(), geolocation=(), notifications=(), usb=()",
+  );
   headers.set("x-content-type-options", "nosniff");
   // The host never forwards cookies or authorization headers. A wildcard is
   // therefore safe for public GET hydration across a page and its public API;
@@ -151,12 +159,18 @@ export function validateEvidenceAction(value) {
     invalid("Evidence action is unsupported");
   }
   if (type !== "snapshot") {
-    if (typeof value.ref !== "string" || !/^[a-f0-9]{16}-[1-9][0-9]{0,2}$/.test(value.ref)) {
+    if (
+      typeof value.ref !== "string" ||
+      !/^[a-f0-9]{16}-[1-9][0-9]{0,2}$/.test(value.ref)
+    ) {
       invalid("Evidence action requires a snapshot reference");
     }
   }
   if (type === "type") {
-    if (typeof value.text !== "string" || Buffer.byteLength(value.text, "utf8") > MAX_EVIDENCE_TEXT_BYTES) {
+    if (
+      typeof value.text !== "string" ||
+      Buffer.byteLength(value.text, "utf8") > MAX_EVIDENCE_TEXT_BYTES
+    ) {
       invalid(`Evidence text must be at most ${MAX_EVIDENCE_TEXT_BYTES} bytes`);
     }
   }

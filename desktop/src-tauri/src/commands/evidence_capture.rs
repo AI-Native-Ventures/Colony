@@ -21,10 +21,10 @@ use tauri::Manager;
 
 use crate::{
     app_state::AppState,
+    managed_agents::managed_agents_base_dir,
     managed_agents::{
         load_managed_agents, BackendKind, ManagedAgentRuntimeKey, ManagedAgentRuntimeLifecycle,
     },
-    managed_agents::managed_agents_base_dir,
     relay::{effective_agent_relay_url, relay_ws_url_with_override},
 };
 
@@ -223,8 +223,9 @@ fn assert_current_scope(
     if !actual_owner.eq_ignore_ascii_case(owner_pubkey) {
         return Err("evidence owner changed during capture".to_string());
     }
-    let actual_relay = buzz_core_pkg::relay::normalize_relay_url(&relay_ws_url_with_override(state))
-        .map_err(|error| format!("active relay is invalid: {error}"))?;
+    let actual_relay =
+        buzz_core_pkg::relay::normalize_relay_url(&relay_ws_url_with_override(state))
+            .map_err(|error| format!("active relay is invalid: {error}"))?;
     if actual_relay != relay_url {
         return Err("evidence relay changed during capture".to_string());
     }
@@ -265,10 +266,7 @@ fn write_evidence_capture_at_with_hook<F>(
 where
     F: FnOnce(),
 {
-    use std::{
-        fs::OpenOptions,
-        io::Write,
-    };
+    use std::{fs::OpenOptions, io::Write};
 
     use nix::{
         errno::Errno,
@@ -284,7 +282,8 @@ where
             MAX_EVIDENCE_CAPTURE_BYTES
         ));
     }
-    let directory_flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    let directory_flags =
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
     let root = FdGuard::new(
         open(workspace, directory_flags, Mode::empty())
             .map_err(|error| format!("cannot open evidence workspace: {error}"))?,
@@ -297,8 +296,12 @@ where
     ) {
         Ok(fd) => FdGuard::new(fd),
         Err(Errno::ENOENT) => {
-            mkdirat(Some(root.raw()), EVIDENCE_DIRECTORY, Mode::from_bits_truncate(0o700))
-                .map_err(|error| format!("cannot create evidence directory: {error}"))?;
+            mkdirat(
+                Some(root.raw()),
+                EVIDENCE_DIRECTORY,
+                Mode::from_bits_truncate(0o700),
+            )
+            .map_err(|error| format!("cannot create evidence directory: {error}"))?;
             before_directory_open();
             FdGuard::new(
                 openat(
@@ -316,11 +319,7 @@ where
         openat(
             Some(directory.raw()),
             file_name,
-            OFlag::O_WRONLY
-                | OFlag::O_CREAT
-                | OFlag::O_EXCL
-                | OFlag::O_CLOEXEC
-                | OFlag::O_NOFOLLOW,
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW,
             Mode::from_bits_truncate(0o600),
         )
         .map_err(|error| format!("cannot create evidence capture: {error}"))?,
@@ -386,7 +385,11 @@ fn remove_evidence_capture_at(workspace: &Path, file_name: &str) -> Result<(), S
     ) {
         Ok(fd) => FdGuard::new(fd),
         Err(Errno::ENOENT) => return Ok(()),
-        Err(error) => return Err(format!("cannot open evidence directory for cleanup: {error}")),
+        Err(error) => {
+            return Err(format!(
+                "cannot open evidence directory for cleanup: {error}"
+            ))
+        }
     };
     match unlinkat(Some(directory.raw()), file_name, UnlinkatFlags::NoRemoveDir) {
         Ok(()) | Err(Errno::ENOENT) => Ok(()),
@@ -448,17 +451,13 @@ mod tests {
 
         let workspace = tempfile::tempdir().expect("workspace");
         let outside = tempfile::tempdir().expect("outside");
-        let result = write_evidence_capture_at_with_hook(
-            workspace.path(),
-            "capture.png",
-            b"png",
-            || {
+        let result =
+            write_evidence_capture_at_with_hook(workspace.path(), "capture.png", b"png", || {
                 let original = workspace.path().join(EVIDENCE_DIRECTORY);
                 let moved = workspace.path().join(".colony-evidence-real");
                 fs::rename(&original, moved).expect("move evidence directory");
                 symlink(outside.path(), original).expect("swap symlink");
-            },
-        );
+            });
 
         assert!(result.is_err());
         assert!(fs::read_dir(outside.path())

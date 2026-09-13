@@ -11,7 +11,12 @@ import { evidenceViewportSize, validateEvidenceUrl } from "./policy.mjs";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
-function requireElectronConstructors({ BrowserWindow, WebContentsView, View, session }) {
+function requireElectronConstructors({
+  BrowserWindow,
+  WebContentsView,
+  View,
+  session,
+}) {
   if (
     typeof BrowserWindow !== "function" ||
     typeof WebContentsView !== "function" ||
@@ -19,7 +24,9 @@ function requireElectronConstructors({ BrowserWindow, WebContentsView, View, ses
     session === null ||
     typeof session?.fromPartition !== "function"
   ) {
-    throw new Error("Verified artifact rendering requires Electron view constructors");
+    throw new Error(
+      "Verified artifact rendering requires Electron view constructors",
+    );
   }
 }
 
@@ -56,10 +63,14 @@ export function requireWebsiteManifest(binding, manifest) {
   try {
     manifestUrl = validateEvidenceUrl(manifest?.url).href;
   } catch {
-    throw new Error("The artifact manifest does not match the signed Website revision");
+    throw new Error(
+      "The artifact manifest does not match the signed Website revision",
+    );
   }
   if (manifestUrl !== expectedUrl || manifest?.sha256 !== expectedHash) {
-    throw new Error("The artifact manifest does not match the signed Website revision");
+    throw new Error(
+      "The artifact manifest does not match the signed Website revision",
+    );
   }
   return Object.freeze({ url: manifestUrl, sha256: expectedHash });
 }
@@ -76,7 +87,12 @@ export function createVerifiedArtifactRenderer({
   session,
   loadPreview,
 } = {}) {
-  requireElectronConstructors({ BrowserWindow, WebContentsView, View, session });
+  requireElectronConstructors({
+    BrowserWindow,
+    WebContentsView,
+    View,
+    session,
+  });
   if (typeof loadPreview !== "function")
     throw new Error("Verified artifact rendering requires a verified loader");
 
@@ -93,7 +109,9 @@ export function createVerifiedArtifactRenderer({
 
   const render = async ({ binding, source, viewport } = {}) => {
     if (source?.kind !== "verified-artifact")
-      throw new Error("Local build evidence requires a host-registered renderer");
+      throw new Error(
+        "Local build evidence requires a host-registered renderer",
+      );
     const websiteRevision = requireWebsiteRevision(binding);
     const manifest = requireWebsiteManifest(binding, source.manifest);
     const size = evidenceViewportSize(viewport);
@@ -131,7 +149,9 @@ export function createVerifiedArtifactRenderer({
       });
       const entry = previewHost.byHandle.get(state.handle);
       if (!entry?.view?.webContents)
-        throw new Error("The verified artifact did not produce an isolated page");
+        throw new Error(
+          "The verified artifact did not produce an isolated page",
+        );
       return {
         window,
         view: entry.view,
@@ -150,7 +170,9 @@ export function createVerifiedArtifactRenderer({
       };
     } catch (error) {
       if (state?.handle) {
-        await previewHost.close({ window, handle: state.handle }).catch(() => {});
+        await previewHost
+          .close({ window, handle: state.handle })
+          .catch(() => {});
       } else {
         await previewHost.closeAllForWindow(window).catch(() => {});
       }

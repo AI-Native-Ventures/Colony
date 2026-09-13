@@ -131,7 +131,9 @@ test("closed task, handed-over review, and changed coordinates revoke access", (
     { website: { ...snapshot().website, threadRoot: "d".repeat(64) } },
     { websiteEventId: "A".repeat(64) },
   ]) {
-    assert.throws(() => validateRelayTaskAssignment(snapshot(changed), EXPECTED));
+    assert.throws(() =>
+      validateRelayTaskAssignment(snapshot(changed), EXPECTED),
+    );
   }
 });
 
@@ -144,7 +146,13 @@ test("evidence follows the accepted task and active Website lifecycle phases", (
       ),
     );
   }
-  for (const status of ["proposed", "blocked", "snoozed", "completed", "cancelled"]) {
+  for (const status of [
+    "proposed",
+    "blocked",
+    "snoozed",
+    "completed",
+    "cancelled",
+  ]) {
     assert.throws(
       () =>
         validateRelayTaskAssignment(
@@ -193,7 +201,9 @@ test("resolver passes only the exact coordinates to the native reader", async ()
 });
 
 test("resolver refuses a scope without task and channel coordinates", async () => {
-  const resolve = createRelayTaskAssignmentResolver({ read: async () => snapshot() });
+  const resolve = createRelayTaskAssignmentResolver({
+    read: async () => snapshot(),
+  });
   await assert.rejects(
     () => resolve({ ...EXPECTED, taskId: undefined }),
     /task and channel coordinate/,

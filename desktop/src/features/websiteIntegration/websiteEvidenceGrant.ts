@@ -62,7 +62,8 @@ export async function ensureWebsiteEvidenceGrants(input: {
   const workers = [
     ...new Set(
       rows.flatMap((row) => {
-        const pubkey = typeof row?.pubkey === "string" ? row.pubkey.toLowerCase() : "";
+        const pubkey =
+          typeof row?.pubkey === "string" ? row.pubkey.toLowerCase() : "";
         return PUBKEY.test(pubkey) ? [pubkey] : [];
       }),
     ),

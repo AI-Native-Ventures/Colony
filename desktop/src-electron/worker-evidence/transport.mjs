@@ -76,7 +76,9 @@ export class EvidenceTransport {
       typeof dependencies.lookup !== "function" ||
       typeof dependencies.open !== "function"
     ) {
-      throw new Error("Evidence transport requires pinned network dependencies");
+      throw new Error(
+        "Evidence transport requires pinned network dependencies",
+      );
     }
     for (const [label, value] of [
       ["maxRequests", maxRequests],
@@ -212,7 +214,8 @@ export class EvidenceTransport {
   }
 
   acquireRequest() {
-    if (this.closed) return Promise.reject(new Error("Evidence transport is closed"));
+    if (this.closed)
+      return Promise.reject(new Error("Evidence transport is closed"));
     return new Promise((resolve, reject) => {
       const waiter = {
         resolve,

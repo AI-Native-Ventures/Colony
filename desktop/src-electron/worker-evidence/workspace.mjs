@@ -25,10 +25,7 @@ export function nativeManagedWorkerWorkspace({
   workerPubkey,
   relayUrl,
 } = {}) {
-  if (
-    typeof workerPubkey !== "string" ||
-    !PUBKEY_PATTERN.test(workerPubkey)
-  ) {
+  if (typeof workerPubkey !== "string" || !PUBKEY_PATTERN.test(workerPubkey)) {
     throw new Error("Managed-agent identity is invalid");
   }
   const base = requireAbsoluteDirectory(managedAgentsBaseDir);

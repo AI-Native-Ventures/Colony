@@ -254,7 +254,9 @@ export class ManagedBrowser {
     if (previousRenewalToken !== undefined) {
       const previous = this.getEvidenceRenewal(previousRenewalToken, expected);
       if (!sameEvidenceScope(previous.scope, scope))
-        throw Error("The evidence renewal scope changed; retry evidence access");
+        throw Error(
+          "The evidence renewal scope changed; retry evidence access",
+        );
     }
     const context = this.context();
     if (!context?.id || !context.relay)
@@ -329,13 +331,17 @@ export class ManagedBrowser {
       );
       const previousFileRenewal = existing?.evidence?.renewalToken;
       if (previousRenewalToken !== undefined)
-        this.evidenceRenewals.delete(validateRenewalToken(previousRenewalToken));
+        this.evidenceRenewals.delete(
+          validateRenewalToken(previousRenewalToken),
+        );
       if (
         typeof previousFileRenewal === "string" &&
         previousFileRenewal !== renewalToken
       ) {
         try {
-          this.evidenceRenewals.delete(validateRenewalToken(previousFileRenewal));
+          this.evidenceRenewals.delete(
+            validateRenewalToken(previousFileRenewal),
+          );
         } catch {}
       }
       this.evidenceRenewals.set(renewalToken, { scope });
@@ -347,7 +353,8 @@ export class ManagedBrowser {
   getEvidenceRenewal(renewalToken, expected = {}) {
     const checked = validateRenewalToken(renewalToken);
     const record = this.evidenceRenewals.get(checked);
-    if (!record) throw Error("The evidence renewal capability is no longer valid");
+    if (!record)
+      throw Error("The evidence renewal capability is no longer valid");
     for (const key of [
       "communityId",
       "relayUrl",

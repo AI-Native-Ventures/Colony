@@ -37,7 +37,9 @@ function safeTitle(value) {
 }
 
 function errorMessage(error, fallback) {
-  return error instanceof Error && error.message !== "" ? error.message : fallback;
+  return error instanceof Error && error.message !== ""
+    ? error.message
+    : fallback;
 }
 
 function waitForMainLoad(entry) {
@@ -76,13 +78,15 @@ function waitForMainLoad(entry) {
       settle(new Error("Evidence page renderer stopped")),
     );
     if (entry.abortSignal?.aborted) onAbort();
-    else entry.abortSignal?.addEventListener?.("abort", onAbort, { once: true });
+    else
+      entry.abortSignal?.addEventListener?.("abort", onAbort, { once: true });
   });
 }
 
 function isMainNavigation(details, fallback = true) {
   if (typeof details?.isMainFrame === "boolean") return details.isMainFrame;
-  if (typeof details?.isMainFrame === "number") return details.isMainFrame === 1;
+  if (typeof details?.isMainFrame === "number")
+    return details.isMainFrame === 1;
   return fallback;
 }
 
@@ -99,8 +103,13 @@ export class EvidenceBrowserHost {
     maxSessions = 4,
     sessionMs = MAX_EVIDENCE_SESSION_MS,
   } = {}) {
-    if (typeof BrowserWindow !== "function" || typeof WebContentsView !== "function") {
-      throw new Error("EvidenceBrowserHost requires Electron window constructors");
+    if (
+      typeof BrowserWindow !== "function" ||
+      typeof WebContentsView !== "function"
+    ) {
+      throw new Error(
+        "EvidenceBrowserHost requires Electron window constructors",
+      );
     }
     if (session === null || typeof session?.fromPartition !== "function") {
       throw new Error("EvidenceBrowserHost requires Electron sessions");
@@ -115,8 +124,14 @@ export class EvidenceBrowserHost {
     if (!Number.isSafeInteger(maxSessions) || maxSessions < 1) {
       throw new Error("maxSessions must be a positive safe integer");
     }
-    if (!Number.isSafeInteger(sessionMs) || sessionMs <= 0 || sessionMs > MAX_EVIDENCE_SESSION_MS) {
-      throw new Error(`sessionMs must be between 1 and ${MAX_EVIDENCE_SESSION_MS}`);
+    if (
+      !Number.isSafeInteger(sessionMs) ||
+      sessionMs <= 0 ||
+      sessionMs > MAX_EVIDENCE_SESSION_MS
+    ) {
+      throw new Error(
+        `sessionMs must be between 1 and ${MAX_EVIDENCE_SESSION_MS}`,
+      );
     }
     if (artifactRenderer !== null && typeof artifactRenderer !== "function") {
       throw new Error("artifactRenderer must be a function");
@@ -203,7 +218,8 @@ export class EvidenceBrowserHost {
           disableDialogs: true,
         },
       });
-      if (!view.webContents) throw new Error("Evidence web contents are unavailable");
+      if (!view.webContents)
+        throw new Error("Evidence web contents are unavailable");
       window.contentView.addChildView(view);
       view.setBounds({ x: 0, y: 0, width: size.width, height: size.height });
       view.setVisible(true);
@@ -375,7 +391,8 @@ export class EvidenceBrowserHost {
       await this.closeEntry(entry, false);
       entry = undefined;
     }
-    if (entry === undefined) entry = await this.createEntry(token, binding, viewport);
+    if (entry === undefined)
+      entry = await this.createEntry(token, binding, viewport);
     await this.authority.validate(token, { jobId: binding.jobId });
     if (entry.url !== canonicalUrl || entry.state !== "ready") {
       await this.loadEntry(entry, canonicalUrl);
@@ -388,7 +405,11 @@ export class EvidenceBrowserHost {
     if (this.artifactRenderer === null) {
       throw new Error("Verified artifact rendering is not configured");
     }
-    if (source === null || typeof source !== "object" || Array.isArray(source)) {
+    if (
+      source === null ||
+      typeof source !== "object" ||
+      Array.isArray(source)
+    ) {
       throw new Error("Evidence artifact source is invalid");
     }
     if (source.kind !== "verified-artifact" && source.kind !== "local-build") {
@@ -399,7 +420,10 @@ export class EvidenceBrowserHost {
         throw new Error("Evidence artifact manifest is invalid");
       }
       validateEvidenceUrl(source.manifest.url);
-      if (typeof source.manifest.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.manifest.sha256)) {
+      if (
+        typeof source.manifest.sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(source.manifest.sha256)
+      ) {
         throw new Error("Evidence artifact manifest hash is invalid");
       }
     } else {
@@ -456,7 +480,9 @@ export class EvidenceBrowserHost {
       try {
         rendered?.window?.close?.();
       } catch {}
-      throw new Error(errorMessage(error, "Evidence artifact could not be opened"));
+      throw new Error(
+        errorMessage(error, "Evidence artifact could not be opened"),
+      );
     }
   }
 
@@ -533,9 +559,14 @@ export class EvidenceBrowserHost {
         break;
       }
     }
-    if (!nonBlank) throw new Error("Evidence capture contains no visible content");
+    if (!nonBlank)
+      throw new Error("Evidence capture contains no visible content");
     const bytes = image?.toPNG?.();
-    if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > MAX_EVIDENCE_CAPTURE_BYTES) {
+    if (
+      !Buffer.isBuffer(bytes) ||
+      bytes.length === 0 ||
+      bytes.length > MAX_EVIDENCE_CAPTURE_BYTES
+    ) {
       throw new Error("Evidence capture exceeds its PNG budget");
     }
     return {
@@ -599,7 +630,8 @@ export class EvidenceBrowserHost {
   }
 
   async request({ token, method, args = {} } = {}) {
-    if (typeof token !== "string") throw new Error("Evidence access is invalid or revoked");
+    if (typeof token !== "string")
+      throw new Error("Evidence access is invalid or revoked");
     if (args === null || typeof args !== "object" || Array.isArray(args)) {
       throw new Error("Evidence arguments must be an object");
     }
@@ -619,7 +651,9 @@ export class EvidenceBrowserHost {
       }
       const { entry } = await this.requireEntry(token);
       if (method === "evidence_snapshot") {
-        const value = await snapshot(entry.tab, (options) => this.liveCheck(entry, options));
+        const value = await snapshot(entry.tab, (options) =>
+          this.liveCheck(entry, options),
+        );
         await this.authority.validate(token, { jobId: binding.jobId });
         return value;
       }
@@ -639,7 +673,9 @@ export class EvidenceBrowserHost {
         return value;
       }
       if (method === "evidence_screenshot") {
-        const value = await screenshot(entry.tab, (options) => this.liveCheck(entry, options));
+        const value = await screenshot(entry.tab, (options) =>
+          this.liveCheck(entry, options),
+        );
         await this.authority.validate(token, { jobId: binding.jobId });
         return value;
       }
@@ -697,7 +733,9 @@ export class EvidenceBrowserHost {
 
   async invalidateAll() {
     const entries = [...this.entries.values()];
-    await Promise.allSettled(entries.map((entry) => this.closeEntry(entry, true)));
+    await Promise.allSettled(
+      entries.map((entry) => this.closeEntry(entry, true)),
+    );
   }
 
   async close() {
