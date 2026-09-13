@@ -557,6 +557,7 @@ pub async fn confirm_team_snapshot_import(
 
         // Build the ManagedAgentRecord for this member.
         let record = ManagedAgentRecord {
+            superseded_by: None,
             // An agent created here is the workspace's own, never provisioned.
             provisioned: None,
             provisioned_version: None,

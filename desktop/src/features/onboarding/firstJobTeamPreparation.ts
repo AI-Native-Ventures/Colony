@@ -3,12 +3,15 @@ import {
   type AgentProposalSafeAction,
 } from "@/features/blocks/agentProposal";
 import { canonicalRelayUrl } from "@/features/agents/managedAgentRuntimeStatus";
+import {
+  isChiefOfStaffAgent,
+  pickChiefOfStaff,
+} from "@/features/agents/provisionedChief";
 import { relayClient } from "@/shared/api/relayClient";
 import { executeAgentProposal } from "@/shared/api/agentProposals";
 import { listManagedAgents, signRelayEvent } from "@/shared/api/tauri";
 import { listPersonas } from "@/shared/api/tauriPersonas";
 import type { ManagedAgent } from "@/shared/api/types";
-import { STARTER_PERSONA_IDS } from "@/shared/constants/starterPersonas";
 import { createFirstJobBrowserStore } from "./firstJobBrowserStore";
 import { assertFirstJobSuggestionRoot } from "./firstJobBusinessContext";
 import { assertFirstJobScope } from "./firstJobScope";
@@ -79,12 +82,16 @@ export async function previewFirstJobTeam(
   await assertFirstJobScope(scope);
   const scout = pair
     ? localAgent(agents, scope, pair.scoutPubkey)
-    : agents.find(
-        (agent) =>
-          agent.personaId === STARTER_PERSONA_IDS.fizz &&
-          agent.backend.type === "local" &&
-          canonicalRelayUrl(agent.relayUrl) ===
-            canonicalRelayUrl(scope.relayUrl),
+    : // The provisioned employee holds the office where it exists; the
+      // desktop-builtin instance is the fallback for a community that has
+      // none. `pickChiefOfStaff` owns that preference.
+      pickChiefOfStaff(
+        agents.filter(
+          (agent) =>
+            agent.backend.type === "local" &&
+            canonicalRelayUrl(agent.relayUrl) ===
+              canonicalRelayUrl(scope.relayUrl),
+        ),
       );
   if (!scout)
     throw new Error(
@@ -163,7 +170,7 @@ async function validateProposal(
   const scout = localAgent(agents, scope, proposal.scout.pubkey);
   if (
     !scout ||
-    scout.personaId !== STARTER_PERSONA_IDS.fizz ||
+    !isChiefOfStaffAgent(scout) ||
     scout.name !== proposal.scout.name
   )
     throw new Error(

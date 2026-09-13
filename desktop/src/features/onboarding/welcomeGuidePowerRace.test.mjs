@@ -43,6 +43,7 @@ const agent = (overrides = {}) => ({
 });
 mock.module("@/shared/api/tauri", {
   namedExports: {
+    adoptProvisionedEmployees: async () => [],
     listManagedAgents: async () => agents,
     discoverAcpRuntimes: async () => runtimes,
     getChannelMembers: async () => [],

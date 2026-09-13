@@ -450,6 +450,7 @@ fn make_persona(id: &str, display_name: &str) -> AgentDefinition {
 
 fn make_agent(name: &str, persona_id: Option<&str>) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        superseded_by: None,
         provisioned: None,
         provisioned_version: None,
         provisioned_requires_commands: Vec::new(),
