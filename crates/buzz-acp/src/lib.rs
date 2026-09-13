@@ -1648,6 +1648,13 @@ fn handle_switch_model_control(
         tracing::warn!("observer switch_model control frame missing modelId");
         return;
     };
+    // Opaque per-pick correlator, echoed on every result frame so the Desktop
+    // can ignore a replayed result for an earlier pick. Optional: absent on
+    // older Desktop clients, in which case the frames simply carry no id.
+    let request_id = payload
+        .get("requestId")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
 
     // A turn is in flight for this channel iff a task_map entry exists. The
     // agent is moved out of the pool during a turn, so the control oneshot is
@@ -1668,7 +1675,10 @@ fn handle_switch_model_control(
         if signal_in_flight_task(
             pool,
             channel_id,
-            ControlSignal::SwitchModel(model_id.to_string()),
+            ControlSignal::SwitchModel {
+                model_id: model_id.to_string(),
+                request_id: request_id.clone(),
+            },
         ) {
             "sent"
         } else {
@@ -1676,7 +1686,7 @@ fn handle_switch_model_control(
         }
     } else {
         // Idle path: validate against the cached catalog before invalidating.
-        match pool.switch_idle_agent_model(channel_id, model_id) {
+        match pool.switch_idle_agent_model(channel_id, model_id, request_id.clone()) {
             IdleSwitchResult::AmbiguousTarget => "ambiguous_target",
             IdleSwitchResult::Switched => "switched",
             IdleSwitchResult::UnsupportedModel => "unsupported_model",
@@ -1698,6 +1708,9 @@ fn handle_switch_model_control(
                 "type": "switch_model",
                 "status": status,
                 "modelId": model_id,
+                // Echo the correlator on the immediate ack so a `sent` /
+                // `turn_ending` / idle-path terminal frame matches the pick.
+                "requestId": request_id,
             }),
         );
     }
@@ -3159,6 +3172,9 @@ async fn tokio_main() -> Result<()> {
                         desired_model: config.model.clone(),
                         provider: config.provider.clone(),
                         model_overridden: false,
+                        desired_model_request_id: None,
+                        desired_model_pending_ack: false,
+                        startup_effort: config.effort_level.clone(),
                         agent_name,
                         goose_system_prompt_supported: None,
                         protocol_version,
@@ -6164,6 +6180,7 @@ struct PoolStartup {
     has_generated_codex_config: bool,
     model: Option<String>,
     provider: Option<String>,
+    effort_level: Option<String>,
     observer: Option<observer::ObserverHandle>,
 }
 
@@ -6177,6 +6194,7 @@ impl PoolStartup {
             has_generated_codex_config: config.has_generated_codex_config,
             model: config.model.clone(),
             provider: config.provider.clone(),
+            effort_level: config.effort_level.clone(),
             observer,
         }
     }
@@ -6265,6 +6283,9 @@ async fn initialize_agent_pool(
                             desired_model: startup.model.clone(),
                             provider: startup.provider.clone(),
                             model_overridden: false,
+                            desired_model_request_id: None,
+                            desired_model_pending_ack: false,
+                            startup_effort: startup.effort_level.clone(),
                             agent_name,
                             goose_system_prompt_supported: None,
                             protocol_version,
@@ -7011,7 +7032,7 @@ mod owner_control_command_tests {
         pool.record_scope_owner(b, 1);
         pool.task_map_mut().clear();
         assert_eq!(
-            pool.switch_idle_agent_model(ch, "new-model"),
+            pool.switch_idle_agent_model(ch, "new-model", None),
             IdleSwitchResult::AmbiguousTarget
         );
         assert!(!pool.channel_control_is_ambiguous(Uuid::new_v4()));
@@ -7021,7 +7042,10 @@ mod owner_control_command_tests {
     async fn observer_channel_controls_allow_one_scope_and_ignore_other_channels() {
         for signal in [
             ControlSignal::Cancel,
-            ControlSignal::SwitchModel("new-model".into()),
+            ControlSignal::SwitchModel {
+                model_id: "new-model".into(),
+                request_id: Some("pick-1".into()),
+            },
         ] {
             let mut pool = AgentPool::from_slots(vec![]);
             let ch = Uuid::new_v4();
@@ -10054,6 +10078,7 @@ mod build_mcp_servers_tests {
             thread_record_enabled: false,
             model: None,
             provider: None,
+            effort_level: None,
             session_title: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
@@ -10412,6 +10437,7 @@ mod error_outcome_emission_tests {
             thread_record_enabled: false,
             model: None,
             provider: None,
+            effort_level: None,
             session_title: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
@@ -10459,6 +10485,9 @@ mod error_outcome_emission_tests {
             desired_model: None,
             provider: None,
             model_overridden: false,
+            desired_model_request_id: None,
+            desired_model_pending_ack: false,
+            startup_effort: None,
             agent_name: "unknown".into(),
             goose_system_prompt_supported: None,
             // Error branches under test never read this; 1 is the legacy

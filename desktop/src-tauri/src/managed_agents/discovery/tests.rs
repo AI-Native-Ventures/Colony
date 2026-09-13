@@ -376,7 +376,7 @@ fn record_with(
 fn record_agent_command_own_runtime_wins_over_persona() {
     // A record with its own materialized runtime never consults the
     // persona list — the unified-model resolution.
-    let personas = vec![persona_with_runtime("p1", Some("omp"))];
+    let personas = [persona_with_runtime("p1", Some("omp"))];
     let record = record_with(Some("claude"), Some("p1"), None);
     assert_eq!(record_agent_command(&record, &personas), "claude-agent-acp");
 }

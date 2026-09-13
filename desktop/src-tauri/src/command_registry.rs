@@ -196,6 +196,7 @@ macro_rules! app_invoke_handler {
             get_agent_models,
             discover_agent_models,
             get_agent_config_surface,
+            persist_agent_effort_level,
             get_runtime_file_config,
             get_baked_build_env_keys,
             get_baked_build_env,

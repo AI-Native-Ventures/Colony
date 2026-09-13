@@ -402,6 +402,9 @@ pub(crate) async fn create_managed_agent_with_preparation(
             } else {
                 relay_mesh.clone()
             },
+            // A newly created agent has no canonical effort yet; it is set later
+            // through `persist_agent_effort_level` (local backends only).
+            effort_level: None,
         };
 
         // Mirrors COLONY_WORKTREE into `env_vars` so the tile chip and the
