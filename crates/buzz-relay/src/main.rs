@@ -288,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
             );
             None
         } else {
-            match db.ensure_configured_community(&host).await {
+            match db.ensure_configured_community_for_bootstrap(&host).await {
                 Ok(record) => {
                     info!(host = %record.host, community = %record.id, "Deployment community ensured");
                     Some(record.id)
@@ -703,7 +703,11 @@ async fn main() -> anyhow::Result<()> {
     // this repairs pre-snapshot communities and any publication that failed
     // after a membership transaction committed.
     if config.require_relay_membership {
-        match buzz_relay::handlers::side_effects::reconcile_nip43_membership_snapshots(&state).await
+        match buzz_relay::handlers::side_effects::reconcile_nip43_membership_snapshots_with_purpose(
+            &state,
+            buzz_relay::handlers::side_effects::Nip43ReconciliationPurpose::Bootstrap,
+        )
+        .await
         {
             Ok(count) => info!(count, "NIP-43 membership snapshots reconciled on startup"),
             Err(error) => {
@@ -722,8 +726,9 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                match buzz_relay::handlers::side_effects::reconcile_nip43_membership_snapshots(
+                match buzz_relay::handlers::side_effects::reconcile_nip43_membership_snapshots_with_purpose(
                     &reconcile_state,
+                    buzz_relay::handlers::side_effects::Nip43ReconciliationPurpose::Maintenance,
                 )
                 .await
                 {
@@ -1305,6 +1310,7 @@ async fn main() -> anyhow::Result<()> {
                 metrics::gauge!("buzz_db_pool_idle").set(db_stats.idle as f64);
                 metrics::gauge!("buzz_db_pool_active").set(active as f64);
                 metrics::gauge!("buzz_db_pool_max").set(db_stats.max as f64);
+                pool_state.db.refresh_pool_waiter_metrics();
 
                 if let Some(read_stats) = pool_state.db.read_pool_stats() {
                     let read_active = read_stats.size.saturating_sub(read_stats.idle);

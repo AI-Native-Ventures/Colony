@@ -62,9 +62,12 @@ where
     F: FnOnce(PgConnection) -> Fut,
     Fut: Future<Output = (PgConnection, Result<T>)>,
 {
-    let mut lock_conn = crate::observability::acquire(pool, crate::observability::PoolRole::Writer)
-        .await?
-        .detach();
+    let mut lock_conn = crate::observability::acquire_writer_with_legacy_metrics(
+        pool,
+        crate::observability::WriterOperation::Bootstrap,
+    )
+    .await?
+    .detach();
     crate::observability::observe_advisory_lock(
         crate::observability::LockType::MigrationSchemaSafety,
         sqlx::query("SELECT pg_advisory_lock($1)")

@@ -9,11 +9,13 @@
 use crate::error::DbError;
 use crate::Db;
 use buzz_core::StoredEvent;
+use buzz_datastore_tracing::datastore_span;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row as _};
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::observability;
 use crate::CommunityId;
 
 /// A single relay member record.
@@ -33,7 +35,8 @@ pub struct RelayMember {
 
 /// Returns `true` if `pubkey` (64-char hex) is a member of `community`.
 pub async fn is_relay_member(pool: &PgPool, community: CommunityId, pubkey: &str) -> Result<bool> {
-    let mut conn = pool.acquire().await?;
+    let mut conn =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
     is_relay_member_on(&mut conn, community, pubkey).await
 }
 
@@ -58,12 +61,14 @@ pub(crate) async fn is_relay_member_on(
 /// (`bootstrap_owner`) and operator provisioning still populate it — this is
 /// how the workspace-profile gate detects whether a steward exists.
 pub async fn has_admin_or_owner(pool: &PgPool, community: CommunityId) -> Result<bool> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
     let row = sqlx::query(
         "SELECT 1 FROM relay_members \
          WHERE community_id = $1 AND role IN ('admin', 'owner') LIMIT 1",
     )
     .bind(community.as_uuid())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?;
     Ok(row.is_some())
 }
@@ -74,13 +79,15 @@ pub async fn get_relay_member(
     community: CommunityId,
     pubkey: &str,
 ) -> Result<Option<RelayMember>> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
     let row = sqlx::query(
         "SELECT pubkey, role, added_by, created_at, updated_at \
          FROM relay_members WHERE community_id = $1 AND pubkey = $2",
     )
     .bind(community.as_uuid())
     .bind(pubkey)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?;
 
     row.map(|r| -> std::result::Result<RelayMember, sqlx::Error> {
@@ -109,6 +116,8 @@ pub async fn list_relay_owners(
     community: CommunityId,
     limit: i64,
 ) -> Result<Vec<String>> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Maintenance).await?;
     let owners = sqlx::query_scalar(
         "SELECT pubkey FROM relay_members \
          WHERE community_id = $1 AND role = 'owner' \
@@ -116,19 +125,33 @@ pub async fn list_relay_owners(
     )
     .bind(community.as_uuid())
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     Ok(owners)
 }
 
 /// Returns all relay members of `community` ordered by `created_at` ascending.
 pub async fn list_relay_members(pool: &PgPool, community: CommunityId) -> Result<Vec<RelayMember>> {
+    list_relay_members_with_operation(
+        pool,
+        community,
+        observability::WriterOperation::Authorization,
+    )
+    .await
+}
+
+async fn list_relay_members_with_operation(
+    pool: &PgPool,
+    community: CommunityId,
+    operation: observability::WriterOperation,
+) -> Result<Vec<RelayMember>> {
+    let mut connection = observability::acquire_writer(pool, operation).await?;
     let rows = sqlx::query(
         "SELECT pubkey, role, added_by, created_at, updated_at \
          FROM relay_members WHERE community_id = $1 ORDER BY created_at ASC",
     )
     .bind(community.as_uuid())
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
 
     rows.into_iter()
@@ -157,6 +180,8 @@ pub async fn add_relay_member(
     role: &str,
     added_by: Option<&str>,
 ) -> Result<bool> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
     let result = sqlx::query(
         "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
          VALUES ($1, $2, $3, $4) ON CONFLICT (community_id, pubkey) DO NOTHING",
@@ -165,7 +190,7 @@ pub async fn add_relay_member(
     .bind(pubkey)
     .bind(role)
     .bind(added_by)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     Ok(result.rows_affected() > 0)
 }
@@ -182,7 +207,9 @@ pub async fn claim_relay_membership(
     role: &str,
     policy_version: Option<&str>,
 ) -> Result<bool> {
-    let mut tx = pool.begin().await?;
+    let connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
+    let mut tx = sqlx::Transaction::begin(connection, None).await?;
     let inserted = sqlx::query(
         "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
          VALUES ($1, $2, $3, 'invite') \
@@ -219,6 +246,8 @@ pub async fn has_join_policy_acceptance(
     pubkey: &str,
     policy_version: &str,
 ) -> Result<bool> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
     let row = sqlx::query(
         "SELECT 1 FROM join_policy_acceptances \
          WHERE community_id = $1 AND pubkey = $2 AND policy_version = $3",
@@ -226,7 +255,7 @@ pub async fn has_join_policy_acceptance(
     .bind(community.as_uuid())
     .bind(pubkey)
     .bind(policy_version)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?;
     Ok(row.is_some())
 }
@@ -254,13 +283,15 @@ pub async fn remove_relay_member(
     community: CommunityId,
     pubkey: &str,
 ) -> Result<RemoveResult> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
     let result = sqlx::query(
         "DELETE FROM relay_members \
          WHERE community_id = $1 AND pubkey = $2 AND role <> 'owner'",
     )
     .bind(community.as_uuid())
     .bind(pubkey)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
 
     if result.rows_affected() > 0 {
@@ -272,7 +303,7 @@ pub async fn remove_relay_member(
     let exists = sqlx::query("SELECT 1 FROM relay_members WHERE community_id = $1 AND pubkey = $2")
         .bind(community.as_uuid())
         .bind(pubkey)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
     if exists.is_some() {
@@ -301,13 +332,15 @@ pub async fn remove_relay_member_if_role(
     pubkey: &str,
     expected_role: &str,
 ) -> Result<RemoveResult> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
     let result = sqlx::query(
         "DELETE FROM relay_members WHERE community_id = $1 AND pubkey = $2 AND role = $3",
     )
     .bind(community.as_uuid())
     .bind(pubkey)
     .bind(expected_role)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
 
     if result.rows_affected() > 0 {
@@ -319,7 +352,7 @@ pub async fn remove_relay_member_if_role(
     let row = sqlx::query("SELECT role FROM relay_members WHERE community_id = $1 AND pubkey = $2")
         .bind(community.as_uuid())
         .bind(pubkey)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
     match row {
@@ -346,6 +379,8 @@ pub async fn update_relay_member_role(
     pubkey: &str,
     new_role: &str,
 ) -> Result<bool> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
     let result = sqlx::query(
         "UPDATE relay_members SET role = $1, updated_at = now() \
          WHERE community_id = $2 AND pubkey = $3 AND role <> 'owner'",
@@ -353,7 +388,7 @@ pub async fn update_relay_member_role(
     .bind(new_role)
     .bind(community.as_uuid())
     .bind(pubkey)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     Ok(result.rows_affected() > 0)
 }
@@ -378,8 +413,24 @@ pub async fn bootstrap_owner(
     community: CommunityId,
     owner_pubkey: &str,
 ) -> Result<()> {
+    bootstrap_owner_with_operation(
+        pool,
+        community,
+        owner_pubkey,
+        observability::WriterOperation::Bootstrap,
+    )
+    .await
+}
+
+async fn bootstrap_owner_with_operation(
+    pool: &PgPool,
+    community: CommunityId,
+    owner_pubkey: &str,
+    operation: observability::WriterOperation,
+) -> Result<()> {
     let pubkey = owner_pubkey.to_ascii_lowercase();
-    let mut tx = pool.begin().await?;
+    let connection = observability::acquire_writer(pool, operation).await?;
+    let mut tx = sqlx::Transaction::begin(connection, None).await?;
 
     // 1. Upsert the configured owner for this community.
     sqlx::query(
@@ -498,7 +549,9 @@ pub async fn transfer_ownership(
 ) -> Result<TransferResult> {
     let pubkey = new_owner_pubkey.to_ascii_lowercase();
     let expected_owner = expected_owner_pubkey.to_ascii_lowercase();
-    let mut tx = pool.begin().await?;
+    let connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
+    let mut tx = sqlx::Transaction::begin(connection, None).await?;
 
     // 1. Serialize on the transferee so concurrent transfers to the same
     //    recipient cannot both pass the ownership count check.
@@ -599,12 +652,14 @@ pub async fn transfer_ownership(
 /// The empty-table guard prevents re-adding members that were intentionally
 /// removed by an admin after the initial backfill.
 pub async fn backfill_from_allowlist(pool: &PgPool, community: CommunityId) -> Result<u64> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Bootstrap).await?;
     // Check if pubkey_allowlist table exists.
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
          WHERE table_schema = 'public' AND table_name = 'pubkey_allowlist')",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await?;
 
     if !exists {
@@ -617,7 +672,7 @@ pub async fn backfill_from_allowlist(pool: &PgPool, community: CommunityId) -> R
     let has_members: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM relay_members WHERE community_id = $1)")
             .bind(community.as_uuid())
-            .fetch_one(pool)
+            .fetch_one(&mut *connection)
             .await?;
 
     if has_members {
@@ -632,7 +687,7 @@ pub async fn backfill_from_allowlist(pool: &PgPool, community: CommunityId) -> R
          ON CONFLICT (community_id, pubkey) DO NOTHING",
     )
     .bind(community.as_uuid())
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
 
     Ok(result.rows_affected())
@@ -760,6 +815,17 @@ impl Db {
         crate::relay_members::bootstrap_owner(&self.pool, community, owner_pubkey).await
     }
 
+    /// Ensure an owner during operator-driven community provisioning.
+    pub async fn provision_owner(&self, community: CommunityId, owner_pubkey: &str) -> Result<()> {
+        bootstrap_owner_with_operation(
+            &self.pool,
+            community,
+            owner_pubkey,
+            observability::WriterOperation::Authorization,
+        )
+        .await
+    }
+
     /// Atomically transfers ownership of `community` to `new_owner_pubkey`,
     /// demoting the previous owner(s) to `member`. Verifies
     /// `expected_owner_pubkey` matches the current owner inside the same
@@ -793,23 +859,80 @@ impl Db {
     /// Snapshot and canonical rows are compared directly rather than by
     /// timestamp: relay membership events use whole-second Nostr timestamps,
     /// and multiple mutations within one second must still be repaired.
+    #[deprecated(
+        note = "use nip43_membership_snapshot_needs_reconciliation_for_bootstrap or nip43_membership_snapshot_needs_reconciliation_for_maintenance"
+    )]
     pub async fn nip43_membership_snapshot_needs_reconciliation(
         &self,
         community_id: CommunityId,
         relay_pubkey: &nostr::PublicKey,
     ) -> Result<bool> {
-        let snapshot = self
-            .query_events(&crate::event::EventQuery {
+        self.nip43_membership_snapshot_needs_reconciliation_with_operation(
+            community_id,
+            relay_pubkey,
+            observability::WriterOperation::Maintenance,
+        )
+        .await
+    }
+
+    /// Startup-attributed variant of the NIP-43 snapshot comparison.
+    #[datastore_span(
+        name = "nip43_membership_snapshot_needs_reconciliation_for_bootstrap",
+        system = "postgresql"
+    )]
+    pub async fn nip43_membership_snapshot_needs_reconciliation_for_bootstrap(
+        &self,
+        community_id: CommunityId,
+        relay_pubkey: &nostr::PublicKey,
+    ) -> Result<bool> {
+        self.nip43_membership_snapshot_needs_reconciliation_with_operation(
+            community_id,
+            relay_pubkey,
+            observability::WriterOperation::Bootstrap,
+        )
+        .await
+    }
+
+    /// Periodic maintenance variant of the NIP-43 snapshot comparison.
+    #[datastore_span(
+        name = "nip43_membership_snapshot_needs_reconciliation_for_maintenance",
+        system = "postgresql"
+    )]
+    pub async fn nip43_membership_snapshot_needs_reconciliation_for_maintenance(
+        &self,
+        community_id: CommunityId,
+        relay_pubkey: &nostr::PublicKey,
+    ) -> Result<bool> {
+        self.nip43_membership_snapshot_needs_reconciliation_with_operation(
+            community_id,
+            relay_pubkey,
+            observability::WriterOperation::Maintenance,
+        )
+        .await
+    }
+
+    async fn nip43_membership_snapshot_needs_reconciliation_with_operation(
+        &self,
+        community_id: CommunityId,
+        relay_pubkey: &nostr::PublicKey,
+        operation: observability::WriterOperation,
+    ) -> Result<bool> {
+        let snapshot = crate::event::query_events_with_operation(
+            &self.pool,
+            &crate::event::EventQuery {
                 kinds: Some(vec![buzz_core::kind::KIND_NIP43_MEMBERSHIP_LIST as i32]),
                 pubkey: Some(relay_pubkey.to_bytes().to_vec()),
                 global_only: true,
                 limit: Some(1),
                 ..crate::event::EventQuery::for_community(community_id)
-            })
-            .await?
-            .into_iter()
-            .next();
-        let members = self.list_relay_members(community_id).await?;
+            },
+            operation,
+        )
+        .await?
+        .into_iter()
+        .next();
+        let members =
+            list_relay_members_with_operation(&self.pool, community_id, operation).await?;
 
         let Some(snapshot) = snapshot else {
             return Ok(true);

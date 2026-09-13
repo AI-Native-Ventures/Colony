@@ -137,7 +137,11 @@ pub async fn query_mentions(
     since: Option<DateTime<Utc>>,
     limit: i64,
 ) -> Result<Vec<StoredEvent>> {
-    let mut conn = pool.acquire().await?;
+    let mut conn = crate::observability::acquire_writer(
+        pool,
+        crate::observability::WriterOperation::SubscriptionHistory,
+    )
+    .await?;
     query_mentions_on(
         &mut conn,
         community,
@@ -246,7 +250,11 @@ pub async fn query_needs_action(
     since: Option<DateTime<Utc>>,
     limit: i64,
 ) -> Result<Vec<StoredEvent>> {
-    let mut conn = pool.acquire().await?;
+    let mut conn = crate::observability::acquire_writer(
+        pool,
+        crate::observability::WriterOperation::SubscriptionHistory,
+    )
+    .await?;
     query_needs_action_on(
         &mut conn,
         community,
@@ -315,7 +323,11 @@ pub async fn query_activity(
     since: Option<DateTime<Utc>>,
     limit: i64,
 ) -> Result<Vec<StoredEvent>> {
-    let mut conn = pool.acquire().await?;
+    let mut conn = crate::observability::acquire_writer(
+        pool,
+        crate::observability::WriterOperation::SubscriptionHistory,
+    )
+    .await?;
     query_activity_on(&mut conn, community, accessible_channel_ids, since, limit).await
 }
 
@@ -371,7 +383,14 @@ impl Db {
         since: Option<DateTime<Utc>>,
         limit: i64,
     ) -> Result<Vec<StoredEvent>> {
-        match self.route_read(path, RoutePredicate::Bounded).await {
+        match self
+            .route_read(
+                path,
+                RoutePredicate::Bounded,
+                crate::observability::ReaderOperation::SubscriptionHistory,
+            )
+            .await
+        {
             RouteDecision::Replica(mut tx, _entry, reason) => match crate::feed::query_mentions_on(
                 &mut tx,
                 community,
@@ -451,7 +470,14 @@ impl Db {
         since: Option<DateTime<Utc>>,
         limit: i64,
     ) -> Result<Vec<StoredEvent>> {
-        match self.route_read(path, RoutePredicate::Bounded).await {
+        match self
+            .route_read(
+                path,
+                RoutePredicate::Bounded,
+                crate::observability::ReaderOperation::SubscriptionHistory,
+            )
+            .await
+        {
             RouteDecision::Replica(mut tx, _entry, reason) => {
                 match crate::feed::query_needs_action_on(
                     &mut tx,
@@ -519,7 +545,14 @@ impl Db {
         since: Option<DateTime<Utc>>,
         limit: i64,
     ) -> Result<Vec<StoredEvent>> {
-        match self.route_read(path, RoutePredicate::Bounded).await {
+        match self
+            .route_read(
+                path,
+                RoutePredicate::Bounded,
+                crate::observability::ReaderOperation::SubscriptionHistory,
+            )
+            .await
+        {
             RouteDecision::Replica(mut tx, _entry, reason) => match crate::feed::query_activity_on(
                 &mut tx,
                 community,

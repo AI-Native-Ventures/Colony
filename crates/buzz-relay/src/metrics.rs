@@ -32,6 +32,12 @@ const LATENCY_BUCKETS_MS: [f64; 11] = [
 /// Seconds-scale buckets for internal processing histograms (event, search, audit).
 const DURATION_BUCKETS_S: [f64; 10] = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0];
 
+/// Pool checkout buckets: dense around normal sub-100ms waits, with explicit
+/// coverage of the reader's 150ms and writer's default three-second budgets.
+const DB_POOL_ACQUIRE_DURATION_BUCKETS_S: [f64; 9] =
+    [0.001, 0.005, 0.01, 0.025, 0.05, 0.15, 0.5, 1.0, 3.0];
+const DB_POOL_ACQUIRE_DURATION_UNIT: metrics::Unit = metrics::Unit::Seconds;
+
 /// Seconds-scale buckets for Git hydration and pack streams.
 const GIT_DURATION_BUCKETS_S: [f64; 13] = [
     0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
@@ -103,6 +109,11 @@ pub fn install(port: u16, gauge_idle_timeout_secs: u64) {
         )
         .expect("valid git compaction duration bucket boundaries")
         .set_buckets_for_metric(
+            Matcher::Full("buzz_db_pool_acquire_duration_seconds".to_owned()),
+            &DB_POOL_ACQUIRE_DURATION_BUCKETS_S,
+        )
+        .expect("valid DB pool acquisition duration bucket boundaries")
+        .set_buckets_for_metric(
             Matcher::Full("buzz_git_hydrate_bytes".to_owned()),
             &GIT_BYTES_BUCKETS,
         )
@@ -143,7 +154,25 @@ pub fn install(port: u16, gauge_idle_timeout_secs: u64) {
         .expect("metrics exporter must build exactly once");
 
     metrics::set_global_recorder(recorder).expect("global recorder must be set exactly once");
+    describe_db_pool_metrics();
     tokio::spawn(exporter);
+}
+
+/// Register the frozen operation-aware pool-acquisition contract.
+pub(crate) fn describe_db_pool_metrics() {
+    metrics::describe_histogram!(
+        "buzz_db_pool_acquire_duration_seconds",
+        DB_POOL_ACQUIRE_DURATION_UNIT,
+        "Database pool checkout duration by valid pool role and operation"
+    );
+    metrics::describe_counter!(
+        "buzz_db_pool_acquire_attempts_total",
+        "Database pool checkout terminals by valid pool role, operation, and outcome"
+    );
+    metrics::describe_gauge!(
+        "buzz_db_pool_waiters",
+        "Current tracked-operation database pool checkout attempts in progress by valid pool role and operation"
+    );
 }
 
 /// Axum middleware that records CAKE framework HTTP metrics.

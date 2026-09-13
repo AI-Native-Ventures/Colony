@@ -725,7 +725,10 @@ pub(crate) async fn derive_reaction_channel(
         _ => return ReactionChannelResult::NoTarget,
     };
 
-    match db.get_event_by_id(community_id, &id_bytes).await {
+    match db
+        .get_event_by_id_for_event_write(community_id, &id_bytes)
+        .await
+    {
         Ok(Some(target)) => match target.channel_id {
             Some(ch_id) => ReactionChannelResult::Channel(ch_id),
             None => ReactionChannelResult::NoChannel,
@@ -950,7 +953,7 @@ pub(crate) async fn check_channel_membership(
         Some(ch) => ch.visibility == "open",
         None => state
             .db
-            .get_channel(tenant.community(), ch_id)
+            .get_channel_for_event_write(tenant.community(), ch_id)
             .await
             .map(|ch| ch.visibility == "open")
             .unwrap_or(false),
@@ -1039,7 +1042,9 @@ pub(crate) async fn resolve_nip10_thread_meta(
         hex::decode(&parent_hex).map_err(|_| "invalid parent event ID hex".to_string())?;
 
     let (parent_event_result, parent_meta_result) = tokio::join!(
-        state.db.get_event_by_id(community_id, &parent_bytes),
+        state
+            .db
+            .get_event_by_id_for_event_write(community_id, &parent_bytes),
         state
             .db
             .get_thread_metadata_by_event(community_id, &parent_bytes),
@@ -1075,7 +1080,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
             }
             let root_ts = if let Ok(Some(root_ev)) = state
                 .db
-                .get_event_by_id(community_id, &effective_root)
+                .get_event_by_id_for_event_write(community_id, &effective_root)
                 .await
             {
                 chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
@@ -1119,8 +1124,10 @@ pub(crate) async fn resolve_nip10_thread_meta(
             }
             let depth = if parent_root == parent_bytes { 1 } else { 2 };
             let root_created = if parent_root != parent_bytes {
-                if let Ok(Some(root_ev)) =
-                    state.db.get_event_by_id(community_id, &parent_root).await
+                if let Ok(Some(root_ev)) = state
+                    .db
+                    .get_event_by_id_for_event_write(community_id, &parent_root)
+                    .await
                 {
                     chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
                         .unwrap_or(parent_created)
@@ -1227,7 +1234,7 @@ async fn validate_edit_ownership(
         hex::decode(&target_hex).map_err(|_| "invalid target event ID".to_string())?;
     let target_event = state
         .db
-        .get_event_by_id(community_id, &target_bytes)
+        .get_event_by_id_for_event_write(community_id, &target_bytes)
         .await
         .map_err(|e| format!("db error: {e}"))?
         .ok_or_else(|| "edit target event not found".to_string())?;
@@ -1257,7 +1264,7 @@ async fn validate_edit_ownership(
             if !is_member {
                 let is_open = state
                     .db
-                    .get_channel(community_id, ch_id)
+                    .get_channel_for_event_write(community_id, ch_id)
                     .await
                     .map(|ch| ch.visibility == "open")
                     .unwrap_or(false);
@@ -1308,7 +1315,7 @@ async fn validate_forum_vote_target(
         hex::decode(&target_hex).map_err(|_| "invalid target event ID".to_string())?;
     let target_event = state
         .db
-        .get_event_by_id(community_id, &target_bytes)
+        .get_event_by_id_for_event_write(community_id, &target_bytes)
         .await
         .map_err(|e| format!("db error: {e}"))?
         .ok_or_else(|| "vote target event not found".to_string())?;
@@ -2169,7 +2176,7 @@ async fn validate_canvas_event(
 
             let root_event = state
                 .db
-                .get_event_by_id(tenant.community(), &root_bytes)
+                .get_event_by_id_for_event_write(tenant.community(), &root_bytes)
                 .await
                 .map_err(|e| format!("db error looking up canvas thread root: {e}"))?
                 .ok_or_else(|| "invalid: canvas e tag points at an unknown event".to_string())?;
@@ -2903,7 +2910,7 @@ async fn ingest_event_inner(
                 })?;
                 match state
                     .db
-                    .get_event_by_id(tenant.community(), &target_bytes)
+                    .get_event_by_id_for_event_write(tenant.community(), &target_bytes)
                     .await
                 {
                     Ok(Some(target)) => target.channel_id,
@@ -2951,7 +2958,11 @@ async fn ingest_event_inner(
     // it later in this request); each gate keeps its existing missing-row
     // behavior.
     let channel_row = match channel_id {
-        Some(ch_id) => state.db.get_channel(tenant.community(), ch_id).await.ok(),
+        Some(ch_id) => state
+            .db
+            .get_channel_for_event_write(tenant.community(), ch_id)
+            .await
+            .ok(),
         None => None,
     };
     // E1 phase-2 (§4.8 phase-2 addendum): resolve the fan-out visibility once,

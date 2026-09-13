@@ -89,7 +89,7 @@ async fn apply_tab_action_inner(
 
     let mut tx = state
         .db
-        .begin_transaction()
+        .begin_event_write_transaction()
         .await
         .map_err(|error| format!("workspace tab transaction failed: {error}"))?;
 

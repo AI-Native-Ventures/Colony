@@ -805,7 +805,7 @@ mod tests {
         );
 
         let mut tx = db
-            .begin_transaction()
+            .begin_event_write_transaction()
             .await
             .expect("begin caller transaction");
         let result = db
@@ -875,7 +875,10 @@ mod tests {
                 .1
         );
 
-        let mut tx = db.begin_transaction().await.expect("begin replacement tx");
+        let mut tx = db
+            .begin_event_write_transaction()
+            .await
+            .expect("begin replacement tx");
         let outcome = db
             .replace_parameterized_event_in_transaction(
                 &mut tx,
@@ -909,7 +912,7 @@ mod tests {
         assert_eq!(live_id, old.id.as_bytes().to_vec());
 
         let mut tx = db
-            .begin_transaction()
+            .begin_event_write_transaction()
             .await
             .expect("begin stale revision tx");
         let mismatch = db
@@ -943,7 +946,7 @@ mod tests {
         .sign_with_keys(&keys)
         .expect("sign missing project");
         let mut tx = db
-            .begin_transaction()
+            .begin_event_write_transaction()
             .await
             .expect("begin missing revision tx");
         let missing_result = db
@@ -1021,7 +1024,7 @@ mod tests {
         .expect("install failure injection");
 
         let mut tx = db
-            .begin_transaction()
+            .begin_event_write_transaction()
             .await
             .expect("begin caller transaction");
         let error = db
@@ -1102,7 +1105,7 @@ mod tests {
             .expect("soft-delete duplicate row");
 
         let mut seed_tx = db
-            .begin_transaction()
+            .begin_event_write_transaction()
             .await
             .expect("begin seed transaction");
         let (_, was_inserted) =
@@ -1113,7 +1116,7 @@ mod tests {
         seed_tx.commit().await.expect("commit older live head");
 
         let mut tx = db
-            .begin_transaction()
+            .begin_event_write_transaction()
             .await
             .expect("begin caller transaction");
         let result = db

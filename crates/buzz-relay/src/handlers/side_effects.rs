@@ -146,7 +146,10 @@ async fn evict_non_member_channel_subscriptions(
     state: &Arc<AppState>,
     channel_id: Uuid,
 ) -> anyhow::Result<()> {
-    let members = state.db.get_members(tenant.community(), channel_id).await?;
+    let members = state
+        .db
+        .get_members_for_event_write(tenant.community(), channel_id)
+        .await?;
     let member_pubkeys: std::collections::HashSet<Vec<u8>> =
         members.into_iter().map(|m| m.pubkey).collect();
 
@@ -294,7 +297,7 @@ pub async fn validate_standard_deletion_event(
     for target_id in target_ids {
         let target_event = state
             .db
-            .get_event_by_id_including_deleted(tenant.community(), &target_id)
+            .get_event_by_id_including_deleted_for_event_write(tenant.community(), &target_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("target event not found"))?;
 
@@ -359,7 +362,7 @@ pub async fn validate_admin_event(
     // (unarchive), which must be allowed through so the channel can be restored.
     let channel = state
         .db
-        .get_channel(tenant.community(), channel_id)
+        .get_channel_for_event_write(tenant.community(), channel_id)
         .await
         .map_err(|_| anyhow::anyhow!("channel not found"))?;
     let is_unarchive_request = kind == 9002
@@ -618,7 +621,7 @@ pub async fn validate_admin_event(
             // BEFORE storage. Fail closed: missing target → reject.
             let target_event = state
                 .db
-                .get_event_by_id(tenant.community(), &target_id)
+                .get_event_by_id_for_event_write(tenant.community(), &target_id)
                 .await
                 .map_err(|e| anyhow::anyhow!("db error looking up target: {e}"))?
                 .ok_or_else(|| anyhow::anyhow!("target event not found"))?;
@@ -650,7 +653,7 @@ pub async fn validate_admin_event(
                 }
                 let is_open = state
                     .db
-                    .get_channel(tenant.community(), channel_id)
+                    .get_channel_for_event_write(tenant.community(), channel_id)
                     .await
                     .map(|ch| ch.visibility == "open")
                     .unwrap_or(false);
@@ -957,7 +960,7 @@ async fn emit_addressable_discovery_event(
     let min_ts = {
         let existing = state
             .db
-            .query_events(&buzz_db::event::EventQuery {
+            .query_events_for_event_write(&buzz_db::event::EventQuery {
                 kinds: Some(vec![kind as i32]),
                 channel_id: Some(channel_id),
                 limit: Some(1),
@@ -1002,8 +1005,14 @@ pub async fn emit_group_discovery_events(
     state: &Arc<AppState>,
     channel_id: Uuid,
 ) -> anyhow::Result<()> {
-    let channel = state.db.get_channel(tenant.community(), channel_id).await?;
-    let members = state.db.get_members(tenant.community(), channel_id).await?;
+    let channel = state
+        .db
+        .get_channel_for_event_write(tenant.community(), channel_id)
+        .await?;
+    let members = state
+        .db
+        .get_members_for_event_write(tenant.community(), channel_id)
+        .await?;
 
     let relay_pubkey_hex = hex::encode(state.relay_keypair.public_key().to_bytes());
     let group_id = channel_id.to_string();
@@ -1255,7 +1264,7 @@ async fn handle_put_user(
             .map_err(|_| anyhow::anyhow!("invalid role: {role_str}"))?,
         None => state
             .db
-            .get_members(tenant.community(), channel_id)
+            .get_members_for_event_write(tenant.community(), channel_id)
             .await?
             .iter()
             .find(|m| m.pubkey == target_pubkey)
@@ -1324,7 +1333,10 @@ async fn handle_remove_user(
 
     // Guard: prevent last-owner orphaning on self-removal (kind 9001).
     if target_pubkey == actor_bytes {
-        let members = state.db.get_members(tenant.community(), channel_id).await?;
+        let members = state
+            .db
+            .get_members_for_event_write(tenant.community(), channel_id)
+            .await?;
         if channel_authz::is_sole_owner(&members, &actor_bytes) {
             return Err(ChannelAuthzError::LastOwnerRemovalTransferFirst.into());
         }
@@ -1450,7 +1462,7 @@ async fn handle_edit_metadata(
                 "visibility" => {
                     let was_open = state
                         .db
-                        .get_channel(tenant.community(), channel_id)
+                        .get_channel_for_event_write(tenant.community(), channel_id)
                         .await
                         .map(|c| c.visibility == "open")
                         .unwrap_or(false);
@@ -1566,8 +1578,10 @@ async fn handle_edit_metadata(
                             // same channel by the same actor could collide ids and skip a fan-out.
                             // Not reachable in practice — unarchive has a single human-driven caller;
                             // the reaper only auto-archives — so we don't engineer around it.
-                            for member in
-                                state.db.get_members(tenant.community(), channel_id).await?
+                            for member in state
+                                .db
+                                .get_members_for_event_write(tenant.community(), channel_id)
+                                .await?
                             {
                                 if let Err(e) = emit_membership_notification(
                                     tenant,
@@ -1635,7 +1649,7 @@ async fn handle_delete_event_side_effect(
     // by sending h=A, e=<event-in-B>.
     if let Some(target_event) = state
         .db
-        .get_event_by_id_including_deleted(tenant.community(), &target_id)
+        .get_event_by_id_including_deleted_for_event_write(tenant.community(), &target_id)
         .await
         .map_err(|e| anyhow::anyhow!("get_event_by_id failed: {e}"))?
     {
@@ -1737,7 +1751,11 @@ async fn handle_create_group(
     // no-h-tag path, ingest never creates the channel, so this is the sole
     // increment.
     let channel = if let Some(client_uuid) = extract_h_tag_channel(event) {
-        match state.db.get_channel(tenant.community(), client_uuid).await {
+        match state
+            .db
+            .get_channel_for_event_write(tenant.community(), client_uuid)
+            .await
+        {
             Ok(ch) => ch,
             Err(_) => {
                 // Channel not found — shouldn't happen (ingest_event pre-created it),
@@ -1889,7 +1907,7 @@ async fn handle_join_request(
     // Only open channels allow self-join via kind:9021.
     let channel = state
         .db
-        .get_channel(tenant.community(), channel_id)
+        .get_channel_for_event_write(tenant.community(), channel_id)
         .await
         .map_err(|_| anyhow::anyhow!("channel not found"))?;
     if channel.visibility != "open" {
@@ -1966,7 +1984,10 @@ async fn handle_leave_request(
     let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Guard: prevent last-owner orphaning on leave.
-    let members = state.db.get_members(tenant.community(), channel_id).await?;
+    let members = state
+        .db
+        .get_members_for_event_write(tenant.community(), channel_id)
+        .await?;
     if channel_authz::is_sole_owner(&members, &actor_bytes) {
         return Err(ChannelAuthzError::LastOwnerRemovalTransferFirst.into());
     }
@@ -2170,7 +2191,7 @@ async fn handle_standard_deletion_event(
     for target_id in target_ids {
         let target_event = match state
             .db
-            .get_event_by_id_including_deleted(tenant.community(), &target_id)
+            .get_event_by_id_including_deleted_for_event_write(tenant.community(), &target_id)
             .await?
         {
             Some(target) => target,
@@ -2248,7 +2269,7 @@ async fn handle_standard_deletion_event(
                     if let Ok(react_target_id) = hex::decode(&react_target_hex) {
                         if let Ok(Some(react_target_event)) = state
                             .db
-                            .get_event_by_id(tenant.community(), &react_target_id)
+                            .get_event_by_id_for_event_write(tenant.community(), &react_target_id)
                             .await
                         {
                             let react_target_ts = chrono::DateTime::from_timestamp(
@@ -2821,22 +2842,61 @@ async fn emit_initial_ref_state(
 /// safe to run at startup and periodically without producing an event stream
 /// when nothing changed. A failure in one community is logged and counted but
 /// does not prevent the remaining communities from being repaired.
+/// Attribution for a NIP-43 membership reconciliation sweep.
+#[derive(Clone, Copy)]
+pub enum Nip43ReconciliationPurpose {
+    /// Before listener admission opens.
+    Bootstrap,
+    /// Periodic background repair after startup.
+    Maintenance,
+}
+
+/// Preserve the original maintenance reconciliation API for downstream callers.
+#[deprecated(note = "use reconcile_nip43_membership_snapshots_with_purpose")]
 pub async fn reconcile_nip43_membership_snapshots(state: &Arc<AppState>) -> anyhow::Result<usize> {
-    let communities = state.db.usage_community_hosts().await?;
+    reconcile_nip43_membership_snapshots_with_purpose(
+        state,
+        Nip43ReconciliationPurpose::Maintenance,
+    )
+    .await
+}
+
+/// Reconcile NIP-43 snapshots with explicit startup or maintenance attribution.
+pub async fn reconcile_nip43_membership_snapshots_with_purpose(
+    state: &Arc<AppState>,
+    purpose: Nip43ReconciliationPurpose,
+) -> anyhow::Result<usize> {
+    let communities = match purpose {
+        Nip43ReconciliationPurpose::Bootstrap => state.db.bootstrap_community_hosts().await?,
+        Nip43ReconciliationPurpose::Maintenance => state.db.usage_community_hosts().await?,
+    };
     let mut reconciled = 0usize;
 
     for community in communities {
         let community_id = buzz_core::CommunityId::from_uuid(community.id);
         let host = community.host;
         let result = async {
-            if !state
-                .db
-                .nip43_membership_snapshot_needs_reconciliation(
-                    community_id,
-                    &state.relay_keypair.public_key(),
-                )
-                .await?
-            {
+            let needs_reconciliation = match purpose {
+                Nip43ReconciliationPurpose::Bootstrap => {
+                    state
+                        .db
+                        .nip43_membership_snapshot_needs_reconciliation_for_bootstrap(
+                            community_id,
+                            &state.relay_keypair.public_key(),
+                        )
+                        .await?
+                }
+                Nip43ReconciliationPurpose::Maintenance => {
+                    state
+                        .db
+                        .nip43_membership_snapshot_needs_reconciliation_for_maintenance(
+                            community_id,
+                            &state.relay_keypair.public_key(),
+                        )
+                        .await?
+                }
+            };
+            if !needs_reconciliation {
                 return Ok::<bool, anyhow::Error>(false);
             }
 
@@ -2999,7 +3059,10 @@ pub async fn reconcile_channel_events(
 ) -> anyhow::Result<()> {
     use buzz_db::event::EventQuery;
 
-    let channels = state.db.list_channels(tenant.community(), None).await?;
+    let channels = state
+        .db
+        .list_channels_for_bootstrap(tenant.community(), None)
+        .await?;
     if channels.is_empty() {
         return Ok(());
     }
@@ -3010,7 +3073,7 @@ pub async fn reconcile_channel_events(
         let channel_id_str = channel.id.to_string();
         let existing = match state
             .db
-            .query_events(&EventQuery {
+            .query_events_for_bootstrap(&EventQuery {
                 kinds: Some(vec![39000]),
                 d_tag: Some(channel_id_str.clone()),
                 limit: Some(1),
@@ -3141,7 +3204,7 @@ pub async fn publish_dm_visibility_snapshot(
     let ts = {
         let existing = state
             .db
-            .query_events(&buzz_db::event::EventQuery {
+            .query_events_for_event_write(&buzz_db::event::EventQuery {
                 kinds: Some(vec![KIND_DM_VISIBILITY as i32]),
                 pubkey: Some(state.relay_keypair.public_key().to_bytes().to_vec()),
                 d_tag: Some(viewer_hex.clone()),
