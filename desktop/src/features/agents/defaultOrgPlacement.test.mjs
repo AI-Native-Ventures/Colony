@@ -32,6 +32,46 @@ test("no chief of staff deployed yet resolves to nobody", () => {
   assert.equal(chiefOfStaffPubkey(agents, [personas[1]]), null);
 });
 
+const PROVISIONED = "c".repeat(64);
+const provisionedChief = {
+  pubkey: PROVISIONED,
+  personaId: null,
+  provisioned: "chief-of-staff",
+  name: "Chief of Staff",
+};
+
+test("the employee Colony provisions holds the office over the built-in one", () => {
+  assert.equal(
+    chiefOfStaffPubkey([...agents, provisionedChief], personas),
+    PROVISIONED,
+  );
+});
+
+test("the provisioned chief is found even with no chief persona at all", () => {
+  // It carries no persona, so the persona-role match cannot see it. Before
+  // this preference existed, a community whose only chief was the provisioned
+  // one reported nobody in the office.
+  assert.equal(
+    chiefOfStaffPubkey([provisionedChief], [personas[1]]),
+    PROVISIONED,
+  );
+});
+
+test("the built-in chief still answers where no provisioned record exists", () => {
+  assert.equal(chiefOfStaffPubkey(agents, personas), SCOUT);
+});
+
+test("a new agent reports to the provisioned chief when there is one", () => {
+  assert.deepEqual(
+    resolveDefaultOrgPlacement({
+      roleId: "engineer",
+      agents: [...agents, provisionedChief],
+      personas,
+    }),
+    { tier: "leader", manager: PROVISIONED },
+  );
+});
+
 test("a new agent defaults to team lead reporting to the chief of staff", () => {
   assert.deepEqual(
     resolveDefaultOrgPlacement({ roleId: "engineer", agents, personas }),
