@@ -4,6 +4,7 @@
 //! retries, tombstoning, and logical verification. CLI claim-loop policy and
 //! external storage adapters live above it; they never implement state changes.
 
+use crate::Db;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -3027,6 +3028,23 @@ fn bound_text(input: &str, max: usize) -> String {
         end -= 1;
     }
     input[..end].to_owned()
+}
+
+impl Db {
+    /// Validate the minimum deletion fence catalog required by serving paths.
+    pub async fn validate_deletion_serving_catalog(&self) -> Result<()> {
+        self.deletion_store().validate_serving_catalog().await
+    }
+
+    /// Validate the exact live community-deletion tenant catalog for destruction.
+    pub async fn validate_deletion_catalog(&self) -> Result<()> {
+        self.deletion_store().validate_catalog().await
+    }
+
+    /// Return the shared durable whole-community deletion adapter.
+    pub fn deletion_store(&self) -> crate::deletion::DeletionStore {
+        crate::deletion::DeletionStore::new(self.pool.clone())
+    }
 }
 
 #[cfg(test)]

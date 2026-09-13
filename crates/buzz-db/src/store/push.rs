@@ -3,6 +3,7 @@
 //! Every operation requires a server-resolved [`CommunityId`]. Client-provided
 //! origins never select rows in this module.
 
+use crate::Db;
 use buzz_core::CommunityId;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -1261,10 +1262,166 @@ fn row_to_claimed_wake(row: sqlx::postgres::PgRow) -> Result<ClaimedWake> {
     })
 }
 
+impl Db {
+    /// Exclusively claim a batch of due matcher jobs from one community.
+    pub async fn claim_due_push_match_batch(
+        &self,
+        limit: i64,
+        lease_until: DateTime<Utc>,
+    ) -> Result<Option<crate::push::ClaimedMatchBatch>> {
+        crate::push::claim_due_match_batch(&self.pool, limit, lease_until).await
+    }
+
+    /// Load active endpoint-enabled leases eligible for push matching.
+    pub async fn active_push_match_leases(
+        &self,
+        community: CommunityId,
+    ) -> Result<Vec<crate::push::MatchLease>> {
+        crate::push::active_match_leases(&self.pool, community).await
+    }
+
+    /// Complete matcher jobs from one claimed batch while the fence holds.
+    pub async fn complete_push_match_batch(
+        &self,
+        community: CommunityId,
+        claim_id: uuid::Uuid,
+        event_ids: &[Vec<u8>],
+    ) -> Result<u64> {
+        crate::push::complete_match_batch(&self.pool, community, claim_id, event_ids).await
+    }
+
+    /// Release fenced matcher claims from one batch for retry.
+    pub async fn retry_push_match_batch(
+        &self,
+        community: CommunityId,
+        claim_id: uuid::Uuid,
+        event_ids: &[Vec<u8>],
+        next: DateTime<Utc>,
+    ) -> Result<u64> {
+        crate::push::retry_match_batch(&self.pool, community, claim_id, event_ids, next).await
+    }
+
+    /// Delete exhausted matcher jobs (periodic sweep, off the claim path).
+    pub async fn reap_exhausted_push_matches(&self) -> Result<u64> {
+        crate::push::reap_exhausted_matches(&self.pool).await
+    }
+
+    /// Idempotently enqueue a wake for a matched lease and event.
+    pub async fn enqueue_push_wake(
+        &self,
+        community: CommunityId,
+        author: &[u8],
+        installation_id: &str,
+        wake: crate::push::NewWake<'_>,
+    ) -> Result<crate::push::EnqueueWakeOutcome> {
+        crate::push::enqueue_wake(&self.pool, community, author, installation_id, wake).await
+    }
+
+    /// Set-wise [`Self::enqueue_push_wake`]: one transaction per batch.
+    pub async fn enqueue_push_wakes(
+        &self,
+        community: CommunityId,
+        requests: &[crate::push::WakeRequest],
+    ) -> Result<Vec<crate::push::EnqueueWakeOutcome>> {
+        crate::push::enqueue_wakes(&self.pool, community, requests).await
+    }
+
+    /// Exclusively claim due wake jobs for one community.
+    pub async fn claim_due_push_wakes(
+        &self,
+        community: CommunityId,
+        limit: i64,
+        lease_until: DateTime<Utc>,
+    ) -> Result<Vec<crate::push::ClaimedWake>> {
+        crate::push::claim_due_wakes(&self.pool, community, limit, lease_until).await
+    }
+
+    /// Revalidate a wake's claim, source event, and current lease before send.
+    pub async fn revalidate_push_wake(
+        &self,
+        community: CommunityId,
+        id: Uuid,
+        claim_id: Uuid,
+    ) -> Result<crate::push::RevalidateWakeOutcome> {
+        crate::push::revalidate_wake_for_send(&self.pool, community, id, claim_id).await
+    }
+
+    /// Mark a fenced wake claim delivered.
+    pub async fn complete_push_wake(
+        &self,
+        community: CommunityId,
+        id: Uuid,
+        claim_id: Uuid,
+    ) -> Result<bool> {
+        crate::push::complete_wake(&self.pool, community, id, claim_id).await
+    }
+
+    /// Release a fenced wake claim for retry at the supplied time.
+    pub async fn retry_push_wake(
+        &self,
+        community: CommunityId,
+        id: Uuid,
+        claim_id: Uuid,
+        next: DateTime<Utc>,
+    ) -> Result<bool> {
+        crate::push::retry_wake(&self.pool, community, id, claim_id, next).await
+    }
+
+    /// Mark a fenced wake claim terminally failed.
+    pub async fn fail_push_wake(
+        &self,
+        community: CommunityId,
+        id: Uuid,
+        claim_id: Uuid,
+    ) -> Result<bool> {
+        crate::push::fail_wake(&self.pool, community, id, claim_id).await
+    }
+
+    /// Disable an endpoint only if the specified lease generation is current.
+    pub async fn disable_push_endpoint(
+        &self,
+        community: CommunityId,
+        author: &[u8],
+        installation_id: &str,
+        generation: i64,
+    ) -> Result<bool> {
+        crate::push::disable_endpoint_generation(
+            &self.pool,
+            community,
+            author,
+            installation_id,
+            generation,
+        )
+        .await
+    }
+
+    /// Atomically persist a validated kind:30350 event and its effective lease.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn accept_push_lease_event(
+        &self,
+        community: CommunityId,
+        event: &nostr::Event,
+        installation_id: &str,
+        version: crate::push::LeaseVersion<'_>,
+        active: Option<crate::push::ActiveLease<'_>>,
+        max_active_leases: i64,
+    ) -> Result<crate::push::AcceptLeaseOutcome> {
+        crate::push::accept_lease_event(
+            &self.pool,
+            community,
+            event,
+            installation_id,
+            version,
+            active,
+            max_active_leases,
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration;
     use std::sync::Arc;
     use tokio::sync::Barrier;
 
@@ -1275,7 +1432,7 @@ mod tests {
         let pool = PgPool::connect(&database_url)
             .await
             .expect("connect to test DB");
-        migration::run_migrations(&pool)
+        crate::migration::run_migrations(&pool)
             .await
             .expect("run migrations");
         pool

@@ -374,6 +374,14 @@ test-unit:
         # because nothing in CI runs `cargo test --workspace` — workspace
         # membership alone buys clippy/check, not a single executed test.
         cargo nextest run -p buzz-backend-kubernetes
+        # Relay authorization decisions: the NIP-29 channel membership grid
+        # (handlers::channel_authz) and the moderation capability grid
+        # (handlers::moderation_authz) are pure functions over already-resolved
+        # data, so they run without Postgres or Redis. Enumerated explicitly
+        # because nothing in CI runs `cargo test --workspace`, so without this
+        # stanza the authorization tables execute in no lane at all.
+        cargo nextest run -p buzz-relay --lib \
+            -E 'test(handlers::channel_authz::) + test(handlers::moderation_authz::)'
     else
         ./scripts/run-tests.sh unit
     fi

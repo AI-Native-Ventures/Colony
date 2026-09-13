@@ -2,6 +2,7 @@
 //!
 //! Call `ensure_future_partitions` on startup and monthly via cron.
 
+use crate::Db;
 use chrono::{Datelike, TimeZone, Utc};
 use sqlx::{PgPool, Row};
 use tracing::info;
@@ -146,6 +147,13 @@ async fn ensure_partition(
             Ok(())
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+impl Db {
+    /// Ensures monthly partitions exist for the next N months.
+    pub async fn ensure_future_partitions(&self, months_ahead: u32) -> Result<()> {
+        crate::partition::ensure_future_partitions(&self.pool, months_ahead).await
     }
 }
 

@@ -141,6 +141,15 @@ run_unit_tests() {
   # the two lists must stay in step or the fallback silently covers less.
   run_test_step "buzz-backend-kubernetes tests" \
     cargo test -p buzz-backend-kubernetes -- --nocapture
+
+  # Mirror the infra-free relay authorization-decision modules in
+  # `just test-unit`. Keep the side-effects filter pinned to `::tests::` so it
+  # does not select the sibling Postgres-backed test module.
+  run_test_step "buzz-relay channel authorization tests" \
+    cargo test -p buzz-relay --lib handlers::channel_authz:: -- --nocapture
+
+  run_test_step "buzz-relay moderation authorization tests" \
+    cargo test -p buzz-relay --lib handlers::moderation_authz:: -- --nocapture
 }
 
 # ---- DB / integration tests (infra required) --------------------------------

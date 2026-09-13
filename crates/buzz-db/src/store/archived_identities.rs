@@ -5,6 +5,7 @@
 //! relay access, or repository permissions.
 //! All pubkey and event ID values are lowercase hex strings.
 
+use crate::Db;
 use buzz_core::CommunityId;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row as _};
@@ -122,6 +123,51 @@ fn row_to_archived_identity(
         request_event_id: row.try_get("request_event_id")?,
         archived_at: row.try_get("archived_at")?,
     })
+}
+
+impl Db {
+    /// Returns `true` if `pubkey` (64-char hex) is archived in `community_id`.
+    pub async fn is_archived(&self, community_id: CommunityId, pubkey: &str) -> Result<bool> {
+        crate::archived_identities::is_archived(&self.pool, community_id, pubkey).await
+    }
+
+    /// Archives an identity in `community_id`. Returns `true` if inserted, `false` if already archived.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn archive(
+        &self,
+        community_id: CommunityId,
+        pubkey: &str,
+        consent_path: &str,
+        actor: &str,
+        reason: Option<&str>,
+        replaced_by: Option<&str>,
+        request_event_id: &str,
+    ) -> Result<bool> {
+        crate::archived_identities::archive(
+            &self.pool,
+            community_id,
+            pubkey,
+            consent_path,
+            actor,
+            reason,
+            replaced_by,
+            request_event_id,
+        )
+        .await
+    }
+
+    /// Unarchives an identity from `community_id`. Returns `true` if deleted, `false` if absent.
+    pub async fn unarchive(&self, community_id: CommunityId, pubkey: &str) -> Result<bool> {
+        crate::archived_identities::unarchive(&self.pool, community_id, pubkey).await
+    }
+
+    /// Returns all identities archived in `community_id`, ordered by archive time ascending.
+    pub async fn list_archived(
+        &self,
+        community_id: CommunityId,
+    ) -> Result<Vec<crate::archived_identities::ArchivedIdentity>> {
+        crate::archived_identities::list_archived(&self.pool, community_id).await
+    }
 }
 
 #[cfg(test)]

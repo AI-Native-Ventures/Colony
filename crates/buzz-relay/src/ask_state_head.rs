@@ -228,7 +228,7 @@ async fn sign_store_and_fan_out_head(
             return;
         }
     };
-    if !outcome.was_inserted() {
+    if !outcome {
         // Lost latest-wins against a newer revision of the same head --
         // possible only under concurrent transitions of one ask. The winner
         // is at least as new as what this call would have written.

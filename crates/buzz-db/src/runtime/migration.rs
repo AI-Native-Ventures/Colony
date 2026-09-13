@@ -1263,7 +1263,7 @@ mod tests {
             .contains("CREATE INDEX relay_invites_expires_at_idx ON relay_invites (expires_at)"));
         assert!(!relay_invites.contains("_operator_global_tables"));
 
-        let desired_schema = include_str!("../../../schema/schema.sql");
+        let desired_schema = include_str!("../../../../schema/schema.sql");
         assert!(
             desired_schema.contains("CREATE TABLE join_policy_acceptances"),
             "desired-state schema must include join-policy evidence used by invite claims",
@@ -1423,7 +1423,7 @@ mod tests {
         assert!(discovery_credits.contains("state IN ('succeeded', 'cancelled', 'failed')"));
         assert!(discovery_credits.contains("request_id IS NULL"));
         assert!(discovery_credits.contains("settle_basis IS NULL"));
-        let desired_schema = include_str!("../../../schema/schema.sql");
+        let desired_schema = include_str!("../../../../schema/schema.sql");
         for required in [
             "CREATE TABLE discovery_gateway_attempts",
             "CREATE TABLE discovery_campaign_leads",

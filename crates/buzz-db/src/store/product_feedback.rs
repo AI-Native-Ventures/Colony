@@ -3,6 +3,7 @@
 //! Feedback retains its source [`CommunityId`] as provenance, but is not a
 //! community moderation concern and is never inserted into the events table.
 
+use crate::Db;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row as _};
@@ -115,6 +116,25 @@ pub async fn list(pool: &PgPool, limit: i64) -> Result<Vec<ProductFeedbackRecord
             })
         })
         .collect()
+}
+
+impl Db {
+    /// Sidecar an accepted product-feedback event, idempotent by event id.
+    pub async fn insert_product_feedback(
+        &self,
+        community: CommunityId,
+        feedback: crate::product_feedback::NewProductFeedback<'_>,
+    ) -> Result<Uuid> {
+        crate::product_feedback::insert(&self.pool, community, feedback).await
+    }
+
+    /// List product feedback across the deployment, newest first.
+    pub async fn list_product_feedback(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::product_feedback::ProductFeedbackRecord>> {
+        crate::product_feedback::list(&self.pool, limit).await
+    }
 }
 
 #[cfg(test)]

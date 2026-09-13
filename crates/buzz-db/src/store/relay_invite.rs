@@ -17,6 +17,7 @@
 //! `FOR UPDATE` serializes concurrent claims for one invite across relay
 //! processes — exactly one claimant can win the final slot.
 
+use crate::Db;
 use buzz_core::invite::{
     encode_v2_code, hash_v2_code, MAX_INVITE_TTL_SECS, MAX_INVITE_USES, MIN_INVITE_TTL_SECS,
     V2_SECRET_LEN,
@@ -378,6 +379,56 @@ pub async fn claim_relay_invite(
         use_count: new_use_count,
         uses_remaining: new_uses_remaining,
     })
+}
+
+impl Db {
+    /// Mints a v2 use-limited relay invite. The plaintext code is returned
+    /// exactly once; only its SHA-256 hash is persisted.
+    ///
+    /// `max_uses` is `None` for unlimited or `Some(1..=10000)`.
+    /// `ttl_secs` must be in the shared invite lifetime range.
+    pub async fn mint_relay_invite(
+        &self,
+        community: CommunityId,
+        created_by: &str,
+        ttl_secs: u64,
+        max_uses: Option<i32>,
+    ) -> Result<crate::relay_invite::MintedInvite> {
+        crate::relay_invite::mint_relay_invite(
+            &self.pool, community, created_by, ttl_secs, max_uses,
+        )
+        .await
+    }
+
+    /// Delete one bounded batch of invites expired before `cutoff`.
+    pub async fn reap_expired_relay_invites(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        crate::relay_invite::reap_expired_relay_invites(&self.pool, cutoff).await
+    }
+
+    /// Atomically claims a v2 relay invite. The full redemption (membership
+    /// insert, policy evidence, use_count increment) runs in one PostgreSQL
+    /// transaction with `FOR UPDATE` on the invite row.
+    ///
+    /// `token_hash` is the SHA-256 of the presented v2 code (32 bytes).
+    pub async fn claim_relay_invite(
+        &self,
+        community: CommunityId,
+        token_hash: &[u8; 32],
+        claimer_pubkey: &str,
+        policy_version: Option<&str>,
+    ) -> Result<crate::relay_invite::ClaimOutcome> {
+        crate::relay_invite::claim_relay_invite(
+            &self.pool,
+            community,
+            token_hash,
+            claimer_pubkey,
+            policy_version,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]

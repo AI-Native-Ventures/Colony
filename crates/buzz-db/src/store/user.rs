@@ -1,6 +1,7 @@
 //! User CRUD operations.
 
 use crate::error::Result;
+use crate::Db;
 use buzz_core::CommunityId;
 use sqlx::PgPool;
 use sqlx::Row;
@@ -396,6 +397,108 @@ pub async fn set_channel_add_policy(
         ));
     }
     Ok(())
+}
+
+impl Db {
+    /// Ensure a user record exists (upsert).
+    ///
+    /// Returns `true` if a new row was inserted (first time), `false` if it
+    /// already existed. Callers use the `true` return to increment
+    /// `buzz_users_created_total`.
+    pub async fn ensure_user(&self, community_id: CommunityId, pubkey: &[u8]) -> Result<bool> {
+        ensure_user(&self.pool, community_id, pubkey).await
+    }
+
+    /// Get a single user record by pubkey.
+    pub async fn get_user(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<crate::user::UserProfile>> {
+        get_user(&self.pool, community_id, pubkey).await
+    }
+
+    /// Update a user's profile fields.
+    pub async fn update_user_profile(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+        display_name: Option<&str>,
+        avatar_url: Option<&str>,
+        about: Option<&str>,
+        nip05_handle: Option<&str>,
+    ) -> Result<()> {
+        update_user_profile(
+            &self.pool,
+            community_id,
+            pubkey,
+            display_name,
+            avatar_url,
+            about,
+            nip05_handle,
+        )
+        .await
+    }
+
+    /// Look up a user by NIP-05 handle.
+    pub async fn get_user_by_nip05(
+        &self,
+        community_id: CommunityId,
+        local_part: &str,
+        domain: &str,
+    ) -> Result<Option<crate::user::UserProfile>> {
+        get_user_by_nip05(&self.pool, community_id, local_part, domain).await
+    }
+
+    /// Search users by display name, NIP-05 handle, or pubkey prefix.
+    pub async fn search_users(
+        &self,
+        community_id: CommunityId,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<crate::user::UserSearchProfile>> {
+        search_users(&self.pool, community_id, query, limit).await
+    }
+
+    /// Atomically set agent owner — only if no owner is currently assigned.
+    /// Returns Ok(true) if set, Ok(false) if an owner already exists.
+    pub async fn set_agent_owner(
+        &self,
+        community_id: CommunityId,
+        agent_pubkey: &[u8],
+        owner_pubkey: &[u8],
+    ) -> Result<bool> {
+        set_agent_owner(&self.pool, community_id, agent_pubkey, owner_pubkey).await
+    }
+
+    /// Get the channel_add_policy and agent_owner_pubkey for a user.
+    pub async fn get_agent_channel_policy(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<(String, Option<Vec<u8>>)>> {
+        get_agent_channel_policy(&self.pool, community_id, pubkey).await
+    }
+
+    /// Check whether `actor_pubkey` is the agent owner of `target_pubkey`.
+    pub async fn is_agent_owner(
+        &self,
+        community_id: CommunityId,
+        target_pubkey: &[u8],
+        actor_pubkey: &[u8],
+    ) -> Result<bool> {
+        is_agent_owner(&self.pool, community_id, target_pubkey, actor_pubkey).await
+    }
+
+    /// Set the channel_add_policy for a user.
+    pub async fn set_channel_add_policy(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+        policy: &str,
+    ) -> Result<()> {
+        set_channel_add_policy(&self.pool, community_id, pubkey, policy).await
+    }
 }
 
 #[cfg(test)]

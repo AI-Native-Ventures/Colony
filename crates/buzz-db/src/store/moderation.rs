@@ -14,6 +14,7 @@
 //! Lane ownership: L1 (Max). Signatures below are the contract; changes go
 //! through the integration thread.
 
+use crate::Db;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row as _};
 use uuid::Uuid;
@@ -625,6 +626,155 @@ fn row_to_action(row: sqlx::postgres::PgRow) -> Result<ActionRecord> {
         matched_principal: row.try_get("matched_principal")?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+impl Db {
+    /// Insert a tenant-scoped NIP-56 report row, idempotent by report event id.
+    pub async fn insert_moderation_report(
+        &self,
+        community: CommunityId,
+        report: crate::moderation::NewReport<'_>,
+    ) -> Result<Uuid> {
+        crate::moderation::insert_report(&self.pool, community, report).await
+    }
+
+    /// List moderation reports for a community, newest first.
+    pub async fn list_moderation_reports(
+        &self,
+        community: CommunityId,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<crate::moderation::ReportRecord>> {
+        crate::moderation::list_reports(&self.pool, community, status, limit).await
+    }
+
+    /// Fetch one moderation report by row id.
+    pub async fn get_moderation_report(
+        &self,
+        community: CommunityId,
+        report_id: Uuid,
+    ) -> Result<Option<crate::moderation::ReportRecord>> {
+        crate::moderation::get_report(&self.pool, community, report_id).await
+    }
+
+    /// Fetch one moderation report by signed NIP-56 report event id.
+    pub async fn get_moderation_report_by_event(
+        &self,
+        community: CommunityId,
+        report_event_id: &[u8],
+    ) -> Result<Option<crate::moderation::ReportRecord>> {
+        crate::moderation::get_report_by_event(&self.pool, community, report_event_id).await
+    }
+
+    /// Resolve, dismiss, or escalate an open moderation report.
+    pub async fn resolve_moderation_report(
+        &self,
+        community: CommunityId,
+        report_id: Uuid,
+        status: &str,
+        resolved_by: &[u8],
+        action_id: Option<Uuid>,
+    ) -> Result<bool> {
+        crate::moderation::resolve_report(
+            &self.pool,
+            community,
+            report_id,
+            status,
+            resolved_by,
+            action_id,
+        )
+        .await
+    }
+
+    /// Upsert a community ban for a member pubkey.
+    pub async fn ban_community_member(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+        actor: &[u8],
+        reason: Option<&str>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        crate::moderation::ban_member(&self.pool, community, pubkey, actor, reason, expires_at)
+            .await
+    }
+
+    /// Lift a community ban for a member pubkey.
+    pub async fn unban_community_member(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+        actor: &[u8],
+    ) -> Result<bool> {
+        crate::moderation::unban_member(&self.pool, community, pubkey, actor).await
+    }
+
+    /// Upsert a community timeout/write-block for a member pubkey.
+    pub async fn timeout_community_member(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+        actor: &[u8],
+        muted_until: DateTime<Utc>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        crate::moderation::timeout_member(&self.pool, community, pubkey, actor, muted_until, reason)
+            .await
+    }
+
+    /// Clear a community timeout/write-block for a member pubkey.
+    pub async fn untimeout_community_member(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+        actor: &[u8],
+    ) -> Result<bool> {
+        crate::moderation::untimeout_member(&self.pool, community, pubkey, actor).await
+    }
+
+    /// Fetch the active ban/timeout restriction state for enforcement hot paths.
+    pub async fn moderation_restriction_state(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<crate::moderation::RestrictionState> {
+        crate::moderation::restriction_state(&self.pool, community, pubkey).await
+    }
+
+    /// Fetch the full ban/timeout row for a member pubkey.
+    pub async fn get_community_ban(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<crate::moderation::BanRecord>> {
+        crate::moderation::get_ban(&self.pool, community, pubkey).await
+    }
+
+    /// List currently restricted members in a community.
+    pub async fn list_community_restrictions(
+        &self,
+        community: CommunityId,
+    ) -> Result<Vec<crate::moderation::BanRecord>> {
+        crate::moderation::list_restricted(&self.pool, community).await
+    }
+
+    /// Insert a moderation audit action row.
+    pub async fn insert_moderation_action(
+        &self,
+        community: CommunityId,
+        action: crate::moderation::NewAction<'_>,
+    ) -> Result<Uuid> {
+        crate::moderation::insert_action(&self.pool, community, action).await
+    }
+
+    /// List moderation audit action rows, newest first.
+    pub async fn list_moderation_actions(
+        &self,
+        community: CommunityId,
+        limit: i64,
+    ) -> Result<Vec<crate::moderation::ActionRecord>> {
+        crate::moderation::list_actions(&self.pool, community, limit).await
+    }
 }
 
 #[cfg(test)]

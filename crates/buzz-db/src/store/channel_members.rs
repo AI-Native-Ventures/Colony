@@ -1,67 +1,31 @@
-//! Channel CRUD and membership management.
+//! Channel membership and roster persistence.
 //!
-//! Channels have two visibility modes:
-//! - `open`: searchable, anyone can join
-//! - `private`: hidden, invite-only
+//! Membership mutations share one advisory-lock namespace. Relay-authored
+//! roster snapshots hold that same lock through replacement publication.
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
+use crate::channel::{row_to_channel_record, ChannelRecord, MemberRole};
 use crate::error::{DbError, Result};
+use crate::Db;
 use buzz_core::CommunityId;
 
-// Re-export the canonical enum definitions from buzz-core.
-// These live in core (zero I/O deps) so the SDK can share them
-// without pulling in sqlx/tokio.
-pub use buzz_core::channel::{ChannelType, ChannelVisibility, MemberRole};
-
-/// A channel row as returned from the database.
-#[derive(Debug, Clone)]
-pub struct ChannelRecord {
-    /// Unique channel identifier.
-    pub id: Uuid,
-    /// Human-readable channel name.
-    pub name: String,
-    /// Channel type string (e.g. `"stream"`, `"forum"`, `"dm"`).
-    pub channel_type: String,
-    /// Visibility string (`"open"` or `"private"`).
-    pub visibility: String,
-    /// Optional channel description.
-    pub description: Option<String>,
-    /// Compressed public key bytes of the channel creator.
-    pub created_by: Vec<u8>,
-    /// When the channel was created.
-    pub created_at: DateTime<Utc>,
-    /// When the channel was last updated.
-    pub updated_at: DateTime<Utc>,
-    /// When the channel was archived, if applicable.
-    pub archived_at: Option<DateTime<Utc>>,
-    /// When the channel was soft-deleted, if applicable.
-    pub deleted_at: Option<DateTime<Utc>>,
-    /// NIP-29 group ID for external Nostr clients.
-    pub nip29_group_id: Option<String>,
-    /// Whether posts must be associated with a topic.
-    pub topic_required: bool,
-    /// Optional cap on the number of members.
-    pub max_members: Option<i32>,
-    /// Current channel topic (short, visible in header).
-    pub topic: Option<String>,
-    /// Compressed public key bytes of the user who last set the topic.
-    pub topic_set_by: Option<Vec<u8>>,
-    /// When the topic was last set.
-    pub topic_set_at: Option<DateTime<Utc>>,
-    /// Channel purpose / description of intent.
-    pub purpose: Option<String>,
-    /// Compressed public key bytes of the user who last set the purpose.
-    pub purpose_set_by: Option<Vec<u8>>,
-    /// When the purpose was last set.
-    pub purpose_set_at: Option<DateTime<Utc>>,
-    /// TTL in seconds for ephemeral channels. `None` means permanent.
-    pub ttl_seconds: Option<i32>,
-    /// Deadline by which a new message must arrive or the channel is auto-archived.
-    pub ttl_deadline: Option<DateTime<Utc>>,
-}
+/// Namespace for the per-channel membership advisory lock. Serializes the
+/// role-authorization + last-owner-count + write sequences in [`add_member`]
+/// and [`remove_member`] against each other.
+///
+/// Both functions read an owner COUNT and then write a *different* row than the
+/// one they counted, so `READ COMMITTED` snapshot isolation alone permits two
+/// concurrent demotions (or a demotion racing a removal) to each observe two
+/// owners, each pass, and together leave zero — the exact governance loss the
+/// guards exist to prevent. An advisory key rather than `SELECT ... FOR UPDATE`
+/// on the channel row: membership is its own contention domain and must not
+/// serialize against unrelated channel metadata writers (`update_channel`,
+/// `set_topic`, the TTL transition). Distinct key domain from
+/// `buzz_channel_ttl:`.
+const CHANNEL_MEMBERSHIP_LOCK_NAMESPACE: &str = "buzz_channel_membership:";
 
 /// A channel membership row as returned from the database.
 #[derive(Debug, Clone)]
@@ -80,233 +44,6 @@ pub struct MemberRecord {
     pub removed_at: Option<DateTime<Utc>>,
 }
 
-/// Creates a new channel, bootstraps the creator as owner, and returns the record.
-#[allow(clippy::too_many_arguments)]
-pub async fn create_channel(
-    pool: &PgPool,
-    community_id: CommunityId,
-    name: &str,
-    channel_type: ChannelType,
-    visibility: ChannelVisibility,
-    description: Option<&str>,
-    created_by: &[u8],
-    ttl_seconds: Option<i32>,
-) -> Result<ChannelRecord> {
-    if created_by.len() != 32 {
-        return Err(DbError::InvalidData(format!(
-            "pubkey must be 32 bytes, got {}",
-            created_by.len()
-        )));
-    }
-
-    let name = buzz_core::channel::canonical_channel_name(name);
-    if name.trim().is_empty() {
-        return Err(DbError::InvalidData("channel name is required".into()));
-    }
-
-    let id = Uuid::new_v4();
-
-    let mut tx = pool.begin().await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO channels (id, community_id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
-        VALUES ($1, $2, $3, $4::channel_type, $5::channel_visibility, $6, $7, $8,
-                CASE WHEN $8 IS NOT NULL THEN NOW() + ($8 || ' seconds')::interval ELSE NULL END)
-        "#,
-    )
-    .bind(id)
-    .bind(community_id.as_uuid())
-    .bind(name)
-    .bind(channel_type.as_str())
-    .bind(visibility.as_str())
-    .bind(description)
-    .bind(created_by)
-    .bind(ttl_seconds)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO channel_members (community_id, channel_id, pubkey, role, invited_by)
-        VALUES ($1, $2, $3, 'owner', $4)
-        ON CONFLICT (community_id, channel_id, pubkey) DO UPDATE SET
-            removed_at = NULL,
-            removed_by = NULL,
-            role = EXCLUDED.role
-        "#,
-    )
-    .bind(community_id.as_uuid())
-    .bind(id)
-    .bind(created_by)
-    .bind(created_by)
-    .execute(&mut *tx)
-    .await?;
-
-    let row = sqlx::query(
-        r#"
-        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-               description,
-               created_by, created_at, updated_at, archived_at, deleted_at,
-               nip29_group_id, topic_required, max_members,
-               topic, topic_set_by, topic_set_at,
-               purpose, purpose_set_by, purpose_set_at,
-               ttl_seconds, ttl_deadline
-        FROM channels WHERE community_id = $1 AND id = $2
-        "#,
-    )
-    .bind(community_id.as_uuid())
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let record = row_to_channel_record(row)?;
-    tx.commit().await?;
-    Ok(record)
-}
-
-/// Creates a channel with a client-supplied UUID (idempotent via ON CONFLICT DO NOTHING).
-///
-/// Returns `(record, true)` if the channel was newly created, or `(record, false)` if a
-/// channel with `channel_id` already exists (duplicate — caller should reject the event).
-#[allow(clippy::too_many_arguments)]
-pub async fn create_channel_with_id(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-    name: &str,
-    channel_type: ChannelType,
-    visibility: ChannelVisibility,
-    description: Option<&str>,
-    created_by: &[u8],
-    ttl_seconds: Option<i32>,
-) -> Result<(ChannelRecord, bool)> {
-    if created_by.len() != 32 {
-        return Err(DbError::InvalidData(format!(
-            "pubkey must be 32 bytes, got {}",
-            created_by.len()
-        )));
-    }
-
-    if channel_id.is_nil() {
-        return Err(DbError::InvalidData(
-            "channel_id must not be nil (reserved for global fan-out)".into(),
-        ));
-    }
-
-    let name = buzz_core::channel::canonical_channel_name(name);
-    if name.trim().is_empty() {
-        return Err(DbError::InvalidData("channel name is required".into()));
-    }
-
-    let mut tx = pool.begin().await?;
-
-    let rows_affected = sqlx::query(
-        r#"
-        INSERT INTO channels (id, community_id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
-        VALUES ($1, $2, $3, $4::channel_type, $5::channel_visibility, $6, $7, $8,
-                CASE WHEN $8 IS NOT NULL THEN NOW() + ($8 || ' seconds')::interval ELSE NULL END)
-        ON CONFLICT (community_id, id) DO NOTHING
-        "#,
-    )
-    .bind(channel_id)
-    .bind(community_id.as_uuid())
-    .bind(name)
-    .bind(channel_type.as_str())
-    .bind(visibility.as_str())
-    .bind(description)
-    .bind(created_by)
-    .bind(ttl_seconds)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-
-    let was_created = rows_affected > 0;
-
-    if was_created {
-        // Bootstrap the creator as owner.
-        sqlx::query(
-            r#"
-            INSERT INTO channel_members (community_id, channel_id, pubkey, role, invited_by)
-            VALUES ($1, $2, $3, 'owner', $4)
-            ON CONFLICT (community_id, channel_id, pubkey) DO UPDATE SET
-                removed_at = NULL,
-                removed_by = NULL,
-                role = EXCLUDED.role
-            "#,
-        )
-        .bind(community_id.as_uuid())
-        .bind(channel_id)
-        .bind(created_by)
-        .bind(created_by)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    let row = sqlx::query(
-        r#"
-        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-               description,
-               created_by, created_at, updated_at, archived_at, deleted_at,
-               nip29_group_id, topic_required, max_members,
-               topic, topic_set_by, topic_set_at,
-               purpose, purpose_set_by, purpose_set_at,
-               ttl_seconds, ttl_deadline
-        FROM channels WHERE community_id = $1 AND id = $2
-        "#,
-    )
-    .bind(community_id.as_uuid())
-    .bind(channel_id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let record = row_to_channel_record(row)?;
-    tx.commit().await?;
-    Ok((record, was_created))
-}
-
-/// Fetches a channel record by `(community_id, id)`. Returns `ChannelNotFound` if missing or deleted.
-pub async fn get_channel(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-) -> Result<ChannelRecord> {
-    let row = sqlx::query(
-        r#"
-        SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-               description,
-               created_by, created_at, updated_at, archived_at, deleted_at,
-               nip29_group_id, topic_required, max_members,
-               topic, topic_set_by, topic_set_at,
-               purpose, purpose_set_by, purpose_set_at,
-               ttl_seconds, ttl_deadline
-        FROM channels WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL
-        "#,
-    )
-    .bind(community_id.as_uuid())
-    .bind(channel_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or(DbError::ChannelNotFound(channel_id))?;
-
-    row_to_channel_record(row)
-}
-
-/// Namespace for the per-channel membership advisory lock. Serializes the
-/// role-authorization + last-owner-count + write sequences in [`add_member`]
-/// and [`remove_member`] against each other.
-///
-/// Both functions read an owner COUNT and then write a *different* row than the
-/// one they counted, so `READ COMMITTED` snapshot isolation alone permits two
-/// concurrent demotions (or a demotion racing a removal) to each observe two
-/// owners, each pass, and together leave zero — the exact governance loss the
-/// guards exist to prevent. An advisory key rather than `SELECT ... FOR UPDATE`
-/// on the channel row: membership is its own contention domain and must not
-/// serialize against unrelated channel metadata writers (`update_channel`,
-/// `set_topic`, the TTL transition). Distinct key domain from
-/// `buzz_channel_ttl:`.
-const CHANNEL_MEMBERSHIP_LOCK_NAMESPACE: &str = "buzz_channel_membership:";
-
 /// Take the per-channel membership lock. MUST be the first statement in the
 /// transaction that then reads roles/owner counts and writes membership, so the
 /// whole check-then-write sequence is atomic against a concurrent one.
@@ -324,6 +61,179 @@ async fn acquire_channel_membership_lock(
         .execute(&mut **tx)
         .await?;
     Ok(())
+}
+
+/// An active member roster captured while holding the channel's membership
+/// serialization lock on one writer connection.
+pub struct LockedMemberSnapshot {
+    /// Canonical active members captured behind the lock.
+    pub members: Vec<MemberRecord>,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    relay_pubkey: Vec<u8>,
+    tx: Transaction<'static, Postgres>,
+}
+
+impl LockedMemberSnapshot {
+    /// Return the newest relay-authored member snapshot timestamp using this
+    /// guard's existing connection.
+    pub async fn latest_member_event_timestamp(
+        &mut self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        relay_pubkey: &[u8],
+    ) -> Result<Option<u64>> {
+        let value: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT created_at FROM events WHERE community_id = $1 AND kind = 39002 AND pubkey = $2 AND channel_id = $3 AND deleted_at IS NULL ORDER BY created_at DESC, id ASC LIMIT 1",
+        )
+        .bind(community_id.as_uuid())
+        .bind(relay_pubkey)
+        .bind(channel_id)
+        .fetch_optional(&mut *self.tx)
+        .await?;
+        Ok(value.map(|timestamp| timestamp.timestamp() as u64))
+    }
+
+    /// Replace the relay-authored member snapshot on this guard's existing
+    /// connection. The membership lock therefore spans capture and replacement
+    /// without a nested pool checkout.
+    pub async fn replace_member_event(
+        &mut self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        event: &nostr::Event,
+    ) -> Result<(buzz_core::StoredEvent, bool)> {
+        if community_id != self.community_id
+            || channel_id != self.channel_id
+            || event.pubkey.to_bytes().as_slice() != self.relay_pubkey.as_slice()
+        {
+            return Err(DbError::InvalidData(
+                "member snapshot replacement does not match its locked coordinate".into(),
+            ));
+        }
+        let kind = buzz_core::kind::event_kind_i32(event);
+        if kind != 39002 {
+            return Err(DbError::InvalidData(
+                "member snapshot replacement requires kind 39002".into(),
+            ));
+        }
+        let pubkey = event.pubkey.to_bytes();
+        let created_at_secs = event.created_at.as_secs() as i64;
+        let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
+            .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
+        let existing: Option<(chrono::DateTime<Utc>, Vec<u8>)> = sqlx::query_as(
+            "SELECT created_at, id FROM events WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND channel_id = $4 AND deleted_at IS NULL ORDER BY created_at DESC, id ASC LIMIT 1",
+        )
+        .bind(community_id.as_uuid())
+        .bind(kind)
+        .bind(pubkey.as_slice())
+        .bind(channel_id)
+        .fetch_optional(&mut *self.tx)
+        .await?;
+        let incoming_id = event.id.as_bytes().as_slice();
+        if let Some((existing_ts, existing_id)) = existing {
+            if created_at < existing_ts
+                || (created_at == existing_ts && incoming_id >= existing_id.as_slice())
+            {
+                return Ok((
+                    buzz_core::StoredEvent::with_received_at(
+                        event.clone(),
+                        Utc::now(),
+                        Some(channel_id),
+                        false,
+                    ),
+                    false,
+                ));
+            }
+        }
+        sqlx::query("UPDATE events SET deleted_at = NOW() WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND channel_id = $4 AND deleted_at IS NULL")
+            .bind(community_id.as_uuid()).bind(kind).bind(pubkey.as_slice()).bind(channel_id)
+            .execute(&mut *self.tx).await?;
+        let received_at = Utc::now();
+        let tags = serde_json::to_value(&event.tags)?;
+        let sig = event.sig.serialize();
+        let inserted = sqlx::query("INSERT INTO events (community_id, id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING")
+            .bind(community_id.as_uuid()).bind(event.id.as_bytes().as_slice())
+            .bind(pubkey.as_slice()).bind(created_at).bind(kind).bind(tags)
+            .bind(&event.content).bind(sig.as_slice()).bind(received_at).bind(channel_id)
+            .bind(crate::event::extract_d_tag(event)).execute(&mut *self.tx).await?;
+        if inserted.rows_affected() == 0 {
+            return Err(DbError::InvalidData(
+                "member snapshot event id already exists".into(),
+            ));
+        }
+        crate::insert_mentions_in_transaction(&mut self.tx, community_id, event, Some(channel_id))
+            .await?;
+        Ok((
+            buzz_core::StoredEvent::with_received_at(
+                event.clone(),
+                received_at,
+                Some(channel_id),
+                true,
+            ),
+            true,
+        ))
+    }
+
+    /// Commit the replacement and release the membership lock.
+    pub async fn release(self) -> Result<()> {
+        self.tx.commit().await?;
+        Ok(())
+    }
+}
+
+/// Capture all active members while holding the same per-channel lock used by
+/// membership writers.
+///
+/// The returned guard must remain alive through publication. This prevents a
+/// rolling relay from publishing an older roster after a concurrent add or
+/// remove has committed and published newer membership state.
+pub async fn lock_member_snapshot(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    relay_pubkey: &[u8],
+) -> Result<LockedMemberSnapshot> {
+    let mut tx = pool.begin().await?;
+    // Match the canonical replacement writer's lock order. Old binaries take
+    // this key before INSERT; migration 0032 then takes the membership key in
+    // the INSERT trigger. Taking both in that order avoids mixed-version
+    // duplicate heads without introducing a lock-order inversion.
+    let replacement_lock = crate::replaceable::event_replacement_lock_key(
+        community_id,
+        39002,
+        relay_pubkey,
+        Some(channel_id.as_bytes()),
+    );
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(replacement_lock)
+        .execute(&mut *tx)
+        .await?;
+    acquire_channel_membership_lock(&mut tx, community_id, channel_id).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT cm.channel_id, cm.pubkey, cm.role::text AS role, cm.joined_at, cm.invited_by, cm.removed_at
+        FROM channel_members cm
+        JOIN channels c ON cm.community_id = c.community_id AND cm.channel_id = c.id AND c.deleted_at IS NULL
+        WHERE cm.community_id = $1 AND cm.channel_id = $2 AND cm.removed_at IS NULL
+        ORDER BY cm.joined_at ASC
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(channel_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let members = rows
+        .into_iter()
+        .map(row_to_member_record)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(LockedMemberSnapshot {
+        members,
+        community_id,
+        channel_id,
+        relay_pubkey: relay_pubkey.to_vec(),
+        tx,
+    })
 }
 
 /// Add a member to a channel.
@@ -737,56 +647,6 @@ pub async fn get_accessible_channel_ids(
         .collect()
 }
 
-/// Lists channels in a community, optionally filtered by visibility string.
-pub async fn list_channels(
-    pool: &PgPool,
-    community_id: CommunityId,
-    visibility: Option<&str>,
-) -> Result<Vec<ChannelRecord>> {
-    let rows = if let Some(vis) = visibility {
-        sqlx::query(
-            r#"
-            SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-                   description,
-                   created_by, created_at, updated_at, archived_at, deleted_at,
-                   nip29_group_id, topic_required, max_members,
-                   topic, topic_set_by, topic_set_at,
-                   purpose, purpose_set_by, purpose_set_at,
-                   ttl_seconds, ttl_deadline
-            FROM channels
-            WHERE community_id = $1 AND deleted_at IS NULL AND visibility::text = $2
-            ORDER BY created_at DESC
-            LIMIT 1000
-            "#,
-        )
-        .bind(community_id.as_uuid())
-        .bind(vis)
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query(
-            r#"
-            SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-                   description,
-                   created_by, created_at, updated_at, archived_at, deleted_at,
-                   nip29_group_id, topic_required, max_members,
-                   topic, topic_set_by, topic_set_at,
-                   purpose, purpose_set_by, purpose_set_at,
-                   ttl_seconds, ttl_deadline
-            FROM channels
-            WHERE community_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at DESC
-            LIMIT 1000
-            "#,
-        )
-        .bind(community_id.as_uuid())
-        .fetch_all(pool)
-        .await?
-    };
-
-    rows.into_iter().map(row_to_channel_record).collect()
-}
-
 /// Transaction-aware variant of [`get_active_role_tx`].
 async fn get_active_role_tx(
     tx: &mut Transaction<'_, Postgres>,
@@ -839,17 +699,6 @@ pub struct BotChannelEntry {
     pub name: String,
     /// Channel UUID (as string from the DB).
     pub id: String,
-}
-
-/// A channel archived by the ephemeral-channel reaper.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReapedEphemeralChannel {
-    /// Community that owns the archived channel.
-    pub community_id: CommunityId,
-    /// Normalized host mapped to that community.
-    pub host: String,
-    /// Archived channel UUID.
-    pub channel_id: Uuid,
 }
 
 /// Bot member record — a user with role=bot, with their channel memberships aggregated.
@@ -1045,46 +894,6 @@ pub async fn get_users_bulk(
     Ok(out)
 }
 
-fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
-    let id: Uuid = row.try_get("id")?;
-    let topic_required: bool = row.try_get("topic_required")?;
-
-    // topic/purpose fields are new — use try_get and fall back to None if the
-    // column is absent (e.g. queries that don't SELECT these columns yet).
-    let topic: Option<String> = row.try_get("topic").unwrap_or(None);
-    let topic_set_by: Option<Vec<u8>> = row.try_get("topic_set_by").unwrap_or(None);
-    let topic_set_at: Option<DateTime<Utc>> = row.try_get("topic_set_at").unwrap_or(None);
-    let purpose: Option<String> = row.try_get("purpose").unwrap_or(None);
-    let purpose_set_by: Option<Vec<u8>> = row.try_get("purpose_set_by").unwrap_or(None);
-    let purpose_set_at: Option<DateTime<Utc>> = row.try_get("purpose_set_at").unwrap_or(None);
-    let ttl_seconds: Option<i32> = row.try_get("ttl_seconds").unwrap_or(None);
-    let ttl_deadline: Option<DateTime<Utc>> = row.try_get("ttl_deadline").unwrap_or(None);
-
-    Ok(ChannelRecord {
-        id,
-        name: row.try_get("name")?,
-        channel_type: row.try_get("channel_type")?,
-        visibility: row.try_get("visibility")?,
-        description: row.try_get("description")?,
-        created_by: row.try_get("created_by")?,
-        created_at: row.try_get("created_at")?,
-        updated_at: row.try_get("updated_at")?,
-        archived_at: row.try_get("archived_at")?,
-        deleted_at: row.try_get("deleted_at")?,
-        nip29_group_id: row.try_get("nip29_group_id")?,
-        topic_required,
-        max_members: row.try_get("max_members")?,
-        topic,
-        topic_set_by,
-        topic_set_at,
-        purpose,
-        purpose_set_by,
-        purpose_set_at,
-        ttl_seconds,
-        ttl_deadline,
-    })
-}
-
 fn row_to_member_record(row: sqlx::postgres::PgRow) -> Result<MemberRecord> {
     let channel_id: Uuid = row.try_get("channel_id")?;
 
@@ -1096,284 +905,6 @@ fn row_to_member_record(row: sqlx::postgres::PgRow) -> Result<MemberRecord> {
         invited_by: row.try_get("invited_by")?,
         removed_at: row.try_get("removed_at")?,
     })
-}
-
-/// Partial update for channel metadata. Every field is `None` to leave the
-/// column unchanged.
-#[derive(Default)]
-pub struct ChannelUpdate {
-    /// New channel name, or `None` to leave unchanged.
-    pub name: Option<String>,
-    /// New channel description, or `None` to leave unchanged.
-    pub description: Option<String>,
-    /// New visibility (`"open"`/`"private"`), or `None` to leave unchanged.
-    pub visibility: Option<String>,
-    /// TTL change: outer `None` leaves it unchanged, `Some(None)` clears the
-    /// ephemeral TTL (channel becomes permanent), `Some(Some(secs))` sets it.
-    /// On any change the `ttl_deadline` is reset to `NOW() + ttl_seconds`.
-    pub ttl_seconds: Option<Option<i32>>,
-}
-
-/// Updates channel metadata dynamically.
-///
-/// At least one field must be provided; returns `InvalidData` otherwise.
-/// Returns the updated `ChannelRecord` on success.
-pub async fn update_channel(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-    mut updates: ChannelUpdate,
-) -> Result<ChannelRecord> {
-    if updates.name.is_none()
-        && updates.description.is_none()
-        && updates.visibility.is_none()
-        && updates.ttl_seconds.is_none()
-    {
-        return Err(DbError::InvalidData(
-            "at least one field must be provided for update".to_string(),
-        ));
-    }
-
-    if let Some(name) = updates.name.as_mut() {
-        *name = buzz_core::channel::canonical_channel_name(name).to_owned();
-        if name.is_empty() {
-            return Err(DbError::InvalidData("channel name is required".into()));
-        }
-    }
-
-    // Build SET clause dynamically — only include fields that are provided.
-    // Track parameter index for positional placeholders.
-    let mut set_parts: Vec<String> = Vec::new();
-    let mut param_idx: usize = 1;
-    if updates.name.is_some() {
-        set_parts.push(format!("name = ${param_idx}"));
-        param_idx += 1;
-    }
-    if updates.description.is_some() {
-        set_parts.push(format!("description = ${param_idx}"));
-        param_idx += 1;
-    }
-    if updates.visibility.is_some() {
-        set_parts.push(format!("visibility = ${param_idx}::channel_visibility"));
-        param_idx += 1;
-    }
-    if let Some(ref ttl) = updates.ttl_seconds {
-        // Set ttl_seconds, then reset the deadline from now (or clear both).
-        set_parts.push(format!("ttl_seconds = ${param_idx}"));
-        param_idx += 1;
-        match ttl {
-            Some(_) => set_parts.push(format!(
-                "ttl_deadline = NOW() + (${} || ' seconds')::interval",
-                param_idx - 1
-            )),
-            None => set_parts.push("ttl_deadline = NULL".to_string()),
-        }
-    }
-    let channel_param_idx = param_idx + 1;
-    let sql = format!(
-        "UPDATE channels SET {}, updated_at = NOW() WHERE community_id = ${param_idx} AND id = ${channel_param_idx} AND deleted_at IS NULL",
-        set_parts.join(", ")
-    );
-
-    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-    if let Some(ref name) = updates.name {
-        q = q.bind(name);
-    }
-    if let Some(ref desc) = updates.description {
-        q = q.bind(desc);
-    }
-    if let Some(ref vis) = updates.visibility {
-        q = q.bind(vis);
-    }
-    if let Some(ref ttl) = updates.ttl_seconds {
-        q = q.bind(*ttl);
-    }
-    q = q.bind(community_id.as_uuid());
-    q = q.bind(channel_id);
-
-    // T1a repair: a TTL change can flip this channel's event-trigger fast
-    // path (migration 0024 reads ttl_seconds under a SHARED per-channel
-    // advisory lock). Take the same key EXCLUSIVE before the UPDATE so a
-    // concurrent event either sees the committed TTL or strictly precedes
-    // this transition — whose own deadline reset is then the latest word.
-    // Non-TTL updates don't touch the fast path and skip the lock.
-    if updates.ttl_seconds.is_some() {
-        let mut tx = pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!(
-                "buzz_channel_ttl:{}:{}",
-                community_id.as_uuid(),
-                channel_id
-            ))
-            .execute(&mut *tx)
-            .await?;
-        let result = q.execute(&mut *tx).await?;
-        if result.rows_affected() == 0 {
-            return Err(DbError::ChannelNotFound(channel_id));
-        }
-        tx.commit().await?;
-    } else {
-        let result = q.execute(pool).await?;
-        if result.rows_affected() == 0 {
-            return Err(DbError::ChannelNotFound(channel_id));
-        }
-    }
-
-    get_channel(pool, community_id, channel_id).await
-}
-
-/// Sets the topic for a channel, recording who set it and when.
-pub async fn set_topic(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-    topic: &str,
-    set_by: &[u8],
-) -> Result<()> {
-    let result = sqlx::query(
-        "UPDATE channels SET topic = $1, topic_set_by = $2, topic_set_at = NOW() \
-         WHERE community_id = $3 AND id = $4 AND deleted_at IS NULL",
-    )
-    .bind(topic)
-    .bind(set_by)
-    .bind(community_id.as_uuid())
-    .bind(channel_id)
-    .execute(pool)
-    .await?;
-    if result.rows_affected() == 0 {
-        return Err(DbError::ChannelNotFound(channel_id));
-    }
-    Ok(())
-}
-
-/// Sets the purpose for a channel, recording who set it and when.
-pub async fn set_purpose(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-    purpose: &str,
-    set_by: &[u8],
-) -> Result<()> {
-    let result = sqlx::query(
-        "UPDATE channels SET purpose = $1, purpose_set_by = $2, purpose_set_at = NOW() \
-         WHERE community_id = $3 AND id = $4 AND deleted_at IS NULL",
-    )
-    .bind(purpose)
-    .bind(set_by)
-    .bind(community_id.as_uuid())
-    .bind(channel_id)
-    .execute(pool)
-    .await?;
-    if result.rows_affected() == 0 {
-        return Err(DbError::ChannelNotFound(channel_id));
-    }
-    Ok(())
-}
-
-/// Archives a channel.
-///
-/// Returns `AccessDenied` if the channel is already archived.
-/// Returns `ChannelNotFound` if the channel does not exist or is deleted.
-pub async fn archive_channel(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-) -> Result<()> {
-    // First check: does the channel exist and what is its state?
-    let row = sqlx::query(
-        "SELECT archived_at FROM channels WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
-    )
-        .bind(community_id.as_uuid())
-        .bind(channel_id)
-        .fetch_optional(pool)
-        .await?;
-
-    match row {
-        None => return Err(DbError::ChannelNotFound(channel_id)),
-        Some(r) => {
-            let archived_at: Option<DateTime<Utc>> = r.try_get("archived_at")?;
-            if archived_at.is_some() {
-                return Err(DbError::AccessDenied(
-                    "channel is already archived".to_string(),
-                ));
-            }
-        }
-    }
-
-    sqlx::query(
-        "UPDATE channels SET archived_at = NOW() \
-         WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL AND archived_at IS NULL",
-    )
-    .bind(community_id.as_uuid())
-    .bind(channel_id)
-    .execute(pool)
-    .await?;
-
-    Ok(())
-}
-
-/// Unarchives a channel.
-///
-/// Returns `AccessDenied` if the channel is not currently archived.
-/// Returns `ChannelNotFound` if the channel does not exist or is deleted.
-pub async fn unarchive_channel(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-) -> Result<()> {
-    // First check: does the channel exist and what is its state?
-    let row = sqlx::query(
-        "SELECT archived_at FROM channels WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
-    )
-        .bind(community_id.as_uuid())
-        .bind(channel_id)
-        .fetch_optional(pool)
-        .await?;
-
-    match row {
-        None => return Err(DbError::ChannelNotFound(channel_id)),
-        Some(r) => {
-            let archived_at: Option<DateTime<Utc>> = r.try_get("archived_at")?;
-            if archived_at.is_none() {
-                return Err(DbError::AccessDenied("channel is not archived".to_string()));
-            }
-        }
-    }
-
-    sqlx::query(
-        "UPDATE channels SET archived_at = NULL, \
-             ttl_deadline = CASE \
-                 WHEN ttl_seconds IS NOT NULL THEN NOW() + (ttl_seconds || ' seconds')::interval \
-                 ELSE ttl_deadline \
-             END \
-         WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL AND archived_at IS NOT NULL",
-    )
-    .bind(community_id.as_uuid())
-    .bind(channel_id)
-    .execute(pool)
-    .await?;
-
-    Ok(())
-}
-
-/// Soft-delete a channel by setting `deleted_at = NOW()`.
-///
-/// Returns `Ok(true)` if the channel was deleted, `Ok(false)` if already
-/// deleted or not found.
-pub async fn soft_delete_channel(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE channels SET deleted_at = NOW() WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
-    )
-            .bind(community_id.as_uuid())
-            .bind(channel_id)
-            .execute(pool)
-            .await?;
-
-    Ok(result.rows_affected() > 0)
 }
 
 /// Returns the count of active (non-removed) members in a channel.
@@ -1450,44 +981,151 @@ pub async fn get_member_role(
     Ok(row.map(|r| r.try_get("role")).transpose()?)
 }
 
-/// Archive ephemeral channels whose TTL deadline has passed.
-///
-/// Returns the `(community_id, host, channel_id)` list that was archived. Idempotent — the
-/// `archived_at IS NULL` guard prevents double-archiving even if called
-/// concurrently from multiple relay pods.
-pub async fn reap_expired_ephemeral_channels(pool: &PgPool) -> Result<Vec<ReapedEphemeralChannel>> {
-    let rows = sqlx::query(
-        "UPDATE channels AS ch SET archived_at = NOW() \
-         FROM communities AS c \
-         WHERE ch.community_id = c.id \
-           AND ch.ttl_seconds IS NOT NULL \
-           AND ch.ttl_deadline < NOW() \
-           AND ch.archived_at IS NULL \
-           AND ch.deleted_at IS NULL \
-           AND c.archived_at IS NULL \
-           AND community_write_allowed(ch.community_id) \
-         RETURNING ch.community_id, c.host, ch.id",
-    )
-    .fetch_all(pool)
-    .await?;
+impl Db {
+    /// Adds a member to a channel.
+    pub async fn add_member(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+        role: MemberRole,
+        invited_by: Option<&[u8]>,
+    ) -> Result<MemberRecord> {
+        add_member(
+            &self.pool,
+            community_id,
+            channel_id,
+            pubkey,
+            role,
+            invited_by,
+        )
+        .await
+    }
 
-    rows.into_iter()
-        .map(|row| {
-            let community_id: Uuid = row.try_get("community_id")?;
-            let host: String = row.try_get("host")?;
-            let channel_id: Uuid = row.try_get("id")?;
-            Ok(ReapedEphemeralChannel {
-                community_id: CommunityId::from_uuid(community_id),
-                host,
-                channel_id,
-            })
-        })
-        .collect()
+    /// Removes a member from a channel.
+    pub async fn remove_member(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+        actor_pubkey: &[u8],
+    ) -> Result<()> {
+        remove_member(&self.pool, community_id, channel_id, pubkey, actor_pubkey).await
+    }
+
+    /// Returns `true` if the pubkey is an active member.
+    pub async fn is_member(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) -> Result<bool> {
+        is_member(&self.pool, community_id, channel_id, pubkey).await
+    }
+
+    /// Return the active (channel, pubkey) membership pairs among the given
+    /// sets, in one statement.
+    pub async fn membership_pairs(
+        &self,
+        community_id: CommunityId,
+        channel_ids: &[Uuid],
+        pubkeys: &[Vec<u8>],
+    ) -> Result<Vec<(Uuid, Vec<u8>)>> {
+        membership_pairs(&self.pool, community_id, channel_ids, pubkeys).await
+    }
+
+    /// Returns all active members of a channel.
+    pub async fn get_members(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<Vec<MemberRecord>> {
+        get_members(&self.pool, community_id, channel_id).await
+    }
+
+    /// Returns active members for multiple channels in a single query.
+    pub async fn get_members_bulk(
+        &self,
+        community_id: CommunityId,
+        channel_ids: &[Uuid],
+    ) -> Result<Vec<MemberRecord>> {
+        get_members_bulk(&self.pool, community_id, channel_ids).await
+    }
+
+    /// Get all channel IDs accessible to a pubkey.
+    pub async fn get_accessible_channel_ids(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Vec<Uuid>> {
+        get_accessible_channel_ids(&self.pool, community_id, pubkey).await
+    }
+
+    /// Returns full channel records for all channels a user can access.
+    pub async fn get_accessible_channels(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+        visibility_filter: Option<&str>,
+        member_only: Option<bool>,
+    ) -> Result<Vec<AccessibleChannel>> {
+        get_accessible_channels(
+            &self.pool,
+            community_id,
+            pubkey,
+            visibility_filter,
+            member_only,
+        )
+        .await
+    }
+
+    /// Returns all bot-role members with their aggregated channel names in one community.
+    pub async fn get_bot_members(&self, community_id: CommunityId) -> Result<Vec<BotMemberRecord>> {
+        get_bot_members(&self.pool, community_id).await
+    }
+
+    /// Bulk-fetch user records by pubkey.
+    pub async fn get_users_bulk(
+        &self,
+        community_id: CommunityId,
+        pubkeys: &[Vec<u8>],
+    ) -> Result<Vec<UserRecord>> {
+        get_users_bulk(&self.pool, community_id, pubkeys).await
+    }
+
+    /// Returns the count of active members in a channel.
+    pub async fn get_member_count(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<i64> {
+        get_member_count(&self.pool, community_id, channel_id).await
+    }
+
+    /// Bulk-fetch member counts for a set of channel IDs.
+    pub async fn get_member_counts_bulk(
+        &self,
+        community_id: CommunityId,
+        channel_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, i64>> {
+        get_member_counts_bulk(&self.pool, community_id, channel_ids).await
+    }
+
+    /// Get the active role of a pubkey in a channel.
+    pub async fn get_member_role(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) -> Result<Option<String>> {
+        get_member_role(&self.pool, community_id, channel_id, pubkey).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channel::{ChannelType, ChannelVisibility};
     use crate::user::{ensure_user, set_agent_owner};
     use nostr::Keys;
 
@@ -1563,31 +1201,7 @@ mod tests {
         .await
         .expect("insert owner membership");
 
-        get_channel(pool, CommunityId::from_uuid(community_id), id).await
-    }
-
-    async fn insert_channel_with_id(
-        pool: &PgPool,
-        community_id: Uuid,
-        id: Uuid,
-        name: &str,
-        created_by: &[u8],
-    ) {
-        sqlx::query(
-            r#"
-            INSERT INTO channels
-                (id, community_id, name, channel_type, visibility, created_by)
-            VALUES
-                ($1, $2, $3, 'stream', 'open', $4)
-            "#,
-        )
-        .bind(id)
-        .bind(community_id)
-        .bind(name)
-        .bind(created_by)
-        .execute(pool)
-        .await
-        .expect("insert channel with fixed id");
+        crate::channel::get_channel(pool, CommunityId::from_uuid(community_id), id).await
     }
 
     #[tokio::test]
@@ -1622,53 +1236,6 @@ mod tests {
             users[0].display_name.as_deref(),
             Some("community-a-profile")
         );
-    }
-
-    #[tokio::test]
-    #[ignore = "requires Postgres"]
-    async fn get_channel_is_scoped_when_channel_uuid_collides_across_communities() {
-        let pool = setup_pool().await;
-        let community_a = make_test_community(&pool).await;
-        let community_b = make_test_community(&pool).await;
-        let channel_id = Uuid::new_v4();
-        let creator = random_pubkey();
-
-        insert_channel_with_id(
-            &pool,
-            community_a,
-            channel_id,
-            "community-a-channel",
-            &creator,
-        )
-        .await;
-        insert_channel_with_id(
-            &pool,
-            community_b,
-            channel_id,
-            "community-b-channel",
-            &creator,
-        )
-        .await;
-
-        let a = get_channel(&pool, CommunityId::from_uuid(community_a), channel_id)
-            .await
-            .expect("community A channel should resolve");
-        let b = get_channel(&pool, CommunityId::from_uuid(community_b), channel_id)
-            .await
-            .expect("community B channel should resolve");
-
-        assert_eq!(a.name, "community-a-channel");
-        assert_eq!(b.name, "community-b-channel");
-
-        let listed_a = list_channels(&pool, CommunityId::from_uuid(community_a), None)
-            .await
-            .expect("list community A channels");
-        assert!(listed_a
-            .iter()
-            .any(|row| row.id == channel_id && row.name == "community-a-channel"));
-        assert!(!listed_a
-            .iter()
-            .any(|row| row.id == channel_id && row.name == "community-b-channel"));
     }
 
     /// Agent owner (non-admin) can remove their own bot from a channel.
@@ -1743,119 +1310,6 @@ mod tests {
                 .await
                 .expect("is_member check"),
             "agent should no longer be a member"
-        );
-    }
-
-    /// Unarchiving an expired ephemeral channel renews its TTL lease so the
-    /// reaper does not immediately archive it again.
-    #[tokio::test]
-    #[ignore = "requires Postgres"]
-    async fn test_unarchive_expired_ephemeral_channel_renews_ttl_deadline() {
-        let pool = setup_pool().await;
-        let community_id = make_test_community(&pool).await;
-        let community = CommunityId::from_uuid(community_id);
-        let owner_pk = random_pubkey();
-        ensure_user(&pool, community, &owner_pk)
-            .await
-            .expect("ensure owner");
-
-        let channel = create_test_channel(
-            &pool,
-            community_id,
-            "test-unarchive-renews-ttl",
-            ChannelType::Stream,
-            ChannelVisibility::Open,
-            None,
-            &owner_pk,
-            Some(60),
-        )
-        .await
-        .expect("create ephemeral channel");
-
-        sqlx::query(
-            "UPDATE channels SET archived_at = NOW(), ttl_deadline = NOW() - interval '1 second' WHERE community_id = $1 AND id = $2",
-        )
-        .bind(community_id)
-        .bind(channel.id)
-        .execute(&pool)
-        .await
-        .expect("expire and archive channel");
-
-        unarchive_channel(&pool, community, channel.id)
-            .await
-            .expect("unarchive expired ephemeral channel");
-
-        let channel = get_channel(&pool, community, channel.id)
-            .await
-            .expect("reload channel");
-        assert!(
-            channel.archived_at.is_none(),
-            "channel should be unarchived"
-        );
-        assert!(
-            channel.ttl_deadline.expect("ttl deadline") > Utc::now(),
-            "unarchive should renew ttl_deadline into the future"
-        );
-
-        let reaped = reap_expired_ephemeral_channels(&pool)
-            .await
-            .expect("run reaper");
-        assert!(
-            !reaped
-                .iter()
-                .any(|row| row.community_id == community && row.channel_id == channel.id),
-            "reaper should not immediately rearchive renewed channel"
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "requires Postgres"]
-    async fn reap_expired_ephemeral_channels_returns_row_community_and_host() {
-        let pool = setup_pool().await;
-        let community_id = make_test_community(&pool).await;
-        let community = CommunityId::from_uuid(community_id);
-        let expected_host: String =
-            sqlx::query_scalar("SELECT host FROM communities WHERE id = $1")
-                .bind(community_id)
-                .fetch_one(&pool)
-                .await
-                .expect("load community host");
-        let owner_pk = random_pubkey();
-        ensure_user(&pool, community, &owner_pk)
-            .await
-            .expect("ensure owner");
-        let channel = create_test_channel(
-            &pool,
-            community_id,
-            "test-reaper-host-provenance",
-            ChannelType::Stream,
-            ChannelVisibility::Open,
-            None,
-            &owner_pk,
-            Some(60),
-        )
-        .await
-        .expect("create ephemeral channel");
-
-        sqlx::query(
-            "UPDATE channels SET ttl_deadline = NOW() - interval '1 second' WHERE community_id = $1 AND id = $2",
-        )
-        .bind(community_id)
-        .bind(channel.id)
-        .execute(&pool)
-        .await
-        .expect("expire channel");
-
-        let reaped = reap_expired_ephemeral_channels(&pool)
-            .await
-            .expect("run reaper");
-        assert!(
-            reaped.iter().any(|row| {
-                row.community_id == community
-                    && row.host == expected_host
-                    && row.channel_id == channel.id
-            }),
-            "reaper should carry the archived row's community id and host"
         );
     }
 
