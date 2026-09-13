@@ -316,6 +316,11 @@ test("emoji picker keeps Frequently used live within the app session", async ({
     window.localStorage.setItem("emoji-mart.frequently", "{}");
     window.localStorage.removeItem("emoji-mart.last");
   });
+  // The picker is ~430px tall and opens above its trigger. Colony's timeline
+  // puts the seeded reaction target near the top of a 720px window, so the
+  // picker is clipped by the viewport top and its category nav cannot be
+  // clicked. A taller window leaves the room this test needs.
+  await page.setViewportSize({ width: 1280, height: 1000 });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
