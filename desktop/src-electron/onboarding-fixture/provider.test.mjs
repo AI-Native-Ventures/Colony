@@ -97,7 +97,7 @@ test("concurrent HTTP handlers have unique IDs; mutable counter baseline reprodu
   // Hosted negative control restores only the old late reads of the shared counter.
   const url = new URL("./provider.mjs", import.meta.url);
   const source = await readFile(url, "utf8");
-  assert.equal(source.split("${requestNumber}").length - 1, 3);
+  assert.equal(source.split("${requestNumber}").length - 1, 4);
   const baseline = source
     .replaceAll("${requestNumber}", "${calls}")
     .replace(
@@ -193,7 +193,7 @@ test("final settlement requires distinct exact intents and debits, not a matchin
   );
 });
 
-async function probeRequest(provider, content) {
+async function probeRequest(provider, content, extra = []) {
   return fetch(`${provider.httpUrl}/v1/chat/completions`, {
     method: "POST",
     signal: AbortSignal.timeout(5000),
@@ -203,13 +203,14 @@ async function probeRequest(provider, content) {
     },
     body: JSON.stringify({
       model: "deepseek/deepseek-v4-flash",
-      messages: [{ role: "user", content }],
+      messages: [{ role: "user", content }, ...extra],
+      tools: [{ type: "function", function: { name: "buzz__shell" } }],
     }),
   });
 }
 const probe =
-  "Colony connection test. Reply in this thread with a short greeting and this verification code: 11111111-1111-4111-8111-111111111111. Do not use tools or start any other work.";
-test("explicit bounded connection probe echoes nonce, records debit evidence and never emits tools", async () => {
+  "Colony connection test. Reply in this thread with a short greeting and this verification code: 11111111-1111-4111-8111-111111111111. Use your messaging tool to post exactly one reply in this thread. Do not use other tools or start any other work.";
+test("bounded connection probe posts one correlated reply and checks actual tool acceptance", async () => {
   const provider = await createOnboardingFixtureProvider();
   try {
     provider.authorizeConnectionTest();
@@ -219,17 +220,44 @@ test("explicit bounded connection probe echoes nonce, records debit evidence and
     );
     const response = await probeRequest(
       provider,
-      `${earlier}\nEarlier failed request.\n${probe}`,
+      `Event ID: ${"a".repeat(64)}\nChannel: Welcome (#33333333-3333-4333-8333-333333333333)\nContent: ${earlier}\nEvent ID: ${"b".repeat(64)}\nChannel: Welcome (#44444444-4444-4444-8444-444444444444)\nContent: ${probe}`,
     );
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.match(
-      body.choices[0].message.content,
-      /11111111-1111-4111-8111-111111111111/,
+    const call = body.choices[0].message.tool_calls[0];
+    const { command } = JSON.parse(call.function.arguments);
+    assert.equal(
+      command,
+      `buzz messages send --channel 44444444-4444-4444-8444-444444444444 --reply-to ${"b".repeat(64)} --content 'Hello, your Colony connection is ready. 11111111-1111-4111-8111-111111111111'`,
     );
-    assert.equal(body.choices[0].message.tool_calls, undefined);
-    assert.equal(provider.tools.length, 0);
-    assert.equal(provider.probeRequests.length, 1);
+    const toolResult = {
+      role: "tool",
+      tool_call_id: call.id,
+      content: JSON.stringify({
+        exit_code: 0,
+        timed_out: false,
+        stdout: JSON.stringify({ accepted: true, event_id: "c".repeat(64) }),
+        stderr: "",
+      }),
+    };
+    const followup = await probeRequest(provider, probe, [toolResult]);
+    assert.equal(followup.status, 200);
+    assert.equal(
+      (await followup.json()).choices[0].message.tool_calls,
+      undefined,
+    );
+    const completed = await probeRequest(provider, probe, [
+      toolResult,
+      { role: "user", content: "You have stopped. Is the task complete?" },
+    ]);
+    assert.equal(completed.status, 200);
+    assert.equal(
+      (await completed.json()).choices[0].message.content,
+      '{"complete":true}',
+    );
+    assert.equal(provider.tools.length, 1);
+    assert.equal(provider.probeRequests.length, 3);
+    assert.equal(provider.toolResults[0].accepted, true);
     assert.equal(provider.requests[0].stage, "connection-test");
     provider.finishConnectionTest();
     assert.equal((await probeRequest(provider, probe)).status, 500);
