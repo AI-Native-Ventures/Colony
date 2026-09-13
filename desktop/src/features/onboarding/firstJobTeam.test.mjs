@@ -489,3 +489,56 @@ test("a failed Chief is reported even while the worker is still starting", async
     /Chief could not connect/,
   );
 });
+
+test("team preview retries only the rate-limited read after its cooldown", async () => {
+  const f = fixture();
+  let reads = 0;
+  let agentReads = 0;
+  const waits = [];
+  f.deps.listAgents = async () => {
+    agentReads++;
+    return f.data.agents;
+  };
+  f.deps.readHeads = async () => {
+    if (++reads === 1)
+      throw new Error("rate-limited: quota exceeded; retry in 5s");
+    return f.data.heads;
+  };
+  f.deps.delay = async (ms) => {
+    waits.push(ms);
+  };
+  assert.deepEqual(await f.adapter.ensureFirstJobTeam(SCOPE), TEAM);
+  assert.equal(reads, 2);
+  assert.equal(agentReads, 1);
+  assert.deepEqual(waits, [5000]);
+  assert.deepEqual(f.starts, []);
+});
+
+test("team preview stops on scope changes, permanent errors, long cooldowns and exhausted retries", async () => {
+  for (const reason of [
+    "invalid signature",
+    "rate-limited: quota exceeded; retry in 60s",
+    "rate-limited: quota exceeded; retry in 1s",
+  ]) {
+    const f = fixture();
+    let reads = 0;
+    f.deps.readHeads = async () => {
+      reads++;
+      throw new Error(reason);
+    };
+    await assert.rejects(f.adapter.ensureFirstJobTeam(SCOPE), {
+      message: reason,
+    });
+    assert.equal(reads, reason.endsWith("in 1s") ? 3 : 1);
+    assert.deepEqual(f.starts, []);
+  }
+  const f = fixture();
+  let reads = 0;
+  f.deps.readHeads = async () => {
+    reads++;
+    throw new Error("rate-limited: quota exceeded; retry in 1s");
+  };
+  f.deps.delay = async () => f.stale();
+  await assert.rejects(f.adapter.ensureFirstJobTeam(SCOPE), /scope changed/);
+  assert.equal(reads, 1);
+});
