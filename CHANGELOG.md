@@ -13,6 +13,11 @@
 - chore(desktop): the menu-bar icon is Colony's ant, and the native layer calls the product Colony where you can read it.
 - chore(desktop): rename the last Buzz references in native messages, and replace the beehive teammate name pool.
 
+## relay-v0.11.15
+
+- feat(relay): Colony's Chief of Staff now holds that office in every workspace. An agent a workspace created for the same role keeps its name, its record and its history; it simply stops being the executive the relay routes to. Nothing is deleted, renamed or retired.
+- fix(relay): escalation to an executive now resolves from the payroll before the owner-authored agent roster, which is the same ordering `agent_tier` already uses when it reads an employees row before any event. **This corrects a claim made for relay-v0.11.14**, whose notes said it repaired leader-to-executive promotion. It did not: promotion resolves candidates from heads authored by a community owner, and a provisioned employee signs its own definition with the employee key, so Colony's Chief of Staff was invisible to that lookup and the ladder stayed dead. 0.11.14 put the employee on the payroll, which was the prerequisite; this release is the repair.
+
 ## relay-v0.11.14
 
 - feat(relay): Colony now provides a Chief of Staff, and every provisioned employee reports to it from the moment it is seeded, so an owner never has to place one on the org chart. This repairs an existing ladder rather than adding a new one: promotion to an executive resolves the role against the payroll, the payroll had no chief of staff in any workspace, and leader-to-executive escalation was therefore dead in sixteen of seventeen production workspaces. Where a workspace already created its own agent holding that role, Colony stands down and leaves the owner's arrangement alone.
