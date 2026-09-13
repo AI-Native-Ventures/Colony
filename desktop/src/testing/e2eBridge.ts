@@ -12333,6 +12333,10 @@ export function maybeInstallE2eTauriMocks() {
         await emitMockHuddleState();
         return;
       }
+      case "prepare_dictation":
+        return;
+      case "transcribe_dictation":
+        return "Ask Sarah to draft three posts for next week.";
       case "get_model_status":
         return { stt: "ready", tts: "ready" };
       case "get_tts_settings":

@@ -755,9 +755,11 @@ impl StopOutcome {
 }
 
 /// How long SIGTERM is given before SIGKILL.
+#[cfg(unix)]
 const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Poll interval while waiting for a signalled process to exit.
+#[cfg(unix)]
 const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// SIGTERM the agent's process group, wait up to [`STOP_GRACE`], then SIGKILL.

@@ -404,6 +404,10 @@ jobs:
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           COLONY_REQUIRE_POSTER_PROOF: "1"
+      - name: Prove bundled offline dictation
+        run: |
+          node desktop/scripts/stage-dictation-model.mjs
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml bundled_whisper_transcribes_speech -- --ignored
       - name: Electron native compatibility host
         run: |
           cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --features electron-host --all-targets -- -D warnings
