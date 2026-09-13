@@ -297,6 +297,25 @@ pub async fn flush_active_pending_events(
     .await
 }
 
+/// Whether a pending kind `KIND_MANAGED_AGENT` row must be held back from a
+/// sweep publishing to `relay_url`.
+///
+/// True only when a local record with that agent pubkey exists, carries a
+/// non-blank pin, and that pin names a different community. A record the local
+/// store does not know about, and one with a blank pin, publish as before: the
+/// belt only stops a head whose own community is provably not this one.
+pub(crate) fn flush_row_pinned_elsewhere(
+    records: &[ManagedAgentRecord],
+    d_tag: &str,
+    relay_url: &str,
+) -> bool {
+    let Some(record) = records.iter().find(|record| record.pubkey == d_tag) else {
+        return false;
+    };
+    let pinned = record.relay_url.trim();
+    !pinned.is_empty() && !crate::managed_agents::reconcile::same_relay_community(pinned, relay_url)
+}
+
 async fn flush_pending_events_at(
     db_path: &std::path::Path,
     state: &AppState,
@@ -356,19 +375,17 @@ async fn flush_pending_events_at(
         // relay must not be published into this sweep's relay.
         if current.kind == KIND_MANAGED_AGENT {
             if let Some(ref records) = pinned_records {
-                if let Some(record) = records.iter().find(|r| r.pubkey == current.d_tag) {
-                    let pinned = record.relay_url.trim();
-                    if !pinned.is_empty()
-                        && !crate::managed_agents::reconcile::same_relay_community(
-                            pinned, relay_url,
-                        )
-                    {
-                        eprintln!(
-                            "buzz-desktop: event-flush: skipped kind KIND_MANAGED_AGENT row pinned elsewhere: d_tag={} pinned_relay={}",
-                            current.d_tag, pinned
-                        );
-                        continue; // skip, do not delete, leave pending
-                    }
+                if flush_row_pinned_elsewhere(records, &current.d_tag, relay_url) {
+                    let pinned_relay = records
+                        .iter()
+                        .find(|record| record.pubkey == current.d_tag)
+                        .map(|record| record.relay_url.trim())
+                        .unwrap_or_default();
+                    eprintln!(
+                        "buzz-desktop: event-flush: skipped kind {KIND_MANAGED_AGENT} row pinned elsewhere: d_tag={} pinned_relay={pinned_relay}",
+                        current.d_tag
+                    );
+                    continue; // skip, do not delete, leave pending
                 }
             }
         }
