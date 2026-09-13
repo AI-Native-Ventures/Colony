@@ -277,28 +277,6 @@ fn reconcile_inbound_tombstone(
         return Ok(()); // deletion for a kind we don't track locally
     }
 
-    // Inbound scoping: a tombstone for a managed-agent pinned to a different
-    // relay must not delete its real local agent (step 6). A blank pin keeps
-    // today's behaviour: only foreign pins are skipped.
-    if target_kind == KIND_MANAGED_AGENT {
-        let agents = load_managed_agents(app)?;
-        if let Some(record) = agents.iter().find(|r| r.pubkey == target_d_tag) {
-            let pinned = record.relay_url.trim();
-            if !pinned.is_empty()
-                && !crate::managed_agents::reconcile::same_relay_community(
-                    pinned,
-                    arrival_relay_url,
-                )
-            {
-                eprintln!(
-                    "buzz-desktop: inbound-tombstone: skipped kind {} tombstone for agent pinned elsewhere: d_tag={} pinned_relay={}",
-                    KIND_MANAGED_AGENT, target_d_tag, pinned
-                );
-                return Ok(()); // keep the local agent intact
-            }
-        }
-    }
-
     let _store_guard = state
         .managed_agents_store_lock
         .lock()
@@ -329,6 +307,32 @@ fn reconcile_inbound_tombstone(
     )?;
     if outcome == InboundOutcome::Skipped {
         return Ok(());
+    }
+
+    // Inbound scoping: a tombstone for a managed-agent pinned to a different
+    // relay must not delete its real local agent (step 6). A blank pin keeps
+    // today's behaviour: only foreign pins are skipped.
+    //
+    // The check reads the store under `_store_guard`, and after the dedupe
+    // above, so it sees the same record the delete below would remove and runs
+    // only for a tombstone that is actually about to act.
+    if target_kind == KIND_MANAGED_AGENT {
+        let agents = load_managed_agents(app)?;
+        if let Some(record) = agents.iter().find(|r| r.pubkey == target_d_tag) {
+            let pinned = record.relay_url.trim();
+            if !pinned.is_empty()
+                && !crate::managed_agents::reconcile::same_relay_community(
+                    pinned,
+                    arrival_relay_url,
+                )
+            {
+                eprintln!(
+                    "buzz-desktop: inbound-tombstone: skipped kind {} tombstone for agent pinned elsewhere: d_tag={} pinned_relay={}",
+                    KIND_MANAGED_AGENT, target_d_tag, pinned
+                );
+                return Ok(()); // keep the local agent intact
+            }
+        }
     }
 
     // Remove the local record using the SAME per-kind match rule the apply fns
