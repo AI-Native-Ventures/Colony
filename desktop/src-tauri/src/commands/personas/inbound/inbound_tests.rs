@@ -279,7 +279,13 @@ fn inbound_managed_agent_drops_injected_secrets_and_harness() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content, None);
+    apply_inbound_managed_agent(
+        &mut agents,
+        AGENT_PUBKEY,
+        content,
+        None,
+        "wss://localhost:3000",
+    );
 
     let a = &agents[0];
     // Secrets / harness / runtime — every one preserved from the local record.
@@ -370,7 +376,13 @@ fn inbound_definition_less_agent_applies_quad() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content, None);
+    apply_inbound_managed_agent(
+        &mut agents,
+        AGENT_PUBKEY,
+        content,
+        None,
+        "wss://localhost:3000",
+    );
 
     let a = &agents[0];
     assert_eq!(a.persona_id, None);
@@ -390,7 +402,13 @@ fn inbound_managed_agent_no_match_is_noop() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, "someotheragentpubkey", content, None);
+    apply_inbound_managed_agent(
+        &mut agents,
+        "someotheragentpubkey",
+        content,
+        None,
+        "wss://localhost:3000",
+    );
 
     // No agent minted from a relay event — it would have no secret key.
     assert_eq!(agents.len(), 1);
@@ -565,7 +583,13 @@ fn inbound_managed_agent_keeps_the_owner_authored_rank() {
     let parsed =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, parsed, None);
+    apply_inbound_managed_agent(
+        &mut agents,
+        AGENT_PUBKEY,
+        parsed,
+        None,
+        "wss://localhost:3000",
+    );
 
     assert_eq!(
         agents[0].tier.as_deref(),
