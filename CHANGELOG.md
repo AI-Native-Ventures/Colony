@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.17.7
+
+- feat(desktop): a role Colony holds does not lend its rank to anybody else's agent. An agent claiming `chief-of-staff` while Colony's provisioned Chief of Staff holds that office no longer inherits executive from it, so the org chart shows one executive rather than two. An agent an owner ranked explicitly keeps the rank they gave it: not holding an office is not a demotion.
+
+
 - feat(desktop): simplify Appearance to Default and Custom, with two saved gradient colors while preserving the default palette and workspace background choices.
 
 - feat(onboarding): show four clear setup steps, require a successful agent reply before entry, and let owners review memories from selected local AI history.
