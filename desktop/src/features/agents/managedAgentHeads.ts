@@ -221,12 +221,44 @@ function rankImpliedByRole(roleId: string | null): AgentRank {
  * This never overrides a stated rank; it only replaces the empty case.
  */
 export function resolveManagedAgentRank(
-  head: Pick<ManagedAgentHead, "roleId" | "tierRank">,
-  employeesByRole: ReadonlyMap<string, { rank: AgentRank }>,
+  head: Pick<ManagedAgentHead, "roleId" | "tierRank" | "pubkey">,
+  employeesByRole: ReadonlyMap<
+    string,
+    { rank: AgentRank; pubkey?: string; provisioned?: string | null }
+  >,
 ): AgentRank {
   if (head.roleId) {
     const employee = employeesByRole.get(head.roleId);
-    if (employee) return employee.rank;
+    if (employee) {
+      // A role Colony holds confers nothing on anyone else. From relay
+      // 0.11.15 a provisioned employee holds its role outright, so an agent
+      // the workspace created that claims the same role keeps its own record
+      // and its own stated rank but must not INHERIT the office's rank from
+      // the employee holding it. Without this the chart promotes every such
+      // agent to executive the moment Colony's Chief of Staff is seeded, and
+      // draws two chiefs of staff with no indication which one the relay
+      // obeys.
+      //
+      // SAME ROLE ONLY, deliberately. Colony seeds an executive into every
+      // workspace, so a rule of the form "a provisioned employee outranks
+      // any other executive" silently reassigns every workspace's chart and
+      // its escalation routing. The relay learned that the hard way in
+      // #757: it promoted an ask to the provisioned Chief of Staff in a
+      // workspace whose own executive held a different office entirely. A
+      // workspace's own executive keeps its office; Colony takes over only
+      // the office it provides.
+      const heldByColony =
+        employee.provisioned != null &&
+        employee.provisioned !== "" &&
+        employee.pubkey !== undefined &&
+        head.pubkey !== undefined &&
+        normalizePubkey(employee.pubkey) !== normalizePubkey(head.pubkey);
+      if (!heldByColony) return employee.rank;
+      // Its own stated rank still stands: not holding the office is not the
+      // same as being demoted, and demoting an agent the owner created is
+      // not ours to do.
+      return head.tierRank ?? "leader";
+    }
   }
   return head.tierRank ?? rankImpliedByRole(head.roleId);
 }

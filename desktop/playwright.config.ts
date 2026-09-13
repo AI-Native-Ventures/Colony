@@ -44,6 +44,7 @@ export default defineConfig({
       testMatch: [
         "**/smoke.spec.ts",
         "**/inline-reply-model.spec.ts",
+        "**/composer-dictation.spec.ts",
         "**/rich-document-previews.spec.ts",
         "**/rich-media-previews.spec.ts",
         "**/approved-blocks-design.spec.ts",
@@ -112,6 +113,7 @@ export default defineConfig({
         "**/edit-agent.spec.ts",
         "**/agent-identity-redesign.spec.ts",
         "**/first-job-handoff.spec.ts",
+        "**/scout-channel-onboarding.spec.ts",
         "**/doctor-cta-screenshots.spec.ts",
         "**/pubkey-display-screenshots.spec.ts",
         "**/agent-rank-screenshots.spec.ts",

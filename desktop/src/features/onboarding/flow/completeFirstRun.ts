@@ -5,6 +5,8 @@ import type { FirstJobScope } from "../firstJobStart";
 import type { FounderBriefSummary } from "../founderBriefSummary";
 import { founderBriefSummaryFrom } from "../founderBriefSummary";
 import type { OnboardingV2Draft } from "../onboardingV2";
+import { scoutOnboardingRootSeedFromDraft } from "../channelOnboardingRuntime/protocol";
+import type { ScoutInitialHandoffInput } from "../channelOnboardingRuntime/handoff";
 import {
   buildOnboardingFirstTaskMessage,
   onboardingFirstTaskMarker,
@@ -13,9 +15,9 @@ import {
 /**
  * The one first-run completion, shared by the canvas flow and the legacy
  * community flow so the two paths cannot drift: starter channels + the
- * private Welcome channel ensured, the founder's kind:0 published, Scout's
- * brief delivered exactly once, the router pointed at Welcome, and the
- * app-level gate key written.
+ * private Welcome channel ensured, the founder's kind:0 published, the
+ * choice-first root or legacy brief delivered exactly once, the router pointed
+ * at Welcome, and the app-level gate key written.
  *
  * This module is deliberately free of React and Tauri imports. Everything it
  * touches arrives through {@link CompleteFirstRunIo}; production callers use
@@ -34,7 +36,7 @@ export type CompleteFirstRunDeps = {
   assertCurrent?: () => void;
   relayUrl: string;
   pubkey: string;
-  /** Scout's opening brief; null skips delivery entirely. */
+  /** The persisted choice-first root or legacy brief; null skips delivery. */
   draft: OnboardingV2Draft | null;
   /** kind:0 display name to publish; null/empty skips the profile write. */
   profileDisplayName: string | null;
@@ -46,7 +48,7 @@ export type CompleteFirstRunDeps = {
 
 export type CompleteFirstRunResult = {
   focusChannelId: string | null;
-  /** Event id of the delivered brief, "already-delivered", or null. */
+  /** Event id of the delivered root/brief, "already-delivered", or null. */
   firstTaskEventId: string | null;
 };
 
@@ -98,6 +100,10 @@ export type CompleteFirstRunIo = {
   ) => Promise<void>;
   /** Focus the actual acknowledged setup root in the existing Welcome thread. */
   navigateToThread?: (channelId: string, eventId: string) => void;
+  /** Choice-first signup handoff; no company setup or agent work is dispatched. */
+  startChannelOnboarding?: (
+    input: ScoutInitialHandoffInput,
+  ) => Promise<{ focusChannelId: string; rootEventId: string }>;
 };
 
 /**
@@ -110,7 +116,34 @@ export async function completeFirstRun(
   io: CompleteFirstRunIo,
 ): Promise<CompleteFirstRunResult> {
   deps.assertCurrent?.();
+  const choiceMode = deps.draft?.firstTask.mode === "choice";
   const suggestionMode = deps.draft?.firstTask.mode === "suggestion";
+  if (choiceMode) {
+    if (!deps.draft || !io.startChannelOnboarding) {
+      throw new Error(
+        "The Scout onboarding handoff is unavailable. Update Colony and retry.",
+      );
+    }
+    const handoff = await io.startChannelOnboarding({
+      queryClient: deps.queryClient,
+      ownerPubkey: deps.pubkey,
+      relayUrl: deps.relayUrl,
+      requestId: deps.draft.firstTask.deliveryMarker,
+      seed: scoutOnboardingRootSeedFromDraft(deps.draft),
+      assertCurrent: deps.assertCurrent,
+      profile: {
+        displayName: deps.profileDisplayName,
+        avatarUrl: deps.profileAvatarUrl,
+        displayNameIfMissing: deps.profileDisplayNameIfMissing,
+      },
+    });
+    deps.assertCurrent?.();
+    io.markComplete(deps.pubkey, deps.relayUrl);
+    return {
+      focusChannelId: handoff.focusChannelId,
+      firstTaskEventId: handoff.rootEventId,
+    };
+  }
   const ensureBusinessContext = io.ensureBusinessContext;
   if (suggestionMode) {
     if (

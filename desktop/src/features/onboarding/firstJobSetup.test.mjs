@@ -10,6 +10,7 @@ import {
   firstJobSuggestionTag,
   FIRST_JOB_SUGGESTION_MARKER,
 } from "./firstJobSuggestion.ts";
+import { SCOUT_ONBOARDING_ROOT_MARKER } from "./channelOnboardingRuntime/protocol.ts";
 const scope = { ownerPubkey: "a".repeat(64), relayUrl: "wss://example.test" };
 const memory = () => {
   const map = new Map();
@@ -121,6 +122,24 @@ test("legacy history must finish without a suggestion before automatic kickoff i
     await allowLegacyFirstJobKickoff(async () => {
       throw Error("offline");
     }),
+    false,
+  );
+});
+
+test("a choice-first root marker suppresses automatic legacy kickoff", async () => {
+  const current = { ...scope, channelId: "welcome" };
+  const event = {
+    id: "d".repeat(64),
+    kind: 9,
+    pubkey: scope.ownerPubkey,
+    tags: [
+      ["h", "welcome"],
+      ["client", SCOUT_ONBOARDING_ROOT_MARKER, "{}"],
+    ],
+  };
+  assert.equal(suppressLegacyFirstJobKickoff("legacy", current, [event]), true);
+  assert.equal(
+    await allowLegacyFirstJobKickoff(async () => [{ tags: event.tags }]),
     false,
   );
 });

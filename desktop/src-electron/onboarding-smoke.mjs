@@ -142,6 +142,7 @@ const proof = {
       "onboarding-fixture/tool-result.mjs",
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",
+      "onboarding-fixture/scout-setup.mjs",
       "onboarding-fixture/relay.mjs",
       "onboarding-fixture/proxy.mjs",
       "onboarding-fixture/certificates.mjs",
@@ -383,7 +384,16 @@ try {
   );
   const counts = async () => ({
     suggestion: await relay.query(
-      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND tags @> '[["client","colony:first-job-suggestion:v1"]]'::jsonb;`,
+      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)=3 AND tag->>0='client' AND tag->>1='colony:first-job-suggestion:v1');`,
+    ),
+    scoutRoot: await relay.query(
+      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)=3 AND tag->>0='client' AND tag->>1='colony:scout-onboarding-root:v1');`,
+    ),
+    scoutAcknowledgement: await relay.query(
+      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)=3 AND tag->>0='client' AND tag->>1='colony:scout-onboarding-approval:v1');`,
+    ),
+    scoutReply: await relay.query(
+      `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND pubkey=decode('${result.scoutSetup.scout.pubkey}','hex') AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE jsonb_array_length(tag)>=2 AND tag->>0='e' AND tag->>1='${result.scoutSetup.acknowledgementEventId}');`,
     ),
     instruction: await relay.query(
       `SELECT count(*) FROM events WHERE ${where} AND kind=9 AND tags @> '[["client","colony:first-job-start:v1"]]'::jsonb;`,
@@ -394,19 +404,29 @@ try {
   });
   assert.deepEqual(await counts(), {
     suggestion: "1",
+    scoutRoot: "1",
+    scoutAcknowledgement: "1",
+    scoutReply: "1",
     instruction: "0",
     tasks: "0",
   });
   provider.assertHealthy();
-  assert.equal(provider.receivedCallCount, result.connectionProbe.calls);
+  assert.equal(provider.receivedCallCount, result.preLegacyModelCalls);
   assert.ok(
-    provider.requests.every((request) => request.stage === "connection-test"),
+    provider.requests.every((request) =>
+      ["connection-test", "scout-onboarding"].includes(request.stage),
+    ),
+  );
+  assert.ok(
+    provider.requests.some((request) => request.stage === "scout-onboarding"),
+    "Approved setup produced a paid Scout-only model turn",
   );
   const { page: _page, rootEvent: _event, ...identifiers } = result;
   Object.assign(proof, identifiers, {
     accountCompleted: true,
     zeroCreditConnection: "blocked before model call; funded probe then passed",
-    beforeWorkApproval: "no Task, job instruction or business-work model call",
+    beforeWorkApproval:
+      "Scout setup acknowledgment/reply verified; no Task, job instruction or business-work model call",
     hostedSignup: "not tested",
     workerCompletion: "not completed",
   });
@@ -433,7 +453,8 @@ try {
   Object.assign(proof, identifiers, {
     completed: true,
     zeroCreditConnection: "blocked before model call; funded probe then passed",
-    beforeWorkApproval: "no Task, job instruction or business-work model call",
+    beforeWorkApproval:
+      "Scout setup acknowledgment/reply verified; no Task, job instruction or business-work model call",
     hostedSignup: "not tested",
     workerCompletion,
     chromiumTrust:

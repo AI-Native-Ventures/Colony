@@ -5,6 +5,8 @@ import { assertFirstJobScope } from "../firstJobScope";
 import { markExplicitFirstJobSetup } from "../firstJobSetup";
 import { withFirstJobBrowserLock } from "../firstJobStorage";
 import { createFirstJobSuggestionDelivery } from "../firstJobSuggestionDelivery";
+import { createScoutOnboardingRootDelivery } from "../channelOnboardingRuntime/delivery";
+import { startScoutOnboardingHandoff } from "../channelOnboardingRuntime/handoff";
 // desktop/src/features/onboarding/flow/completeFirstRunIo.ts
 import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 
@@ -39,6 +41,26 @@ const suggestionDelivery = createFirstJobSuggestionDelivery({
   now: Date.now,
 });
 
+const scoutRootDelivery = createScoutOnboardingRootDelivery({
+  storage: {
+    getItem: (key) => globalThis.localStorage.getItem(key),
+    setItem: (key, value) => globalThis.localStorage.setItem(key, value),
+  },
+  assertCurrent: async (scope) => {
+    await assertFirstJobScope(scope);
+  },
+  withLock: withFirstJobBrowserLock,
+  sign: signRelayEvent,
+  publish: (event, scope) =>
+    relayClient.publishEvent(
+      event,
+      "Colony could not confirm this signup context was saved. Retry the same setup.",
+      "Colony could not save this signup context. Retry the same setup.",
+      scope.relayUrl,
+    ),
+  now: Date.now,
+});
+
 /**
  * The real wiring for {@link completeFirstRun}. Lives apart from the pure
  * module so unit tests never import React, TanStack, or the Tauri bridge.
@@ -49,6 +71,53 @@ export const DEFAULT_COMPLETE_FIRST_RUN_IO: CompleteFirstRunIo = {
     markExplicitFirstJobSetup(scope);
   },
   deliverSuggestion: suggestionDelivery.deliver,
+  startChannelOnboarding: (input) =>
+    startScoutOnboardingHandoff(input, {
+      markExplicitHandoff: async (scope) => {
+        await assertFirstJobScope(scope);
+        markExplicitFirstJobSetup(scope);
+      },
+      initializeStarterChannels: (queryClient, args) =>
+        initializeStarterChannels(
+          queryClient as Parameters<typeof initializeStarterChannels>[0],
+          args,
+        ),
+      updateProfile: async (profileInput, context) => {
+        context.assertCurrent?.();
+        await assertFirstJobScope({
+          ownerPubkey: context.pubkey,
+          relayUrl: context.relayUrl,
+        });
+        const profile = await updateProfile(profileInput, {
+          pubkey: context.pubkey,
+          relayUrl: context.relayUrl,
+          displayNameIfMissing: context.profileDisplayNameIfMissing,
+        });
+        context.assertCurrent?.();
+        if (profile.pubkey.toLowerCase() !== context.pubkey.toLowerCase()) {
+          throw new Error("The active account changed. Retry setup.");
+        }
+        await refreshProfileCaches(
+          context.queryClient as QueryClient,
+          profile,
+          context.relayUrl,
+        );
+        return profile;
+      },
+      deliverRoot: scoutRootDelivery.deliver,
+      takePendingWelcomeChannelForDirectEntry,
+      navigateToChannel: (channelId) => {
+        window.location.hash = `/channels/${channelId}`;
+      },
+      navigateToThread: (channelId, eventId) => {
+        const params = new URLSearchParams({
+          thread: eventId,
+          threadRootId: eventId,
+          messageId: eventId,
+        });
+        window.location.hash = `/channels/${encodeURIComponent(channelId)}?${params}`;
+      },
+    }),
   ensureBusinessContext: ensureFirstJobBusinessContext,
   navigateToThread: (channelId, eventId) => {
     const params = new URLSearchParams({

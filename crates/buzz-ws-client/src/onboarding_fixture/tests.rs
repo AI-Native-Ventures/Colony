@@ -275,10 +275,10 @@ async fn destination_and_resolver_never_fall_back_for_unmapped_names() {
         "https://business.run.invalid:444",
         "https://business.run.invalid/#fragment",
     ] {
-        assert_eq!(
+        assert!(matches!(
             fixture.destination(url),
-            Err(FixtureError::UnmappedDestination)
-        );
+            Err(FixtureError::UnmappedDestinationDetail(_))
+        ));
         assert!(fixture.connect_websocket(url).await.is_err());
     }
     assert!(fixture

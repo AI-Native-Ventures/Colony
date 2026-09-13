@@ -35,6 +35,10 @@ function makeIo(overrides = {}) {
 }
 
 const base = createOnboardingV2Draft();
+// This fixture exercises the shipped explicit legacy task path. New signup
+// drafts default to choice mode; legacy behavior must remain intentional in
+// tests and callers that still provide a v1-style draft.
+base.firstTask.mode = undefined;
 const draft = {
   ...base,
   firstTask: { ...base.firstTask, content: "Get to know Acme." },

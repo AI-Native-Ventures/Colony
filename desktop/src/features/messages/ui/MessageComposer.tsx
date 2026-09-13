@@ -1,5 +1,4 @@
 import * as React from "react";
-import { EditorContent } from "@tiptap/react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import { handleAgentSnapshotPaste } from "@/features/messages/lib/agentSnapshotClipboard";
 import { useComposerAutofocus } from "@/features/messages/lib/useComposerAutofocus";
@@ -49,6 +48,8 @@ import {
   MentionAutocomplete,
   type MentionSuggestion,
 } from "./MentionAutocomplete";
+import { useComposerDictation } from "../lib/useComposerDictation";
+import { ComposerEditor } from "./ComposerEditor";
 import { ComposerDockToolbar } from "./ComposerDockToolbar";
 import { ComposerUploadProgressPill } from "./ComposerUploadProgressPill";
 import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
@@ -62,40 +63,41 @@ import { submitMessageEdit } from "./submitMessageEdit";
 import { useComposerLinkPreviews } from "./useComposerLinkPreviews";
 import { useComposerAutoSubmit } from "./useComposerAutoSubmit";
 import type { MessageComposerProps } from "./MessageComposer.types";
-function MessageComposerImpl({
-  audienceContext = null,
-  channelId = null,
-  channelName,
-  channelType = null,
-  containerClassName,
-  layoutMode = "standalone",
-  disabled = false,
-  draftKey,
-  initialBlockReference,
-  initialContent,
-  autoSubmitDraftKey = null,
-  onAutoSubmitComplete,
-  editTarget = null,
-  isSending = false,
-  onDeferredEditPendingChange,
-  onCancelEdit,
-  onCancelReply,
-  onCaptureSendContext,
-  onEditLastOwnMessage,
-  onEditSave,
-  onPrepareSendChannel,
-  onPreparingMentionSendChange,
-  onSend,
-  placeholder,
-  profiles,
-  replyTarget = null,
-  mediaController,
-  showBackgroundUploadProgress = true,
-  showTopBorder = false,
-  toolbarExtraActions,
-  typingParentEventId = null,
-  typingRootEventId = null,
-}: MessageComposerProps) {
+function MessageComposerImpl(props: MessageComposerProps) {
+  const {
+    audienceContext = null,
+    channelId = null,
+    channelName,
+    channelType = null,
+    containerClassName,
+    layoutMode = "standalone",
+    disabled = false,
+    draftKey,
+    initialBlockReference,
+    initialContent,
+    autoSubmitDraftKey = null,
+    onAutoSubmitComplete,
+    editTarget = null,
+    isSending = false,
+    onDeferredEditPendingChange,
+    onCancelEdit,
+    onCancelReply,
+    onCaptureSendContext,
+    onEditLastOwnMessage,
+    onEditSave,
+    onPrepareSendChannel,
+    onPreparingMentionSendChange,
+    onSend,
+    placeholder,
+    profiles,
+    replyTarget = null,
+    mediaController,
+    showBackgroundUploadProgress = true,
+    showTopBorder = false,
+    toolbarExtraActions,
+    typingParentEventId = null,
+    typingRootEventId = null,
+  } = props;
   const {
     contentRef,
     isContentEmpty,
@@ -235,9 +237,7 @@ function MessageComposerImpl({
     emojiAutocomplete.isEmojiAutocompleteOpen;
   const submitMessageRef = React.useRef<() => void>(() => {});
   const composerScrollRef = React.useRef<HTMLDivElement>(null);
-  // Set after `useLinkEditor` exists below; the editor's link-click handler
-  // delegates through this ref to break the hook ordering cycle (the editor
-  // needs `onEditLink`, but the link editor needs the editor's `richText`).
+  // Refs break the editor/link-editor hook ordering cycle.
   const onEditLinkRef = React.useRef<
     ((info: LinkSelectionInfo) => void) | null
   >(null);
@@ -268,8 +268,7 @@ function MessageComposerImpl({
     customEmoji,
     onSubmit: () => submitMessageRef.current(),
     onEditLastOwnMessage: () => {
-      // Never re-enter edit from an empty edit (e.g. image-only edit whose
-      // text body is empty) — `editTarget` means we're already editing.
+      // An existing edit target prevents re-entering edit, even for empty text.
       if (editTargetRef.current) return false;
       const handler = onEditLastOwnMessageRef.current;
       return handler ? handler() : false;
@@ -290,6 +289,11 @@ function MessageComposerImpl({
       }
     },
   });
+  const dictation = useComposerDictation(
+    richText.editor,
+    props,
+    composerDisabled || isSending,
+  );
   const linkEditor = useLinkEditor(richText);
   syncContentRefFromEditorRef.current = () => {
     const markdown = richText.getMarkdown();
@@ -525,13 +529,12 @@ function MessageComposerImpl({
     mentions.updateMentionQuery,
   ]);
   const submitMessage = React.useCallback(async () => {
+    if (dictation.busy()) return;
     const trimmed = syncComposerContentFromEditor().trim();
     // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
       if (isEditSubmissionLocked) return;
-      // No empty-edit guard here: clearing an edit to empty (no text, no
-      // attachments) flows through to onEditSave as empty content, which
-      // deletes the message instead of publishing it (see handleEditSave).
+      // Empty edits delete the message through handleEditSave.
       await submitMessageEdit({
         content: trimmed,
         editTargetId: editTargetRef.current.id,
@@ -623,6 +626,7 @@ function MessageComposerImpl({
       onPreparingMentionSendChange?.(false);
     }
   }, [
+    dictation.busy,
     channelId,
     channelLinks.clearChannels,
     customEmoji,
@@ -663,6 +667,7 @@ function MessageComposerImpl({
     onAutoSubmitComplete,
     hasPendingLinkPreviewSnapshotsRef,
     submitMessageRef,
+    dictation.hasStarted,
   );
   const handleSubmit = React.useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
@@ -671,11 +676,7 @@ function MessageComposerImpl({
     },
     [submitMessage],
   );
-  // ── Keyboard handling ───────────────────────────────────────────────
-  // Tiptap handles formatting shortcuts (⌘B, ⌘I, etc.) natively.
-  // Plain Enter → submit is now handled inside the Tiptap `submitOnEnter`
-  // extension (fires before ProseMirror's splitBlock). This wrapper only
-  // handles autocomplete arrow/enter keys and Escape for edit mode.
+  // Tiptap submits on Enter; this wrapper handles autocomplete and edit Escape.
   const handleEditorKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       // Let autocomplete handle keys first
@@ -964,15 +965,12 @@ function MessageComposerImpl({
               </div>
             )}
 
-            {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
-            <div
-              className="rich-text-composer relative max-h-32 overflow-y-auto"
-              data-testid="message-input-scroll"
-              ref={composerScrollRef}
+            <ComposerEditor
+              editor={richText.editor}
+              dictation={dictation}
+              scrollRef={composerScrollRef}
               onKeyDown={handleEditorKeyDown}
-            >
-              <EditorContent editor={richText.editor} />
-            </div>
+            />
 
             {mentionSendFlow.newTaskToggle}
             <ReplyModelControls
@@ -984,6 +982,7 @@ function MessageComposerImpl({
               composerDisabled={composerDisabled}
               editor={richText.editor}
               extraActions={toolbarExtraActions}
+              dictation={dictation}
               formattingDisabled={composerDisabled}
               isEmojiPickerOpen={isEmojiPickerOpen}
               isFormattingOpen={isFormattingOpen}

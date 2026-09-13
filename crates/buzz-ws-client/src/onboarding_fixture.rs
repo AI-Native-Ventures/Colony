@@ -45,6 +45,9 @@ pub enum FixtureError {
     /// Requests must use an exact configured canonical HTTPS/WSS origin.
     #[error("URL is not an allowed onboarding fixture destination")]
     UnmappedDestination,
+    /// Same rejection with a sanitized origin and path for fixture diagnostics.
+    #[error("URL is not an allowed onboarding fixture destination: {0}")]
+    UnmappedDestinationDetail(String),
     /// Worker transport must retain the existing authenticated loopback gateway.
     #[error("invalid onboarding fixture worker gateway")]
     InvalidGateway,
@@ -169,19 +172,19 @@ impl FixtureTransport {
     /// Paths and queries are retained by callers; credentials, fragments,
     /// non-default ports, plaintext schemes and unlisted hosts are rejected.
     pub fn destination(&self, original_url: &str) -> Result<SocketAddr, FixtureError> {
-        let url = url::Url::parse(original_url).map_err(|_| FixtureError::UnmappedDestination)?;
+        let url = url::Url::parse(original_url).map_err(|_| rejected_destination(original_url))?;
         if !matches!(url.scheme(), "https" | "wss")
             || !url.username().is_empty()
             || url.password().is_some()
             || url.fragment().is_some()
             || url.port().is_some()
         {
-            return Err(FixtureError::UnmappedDestination);
+            return Err(rejected_destination(original_url));
         }
         url.host_str()
             .and_then(|host| self.resolver.0.get(host))
             .copied()
-            .ok_or(FixtureError::UnmappedDestination)
+            .ok_or_else(|| rejected_destination(original_url))
     }
 
     /// Configure fresh HTTP clients for direct fixture sockets and fixture-only TLS.
@@ -294,6 +297,42 @@ fn canonical_fixture_host(host: &str) -> bool {
         })
 }
 
+/// Emit enough information to diagnose a fixture allowlist miss without
+/// copying credentials, query values, fragments or other URL data into logs.
+fn rejected_destination(original_url: &str) -> FixtureError {
+    let display = safe_origin_path(original_url).unwrap_or_else(|| "<unparseable>".to_owned());
+    eprintln!("buzz onboarding fixture rejected destination origin+path={display}");
+    FixtureError::UnmappedDestinationDetail(display)
+}
+
+fn safe_origin_path(original_url: &str) -> Option<String> {
+    url::Url::parse(original_url).ok().and_then(|url| {
+        let host = url.host_str()?;
+        let host = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_owned()
+        };
+        let port = url
+            .port()
+            .map(|port| format!(":{port}"))
+            .unwrap_or_default();
+        let path: String = url
+            .path()
+            .chars()
+            .filter(|character| character.is_ascii_graphic())
+            .take(256)
+            .collect();
+        Some(format!(
+            "{}://{}{}{}",
+            url.scheme(),
+            host,
+            port,
+            if path.is_empty() { "/" } else { &path },
+        ))
+    })
+}
+
 fn validate_gateway(value: &str) -> Result<(), FixtureError> {
     let url = url::Url::parse(value).map_err(|_| FixtureError::InvalidGateway)?;
     if url.scheme() != "http"
@@ -314,3 +353,18 @@ fn validate_gateway(value: &str) -> Result<(), FixtureError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::safe_origin_path;
+
+    #[test]
+    fn destination_diagnostic_excludes_url_secrets() {
+        assert_eq!(
+            safe_origin_path(
+                "https://fixture-user:fixture-token@public.example.invalid/gateway?token=secret#private"
+            ),
+            Some("https://public.example.invalid/gateway".to_owned())
+        );
+    }
+}

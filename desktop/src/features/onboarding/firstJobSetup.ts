@@ -2,6 +2,7 @@ import {
   FIRST_JOB_SUGGESTION_MARKER,
   canStartFirstJobSuggestion,
 } from "./firstJobSuggestion";
+import { SCOUT_ONBOARDING_ROOT_MARKER } from "./channelOnboardingRuntime/protocol";
 
 /** The owner and exact community that opted into explicit first-job Start. */
 export type FirstJobSetupScope = { ownerPubkey: string; relayUrl: string };
@@ -105,11 +106,16 @@ export function suppressLegacyFirstJobKickoff(
 ): boolean {
   return (
     status !== "legacy" ||
-    events.some((event) =>
-      canStartFirstJobSuggestion(
-        { ...event, signerPubkey: event.pubkey },
-        scope,
-      ),
+    events.some(
+      (event) =>
+        event.tags.some(
+          (tag) =>
+            tag[0] === "client" && tag[1] === SCOUT_ONBOARDING_ROOT_MARKER,
+        ) ||
+        canStartFirstJobSuggestion(
+          { ...event, signerPubkey: event.pubkey },
+          scope,
+        ),
     )
   );
 }
@@ -125,7 +131,9 @@ export async function allowLegacyFirstJobKickoff(
       !events.some((event) =>
         event.tags.some(
           (tag) =>
-            tag[0] === "client" && tag[1] === FIRST_JOB_SUGGESTION_MARKER,
+            tag[0] === "client" &&
+            (tag[1] === FIRST_JOB_SUGGESTION_MARKER ||
+              tag[1] === SCOUT_ONBOARDING_ROOT_MARKER),
         ),
       )
     );

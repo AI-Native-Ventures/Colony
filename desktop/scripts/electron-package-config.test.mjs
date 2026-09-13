@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import {
   CANARY_KEYRING_SERVICE,
+  PORT_KEYRING_SERVICE,
   electronBetaBuildEnv,
   ELECTRON_BETA_RELAY,
   electronPackageVariant,
@@ -108,6 +109,61 @@ test("a canary cannot be built as a fixture, a debug build or a candidate", () =
   // Ad-hoc stays explicit, and a local canary is allowed to ask for it.
   assert.throws(() => electronPackageVariant(["--ad-hoc"]), /requires/);
   assert.equal(electronPackageVariant(["--canary", "--ad-hoc"]).canary, true);
+});
+
+test("the port is a separate app from stable and canary, never a renamed one", () => {
+  const port = electronPackageVariant(["--production", "--port"]);
+  const stable = electronPackageVariant(["--production"]);
+  const canary = electronPackageVariant(["--production", "--canary"]);
+  assert.equal(port.name, "Colony Port");
+  assert.equal(port.channel, "port");
+  assert.equal(port.bundleId, "ventures.ainative.colony.port");
+  assert.equal(port.outputSuffix, "-port");
+  assert.equal(port.stable, false);
+  assert.equal(port.release, true);
+  assert.equal(port.port, true);
+  assert.equal(port.fixture, false);
+  assert.notEqual(port.executableName, stable.executableName);
+  assert.equal(port.executableName, "colony-port");
+  assert.notEqual(port.bundleId, stable.bundleId);
+  assert.notEqual(port.bundleId, canary.bundleId);
+  assert.notEqual(port.outputSuffix, stable.outputSuffix);
+  assert.notEqual(port.outputSuffix, canary.outputSuffix);
+  assert.equal(port.hostFeatures, stable.hostFeatures);
+  assert.equal(port.developerId, stable.developerId);
+  assert.equal(
+    electronPackageVariant(["--production", "--port", "--ad-hoc"]).developerId,
+    false,
+  );
+});
+
+test("a port cannot be built as a fixture, a debug build or a candidate", () => {
+  assert.throws(
+    () => electronPackageVariant(["--port", "--onboarding-fixture"]),
+    /fixture, debug or conflicting/,
+  );
+  assert.throws(
+    () => electronPackageVariant(["--port", "--debug"]),
+    /fixture, debug or conflicting/,
+  );
+  assert.throws(
+    () => electronPackageVariant(["--port", "--production-candidate"]),
+    /production candidate/,
+  );
+  assert.throws(
+    () => electronPackageVariant(["--port", "--canary"]),
+    /mutually exclusive/,
+  );
+  assert.equal(electronPackageVariant(["--port", "--ad-hoc"]).port, true);
+});
+
+test("the port keyring service is owned here, not by a workflow", async () => {
+  assert.equal(PORT_KEYRING_SERVICE, "colony-port-desktop");
+  const source = await readFile(
+    new URL("./electron-package.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /BUZZ_DESKTOP_KEYRING_SERVICE = PORT_KEYRING_SERVICE/);
 });
 
 test("the canary keyring service is owned here, not by a workflow", async () => {

@@ -129,6 +129,7 @@ test("v1 drafts migrate with their captured context and most advanced stage", ()
   assert.equal(migrated.company.summary, "A captured summary.");
   assert.equal(migrated.firstTask.content, "Ship the rework");
   assert.equal(migrated.firstTask.deliveryMarker, "marker-1");
+  assert.equal(migrated.firstTask.mode, undefined);
 });
 
 test("v1 drafts still on early stages land back on those steps", () => {
@@ -149,4 +150,25 @@ test("garbage drafts do not migrate", () => {
   assert.equal(migrateOnboardingV2Draft(null), null);
   assert.equal(migrateOnboardingV2Draft({ version: 1 }), null);
   assert.equal(migrateOnboardingV2Draft("nope"), null);
+});
+
+test("an unknown v2 completion mode fails closed to choice-first", () => {
+  const draft = createOnboardingV2Draft();
+  const migrated = migrateOnboardingV2Draft({
+    ...draft,
+    firstTask: { ...draft.firstTask, mode: "future-mode" },
+  });
+  assert.equal(migrated?.firstTask.mode, "choice");
+  assert.equal(isOnboardingV2Draft(migrated), true);
+});
+
+test("fresh and resumed v2 drafts are choice-first", () => {
+  const fresh = createOnboardingV2Draft();
+  assert.equal(fresh.firstTask.mode, "choice");
+
+  const resumed = migrateOnboardingV2Draft({
+    ...fresh,
+    firstTask: { ...fresh.firstTask, mode: undefined },
+  });
+  assert.equal(resumed?.firstTask.mode, "choice");
 });
