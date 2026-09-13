@@ -681,6 +681,7 @@ jobs:
             -p buzz-test-client \
             --lib \
             --bin buzz-relay \
+            --test boot_lifecycle \
             --test e2e_event_reminder \
             --test interrupt_gate \
             --test interrupt_runtime \
@@ -1184,6 +1185,14 @@ jobs:
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           TEST_DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Startup lifecycle evidence
+        # Spawns the relay binary against a dead TCP listener standing in for
+        # Postgres, so it needs no database; it proves the pre-runtime boot
+        # phases emit exactly one bounded terminal each.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and binary(boot_lifecycle)'
       - name: Writer session timeout guardrails
         run: |
           cargo nextest run \

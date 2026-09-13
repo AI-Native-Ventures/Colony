@@ -61,6 +61,8 @@ pub mod invite_token;
 /// Colony job queue: reclaiming lapsed leases and escalating jobs that are
 /// going nowhere.
 pub mod job_runtime;
+/// Fixed-schema evidence for the relay's earliest startup steps.
+pub mod lifecycle;
 /// Inter-relay mesh startup wiring (`BUZZ_MESH` seam).
 pub mod mesh_boot;
 /// Prometheus metrics: recorder, upkeep, HTTP middleware.
@@ -96,6 +98,8 @@ pub mod subscription;
 pub mod telemetry;
 /// Row-zero host binding: resolve the request community from the connection host.
 pub mod tenant;
+#[cfg(test)]
+mod test_support;
 /// One open task per thread: attach-or-open, completion reports, cascade close.
 pub(crate) mod thread_task_broker;
 /// Relay-side tunnel session directory and routing.
