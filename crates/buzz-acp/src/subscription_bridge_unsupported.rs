@@ -1,5 +1,5 @@
 //! Explicit platform boundary for subscriptions that require Unix process isolation.
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
 const REASON: &str = "Subscription process isolation is unavailable on this platform";
 
