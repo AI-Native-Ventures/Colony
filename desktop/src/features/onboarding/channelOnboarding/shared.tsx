@@ -72,17 +72,17 @@ export function StageFrame({
   return (
     <section
       aria-label="Scout onboarding conversation"
-      className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6 sm:py-7"
+      className="mx-auto flex min-w-0 w-full max-w-3xl flex-col gap-4 px-4 py-5 @sm:px-6 @sm:py-7"
     >
-      <div className="flex items-center gap-2 text-2xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-2 text-2xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
         <Icon aria-hidden="true" className="size-3.5 text-primary" />
-        <span>{STAGE_TITLES[state.stage]}</span>
+        <span className="min-w-0">{STAGE_TITLES[state.stage]}</span>
         <span className="ml-auto tabular-nums text-muted-foreground/70">
           {stageNumber} / 8
         </span>
       </div>
 
-      <div className="flex flex-col gap-3">
+      <div className="flex min-w-0 flex-col gap-3">
         {ownerMessage ? <OwnerMessage>{ownerMessage}</OwnerMessage> : null}
         <ScoutMessage>{scoutMessage}</ScoutMessage>
       </div>
@@ -92,7 +92,7 @@ export function StageFrame({
       {state.notice ? (
         <p
           aria-live="polite"
-          className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+          className="min-w-0 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
           role="alert"
         >
           {state.notice}
@@ -104,14 +104,14 @@ export function StageFrame({
 
 export function ScoutMessage({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2.5">
+    <div className="flex min-w-0 items-start gap-2.5">
       <span
         aria-hidden="true"
         className="grid size-8 shrink-0 place-items-center rounded-[10px] bg-primary/10 text-xs font-medium text-primary"
       >
         S
       </span>
-      <div className="min-w-0 max-w-[42rem]">
+      <div className="min-w-0 max-w-[42rem] flex-1">
         <div className="mb-1 flex items-baseline gap-2">
           <strong className="text-xs font-medium text-foreground">Scout</strong>
           <span className="text-2xs text-muted-foreground">guide</span>
@@ -126,8 +126,8 @@ export function ScoutMessage({ children }: { children: ReactNode }) {
 
 export function OwnerMessage({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start justify-end gap-2.5">
-      <div className="min-w-0 max-w-[42rem]">
+    <div className="flex min-w-0 items-start justify-end gap-2.5">
+      <div className="min-w-0 max-w-[42rem] flex-1">
         <div className="mb-1 flex justify-end gap-2 text-right">
           <span className="text-2xs text-muted-foreground">owner</span>
           <strong className="text-xs font-medium text-foreground">You</strong>
@@ -160,10 +160,10 @@ export function InlineCard({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-border/70 bg-card/80 p-4 shadow-xs sm:p-5">
-      <div className="flex items-center gap-2 text-2xs font-medium uppercase tracking-[0.08em] text-primary">
+    <section className="@container min-w-0 w-full rounded-xl border border-border/70 bg-card/80 p-4 shadow-xs @sm:p-5">
+      <div className="flex min-w-0 items-center gap-2 text-2xs font-medium uppercase tracking-[0.08em] text-primary">
         <Icon aria-hidden="true" className="size-3.5" />
-        <span>{eyebrow}</span>
+        <span className="min-w-0">{eyebrow}</span>
       </div>
       {title ? (
         <h2 className="mt-2 text-xl font-medium leading-tight tracking-tight text-foreground">
@@ -175,7 +175,7 @@ export function InlineCard({
           {description}
         </p>
       ) : null}
-      <div className="mt-4">{children}</div>
+      <div className="mt-4 min-w-0">{children}</div>
     </section>
   );
 }
@@ -293,7 +293,7 @@ export function Field({
 
 export function Actions({ children }: { children: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 pt-1 [&>button]:max-sm:w-full">
+    <div className="flex min-w-0 w-full flex-col items-stretch gap-2 pt-1 @sm:flex-row @sm:items-center [&>button]:h-auto [&>button]:min-h-9 [&>button]:min-w-0 [&>button]:max-w-full [&>button]:w-full [&>button]:whitespace-normal @sm:[&>button]:w-auto">
       {children}
     </div>
   );
@@ -311,7 +311,12 @@ export function PrimaryAction({
   type?: "button" | "submit";
 }) {
   return (
-    <Button className="gap-2" disabled={disabled} onClick={onClick} type={type}>
+    <Button
+      className="min-w-0 max-w-full gap-2"
+      disabled={disabled}
+      onClick={onClick}
+      type={type}
+    >
       {children}
       <ArrowRight aria-hidden="true" className="size-4" />
     </Button>
@@ -328,7 +333,12 @@ export function SecondaryAction({
   type?: "button" | "submit";
 }) {
   return (
-    <Button onClick={onClick} type={type} variant="outline">
+    <Button
+      className="min-w-0 max-w-full"
+      onClick={onClick}
+      type={type}
+      variant="outline"
+    >
       {children}
     </Button>
   );
@@ -377,7 +387,7 @@ export function HistoryBlock({
       </summary>
       <div className="grid gap-2 pb-3">
         {items.map((item) => (
-          <div className="flex gap-2" key={item.label}>
+          <div className="flex min-w-0 gap-2" key={item.label}>
             <strong className="shrink-0 font-medium text-foreground">
               {item.label}
             </strong>
@@ -403,7 +413,7 @@ export function OpenQuestions({
   items: readonly { label: string; detail: string }[];
 }) {
   return (
-    <div className="grid gap-2 bg-muted/30 p-3">
+    <div className="grid min-w-0 gap-2 bg-muted/30 p-3">
       <div className="flex items-center gap-2 text-xs font-medium text-foreground">
         <CircleHelp aria-hidden="true" className="size-4 text-primary" />
         Still to understand
@@ -411,13 +421,13 @@ export function OpenQuestions({
       <ul className="m-0 grid list-none gap-2 p-0">
         {items.map((item) => (
           <li
-            className="flex items-baseline justify-between gap-3 border-b border-border/60 pb-2 text-2xs last:border-b-0 last:pb-0"
+            className="flex min-w-0 items-baseline justify-between gap-3 border-b border-border/60 pb-2 text-2xs last:border-b-0 last:pb-0"
             key={item.label}
           >
-            <strong className="font-medium text-foreground">
+            <strong className="min-w-0 font-medium text-foreground">
               {item.label}
             </strong>
-            <span className="text-right text-muted-foreground">
+            <span className="min-w-0 break-words text-right text-muted-foreground">
               {item.detail}
             </span>
           </li>

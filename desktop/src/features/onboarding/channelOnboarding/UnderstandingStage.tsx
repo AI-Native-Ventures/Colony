@@ -165,7 +165,7 @@ export function UnderstandingStage({
                 label="Idea stage"
               >
                 <select
-                  className="flex h-9 w-full rounded-lg border border-input/40 bg-background px-3 py-1 text-base text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:text-sm"
+                  className="flex h-9 w-full rounded-lg border border-input/40 bg-background px-3 py-1 text-base text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring @sm:text-sm"
                   id={stageId}
                   onChange={(event) =>
                     onChange({

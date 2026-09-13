@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { verifyEvent } from "nostr-tools/pure";
 import { expect } from "@playwright/test";
 import { FIRST_JOB_BRIEF, SCOUT_SETUP_REPLY } from "./provider.mjs";
+import { waitForAnimations } from "../../tests/helpers/animations.ts";
 
 const SCOUT_ROOT_MARKER = "colony:scout-onboarding-root:v1";
 const LEGACY_SUPPRESSION_MARKER = "colony:first-job-suggestion:v1";
@@ -293,6 +294,100 @@ async function assertSetupRecords({
   };
 }
 
+/**
+ * Keep the native 1024x684 proof readable when the same root is mounted in
+ * both the channel timeline and the open thread. These assertions measure the
+ * embedded panes, rather than assuming the browser viewport is wide enough
+ * for a viewport breakpoint.
+ */
+async function assertScoutReadyLayout(page) {
+  const surfaces = page.locator(
+    'section[aria-label="Scout onboarding conversation"]',
+  );
+  await expect(surfaces).toHaveCount(2);
+  for (const surface of [surfaces.first(), surfaces.last()]) {
+    await expect(
+      surface.getByRole("heading", {
+        name: "Ready for the next conversation.",
+        exact: true,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+  }
+  await waitForAnimations(page);
+
+  const layouts = await surfaces.evaluateAll((elements) =>
+    elements.map((surface) => {
+      const heading = Array.from(surface.querySelectorAll("h2")).find(
+        (candidate) =>
+          candidate.textContent?.trim() === "Ready for the next conversation.",
+      );
+      const card = heading?.closest("section");
+      const button = card
+        ? Array.from(card.querySelectorAll("button")).find(
+            (candidate) =>
+              candidate.textContent?.replace(/\s+/g, " ").trim() ===
+              "Continue in #welcome",
+          )
+        : null;
+      const box = (element) => {
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        return {
+          bottom: rect.bottom,
+          height: rect.height,
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          width: rect.width,
+        };
+      };
+      return {
+        card: box(card),
+        cardClientWidth: card?.clientWidth ?? 0,
+        cardScrollWidth: card?.scrollWidth ?? 0,
+        cta: box(button),
+        facts: Array.from(card?.querySelectorAll("dl > div") ?? []).map(
+          (row) => {
+            const value = row.querySelector("dd");
+            return {
+              label: row.querySelector("dt")?.textContent?.trim() ?? "",
+              valueWidth: value?.getBoundingClientRect().width ?? 0,
+            };
+          },
+        ),
+        surface: box(surface),
+        surfaceClientWidth: surface.clientWidth,
+        surfaceScrollWidth: surface.scrollWidth,
+      };
+    }),
+  );
+
+  assert.equal(layouts.length, 2, "Both Scout ready surfaces are measured");
+  for (const [index, layout] of layouts.entries()) {
+    assert.ok(
+      layout.surfaceScrollWidth <= layout.surfaceClientWidth + 1,
+      `Scout surface ${index + 1} has no horizontal overflow`,
+    );
+    assert.ok(layout.card, `Scout ready card ${index + 1} is present`);
+    assert.ok(layout.cta, `Scout ready CTA ${index + 1} is present`);
+    if (!layout.card || !layout.cta) continue;
+    assert.ok(
+      layout.cardScrollWidth <= layout.cardClientWidth + 1,
+      `Scout ready card ${index + 1} has no horizontal overflow`,
+    );
+    assert.ok(
+      layout.cta.left >= layout.card.left - 1 &&
+        layout.cta.right <= layout.card.right + 1,
+      `Scout ready CTA ${index + 1} stays inside its card`,
+    );
+    assert.ok(layout.facts.length >= 3, `Scout ready facts ${index + 1} exist`);
+    assert.ok(
+      layout.facts.every((fact) => fact.valueWidth >= 64),
+      `Scout ready facts ${index + 1} keep a usable value column: ${JSON.stringify(layout.facts)}`,
+    );
+  }
+}
+
 /** Complete the owner-confirmed setup and return its signed records. */
 export async function completeFixtureScoutSetup({
   page,
@@ -450,6 +545,7 @@ export async function completeFixtureScoutSetup({
     relay,
     communityHost,
   );
+  await assertScoutReadyLayout(page);
   if (screenshot) await screenshot(proofDirectory, "joined-scout-ready.png");
 
   const callsBeforeCompletedReload = provider.receivedCallCount;

@@ -197,7 +197,7 @@ export function SetupStage({
 
 function SetupBoundary() {
   return (
-    <div className="grid gap-2 border-t border-border/60 pt-3">
+    <div className="grid min-w-0 gap-2 border-t border-border/60 pt-3">
       {[
         [
           "Keep #welcome for talking with Scout.",
@@ -216,12 +216,12 @@ function SetupBoundary() {
           "You can add help later when it makes sense.",
         ],
       ].map(([title, detail]) => (
-        <div className="flex items-start gap-2 text-xs" key={title}>
+        <div className="flex min-w-0 items-start gap-2 text-xs" key={title}>
           <Check
             aria-hidden="true"
             className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
           />
-          <span>
+          <span className="min-w-0">
             <strong className="font-medium text-foreground">{title}</strong>
             <small className="mt-0.5 block text-2xs text-muted-foreground">
               {detail}
@@ -371,14 +371,14 @@ function ProgressRow({
   active: boolean;
 }) {
   return (
-    <div className="flex items-start gap-2.5 border-b border-border/60 py-3 last:border-b-0">
+    <div className="flex min-w-0 items-start gap-2.5 border-b border-border/60 py-3 last:border-b-0">
       <span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground">
         <Icon
           aria-hidden="true"
           className={`size-3.5 ${active ? "animate-spin motion-reduce:animate-none" : ""}`}
         />
       </span>
-      <span className="grid gap-0.5">
+      <span className="grid min-w-0 gap-0.5">
         <strong className="text-xs font-medium text-foreground">{title}</strong>
         <small className="text-2xs text-muted-foreground">{detail}</small>
       </span>
@@ -425,13 +425,13 @@ export function ReadyStage({
         icon={Pin}
         title="Ready for the next conversation."
       >
-        <div className="grid gap-3 bg-primary/10 p-3.5">
-          <div className="flex items-start gap-2">
+        <div className="grid min-w-0 gap-3 bg-primary/10 p-3.5">
+          <div className="flex min-w-0 items-start gap-2">
             <Bookmark
               aria-hidden="true"
               className="mt-0.5 size-4 shrink-0 text-primary"
             />
-            <div>
+            <div className="min-w-0">
               <strong className="text-sm font-medium text-foreground">
                 {input?.setupName || "Your workspace context"}
               </strong>
@@ -440,7 +440,7 @@ export function ReadyStage({
               </small>
             </div>
           </div>
-          <dl className="m-0 grid gap-2">
+          <dl className="m-0 grid min-w-0 gap-2">
             <Fact
               label="Business or idea"
               value={summary.businessOrIdea || "Still open"}
@@ -491,9 +491,11 @@ export function ReadyStage({
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid gap-0.5 border-b border-foreground/10 pb-2 text-xs last:border-b-0 last:pb-0 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="m-0 break-words text-foreground">{value}</dd>
+    <div className="grid min-w-0 gap-0.5 border-b border-foreground/10 pb-2 text-xs last:border-b-0 last:pb-0 @sm:grid-cols-[8rem_minmax(0,1fr)] @sm:gap-3">
+      <dt className="min-w-0 text-muted-foreground">{label}</dt>
+      <dd className="m-0 min-w-0 break-words text-foreground [overflow-wrap:anywhere]">
+        {value}
+      </dd>
     </div>
   );
 }
@@ -508,12 +510,12 @@ function OrientationRow({
   detail: string;
 }) {
   return (
-    <div className="flex items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0">
+    <div className="flex min-w-0 items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0">
       <Icon
         aria-hidden="true"
         className="mt-0.5 size-4 shrink-0 text-primary"
       />
-      <span>
+      <span className="min-w-0">
         <strong className="text-xs font-medium text-foreground">{title}</strong>
         <small className="mt-0.5 block text-2xs text-muted-foreground">
           {detail}

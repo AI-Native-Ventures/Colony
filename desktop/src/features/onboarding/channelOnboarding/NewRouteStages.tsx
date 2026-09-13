@@ -89,7 +89,7 @@ export function NewPersonStage({
         eyebrow="New business"
         icon={Sprout}
       >
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2 @sm:grid-cols-2">
           {CATEGORIES.map(({ id, detail, icon: Icon }) => (
             <OptionButton
               detail={detail}
@@ -204,7 +204,7 @@ export function NewBusinessStageView({
         eyebrow="Idea stage"
         icon={Sprout}
       >
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 @sm:grid-cols-3">
           {BUSINESS_STAGES.map(({ id, detail }) => (
             <OptionButton
               detail={detail}
@@ -282,7 +282,7 @@ export function NewFollowUpStage({
         eyebrow="Useful priority"
         icon={Compass}
       >
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2 @sm:grid-cols-2">
           {PRIORITIES.map(({ id, detail }) => (
             <OptionButton
               detail={detail}

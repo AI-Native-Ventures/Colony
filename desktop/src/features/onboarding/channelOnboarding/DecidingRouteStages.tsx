@@ -113,7 +113,7 @@ export function DecidingPersonStage({
         eyebrow="Decide what to start"
         icon={Compass}
       >
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2 @sm:grid-cols-2">
           {SKILLS.map(({ id, label, detail, icon: Icon }) => (
             <OptionButton
               detail={detail}
@@ -189,7 +189,7 @@ export function DecidingBusinessStage({
         eyebrow="Possible direction"
         icon={Compass}
       >
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2 @sm:grid-cols-2">
           {DIRECTIONS.map(({ id, detail }) => (
             <OptionButton
               detail={detail}
@@ -242,7 +242,7 @@ export function DecidingFollowUpStage({
         eyebrow="Useful priority"
         icon={Compass}
       >
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 @sm:grid-cols-3">
           {PRIORITIES.map(({ id, icon: Icon }) => (
             <OptionButton
               icon={Icon}

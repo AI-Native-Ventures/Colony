@@ -212,7 +212,10 @@ export function ScoutOnboardingMessage({
 
   if (!verified) return children;
   return (
-    <div className="min-w-0" data-testid="scout-onboarding-message">
+    <div
+      className="@container min-w-0 w-full"
+      data-testid="scout-onboarding-message"
+    >
       {children}
       <ScoutOnboardingHost
         className={className}
