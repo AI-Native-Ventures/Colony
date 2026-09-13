@@ -1556,7 +1556,6 @@ mod tests {
                 .await
                 .expect("select newer head")
                 .1
-                 .1
         );
 
         assert_eq!(
