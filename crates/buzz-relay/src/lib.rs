@@ -28,6 +28,7 @@ pub mod gateway;
 mod job_broker;
 mod ledger_broker;
 mod party_broker;
+mod rejection;
 
 /// REST API route handlers.
 pub mod api;

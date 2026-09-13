@@ -1499,6 +1499,10 @@ pub mod tests {
     /// Build an `AppState` from the environment (`DATABASE_URL`), with relay
     /// membership enforcement off and an unreachable Redis (pub/sub state is
     /// lazy). The returned state is ready for handlers or `build_router`.
+    ///
+    /// Also shared with `crate::rejection`'s tests, where the unreachable
+    /// Redis is what makes admission resolve to `AdmissionError::Unavailable`
+    /// without any live infrastructure.
     pub async fn test_state() -> Arc<AppState> {
         test_state_with_redis("redis://127.0.0.1:1").await
     }
