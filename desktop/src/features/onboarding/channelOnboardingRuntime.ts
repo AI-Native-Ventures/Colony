@@ -63,6 +63,7 @@ import {
   defaultReadScoutRuntime,
   type ScoutLiveRuntime,
 } from "./channelOnboardingRuntime/liveRuntime";
+import { readWithRateLimitRetry } from "./channelOnboardingRuntime/retry";
 import {
   createChannelOnboardingBrowserStore,
   SCOUT_ONBOARDING_ATTEMPT_SLOT,
@@ -176,6 +177,8 @@ export type ChannelOnboardingRuntimeDependencies = {
   ) => Promise<void> | void;
   /** Stable clock seam for focused tests; production uses wall clock time. */
   now?: () => number;
+  /** Cooldown seam for bounded relay read retries; production uses a timer. */
+  delay?: (ms: number) => Promise<void>;
   attemptStore?: ScoutAttemptStore;
 };
 
@@ -220,10 +223,15 @@ async function defaultRootLoader(scope: ChannelOnboardingScope) {
 function defaultCompanyHead() {
   return companyRepository.getActiveCompanyHead();
 }
-
-function defaultActionSubmit(scope: ChannelOnboardingScope) {
+function defaultActionSubmit(
+  scope: ChannelOnboardingScope,
+  dependencies: {
+    relaySelf: typeof getRelaySelf;
+    fetchFirstEvent: typeof relayClient.fetchFirstEvent;
+  },
+) {
   return createCompanyActionBroker({
-    relaySelf: getRelaySelf,
+    relaySelf: dependencies.relaySelf,
     publish: (event) =>
       relayClient.publishEvent(
         event,
@@ -231,7 +239,7 @@ function defaultActionSubmit(scope: ChannelOnboardingScope) {
         "Your business details could not be saved. Try again.",
         scope.relayUrl,
       ),
-    fetchFirstEvent: (filter) => relayClient.fetchFirstEvent(filter),
+    fetchFirstEvent: dependencies.fetchFirstEvent,
   });
 }
 
@@ -321,13 +329,13 @@ export function createChannelOnboardingRuntime(
   const readScoutRuntime =
     dependencies.readScoutRuntime ?? defaultReadScoutRuntime;
   const now = dependencies.now ?? Date.now;
+  const delay =
+    dependencies.delay ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const readReceipt =
     dependencies.readCompanyActionReceipt ??
     ((actionEventId: string, relayPubkey: string) =>
       defaultReadCompanyActionReceipt(actionEventId, relayPubkey));
-  const submit =
-    dependencies.submitCompanyAction ??
-    ((signed: string) => defaultActionSubmit(scope).submit(signed));
   const verifyReply =
     dependencies.verifyScoutReply ??
     createScoutReplyVerifier({ assertCurrent });
@@ -339,6 +347,25 @@ export function createChannelOnboardingRuntime(
     return result;
   }
 
+  async function readWithBackpressure<T>(
+    operation: () => Promise<T> | T,
+  ): Promise<T> {
+    return readWithRateLimitRetry({
+      read: operation,
+      assertCurrent: () => assertCurrent(scope),
+      delay,
+    });
+  }
+
+  const submit =
+    dependencies.submitCompanyAction ??
+    ((signed: string) =>
+      defaultActionSubmit(scope, {
+        relaySelf: () => readWithBackpressure(getSelf),
+        fetchFirstEvent: (filter) =>
+          readWithBackpressure(() => relayClient.fetchFirstEvent(filter)),
+      }).submit(signed));
+
   async function validateCurrentScoutRuntime(
     attempt: ScoutOnboardingAttempt,
   ): Promise<ScoutLiveRuntime> {
@@ -348,7 +375,7 @@ export function createChannelOnboardingRuntime(
         "The saved Scout setup has no Chief of Staff identity. No setup was started.",
       );
     }
-    const live = await current(() =>
+    const live = await readWithBackpressure(() =>
       readScoutRuntime(scoutPubkey, scope.relayUrl, attempt.welcomeChannelId),
     );
     if (!live) {
@@ -405,7 +432,7 @@ export function createChannelOnboardingRuntime(
     }
     assertSavedProfileAction(attempt, scope, input);
     assertProfileReceiptForAttempt(attempt.profileReceipt, attempt);
-    const receipt = await current(() =>
+    const receipt = await readWithBackpressure(() =>
       readReceipt(attempt.profileActionEventId, attempt.relayPubkey, scope),
     );
     if (!receipt) {
@@ -436,7 +463,7 @@ export function createChannelOnboardingRuntime(
   }
 
   async function loadAndValidateRoot(input: ScoutSetupInput) {
-    const root = await current(() => loadRoot(scope));
+    const root = await readWithBackpressure(() => loadRoot(scope));
     // The cryptographic/scope envelope is always checked here. The protocol
     // agent can add its accepted-snapshot rules without weakening this check.
     assertScoutSignedRootEnvelope(scope, root);
@@ -473,7 +500,7 @@ export function createChannelOnboardingRuntime(
       event = parseSignedScoutEvent(saved.signedEvent);
     } else if (dependencies.loadAcknowledgementEvent) {
       const loadAcknowledgementEvent = dependencies.loadAcknowledgementEvent;
-      event = await current(() =>
+      event = await readWithBackpressure(() =>
         loadAcknowledgementEvent(saved.eventId, scope),
       );
     }
@@ -537,7 +564,7 @@ export function createChannelOnboardingRuntime(
               readyAttempt,
               readyAttempt.input,
             );
-            const live = await current(() =>
+            const live = await readWithBackpressure(() =>
               readScoutRuntime(
                 readyAttempt.scoutPubkey ?? "",
                 scope.relayUrl,
@@ -607,13 +634,13 @@ export function createChannelOnboardingRuntime(
             "The original Scout approval could not be found. Reopen its Welcome thread.",
           );
         }
-        const relayPubkey = await current(getSelf);
+        const relayPubkey = await readWithBackpressure(getSelf);
         if (!relayPubkey) {
           throw new Error(
             "This business connection has no stable relay identity.",
           );
         }
-        const head = await current(getHead);
+        const head = await readWithBackpressure(getHead);
         if (!head.ok) invalidCompanyHead(head);
         const built = buildScoutCompanyProfile(
           head.value.profile,
@@ -675,7 +702,7 @@ export function createChannelOnboardingRuntime(
       const saved = attempt;
       if (saved.profileReceipt) {
         assertProfileReceiptForAttempt(saved.profileReceipt, saved);
-        const confirmed = await current(() =>
+        const confirmed = await readWithBackpressure(() =>
           readReceipt(saved.profileActionEventId, saved.relayPubkey, scope),
         );
         if (!confirmed) {
@@ -800,7 +827,7 @@ export function createChannelOnboardingRuntime(
         } else if (dependencies.loadAcknowledgementEvent) {
           const loadAcknowledgementEvent =
             dependencies.loadAcknowledgementEvent;
-          event = await current(() =>
+          event = await readWithBackpressure(() =>
             loadAcknowledgementEvent(acknowledgement.eventId, scope),
           );
         }
@@ -862,7 +889,7 @@ export function createChannelOnboardingRuntime(
         }
         return saved.proof;
       }
-      const proof = await current(() =>
+      const proof = await readWithBackpressure(() =>
         verifyReply({
           scope,
           input: reviewed,
@@ -927,10 +954,8 @@ export function createChannelOnboardingRuntime(
       await validateCurrentScoutRuntime(attempt);
       assertSavedProfileAction(attempt, scope, reviewed);
       assertProfileReceiptForAttempt(attempt.profileReceipt, attempt);
-      const receipt = await readReceipt(
-        attempt.profileActionEventId,
-        attempt.relayPubkey,
-        scope,
+      const receipt = await readWithBackpressure(() =>
+        readReceipt(attempt.profileActionEventId, attempt.relayPubkey, scope),
       );
       if (!receipt) {
         throw new Error(

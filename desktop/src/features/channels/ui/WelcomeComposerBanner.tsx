@@ -250,7 +250,7 @@ function WelcomeComposerPersonaMention() {
         ...(mentionWidth === null ? {} : { width: mentionWidth }),
       }}
     >
-      <span className="sr-only">@Fizz</span>
+      <span className="sr-only">{activeMention}</span>
       <span
         aria-hidden
         className="pointer-events-none invisible inline-block whitespace-nowrap leading-[inherit]"

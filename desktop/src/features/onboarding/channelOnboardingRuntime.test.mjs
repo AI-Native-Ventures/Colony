@@ -229,6 +229,78 @@ test("approval stores and retries the same signed profile action after an uncert
   assert.equal(store.get().phase, "ready");
 });
 
+test("short relay quota windows retry the preflight read before signing", async () => {
+  const store = memoryStore();
+  const f = dependenciesFor(store, {
+    submitOutcome: () => ({
+      status: "applied",
+      receiptEventId: "d".repeat(64),
+      headEventId: "e".repeat(64),
+      target: `30179:${relayPubkey}:profile`,
+    }),
+  });
+  const delays = [];
+  let rootReads = 0;
+  f.deps.delay = async (milliseconds) => {
+    delays.push(milliseconds);
+  };
+  f.deps.loadOriginalRoot = async () => {
+    rootReads += 1;
+    if (rootReads === 1) {
+      throw new Error("rate-limited: quota exceeded; retry in 4s");
+    }
+    return rootEvent;
+  };
+
+  const runtime = createChannelOnboardingRuntime(scope, f.deps);
+  const proof = await runtime.approve(setupInput, approvalRequestId);
+
+  assert.equal(proof.agentPubkey, scoutPubkey);
+  assert.equal(rootReads, 2);
+  assert.deepEqual(delays, [4_000]);
+  assert.equal(f.actions.length, 1);
+  assert.equal(f.submissions.length, 1);
+});
+
+test("a rate-limited company head outcome retries before signing", async () => {
+  const store = memoryStore();
+  const f = dependenciesFor(store, {
+    submitOutcome: () => ({
+      status: "applied",
+      receiptEventId: "d".repeat(64),
+      headEventId: "e".repeat(64),
+      target: `30179:${relayPubkey}:profile`,
+    }),
+  });
+  const delays = [];
+  let headReads = 0;
+  f.deps.delay = async (milliseconds) => {
+    delays.push(milliseconds);
+  };
+  f.deps.getCompanyHead = async () => {
+    headReads += 1;
+    if (headReads === 1) {
+      return {
+        ok: false,
+        code: "unavailable",
+        message:
+          "Company records could not be read: rate-limited: quota exceeded; retry in 4s",
+      };
+    }
+    return {
+      ok: true,
+      value: { profile: currentProfile, headEventId: expectedHeadEventId },
+    };
+  };
+
+  const runtime = createChannelOnboardingRuntime(scope, f.deps);
+  await runtime.approve(setupInput, approvalRequestId);
+
+  assert.equal(headReads, 2);
+  assert.deepEqual(delays, [4_000]);
+  assert.equal(f.actions.length, 1);
+});
+
 test("a changed snapshot gets a new approval action after a completed setup", async () => {
   const store = memoryStore();
   const f = dependenciesFor(store, {
