@@ -99,7 +99,10 @@ export async function createOnboardingFixtureProvider() {
       if (liveProvider) {
         assert.equal(request.method, "POST");
         assert.equal(request.url, "/v1/chat/completions");
-        assert.equal(request.headers.authorization, "Bearer synthetic-onboarding-provider");
+        assert.equal(
+          request.headers.authorization,
+          "Bearer synthetic-onboarding-provider",
+        );
         const chunks = [];
         let size = 0;
         for await (const chunk of request) {
@@ -107,13 +110,21 @@ export async function createOnboardingFixtureProvider() {
           assert.ok(size <= 1024 * 1024);
           chunks.push(chunk);
         }
-        const upstream = await fetch(`${liveProvider.httpUrl}/v1/chat/completions`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${liveProvider.token}`, "Content-Type": "application/json" },
-          body: Buffer.concat(chunks),
-          signal: AbortSignal.timeout(150_000),
+        const upstream = await fetch(
+          `${liveProvider.httpUrl}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${liveProvider.token}`,
+              "Content-Type": "application/json",
+            },
+            body: Buffer.concat(chunks),
+            signal: AbortSignal.timeout(150_000),
+          },
+        );
+        response.writeHead(upstream.status, {
+          "Content-Type": "application/json",
         });
-        response.writeHead(upstream.status, { "Content-Type": "application/json" });
         response.end(await upstream.text());
         return;
       }
