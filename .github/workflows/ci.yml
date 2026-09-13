@@ -1122,6 +1122,14 @@ jobs:
         with:
           name: desktop-e2e-relay
           path: target/ci
+      - name: Restore the executable bit on the downloaded binaries
+        # actions/upload-artifact does not preserve file modes, so both binaries
+        # arrive 0644. Every "Start relay" step in this workflow already chmods
+        # for that reason, but it runs near the end of the job: the nextest
+        # steps below come first, and `boot_lifecycle` spawns the relay through
+        # `env!("CARGO_BIN_EXE_buzz-relay")`, which resolves to this exact file.
+        # Without this it fails with EACCES (os error 13) before any assertion.
+        run: chmod +x ./target/ci/buzz-relay ./target/ci/git-credential-nostr
       - name: Prefetch pgschema
         # The bin/pgschema stub downloads on first use, so a 504 from GitHub
         # Releases fails the schema step instead of reporting a fetch problem.
