@@ -230,9 +230,6 @@ pub enum SeedOutcome {
     Unchanged,
     /// A user's own employee already holds this role, so the seed stood down.
     RoleTaken,
-    /// An agent the workspace created already holds this role, so the seed
-    /// stood down and left the owner's arrangement alone.
-    RoleClaimedByWorkspaceAgent,
 }
 
 /// Ensure every bundled employee exists for one community.
@@ -275,15 +272,6 @@ pub async fn ensure_core_employees(
                 );
             }
             Ok(SeedOutcome::Unchanged) => {}
-            Ok(SeedOutcome::RoleClaimedByWorkspaceAgent) => {
-                warn!(
-                    community = %community,
-                    handle = %employee.handle,
-                    role = %employee.role_id,
-                    "an agent this workspace created already holds this role; the provisioned \
-                     employee stood down and the owner's arrangement was left alone"
-                );
-            }
             Ok(SeedOutcome::RoleTaken) => {
                 warn!(
                     community = %community,
@@ -440,15 +428,6 @@ async fn seed_one(
         .await
         .context("failed to look up an already-seeded employee")?;
 
-    // Stand down before minting anything, but only for a workspace that has
-    // not already adopted this employee: once ours exists, an owner creating
-    // an agent in the same role must not make ours stop being maintained.
-    if already_seeded.is_none()
-        && role_claimed_by_workspace_agent(state, community, &employee.role_id).await?
-    {
-        return Ok(SeedOutcome::RoleClaimedByWorkspaceAgent);
-    }
-
     let manager = resolve_reporting_line(state, community, employee).await?;
 
     if let Some(existing) = already_seeded {
@@ -517,74 +496,6 @@ async fn seed_one(
 
     publish_records(state, community, employee, &keys, manager.as_deref()).await;
     Ok(SeedOutcome::Seeded)
-}
-
-/// Upper bound on the managed-agent heads one stand-down check reads. A
-/// workspace has tens of agents, not thousands, and this only has to find
-/// whether ONE role is already claimed.
-const MAX_ROLE_CLAIM_HEADS: i64 = 200;
-
-/// Whether an agent the workspace created already holds `role_id`.
-///
-/// Colony provides employees; it does not take a job somebody has already
-/// given to an agent of their own. Six production workspaces had an
-/// owner-created agent holding `chief-of-staff` before this shipped, and
-/// seeding ours beside it would have put two executives in one workspace.
-/// That is worse than doing nothing: `unique_executive_in_roster` returns
-/// None when more than one pubkey qualifies, by design, so the workspace
-/// that had a working escalation target would have ended up with none.
-///
-/// Only OWNER-authored heads count, which matters more than it looks.
-/// Kind 30177 is client-writable, so without that filter an agent could
-/// claim a role to keep Colony out of it. It also keeps us from standing
-/// down against ourselves: a provisioned employee's own definition is signed
-/// by the employee, never by an owner, so our Sales definition can never be
-/// read as a workspace agent already holding `sales`.
-///
-/// Fails closed. A read error stands the seed down rather than risking a
-/// second holder of the role.
-async fn role_claimed_by_workspace_agent(
-    state: &AppState,
-    community: CommunityId,
-    role_id: &str,
-) -> anyhow::Result<bool> {
-    let rows = state
-        .db
-        .query_events(&buzz_db::event::EventQuery {
-            kinds: Some(vec![KIND_MANAGED_AGENT as i32]),
-            global_only: true,
-            limit: Some(MAX_ROLE_CLAIM_HEADS),
-            ..buzz_db::event::EventQuery::for_community(community)
-        })
-        .await
-        .context("failed to read managed-agent heads while checking the role")?;
-
-    for stored in rows {
-        let claims_role = serde_json::from_str::<serde_json::Value>(&stored.event.content)
-            .ok()
-            .and_then(|content| {
-                content
-                    .get("role_id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|value| value.trim().to_ascii_lowercase())
-            })
-            .is_some_and(|claimed| claimed == role_id.trim().to_ascii_lowercase());
-        if !claims_role {
-            continue;
-        }
-
-        let author_is_owner = state
-            .db
-            .get_relay_member(community, &stored.event.pubkey.to_hex())
-            .await
-            .context("failed to check a managed-agent head's author")?
-            .is_some_and(|member| member.role == "owner");
-        if author_is_owner {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
 }
 
 /// The pubkey of the employee holding `role_id`, when one does and it can

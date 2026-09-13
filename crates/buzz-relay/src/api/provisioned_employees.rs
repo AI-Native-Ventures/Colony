@@ -515,13 +515,10 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
-    async fn the_chief_of_staff_stands_down_where_a_workspace_agent_holds_the_role() {
-        // Six production workspaces had an owner-created agent holding this
-        // role. Seeding ours beside it would put two executives in one
-        // workspace, and unique_executive_in_roster answers None when more
-        // than one qualifies, so the workspace that had a working escalation
-        // target would end up with none.
-        let host = format!("cos-standdown-{}.test", Uuid::new_v4());
+    async fn the_chief_of_staff_takes_the_office_from_a_workspace_agent_holding_the_role() {
+        // Colony holds this office. An agent the workspace created keeps its
+        // name, its record and its history; it stops being the executive.
+        let host = format!("cos-replace-{}.test", Uuid::new_v4());
         let (state, db, pool) = release_test_state(&host).await;
         let community = crate::tenant::bind_community(&db, &host)
             .await
@@ -533,7 +530,12 @@ mod tests {
         let scout = Keys::generate();
         let head = EventBuilder::new(
             Kind::Custom(KIND_MANAGED_AGENT as u16),
-            serde_json::json!({"name": "Scout", "role_id": "chief-of-staff"}).to_string(),
+            serde_json::json!({
+                "name": "Scout",
+                "role_id": "chief-of-staff",
+                "tier": "executive",
+            })
+            .to_string(),
         )
         .tags(vec![
             Tag::parse(["d", &scout.public_key().to_hex()]).expect("d tag")
@@ -546,20 +548,45 @@ mod tests {
 
         seed(&state, community).await;
 
-        assert!(
-            db.find_provisioned_employee(community, "chief-of-staff")
-                .await
-                .expect("query")
-                .is_none(),
-            "ours must stand down where the workspace already filled the role"
+        // Ours is seeded rather than standing down.
+        let (chief, _) = seeded_line(&db, community, "chief-of-staff").await;
+
+        // And it is what the escalation path resolves to, not the Scout.
+        let tenant = crate::tenant::bind_community(&db, &host)
+            .await
+            .expect("bind community");
+        let resolved = crate::interrupt_runtime::find_unique_executive(&tenant, &state)
+            .await
+            .expect("resolution succeeds")
+            .expect("an executive resolves");
+        assert_eq!(
+            resolved.to_bytes().to_vec(),
+            chief,
+            "the provisioned Chief of Staff holds the office"
+        );
+        assert_ne!(
+            resolved,
+            scout.public_key(),
+            "the workspace's own agent no longer ranks as the executive"
         );
 
-        // Sales still seeds, and is honestly unassigned rather than pointed at
-        // a head the relay cannot rank.
+        // The Scout's record is untouched: we do not edit a user's events.
+        let stored = events_of_kind(
+            &db,
+            community,
+            KIND_MANAGED_AGENT,
+            &scout.public_key().to_hex(),
+        )
+        .await;
+        assert!(
+            !stored.is_empty(),
+            "the workspace's own head is neither deleted nor rewritten"
+        );
+
+        // Sales reports to ours, which is the point of taking the office.
         assert_eq!(
-            seeded_line(&db, community, "sales").await.1,
-            None,
-            "Sales must stay unassigned rather than attach to an unrankable head"
+            seeded_line(&db, community, "sales").await.1.as_deref(),
+            Some(chief.as_slice()),
         );
     }
 
