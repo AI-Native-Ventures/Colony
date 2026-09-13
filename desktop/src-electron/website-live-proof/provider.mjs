@@ -20,6 +20,7 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
   let queued = 0;
   let closed = false;
   let failed = false;
+  let upstreamStatus = null;
   const expires = Date.now() + 45 * 60_000;
   const server = createServer(async (request, response) => {
     const reply = (status, body) => {
@@ -92,6 +93,7 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
           provider: { allow_fallbacks: false },
         }),
       });
+      upstreamStatus = upstream.status;
       assert.ok(upstream.ok, `Provider status ${upstream.status}`);
       const result = await upstream.json();
       assert.ok(Array.isArray(result.choices), "Provider completion missing");
@@ -125,6 +127,9 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
     httpUrl: `http://127.0.0.1:${server.address().port}`,
     token,
     receipts,
+    diagnostics() {
+      return { calls, failed, upstreamStatus, completedCalls: receipts.length };
+    },
     assertHealthy() {
       assert.equal(failed, false, "Live provider run failed");
     },
