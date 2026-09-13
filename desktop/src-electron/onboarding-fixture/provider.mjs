@@ -376,6 +376,64 @@ export async function createOnboardingFixtureProvider() {
         );
         return;
       }
+      if (!context && setupContext?.completed) {
+        const all = JSON.stringify(body.messages);
+        assert.ok(
+          all.includes(setupContext.rootId),
+          "Scout completion check stays bound to the onboarding root",
+        );
+        assert.ok(
+          all.includes(setupContext.channelId),
+          "Scout completion check stays bound to the Welcome channel",
+        );
+        assert.ok(
+          all.includes("colony:scout-onboarding-approval:v1"),
+          "Scout completion check carries the signed approval marker",
+        );
+        assert.equal(
+          extractLatestPromptEventId(body.messages),
+          setupContext.ackEventId,
+          "Scout completion check stays bound to the signed acknowledgment",
+        );
+        assert.ok(
+          typeof body.messages.at(-1)?.content === "string" &&
+            body.messages.at(-1).content.startsWith("You have stopped."),
+          "Only the ACP completion check is authorized after setup reply",
+        );
+        const usage = {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+        };
+        const responseId = `onboarding-${calls}`;
+        const record = {
+          actor: "scout",
+          stage: "scout-onboarding",
+          completion: true,
+          model: body.model,
+          responseId,
+          usage,
+        };
+        requests.push(record);
+        setupRequests.push(record);
+        response.setHeader("Content-Type", "application/json");
+        response.end(
+          JSON.stringify({
+            id: responseId,
+            object: "chat.completion",
+            model: body.model,
+            usage,
+            choices: [
+              {
+                index: 0,
+                message: { role: "assistant", content: '{"complete":true}' },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+        );
+        return;
+      }
       assert.ok(
         context,
         "No model calls are allowed before explicit staffing, an approved setup, or Start",

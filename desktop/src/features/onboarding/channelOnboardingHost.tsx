@@ -190,6 +190,39 @@ export function hydrateScoutOnboardingState(
   return hydrated;
 }
 
+/**
+ * Normalize a state received from another mounted Welcome surface without
+ * treating its active save as an interrupted reload. A persisted save is
+ * still converted to an error by the ordinary reload path above; live
+ * adoption keeps the request in flight so its eventual proof can advance
+ * every mounted surface together.
+ */
+export function hydrateScoutOnboardingStateForLiveUpdate(
+  value: ScoutOnboardingState,
+  context: ScoutSignupContext,
+): ScoutOnboardingState {
+  const hydrated = deserializeScoutOnboardingState(
+    serializeScoutOnboardingState(value),
+    { signupContext: context },
+  );
+  if (!isScoutOnboardingStateEnvelope(hydrated)) {
+    throw new Error("Scout could not normalize its live draft safely.");
+  }
+  if (value.setup.phase !== "saving") return hydrated;
+
+  return {
+    ...hydrated,
+    stage: "setting-up",
+    setup: {
+      ...hydrated.setup,
+      phase: "saving",
+      error: null,
+      proof: null,
+    },
+    notice: null,
+  };
+}
+
 function errorText(error: unknown, fallback: string) {
   return error instanceof Error && error.message.trim()
     ? error.message
@@ -422,7 +455,10 @@ function ScoutOnboardingHostInstance({
         })
       ) {
         lastPersistedSerializedRef.current = incomingSerialized;
-        const incomingState = hydrateScoutOnboardingState(stored, context);
+        const incomingState = hydrateScoutOnboardingStateForLiveUpdate(
+          stored,
+          context,
+        );
         setState(incomingState);
         setReadyReconciliationPending(isReadyScoutOnboardingState(stored));
       }
@@ -482,7 +518,7 @@ function ScoutOnboardingHostInstance({
         // Another mounted Welcome surface won the write. Adopt the current
         // storage value instead of allowing a stale effect to overwrite it.
         lastPersistedSerializedRef.current = storedSerialized;
-        setState(hydrateScoutOnboardingState(stored, context));
+        setState(hydrateScoutOnboardingStateForLiveUpdate(stored, context));
         setReadyReconciliationPending(isReadyScoutOnboardingState(stored));
         return;
       }

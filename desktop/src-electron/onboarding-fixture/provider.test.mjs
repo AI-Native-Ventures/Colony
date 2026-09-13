@@ -347,14 +347,53 @@ test("approved Scout setup uses the signed approval event and publishes one repl
       (await second.json()).choices[0].message.content,
       SCOUT_SETUP_REPLY,
     );
+    const completed = await fetch(`${provider.httpUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer synthetic-onboarding-provider",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-flash",
+        messages: [
+          prompt,
+          firstBody.choices[0].message,
+          {
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: JSON.stringify({
+              stdout: JSON.stringify({ accepted: true, event_id: replyId }),
+              stderr: "",
+              exit_code: 0,
+              timed_out: false,
+            }),
+          },
+          { role: "assistant", content: SCOUT_SETUP_REPLY },
+          {
+            role: "user",
+            content:
+              "You have stopped. Before this turn ends, answer one question about the request below, and nothing else.",
+          },
+        ],
+      }),
+    });
+    assert.equal(completed.status, 200);
+    assert.equal(
+      (await completed.json()).choices[0].message.content,
+      '{"complete":true}',
+    );
     provider.assertHealthy();
-    assert.equal(provider.setupRequests.length, 2);
+    assert.equal(provider.setupRequests.length, 3);
     assert.equal(provider.scoutSetup.ackEventId, acknowledgementId);
     assert.equal(provider.scoutSetup.replyEventId, replyId);
     assert.equal(provider.scoutSetup.completed, true);
     assert.deepEqual(
-      provider.requests.map(({ stage }) => stage),
-      ["scout-onboarding", "scout-onboarding"],
+      provider.requests.map(({ stage, completion }) => ({ stage, completion })),
+      [
+        { stage: "scout-onboarding", completion: false },
+        { stage: "scout-onboarding", completion: false },
+        { stage: "scout-onboarding", completion: true },
+      ],
     );
   } finally {
     await provider.close();

@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 
-import { createInitialScoutOnboardingState } from "./channelOnboarding/state.ts";
+import {
+  createInitialScoutOnboardingState,
+  scoutOnboardingReducer,
+} from "./channelOnboarding/state.ts";
 import {
   createScoutOnboardingRootPayload,
   scoutOnboardingRootTags,
 } from "./channelOnboardingRuntime/protocol.ts";
 import {
   hydrateScoutOnboardingState,
+  hydrateScoutOnboardingStateForLiveUpdate,
   isScoutOnboardingStateEnvelope,
   requestIdForScoutSetup,
   scoutOnboardingScopeKey,
@@ -47,6 +51,33 @@ function setupInput(overrides = {}) {
     setupDescription: "A local service business.",
     ...overrides,
   };
+}
+
+function confirmedExistingState() {
+  let state = createInitialScoutOnboardingState({
+    signupContext: {
+      ownerName: "Mina",
+      businessName: "Pine & Thread",
+      businessDescription: "A small homewares studio",
+      website: "https://pine-thread.example",
+    },
+  });
+  state = scoutOnboardingReducer(state, {
+    type: "select-route",
+    route: "existing",
+  });
+  state = scoutOnboardingReducer(state, { type: "confirm-existing" });
+  state = scoutOnboardingReducer(state, {
+    type: "advance-existing-business",
+  });
+  state = scoutOnboardingReducer(state, {
+    type: "set-existing-answer",
+    field: "priority",
+    value: "delivery",
+  });
+  return scoutOnboardingReducer(state, {
+    type: "advance-existing-follow-up",
+  });
 }
 
 function signedRoot() {
@@ -193,4 +224,47 @@ test("interactive onboarding mounts only for the current owner's verified signed
     }),
     null,
   );
+});
+
+test("live host adoption preserves an active save until both panes accept ready", () => {
+  let state = confirmedExistingState();
+  state = scoutOnboardingReducer(state, { type: "confirm-understanding" });
+  state = scoutOnboardingReducer(state, {
+    type: "approve-setup-started",
+    requestId: "12345678-1234-4234-8234-123456789abc",
+  });
+
+  const timelineState = hydrateScoutOnboardingStateForLiveUpdate(
+    state,
+    state.signupContext,
+  );
+  const threadState = hydrateScoutOnboardingStateForLiveUpdate(
+    state,
+    state.signupContext,
+  );
+  assert.equal(timelineState.setup.phase, "saving");
+  assert.equal(threadState.setup.phase, "saving");
+  assert.equal(timelineState.setup.error, null);
+  assert.equal(threadState.setup.error, null);
+
+  const completed = scoutOnboardingReducer(threadState, {
+    type: "approve-setup-succeeded",
+    requestId: "12345678-1234-4234-8234-123456789abc",
+    proof: { proofId: "live-proof" },
+  });
+  const timelineReady = hydrateScoutOnboardingStateForLiveUpdate(
+    completed,
+    completed.signupContext,
+  );
+  const threadReady = hydrateScoutOnboardingStateForLiveUpdate(
+    completed,
+    completed.signupContext,
+  );
+  assert.equal(completed.setup.phase, "ready");
+  assert.equal(timelineReady.setup.phase, "ready");
+  assert.equal(threadReady.setup.phase, "ready");
+  assert.equal(timelineReady.stage, "ready");
+  assert.equal(threadReady.stage, "ready");
+  assert.equal(timelineReady.setup.proof?.proofId, "live-proof");
+  assert.equal(threadReady.setup.proof?.proofId, "live-proof");
 });
