@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
+import { teamsSectionIsVisible } from "@/features/agents/lib/teamsSectionVisibility";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
 import {
   DropdownMenu,
@@ -53,6 +54,13 @@ export function TeamsSection({
   onShare,
   onImport,
 }: TeamsSectionProps) {
+  // Nothing but the teams this client seeds for itself means nothing worth a
+  // heading. Hidden while the list is still loading too, so the section does
+  // not flash a row of skeletons on its way to not being there.
+  if (!teamsSectionIsVisible(teams, error !== null)) {
+    return null;
+  }
+
   return (
     <section className="relative space-y-4" data-testid="agents-library-teams">
       <div className={TEAM_CARD_COLUMN_CLASS}>

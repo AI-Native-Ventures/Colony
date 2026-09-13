@@ -183,6 +183,43 @@ fn publish_rule_takes_this_relays_coordination_team_and_no_others() {
     assert!(!team_publishes_to_relay(&ours, RELAY_B));
 }
 
+/// The store this device actually held on 2026-09-13: one coordination
+/// record per community it has ever joined, every one of them rewritten to
+/// `is_builtin: false` by another client. Exactly one belongs on the relay
+/// that is open, whatever the flag says.
+#[test]
+fn publish_rule_takes_one_coordination_team_out_of_thirteen() {
+    let relays: Vec<String> = (0..13).map(|n| format!("wss://c{n}.example")).collect();
+    let stored: Vec<TeamRecord> = relays
+        .iter()
+        .map(|relay| {
+            let mut record = seeded_for(relay);
+            record.is_builtin = false;
+            record
+        })
+        .collect();
+
+    let published: Vec<&str> = stored
+        .iter()
+        .filter(|record| team_publishes_to_relay(record, &relays[7]))
+        .map(|record| record.id.as_str())
+        .collect();
+
+    assert_eq!(published, vec![id_for(&relays[7]).as_str()]);
+}
+
+/// The pin is no longer the authority either: the same client that rewrote
+/// the flag could rewrite the pin, and a coordination record wearing another
+/// community's pin still belongs to the community its id names.
+#[test]
+fn publish_rule_reads_the_id_not_the_pin() {
+    let mut ours = seeded_for(RELAY_A);
+    ours.relay_url = Some(RELAY_B.to_string());
+
+    assert!(team_publishes_to_relay(&ours, RELAY_A));
+    assert!(!team_publishes_to_relay(&ours, RELAY_B));
+}
+
 /// The pin is compared canonically, so the same relay spelled differently is
 /// still this community.
 #[test]
