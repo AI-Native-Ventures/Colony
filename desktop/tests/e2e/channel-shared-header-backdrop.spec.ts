@@ -38,10 +38,10 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
-test.describe("non-Colony channel shared header backdrop", () => {
+test.describe("retired theme channel layout migration", () => {
   test.use({ viewport: { width: 1280, height: 720 } });
 
-  test("spans channel and split auxiliary columns with one backdrop", async ({
+  test("uses separate Default channel and thread surfaces without the legacy backdrop", async ({
     page,
   }) => {
     await page.addInitScript(() => {
@@ -104,49 +104,25 @@ test.describe("non-Colony channel shared header backdrop", () => {
     const sharedBackdrop = page.getByTestId("channel-shared-header-backdrop");
     await expect(sharedBackdrop).toHaveCount(1);
 
-    const chatHeader = page.getByTestId("chat-header");
-    const auxiliaryResizeHandle = page.getByTestId(
-      "right-auxiliary-pane-resize-handle",
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-buzz-theme",
+      "buzz",
     );
-
-    const [
-      hostBox,
-      backdropBox,
-      backdropFilter,
-      backdropZIndex,
-      headerZIndex,
-      resizeHandleZIndex,
-      auxiliaryPaneAnimationName,
-    ] = await Promise.all([
-      page.getByTestId("channel-drop-zone").locator("..").boundingBox(),
-      sharedBackdrop.boundingBox(),
-      sharedBackdrop.evaluate(
-        (element) => getComputedStyle(element).backdropFilter,
-      ),
-      sharedBackdrop.evaluate((element) =>
-        Number(getComputedStyle(element).zIndex),
-      ),
-      chatHeader.evaluate((element) =>
-        Number(getComputedStyle(element.parentElement ?? element).zIndex),
-      ),
-      auxiliaryResizeHandle.evaluate((element) =>
-        Number(getComputedStyle(element).zIndex),
-      ),
-      page
-        .getByTestId("message-thread-panel")
-        .evaluate((element) => getComputedStyle(element).animationName),
-    ]);
-
-    expect(hostBox).not.toBeNull();
-    expect(backdropBox).not.toBeNull();
-    expect(Math.round(backdropBox?.x ?? 0)).toBe(Math.round(hostBox?.x ?? 0));
-    expect(Math.round(backdropBox?.width ?? 0)).toBe(
-      Math.round(hostBox?.width ?? 0),
-    );
-    expect(backdropFilter).not.toBe("none");
-    expect(headerZIndex).toBeGreaterThan(backdropZIndex);
-    expect(resizeHandleZIndex).toBeGreaterThan(backdropZIndex);
-    expect(auxiliaryPaneAnimationName).toBe("none");
+    await expect(sharedBackdrop).toBeHidden();
+    const channel = page.getByTestId("channel-drop-zone");
+    await expect(channel).toBeVisible();
+    await expect(threadPanel).toBeVisible();
+    await waitForAnimations(page);
+    const channelBox = await channel.boundingBox();
+    const threadBox = await threadPanel.boundingBox();
+    expect(channelBox).not.toBeNull();
+    expect(threadBox).not.toBeNull();
+    if (!channelBox || !threadBox)
+      throw new Error("Split pane geometry missing");
+    expect(threadBox.x).toBeGreaterThanOrEqual(channelBox.x + channelBox.width);
+    expect(channelBox.width).toBeGreaterThan(0);
+    expect(threadBox.width).toBeGreaterThan(0);
+    await expect(threadPanel).toHaveCSS("animation-name", "none");
 
     await waitForAnimations(page);
   });

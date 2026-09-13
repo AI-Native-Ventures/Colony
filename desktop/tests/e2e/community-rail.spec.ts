@@ -1069,15 +1069,14 @@ test.describe("community rail", () => {
             7,
         ),
       ).toBeLessThan(0.5);
-      if (theme === "buzz") {
-        expect(contentBox?.y ?? 0).toBeLessThan(
-          (chromeBox?.y ?? 0) + (chromeBox?.height ?? 0),
-        );
-      } else {
-        expect(
-          Math.abs((buttonBox?.y ?? 0) - (contentBox?.y ?? 0) - 6),
-        ).toBeLessThan(0.5);
-      }
+      // Retired themes migrate to the same Default workspace layout.
+      await expect(page.locator("html")).toHaveAttribute(
+        "data-buzz-theme",
+        "buzz",
+      );
+      expect(contentBox?.y ?? 0).toBeLessThan(
+        (chromeBox?.y ?? 0) + (chromeBox?.height ?? 0),
+      );
       expect(
         Math.abs((railBox?.y ?? 0) - (appSurfaceBox?.y ?? 0)),
       ).toBeLessThan(0.5);
@@ -1098,44 +1097,40 @@ test.describe("community rail", () => {
       expect(Math.abs(leftInset - rightInset)).toBeLessThan(0.5);
       const visibleRightGap =
         (searchBox?.x ?? 0) - ((buttonBox?.x ?? 0) + (buttonBox?.width ?? 0));
-      if (theme === "buzz") {
-        // Search belongs to the inset navigation group in the new sidebar.
-        const inbox = page
-          .getByTestId("app-sidebar")
-          .getByRole("button", { name: "Inbox", exact: true });
-        const inboxBox = await inbox.boundingBox();
-        const reservedScrollbarWidth = await inbox.evaluate((element) => {
-          const scroller = element.closest<HTMLElement>(
-            '[data-sidebar="content"]',
-          );
-          if (!scroller)
-            throw new Error("Expected Inbox in the sidebar scroller.");
-          const style = getComputedStyle(scroller);
-          return (
-            scroller.offsetWidth -
-            scroller.clientWidth -
-            Number.parseFloat(style.borderLeftWidth) -
-            Number.parseFloat(style.borderRightWidth)
-          );
-        });
-        if (classicScrollbars) expect(reservedScrollbarWidth).toBe(15);
-        expect(inboxBox).not.toBeNull();
-        expect(Math.abs((searchBox?.x ?? 0) - (inboxBox?.x ?? 0))).toBeLessThan(
-          0.5,
+      // Search belongs to the inset navigation group in the new sidebar.
+      const inbox = page
+        .getByTestId("app-sidebar")
+        .getByRole("button", { name: "Inbox", exact: true });
+      const inboxBox = await inbox.boundingBox();
+      const reservedScrollbarWidth = await inbox.evaluate((element) => {
+        const scroller = element.closest<HTMLElement>(
+          '[data-sidebar="content"]',
         );
-        // Search sits outside the scroller; both controls have the same inset,
-        // but only the navigation row reserves the classic scrollbar track.
-        expect(
-          Math.abs(
-            (searchBox?.width ?? 0) -
-              (inboxBox?.width ?? 0) -
-              reservedScrollbarWidth,
-          ),
-        ).toBeLessThan(0.5);
-        expect(visibleRightGap).toBeGreaterThan(leftInset);
-      } else {
-        expect(Math.abs(leftInset - visibleRightGap)).toBeLessThan(0.5);
-      }
+        if (!scroller)
+          throw new Error("Expected Inbox in the sidebar scroller.");
+        const style = getComputedStyle(scroller);
+        return (
+          scroller.offsetWidth -
+          scroller.clientWidth -
+          Number.parseFloat(style.borderLeftWidth) -
+          Number.parseFloat(style.borderRightWidth)
+        );
+      });
+      if (classicScrollbars) expect(reservedScrollbarWidth).toBe(15);
+      expect(inboxBox).not.toBeNull();
+      expect(Math.abs((searchBox?.x ?? 0) - (inboxBox?.x ?? 0))).toBeLessThan(
+        0.5,
+      );
+      // Search sits outside the scroller; both controls have the same inset,
+      // but only the navigation row reserves the classic scrollbar track.
+      expect(
+        Math.abs(
+          (searchBox?.width ?? 0) -
+            (inboxBox?.width ?? 0) -
+            reservedScrollbarWidth,
+        ),
+      ).toBeLessThan(0.5);
+      expect(visibleRightGap).toBeGreaterThan(leftInset);
 
       // With the rail visible, the top-chrome controls (sidebar toggle, back/
       // forward) sit just past the traffic lights near the rail edge — not
@@ -1145,18 +1140,14 @@ test.describe("community rail", () => {
         .first();
       const toggleBox = await toggle.boundingBox();
       expect(toggleBox).not.toBeNull();
-      if (theme === "buzz") {
-        // Navigation stays inside the sidebar header and to the right of the
-        // native traffic lights rather than retaining the legacy left position.
-        const sidebarBox = await page.getByTestId("app-sidebar").boundingBox();
-        expect(sidebarBox).not.toBeNull();
-        expect(toggleBox?.x ?? 0).toBeGreaterThanOrEqual(80);
-        expect(
-          (toggleBox?.x ?? 0) + (toggleBox?.width ?? 0),
-        ).toBeLessThanOrEqual((sidebarBox?.x ?? 0) + (sidebarBox?.width ?? 0));
-      } else {
-        expect(toggleBox?.x ?? 0).toBeLessThan(120);
-      }
+      // Navigation stays inside the sidebar header and to the right of the
+      // native traffic lights rather than retaining the legacy left position.
+      const sidebarBox = await page.getByTestId("app-sidebar").boundingBox();
+      expect(sidebarBox).not.toBeNull();
+      expect(toggleBox?.x ?? 0).toBeGreaterThanOrEqual(80);
+      expect((toggleBox?.x ?? 0) + (toggleBox?.width ?? 0)).toBeLessThanOrEqual(
+        (sidebarBox?.x ?? 0) + (sidebarBox?.width ?? 0),
+      );
     });
   }
 

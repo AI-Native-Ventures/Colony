@@ -127,7 +127,6 @@ pub(super) fn prepare_worker(
         } else {
             configured
         };
-        destinations.push(Destination::resolve(url)?);
         let meter_key = if provider == "anthropic" {
             "BUZZ_METER_ANTHROPIC_UPSTREAM"
         } else {
@@ -143,6 +142,9 @@ pub(super) fn prepare_worker(
             // distinct from the existing meter root override, which adds /v1.
             ("BUZZ_METER_OPENAI_BASE_URL", url.to_owned())
         };
+        // The meter owns provider traffic. Resolve only its selected upstream:
+        // a provisioned gateway replaces the SDK default, which must neither
+        // require DNS nor gain a place in the worker's network allowlist.
         destinations.push(Destination::resolve(&upstream)?);
         meter_upstream = Some((meter_key, upstream));
     }

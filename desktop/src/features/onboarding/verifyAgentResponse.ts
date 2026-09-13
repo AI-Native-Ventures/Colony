@@ -245,7 +245,7 @@ export async function verifyAgentResponse(
       sendChannelMessage({
         channelId: channel.id,
         mentionPubkeys: [agent.pubkey],
-        content: `Colony connection test. Reply in this thread with a short greeting and this verification code: ${nonce}. Do not use tools or start any other work.`,
+        content: `Colony connection test. Reply in this thread with a short greeting and this verification code: ${nonce}. Use your messaging tool to post exactly one reply in this thread. Do not use other tools or start any other work.`,
         clientTags: [["client", "colony:onboarding-response-test"]],
       }),
     );

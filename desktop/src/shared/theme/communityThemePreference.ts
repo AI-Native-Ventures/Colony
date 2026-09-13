@@ -1,10 +1,16 @@
 import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
-import { ACCENT_COLORS } from "./ThemeProvider";
+import { ACCENT_COLORS, defaultAppearanceTheme } from "./ThemeProvider";
 import { SYNTAX_THEMES, type SyntaxThemeName } from "./theme-loader";
 import {
   type WorkspaceGradientPattern,
   parseWorkspaceGradientPattern,
 } from "./workspaceAppearance";
+
+import {
+  DEFAULT_CUSTOM_GRADIENT,
+  parseCustomGradient,
+  type CustomGradient,
+} from "./customGradient";
 
 /**
  * Bumped alongside the global accent key.
@@ -25,6 +31,7 @@ export type CommunityThemePreference = {
   accent: string;
   followSystem: boolean;
   gradientPattern: WorkspaceGradientPattern;
+  customGradient?: CustomGradient;
 };
 
 export const DEFAULT_COMMUNITY_THEME: CommunityThemePreference = Object.freeze({
@@ -65,16 +72,25 @@ export function parseCommunityThemePreference(
     !THEME_NAMES.has(candidate.theme) ||
     typeof candidate.accent !== "string" ||
     !ACCENTS.has(candidate.accent) ||
-    typeof candidate.followSystem !== "boolean"
+    typeof candidate.followSystem !== "boolean" ||
+    (candidate.customGradient !== undefined &&
+      !parseCustomGradient(candidate.customGradient))
   ) {
     return null;
   }
   return {
     version: 1,
-    theme: candidate.theme as SyntaxThemeName,
+    theme: defaultAppearanceTheme(candidate.theme),
     accent: candidate.accent,
     followSystem: candidate.followSystem,
     gradientPattern: parseWorkspaceGradientPattern(candidate.gradientPattern),
+    ...(candidate.customGradient === undefined
+      ? {}
+      : {
+          customGradient:
+            parseCustomGradient(candidate.customGradient) ??
+            DEFAULT_CUSTOM_GRADIENT,
+        }),
   };
 }
 
@@ -192,12 +208,18 @@ export function sameCommunityThemePreference(
   left: CommunityThemePreference,
   right: CommunityThemePreference,
 ): boolean {
+  const leftGradient = left.customGradient ?? DEFAULT_CUSTOM_GRADIENT;
+  const rightGradient = right.customGradient ?? DEFAULT_CUSTOM_GRADIENT;
   return (
-    left.theme === right.theme &&
+    defaultAppearanceTheme(left.theme) ===
+      defaultAppearanceTheme(right.theme) &&
     left.accent === right.accent &&
     left.followSystem === right.followSystem &&
     parseWorkspaceGradientPattern(left.gradientPattern) ===
-      parseWorkspaceGradientPattern(right.gradientPattern)
+      parseWorkspaceGradientPattern(right.gradientPattern) &&
+    leftGradient.enabled === rightGradient.enabled &&
+    leftGradient.color1 === rightGradient.color1 &&
+    leftGradient.color2 === rightGradient.color2
   );
 }
 
