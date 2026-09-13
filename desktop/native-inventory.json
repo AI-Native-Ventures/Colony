@@ -1,7 +1,7 @@
 {
   "files": {
-    "rust_total": 518,
-    "tauri_coupled": 208,
+    "rust_total": 519,
+    "tauri_coupled": 209,
     "portable": 310,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
@@ -179,6 +179,7 @@
       "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
       "src-tauri/src/managed_agents/storage.rs",
       "src-tauri/src/managed_agents/subscriptions/codex_account.rs",
+      "src-tauri/src/managed_agents/supersede.rs",
       "src-tauri/src/managed_agents/teams.rs",
       "src-tauri/src/media_proxy.rs",
       "src-tauri/src/mesh_llm/coordinator.rs",
@@ -550,7 +551,7 @@
     ]
   },
   "params": {
-    "AppHandle": 417,
+    "AppHandle": 419,
     "State": 271,
     "Window": 7,
     "ipc::Request": 2,
@@ -558,7 +559,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 414,
+      "AppHandle": 416,
       "State": 271,
       "Window": 7,
       "ipc::Request": 2,

@@ -268,6 +268,41 @@ pub fn provisioned_edit_refusal(name: &str, handle: &str) -> String {
     )
 }
 
+/// The display name Colony's Chief of Staff answers to.
+///
+/// Reserved: a workspace cannot name anything else Scout, because the name is
+/// how people address the one employee Colony maintains, and a second Scout in
+/// the roster makes every mention of it ambiguous.
+pub const RESERVED_CHIEF_OF_STAFF_NAME: &str = "Scout";
+
+/// Why nothing else may be called Scout.
+pub fn reserved_chief_name_refusal() -> String {
+    format!(
+        "\"{RESERVED_CHIEF_OF_STAFF_NAME}\" is the name of the Chief of Staff Colony provides. Choose another name."
+    )
+}
+
+/// Whether `name` is the reserved one, compared trimmed and case-insensitively
+/// so "  scout " does not slip past.
+pub fn is_reserved_chief_name(name: &str) -> bool {
+    name.trim()
+        .eq_ignore_ascii_case(RESERVED_CHIEF_OF_STAFF_NAME)
+}
+
+/// Refuse a name that is reserved for Colony's Chief of Staff.
+///
+/// `holds_the_chief_office` exempts the office itself: the provisioned
+/// employee, and the desktop-builtin Chief of Staff the welcome flow still
+/// mints as a fallback in a community that has no provisioned record. Those
+/// are the same office rather than somebody else taking its name, and
+/// refusing them would leave such a community with no Chief of Staff at all.
+pub fn refuse_reserved_chief_name(name: &str, holds_the_chief_office: bool) -> Result<(), String> {
+    if holds_the_chief_office || !is_reserved_chief_name(name) {
+        return Ok(());
+    }
+    Err(reserved_chief_name_refusal())
+}
+
 /// Refuse an edit when `record` is an employee Colony provides.
 ///
 /// One helper rather than the check written out at each call site, because
@@ -351,6 +386,41 @@ pub fn parse_available_commands(help_text: &str) -> BTreeSet<String> {
 mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    #[test]
+    fn the_chief_of_staffs_name_is_refused_for_anything_else() {
+        let error = refuse_reserved_chief_name("Scout", false).expect_err("refused");
+        assert_eq!(
+            error,
+            "\"Scout\" is the name of the Chief of Staff Colony provides. Choose another name."
+        );
+    }
+
+    #[test]
+    fn the_refusal_is_not_dodged_by_case_or_padding() {
+        for attempt in ["scout", "SCOUT", "  Scout  ", "sCoUt"] {
+            assert!(
+                refuse_reserved_chief_name(attempt, false).is_err(),
+                "{attempt} must be refused"
+            );
+        }
+    }
+
+    /// The office itself keeps the name: the provisioned employee, and the
+    /// built-in Chief of Staff the welcome flow still mints where no
+    /// provisioned record exists. Refusing those would leave such a community
+    /// with no Chief of Staff at all.
+    #[test]
+    fn the_chief_of_staff_itself_may_be_called_scout() {
+        assert!(refuse_reserved_chief_name("Scout", true).is_ok());
+    }
+
+    #[test]
+    fn every_other_name_is_left_alone() {
+        assert!(refuse_reserved_chief_name("Scouting Party", false).is_ok());
+        assert!(refuse_reserved_chief_name("Atlas", false).is_ok());
+        assert!(refuse_reserved_chief_name("", false).is_ok());
+    }
 
     fn definition_content(handle: &str) -> String {
         serde_json::json!({

@@ -13,6 +13,7 @@
  * looks like when nobody filled the form in.
  */
 import type { AgentRank } from "@/features/agents/employeeHeads";
+import { isProvisionedChiefOfStaff } from "@/features/agents/provisionedChief";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
@@ -28,14 +29,23 @@ export type OrgPlacement = {
 /**
  * The pubkey of the agent currently holding Chief of Staff, or null.
  *
- * Matched on the persona's `roleId`, never on a display name: names are
- * branding and get renamed, the role id is the stable identity the relay and
- * the mention system both key off.
+ * The employee Colony provisions holds the office wherever it exists: it is
+ * the one Chief of Staff per community, and the desktop-builtin instance next
+ * to it is retired legacy rather than a second holder. Only when no
+ * provisioned record has been adopted here (an older relay, or an adoption the
+ * relay refused) does the persona-role match decide.
+ *
+ * That fallback is matched on the persona's `roleId`, never on a display name:
+ * names are branding and get renamed, the role id is the stable identity the
+ * relay and the mention system both key off.
  */
 export function chiefOfStaffPubkey(
   agents: readonly ManagedAgent[] | undefined,
   personas: readonly AgentPersona[] | undefined,
 ): string | null {
+  const provisioned = (agents ?? []).find(isProvisionedChiefOfStaff);
+  if (provisioned) return normalizePubkey(provisioned.pubkey);
+
   const chiefPersonaIds = new Set(
     (personas ?? [])
       .filter((persona) => persona.roleId === CHIEF_OF_STAFF_ROLE_ID)

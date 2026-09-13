@@ -76,6 +76,11 @@ pub async fn adopt_provisioned_employees(
 
     let definitions = trusted_provisioned_definitions(&events);
     if definitions.is_empty() {
+        // Still worth a pass: a provisioned chief adopted on an earlier launch
+        // is on disk even when this query came back empty, and the built-in
+        // instance beside it should not stay employed because the relay was
+        // unreachable for one query.
+        retire_superseded_builtins(&app, &state);
         return Ok(Vec::new());
     }
 
@@ -104,7 +109,28 @@ pub async fn adopt_provisioned_employees(
         }
     }
 
+    // Deliberately after the adoption loop: the provisioned chief-of-staff
+    // record this reads is what adoption just wrote, and retiring before it
+    // exists would find nothing to retire on the launch that matters most.
+    retire_superseded_builtins(&app, &state);
+
     Ok(outcomes)
+}
+
+/// Retire the built-in Chief of Staff instances Colony's provisioned employee
+/// supersedes, reporting rather than returning a failure.
+///
+/// Adoption's contract is that one bad entry cannot hide the others, and the
+/// same holds here: an employee that adopted fine must not be reported as
+/// failed because a retirement pass could not read the store.
+fn retire_superseded_builtins(app: &AppHandle, state: &AppState) {
+    match crate::managed_agents::supersede::retire_superseded_builtin_chiefs(app, state) {
+        Ok(0) => {}
+        Ok(count) => {
+            println!("buzz-desktop: retired {count} superseded built-in Chief of Staff instance(s)")
+        }
+        Err(error) => eprintln!("buzz-desktop: supersede: {error}"),
+    }
 }
 
 /// Adopt one employee: decide whether anything is needed, refuse a brief this
