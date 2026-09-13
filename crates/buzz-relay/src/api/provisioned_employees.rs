@@ -579,7 +579,9 @@ mod tests {
         )
         .await;
         assert!(
-            stored.iter().any(|event| event.id == head.id && event.content == head.content),
+            stored
+                .iter()
+                .any(|event| event.id == head.id && event.content == head.content),
             "the workspace's own head is neither deleted nor rewritten"
         );
 
