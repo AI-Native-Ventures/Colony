@@ -113,12 +113,9 @@ test("thread head reflects the channel-window edit even before thread aux loads"
   const timelineRow = page.locator(
     `[data-testid="message-row"][data-message-id="${rootId}"]`,
   );
-  await expect(timelineRow.getByTestId("message-body")).toContainText(
-    "these PRs?",
-  );
-  await expect(timelineRow.getByTestId("message-body")).not.toContainText(
-    "these two PRs?",
-  );
+  // Colony's rows carry no `message-body` testid; the row itself is the body.
+  await expect(timelineRow).toContainText("these PRs?");
+  await expect(timelineRow).not.toContainText("these two PRs?");
 
   // 3. Open the thread via the reply action (the flow in the bug report).
   const replyButton = page.getByTestId(`reply-message-${rootId}`);
@@ -130,9 +127,9 @@ test("thread head reflects the channel-window edit even before thread aux loads"
   //    thread-aux backfill is still gated (provably not yet delivered). Pre-fix
   //    this rendered the stale original ("these two PRs?"), and because the gate
   //    is held (not merely delayed) no backfill can arrive to heal it.
-  const headBody = threadPanel
-    .locator(`[data-testid="message-row"][data-message-id="${rootId}"]`)
-    .getByTestId("message-body");
+  const headBody = threadPanel.locator(
+    `[data-testid="message-row"][data-message-id="${rootId}"]`,
+  );
   await expect(headBody).toContainText("these PRs?");
   await expect(headBody).not.toContainText("these two PRs?");
 
