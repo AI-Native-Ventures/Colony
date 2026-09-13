@@ -1347,16 +1347,21 @@ mod tests {
         use uuid::Uuid;
 
         let database_url = crate::test_support::database_url();
-        // Upstream builds this through `Db::connect_writer_pool`, which arrives
-        // with the writer session-timeout port (#6229). Until then the pool is
-        // built directly; the checkout attribution under test is unaffected.
-        let writer_pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(4)
-            .min_connections(0)
-            .acquire_timeout(Duration::from_secs(5))
-            .connect(&database_url)
-            .await
-            .expect("connect production-method writer pool");
+        // Build the writer pool the way production does. `connect_writer_pool`
+        // is the only constructor that arms `buzz.created_at_floor`, the three
+        // session timeouts and the isolation assertion in its single
+        // `after_connect` hook, so a bare `PgPoolOptions` here would exercise
+        // checkout attribution against a pool the relay never creates - and
+        // `verify_replica_fence_at_boot` below fails closed on the missing GUC.
+        let writer_pool = crate::Db::connect_writer_pool(&crate::DbConfig {
+            database_url: database_url.clone(),
+            max_connections: 4,
+            min_connections: 0,
+            acquire_timeout_secs: 5,
+            ..crate::DbConfig::default()
+        })
+        .await
+        .expect("connect production-method writer pool");
         let reader_pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(5))
@@ -1503,13 +1508,42 @@ mod tests {
                 Some((labels["pool_role"].clone(), labels["operation"].clone()))
             })
             .collect::<BTreeSet<_>>();
+        // Upstream exercises all eleven valid pairs here. Colony reaches ten:
+        // `reader/authorization` is the one pair no Colony production method
+        // can emit, because `Db::is_relay_member` reads the writer directly.
+        // Upstream routes that single permission read on the bounded replica
+        // arm "by explicit product decision", and its own comment calls it
+        // "not precedent for routing other permission reads"; Colony has never
+        // made that decision (no `route_read` has ever existed in
+        // relay_members.rs here, at this branch or before the Phase 2 store
+        // split). Routing it would make a revoked membership readable for up
+        // to the freshness budget, which is a product call, not a port detail.
+        //
+        // The pair stays in POOL_ACQUIRE_VALID_PAIRS and in the 187-series
+        // budget: that vocabulary is what the label space ALLOWS, and
+        // `ReaderOperation::Authorization` remains constructible. Only this
+        // test, which asserts what production actually emits, is narrowed.
+        // Delete the exclusion the moment `is_relay_member` starts routing.
+        const UNREACHABLE_IN_COLONY: (&str, &str) = ("reader", "authorization");
+        assert!(
+            super::POOL_ACQUIRE_VALID_PAIRS.contains(&UNREACHABLE_IN_COLONY),
+            "the excluded pair must still be a valid label combination"
+        );
         let expected = super::POOL_ACQUIRE_VALID_PAIRS
             .into_iter()
             .map(|(pool_role, operation)| (pool_role.to_owned(), operation.to_owned()))
             .collect::<BTreeSet<_>>();
+        let reached = expected
+            .iter()
+            .filter(|(pool_role, operation)| {
+                (pool_role.as_str(), operation.as_str()) != UNREACHABLE_IN_COLONY
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
         assert_eq!(
-            attempt_labels, expected,
-            "real production Db/store methods must emit every exact valid operation pair"
+            attempt_labels, reached,
+            "real production Db/store methods must emit every exact valid operation pair \
+             that Colony can reach"
         );
 
         let duration_labels = snapshot
@@ -1534,7 +1568,7 @@ mod tests {
                 ))
             })
             .collect::<BTreeSet<_>>();
-        assert_eq!(duration_labels, expected);
+        assert_eq!(duration_labels, reached);
 
         let waiter_labels = snapshot
             .iter()
@@ -1557,6 +1591,10 @@ mod tests {
                 ))
             })
             .collect::<BTreeSet<_>>();
+        // The waiter gauge is published for EVERY valid pair, including the one
+        // no Colony method reaches: `refresh_pool_waiters` exists so a healthy
+        // zero is distinguishable from a missing series, which only works if
+        // the full vocabulary is emitted.
         assert_eq!(waiter_labels, expected);
     }
 

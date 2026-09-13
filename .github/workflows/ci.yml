@@ -1198,6 +1198,11 @@ jobs:
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           TEST_DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          # This job provisions Postgres from schema/schema.sql via pgschema, not
+          # by running migrations, so `serving_write_gate_...` must skip its own
+          # `db.migrate()`. Without this it fails on 42710, `type "channel_type"
+          # already exists`, from migration 0001 re-creating desired-state types.
+          BUZZ_TEST_SCHEMA_MODE: desired
       - name: Full-text search policy
         # The FTS suite is the only place the brownfield search-policy
         # migrations are executed against a real database; nothing else in CI

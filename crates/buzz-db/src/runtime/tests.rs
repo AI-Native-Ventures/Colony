@@ -3656,6 +3656,20 @@ async fn session_timeouts_install_through_db_new_and_bound_lock_waits() {
     assert_eq!(idle, "1min");
     assert_eq!(statement, "0");
 
+    // SQLx keeps exactly one `after_connect` hook, so the session timeouts and
+    // the replica-fence floor guard share it. Asserting the timeouts alone
+    // would still pass if a future edit dropped the floor guard, and the
+    // serving write fence would then be unarmed on every writer connection.
+    let floor: String = sqlx::query_scalar("SELECT current_setting('buzz.created_at_floor')")
+        .fetch_one(&db.pool)
+        .await
+        .expect("writer connections must arm the created_at floor guard");
+    assert_eq!(
+        floor,
+        crate::replica_fence::CREATED_AT_FLOOR_SECS.to_string(),
+        "the floor guard GUC must carry the compiled-in floor"
+    );
+
     let mut holder = db.pool.acquire().await.expect("holder connection");
     sqlx::raw_sql("BEGIN; LOCK TABLE events IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *holder)
