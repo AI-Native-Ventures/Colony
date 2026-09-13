@@ -287,7 +287,7 @@ test("an authority-bound evidence grant can exist without a shared tab", async (
         evidence: {
           token: evidenceToken,
           renewalToken: result.renewalToken,
-          scope: {},
+          scope: { workerPubkey: pubkey },
         },
       },
     );

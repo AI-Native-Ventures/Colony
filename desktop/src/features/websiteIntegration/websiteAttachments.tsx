@@ -323,7 +323,6 @@ function WebsiteAttachmentInner({
     () => isWebsiteCompositeRendered(message.id),
     () => false,
   );
-  const _managedAgentsQuery = useManagedAgentsQuery();
   React.useEffect(() => {
     if (!communityId || !head || !relayUrl) return;
     void ensureWebsiteEvidenceGrants({ communityId, head, relayUrl }).catch(
