@@ -67,11 +67,12 @@ for (const theme of ["buzz", "buzz-dark", "vesper"]) {
     await expect(offscreenSidebar).toHaveCSS("visibility", "hidden");
     await expect(offscreenSidebar).toHaveCSS("pointer-events", "none");
 
-    // The community rail stays visible and interactive beneath it.
-    await expect(page.getByTestId("community-rail")).toBeVisible();
-    await expect(
-      page.getByTestId(`community-rail-button-${COMMUNITY_B.id}`),
-    ).toBeVisible();
+    // Upstream keeps the community rail visible beneath the collapsed sidebar.
+    // Colony hides the rail with the sidebar on purpose (`effectiveCommunityRail`
+    // in AppShell gates on `effectiveSidebarOpen`), so what this regression
+    // proves here is the other half: nothing of the collapsed sidebar is left
+    // painting over the rail's strip.
+    await expect(page.getByTestId("community-rail")).toHaveCount(0);
     await page.screenshot({ path: `${SHOTS}/${theme}-collapsed.png` });
   });
 }
