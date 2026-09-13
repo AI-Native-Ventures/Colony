@@ -905,6 +905,37 @@ mod tests {
     }
 
     #[test]
+    fn direct_work_hydrates_without_team_and_does_not_infer_one_from_membership() {
+        let keys = relay();
+        let mut direct = task();
+        direct.owning_team_id = None;
+        direct.qa_persona_id = None;
+        direct.initiative_id = None;
+        let event = message(vec![scalar("task", &direct.id)]);
+        let reference = read_work_reference(&event)
+            .expect("reference")
+            .expect("task reference");
+        assert_eq!(reference.owning_team_id, None);
+        for memberships in [vec![], vec!["engineering-team".to_owned()]] {
+            let context = hydrate(
+                &reference,
+                &task_head(&direct, &keys),
+                None,
+                &company_head(&keys),
+                &keys.public_key(),
+                &memberships,
+            )
+            .expect("direct hydration");
+            assert_eq!(context.metric.owning_team_id, None);
+            assert_eq!(context.metric.task_id, direct.id);
+            context
+                .metric
+                .validate()
+                .expect("attributed without a team");
+        }
+    }
+
+    #[test]
     fn a_message_with_no_work_reference_is_ordinary_chat() {
         let event = message(vec![scalar("h", "engineering")]);
         assert_eq!(read_work_reference(&event).expect("read"), None);
@@ -1801,35 +1832,5 @@ mod base_prompt_tests {
             BASE_PROMPT.contains("Never write as if the reader already knows us"),
             "the base prompt must forbid copy that assumes familiarity"
         );
-    }
-
-    #[test]
-    fn direct_work_hydrates_without_team_and_does_not_infer_one_from_membership() {
-        let keys = relay();
-        let mut direct = task();
-        direct.owning_team_id = None;
-        direct.qa_persona_id = None;
-        let event = message(vec![scalar("task", &direct.id)]);
-        let reference = read_work_reference(&event)
-            .expect("reference")
-            .expect("task reference");
-        assert_eq!(reference.owning_team_id, None);
-        for memberships in [vec![], vec!["engineering-team".to_owned()]] {
-            let context = hydrate(
-                &reference,
-                &task_head(&direct, &keys),
-                None,
-                &company_head(&keys),
-                &keys.public_key(),
-                &memberships,
-            )
-            .expect("direct hydration");
-            assert_eq!(context.metric.owning_team_id, None);
-            assert_eq!(context.metric.task_id, direct.id);
-            context
-                .metric
-                .validate()
-                .expect("attributed without a team");
-        }
     }
 }
