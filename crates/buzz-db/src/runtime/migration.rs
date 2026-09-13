@@ -776,7 +776,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 73);
+        assert_eq!(migrations.len(), 74);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1510,6 +1510,38 @@ mod tests {
         // The grant is stored, never recomputed: a price edit mid-flight must
         // not change what an already-paid purchase is worth.
         assert!(packs.contains("ADD COLUMN grant_nanousd BIGINT"));
+
+        // NIP-PMA private managed-agent FTS exclusion (0074): same
+        // wrap-the-existing-expression shape as 0014 so brownfield databases
+        // stop tokenizing private managed-agent ciphertext without a policy
+        // rewrite. (The migration itself still rewrites the events heap and
+        // rebuilds the GIN index - see the 0074 header for the cost.)
+        //
+        // Upstream's kind for this payload is 30179; here 30179 is
+        // KIND_COMPANY_PROFILE, which must stay searchable, and the private
+        // managed-agent definition is KIND_PRIVATE_MANAGED_AGENT = 30194.
+        assert_eq!(migrations[73].version, 74);
+        let private_agent_fts = migrations[73].sql.as_str();
+        assert!(private_agent_fts.contains("kind = 30194"));
+        assert!(private_agent_fts.contains("search_tsv"));
+        assert!(
+            !private_agent_fts.contains("30179"),
+            "30179 is KIND_COMPANY_PROFILE here and must remain indexed"
+        );
+        assert_eq!(
+            buzz_core::kind::KIND_PRIVATE_MANAGED_AGENT,
+            30194,
+            "the migration literal must track the registered kind"
+        );
+        assert!(!migrations[0].sql.as_str().contains("30194"));
+        // Colony's desired-state schema uses a positive allowlist rather than
+        // upstream's negative skip-set, so a fresh install already excludes the
+        // private managed-agent kind and schema.sql needs no change. Pin that.
+        assert!(desired_schema.contains("CASE WHEN kind IN (0, 9, 40002, 45001, 45003)"));
+        assert!(
+            !desired_schema.contains("30194"),
+            "the allowlist must never gain the private managed-agent kind"
+        );
 
         // Mixed-version channel-roster fence: old canonical replacement writers
         // acquire their replacement key before INSERT; this trigger then takes
@@ -2318,7 +2350,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
-    async fn populated_upgrade_preserves_search_policy_except_for_push_leases() {
+    async fn populated_upgrade_preserves_search_policy_except_for_private_kinds() {
         let pool = connect_test_pool().await;
         reset_public_schema(&pool).await;
         MIGRATOR
@@ -2334,7 +2366,7 @@ mod tests {
             .await
             .expect("insert community");
 
-        for (marker, kind) in [(1_u8, 1_i32), (2_u8, 30_350_i32)] {
+        for (marker, kind) in [(1_u8, 1_i32), (2_u8, 30_350_i32), (3_u8, 30_194_i32)] {
             sqlx::query(
                 "INSERT INTO events \
                  (community_id, id, pubkey, created_at, kind, tags, content, sig, received_at) \
@@ -2361,19 +2393,37 @@ mod tests {
         .fetch_all(&pool)
         .await
         .expect("read pre-push search behavior");
-        assert_eq!(before, vec![(1, true), (30_350, true)]);
+        assert_eq!(before, vec![(1, true), (30_194, true), (30_350, true)]);
+
+        // 0014 fixes 30350 only. A brownfield database that stopped short of
+        // 0074 still tokenized kind:30194 ciphertext - the gap 0074 closes.
+        MIGRATOR
+            .run_to(73, &pool)
+            .await
+            .expect("apply migrations through 73");
+        let pre_0074: Vec<(i32, Option<bool>)> = sqlx::query_as(
+            "SELECT kind, search_tsv @@ plainto_tsquery('simple', 'needle') \
+             FROM events ORDER BY kind",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read pre-0074 search behavior");
+        assert_eq!(
+            pre_0074,
+            vec![(1, Some(true)), (30_194, Some(true)), (30_350, None)]
+        );
 
         run_migrations(&pool)
             .await
-            .expect("apply push migrations to populated database");
+            .expect("apply remaining migrations to populated database");
         let after: Vec<(i32, Option<bool>)> = sqlx::query_as(
             "SELECT kind, search_tsv @@ plainto_tsquery('simple', 'needle') \
              FROM events ORDER BY kind",
         )
         .fetch_all(&pool)
         .await
-        .expect("read post-push search behavior");
-        assert_eq!(after, vec![(1, Some(true)), (30_350, None)]);
+        .expect("read post-upgrade search behavior");
+        assert_eq!(after, vec![(1, Some(true)), (30_194, None), (30_350, None)]);
     }
 
     #[tokio::test]

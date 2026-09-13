@@ -678,10 +678,12 @@ jobs:
             --cargo-profile ci \
             -p buzz-db \
             -p buzz-relay \
+            -p buzz-search \
             -p buzz-test-client \
             --lib \
             --bin buzz-relay \
             --test boot_lifecycle \
+            --test fts_integration \
             --test e2e_event_reminder \
             --test interrupt_gate \
             --test interrupt_runtime \
@@ -1185,6 +1187,17 @@ jobs:
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           TEST_DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Full-text search policy
+        # The FTS suite is the only place the brownfield search-policy
+        # migrations are executed against a real database; nothing else in CI
+        # builds buzz-search's integration tests.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-search) and binary(fts_integration)' \
+            --run-ignored ignored-only
+        env:
+          BUZZ_TEST_DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
       - name: Startup lifecycle evidence
         # Spawns the relay binary against a dead TCP listener standing in for
         # Postgres, so it needs no database; it proves the pre-runtime boot
