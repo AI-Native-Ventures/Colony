@@ -301,6 +301,21 @@ pub(crate) async fn create_managed_agent_with_preparation(
             linked_persona.as_ref(),
         )?;
 
+        // "Scout" belongs to the Chief of Staff Colony provides. Checked here
+        // rather than at the top of the command because the linked definition
+        // is what says whether this create IS that office: the welcome flow's
+        // built-in fallback still mints a Chief of Staff named Scout in a
+        // community that has no provisioned record, and refusing it would
+        // leave that community with no Chief of Staff at all. Nothing has been
+        // written yet, so a refusal here costs a discarded keypair.
+        crate::managed_agents::provisioned::refuse_reserved_chief_name(
+            &name,
+            linked_persona
+                .as_ref()
+                .and_then(|persona| persona.role_id.as_deref())
+                == Some(crate::managed_agents::supersede::PROVISIONED_CHIEF_OF_STAFF),
+        )?;
+
         // The role two members' instances share, inherited from the linked
         // definition (docs/design/role-agents.html).
         let mut record = crate::managed_agents::ManagedAgentRecord {
