@@ -14,7 +14,10 @@
 //! first started, which is most of the first-run surface.
 
 use crate::{
-    managed_agents::{is_coordination_team_id, ManagedAgentRecord, WELCOME_TEAM_ID},
+    managed_agents::{
+        coordination_team_id_for_relay, is_coordination_team_id, ManagedAgentRecord,
+        WELCOME_TEAM_ID,
+    },
     relay::{agent_belongs_to_workspace, agent_boundary::canonical},
 };
 
@@ -89,11 +92,17 @@ pub(in crate::commands) fn definition_in_workspace(
 /// longer in your agents". They were not gone; they were scoped out by the
 /// rule above while the team itself was not.
 ///
-/// A coordination team never lists, on any community. It is the record the
-/// relay resolves a Task's `owningTeamId` against, seeded by this client and
-/// undeletable, and the Agents page is a list of teams a person assembled.
-/// Thirteen cards reading "Company Coordination" are what a leak looks like,
-/// and even one is furniture nobody asked for.
+/// A coordination team is scoped by the relay its own id names: this
+/// community's lists, every other community's does not. That is what the
+/// thirteen leaked "Company Coordination" records were, and the id is a more
+/// honest pin than the stored flag.
+///
+/// It stays in the list rather than being dropped here because this list is
+/// not only the Agents page: mentions, the new-task dialog, the task thread,
+/// the add-bot dialog and the launch dialog all resolve a Task's owning team
+/// through it, and the relay's `company_broker::load_team_refs` will not
+/// accept an `owningTeamId` it cannot resolve. Hiding it from the cards is
+/// the Agents page's own job.
 ///
 /// Every other built-in is plumbing too, so built-ins list by exception: the
 /// Welcome Team and nothing else.
@@ -118,7 +127,7 @@ pub(in crate::commands) fn team_in_workspace(
     // By id, not by the stored flag: the flag arrives from a file other
     // clients have rewritten, and a coordination team is one whatever it says.
     if is_coordination_team_id(team_id) {
-        return false;
+        return coordination_team_id_for_relay(workspace_relay).is_some_and(|here| here == team_id);
     }
     if is_builtin {
         return team_id == WELCOME_TEAM_ID;
@@ -362,15 +371,16 @@ mod tests {
         ));
     }
 
-    /// The coordination team for THIS community: pinned here, valid, and
-    /// still not a card. It exists so the relay can resolve a Task's
-    /// owningTeamId, which is not something to put on the Agents page.
+    /// The coordination team for THIS community lists. Mentions, the new-task
+    /// dialog, the task thread and both deploy dialogs resolve a Task's owning
+    /// team out of this list, so dropping it here breaks the first job a
+    /// community ever runs. The Agents page hides it on its own side.
     #[test]
-    fn this_communitys_coordination_team_does_not_list() {
+    fn this_communitys_coordination_team_lists() {
         let id = coordination_team_id_for_relay(HERE).expect("a non-blank relay mints an id");
         let rows = vec![definition_row("builtin:fizz")];
         let defs = [("builtin:fizz", true)];
-        assert!(!team_in_workspace(
+        assert!(team_in_workspace(
             &id,
             &members(&["builtin:fizz"]),
             true,
@@ -382,16 +392,35 @@ mod tests {
     }
 
     /// And the same record with the built-in flag rewritten to false, which
-    /// is how thirteen of them reached one Agents page.
+    /// is how thirteen of them reached one Agents page. The id is the pin, so
+    /// this one is still ours.
     #[test]
-    fn a_coordination_team_stored_as_user_owned_does_not_list_either() {
+    fn a_coordination_record_stored_as_user_owned_still_lists() {
         let id = coordination_team_id_for_relay(HERE).expect("a non-blank relay mints an id");
+        let rows = vec![definition_row("builtin:fizz")];
+        let defs = [("builtin:fizz", true)];
+        assert!(team_in_workspace(
+            &id,
+            &members(&["builtin:fizz"]),
+            false,
+            Some(HERE),
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    /// Another community's coordination record stays out, whatever its stored
+    /// flag or pin says. Twelve of the thirteen leaked cards were these.
+    #[test]
+    fn another_communitys_coordination_team_stays_hidden() {
+        let id = coordination_team_id_for_relay(ELSEWHERE).expect("a non-blank relay mints an id");
         let rows = vec![definition_row("builtin:fizz")];
         let defs = [("builtin:fizz", true)];
         assert!(!team_in_workspace(
             &id,
             &members(&["builtin:fizz"]),
-            false,
+            true,
             Some(HERE),
             &defs,
             &rows,
