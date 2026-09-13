@@ -30,6 +30,22 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     .await
 }
 
+/// Run migrations only up to `target`, for tests that need a database frozen
+/// at a specific schema version.
+#[cfg(test)]
+pub(crate) async fn run_migrations_through(pool: &PgPool, target: i64) -> Result<()> {
+    with_exclusive_schema_destruction_lock(pool, |lock_conn| async move {
+        let outcome = async {
+            reject_legacy_nip_rs_cardinality_ambiguity(pool).await?;
+            MIGRATOR.run_to(target, pool).await?;
+            Ok(())
+        }
+        .await;
+        (lock_conn, outcome)
+    })
+    .await
+}
+
 async fn run_migrations_locked(pool: &PgPool) -> Result<()> {
     reject_legacy_nip_rs_cardinality_ambiguity(pool).await?;
     MIGRATOR.run(pool).await?;
@@ -42,6 +58,10 @@ async fn run_migrations_locked(pool: &PgPool) -> Result<()> {
     // guard, so migration fails closed if any is missing. (The fence probe
     // re-runs this same check at startup on non-migrating relays.)
     crate::replica_fence::verify_floor_guard_catalog(pool).await?;
+    // Migration 0073's roster fence is the mixed-version guard that keeps an
+    // old pod from overwriting a newer canonical kind:39002 snapshot. Same
+    // fail-closed rule as the floor guard above.
+    crate::channel_members::verify_channel_roster_fence_catalog(pool).await?;
     Ok(())
 }
 
@@ -756,7 +776,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 72);
+        assert_eq!(migrations.len(), 73);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1490,6 +1510,35 @@ mod tests {
         // The grant is stored, never recomputed: a price edit mid-flight must
         // not change what an already-paid purchase is worth.
         assert!(packs.contains("ADD COLUMN grant_nanousd BIGINT"));
+
+        // Mixed-version channel-roster fence: old canonical replacement writers
+        // acquire their replacement key before INSERT; this trigger then takes
+        // the membership key and validates the exact active pubkey/role p-tag set.
+        assert_eq!(migrations[72].version, 73);
+        let roster_fence = migrations[72].sql.as_str();
+        assert!(roster_fence.contains("CREATE TRIGGER trg_events_guard_channel_roster_snapshot"));
+        assert!(roster_fence.contains("NEW.kind <> 39002"));
+        assert!(roster_fence.contains("'buzz_channel_membership:'"));
+        assert!(roster_fence.contains("cm.removed_at IS NULL"));
+        assert!(roster_fence.contains("cm.role::text"));
+        assert!(roster_fence.contains("jsonb_array_length(roster_tag.tag_json) <> 4"));
+        assert!(roster_fence.contains("roster_tag.tag_json->>3"));
+        assert!(roster_fence.contains("snapshot_members IS DISTINCT FROM canonical_members"));
+        assert!(roster_fence.contains("ERRCODE = '23514'"));
+        // Fresh desired-state bootstrap must install the identical executable
+        // fence as migration 0073. CI and isolated relay startup use schema.sql
+        // without running migrations, so drift reopens rolling-deploy races.
+        fn extract_roster_fence(sql: &str) -> &str {
+            let fence_start = "CREATE OR REPLACE FUNCTION guard_channel_roster_snapshot()";
+            let fence_end = "    FOR EACH ROW EXECUTE FUNCTION guard_channel_roster_snapshot();";
+            let start = sql.find(fence_start).expect("roster fence function");
+            let relative_end = sql[start..].find(fence_end).expect("roster fence trigger");
+            &sql[start..start + relative_end + fence_end.len()]
+        }
+        assert_eq!(
+            extract_roster_fence(roster_fence),
+            extract_roster_fence(desired_schema)
+        );
 
         // The single-row heartbeat table is updated continuously. Prevent
         // autovacuum from truncating its heap so standby queries are not
