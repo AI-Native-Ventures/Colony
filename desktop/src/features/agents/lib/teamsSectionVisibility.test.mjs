@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { teamsSectionIsVisible } from "./teamsSectionVisibility.ts";
+import {
+  isCoordinationTeamId,
+  teamsSectionIsVisible,
+} from "./teamsSectionVisibility.ts";
 
 const WELCOME = { id: "builtin-team:welcome" };
 const MINE = { id: "0f6c1b2e-8a44-4d19-9c3e-5b7a0d21f8ac" };
@@ -20,9 +23,9 @@ describe("teamsSectionIsVisible", () => {
     assert.equal(teamsSectionIsVisible([WELCOME, MINE], false), true);
   });
 
-  // Belt and braces: list_teams filters coordination teams out, so one
-  // reaching the page at all means that rule broke. It must not be the thing
-  // that puts the section back on screen.
+  // list_teams keeps this community's coordination team, because mentions,
+  // tasks and the deploy dialogs resolve a Task's owning team through it. It
+  // must not be the thing that puts the section on screen.
   it("a coordination team does not count as a team of your own", () => {
     assert.equal(teamsSectionIsVisible([WELCOME, COORDINATION], false), false);
   });
@@ -40,5 +43,43 @@ describe("teamsSectionIsVisible", () => {
 
   it("shows the section when the list failed", () => {
     assert.equal(teamsSectionIsVisible([], true), true);
+  });
+});
+
+describe("isCoordinationTeamId", () => {
+  it("recognises a per-community coordination id", () => {
+    assert.equal(isCoordinationTeamId(COORDINATION.id), true);
+  });
+
+  it("recognises the legacy device-wide id", () => {
+    assert.equal(
+      isCoordinationTeamId("builtin-team:company-coordination"),
+      true,
+    );
+  });
+
+  it("leaves the Welcome Team alone", () => {
+    assert.equal(isCoordinationTeamId(WELCOME.id), false);
+  });
+
+  it("leaves a team of your own alone", () => {
+    assert.equal(isCoordinationTeamId(MINE.id), false);
+  });
+
+  // A blueprint's coordination team is the company's own and is user owned,
+  // so it keeps its card.
+  it("leaves a blueprint's coordination team alone", () => {
+    assert.equal(
+      isCoordinationTeamId("company-team:abc123:acme:company-coordination"),
+      false,
+    );
+  });
+
+  // The slug matches on a segment boundary, not as bare trailing text.
+  it("does not match a team merely ending in the slug text", () => {
+    assert.equal(
+      isCoordinationTeamId("builtin-team:acme-company-coordination"),
+      false,
+    );
   });
 });
