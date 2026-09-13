@@ -1,8 +1,8 @@
 {
   "files": {
     "rust_total": 517,
-    "tauri_coupled": 206,
-    "portable": 311,
+    "tauri_coupled": 205,
+    "portable": 312,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -151,7 +151,6 @@
       "src-tauri/src/linux_media.rs",
       "src-tauri/src/macos_notifications.rs",
       "src-tauri/src/managed_agents/config_start.rs",
-      "src-tauri/src/managed_agents/coordination.rs",
       "src-tauri/src/managed_agents/global_config/mod.rs",
       "src-tauri/src/managed_agents/isolation/launch.rs",
       "src-tauri/src/managed_agents/isolation/network.rs",
@@ -383,7 +382,8 @@
       "src-tauri/src/managed_agents/config_bridge/schema_walker.rs",
       "src-tauri/src/managed_agents/config_bridge/types.rs",
       "src-tauri/src/managed_agents/config_start/tests.rs",
-      "src-tauri/src/managed_agents/coordination_enrol_tests.rs",
+      "src-tauri/src/managed_agents/coordination.rs",
+      "src-tauri/src/managed_agents/coordination_publish_tests.rs",
       "src-tauri/src/managed_agents/coordination_tests.rs",
       "src-tauri/src/managed_agents/custom_harnesses.rs",
       "src-tauri/src/managed_agents/discovery.rs",
@@ -549,7 +549,7 @@
     ]
   },
   "params": {
-    "AppHandle": 412,
+    "AppHandle": 411,
     "State": 271,
     "Window": 7,
     "ipc::Request": 1,
@@ -557,7 +557,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 409,
+      "AppHandle": 408,
       "State": 271,
       "Window": 7,
       "ipc::Request": 1,

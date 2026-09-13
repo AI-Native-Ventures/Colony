@@ -4,7 +4,7 @@
 
 use super::{
     plan_initiative_from_head, plan_team_refs, resolve_chat_agent_persona, teams_for_relay,
-    teams_to_company_refs, validated_thread_root, InitiativeDraft,
+    validated_thread_root, InitiativeDraft,
 };
 use crate::managed_agents::{
     coordination_team_id_for_relay, AgentDefinition, BackendKind, ManagedAgentRecord, RespondTo,

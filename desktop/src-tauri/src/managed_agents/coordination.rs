@@ -7,12 +7,7 @@
 
 use std::collections::HashSet;
 
-use tauri::AppHandle;
-
-use crate::{
-    managed_agents::{load_teams, save_teams, ManagedAgentRecord, TeamRecord},
-    util::now_iso,
-};
+use crate::managed_agents::{ManagedAgentRecord, TeamRecord};
 
 /// Suffix `owning_team_for_chat` (`buzz-sdk/src/implicit_task.rs`) matches an
 /// id against to find the team that owns ambiguous chat work. Duplicated here
@@ -187,11 +182,8 @@ pub(crate) fn team_publishes_to_relay(team: &TeamRecord, relay_url: &str) -> boo
 /// worse than recognising one extra. The anchored test exists for the
 /// separate question of whether an id is one this client seeds and owns.
 ///
-/// Every reader that used to ask this question for itself now asks a
-/// per-community one instead ([`enrol_persona_for_relay`],
-/// [`ensure_coordination_team_for_relay`]), so this stays the single
-/// definition of "valid" they all share rather than one each caller
-/// re-derives and drifts from.
+/// Explicit team workflows use [`ensure_coordination_team_for_relay`],
+/// which shares this validation with stored-team migration.
 pub(crate) fn is_valid_coordination_team(team: &TeamRecord) -> bool {
     team.id.ends_with(COORDINATION_TEAM_SLUG)
         && team
@@ -457,126 +449,10 @@ pub(crate) fn split_legacy_coordination_team(
     true
 }
 
-/// Add `persona_id` to `team` unless it is already a member.
-///
-/// Returns whether the team changed.
-fn add_team_member(team: &mut TeamRecord, persona_id: &str, now: &str) -> bool {
-    if team.persona_ids.iter().any(|member| member == persona_id) {
-        return false;
-    }
-    team.persona_ids.push(persona_id.to_string());
-    team.updated_at = now.to_string();
-    true
-}
-
-/// Whether `team` is a valid coordination team that names the community it
-/// belongs to.
-///
-/// An unpinned coordination team predates the pin and belongs to no
-/// community in particular, so an enrol keyed on a relay must not treat it
-/// as any community's team.
-fn is_pinned_coordination_team(team: &TeamRecord) -> bool {
-    team.relay_url.is_some() && is_valid_coordination_team(team)
-}
-
-/// Put `persona_id` on the coordination team for the community reachable at
-/// `relay_url`, seeding that team first when the community has none.
-///
-/// Membership is what makes a persona assignable: `owning_team_for_chat`
-/// resolves an ambiguous chat send to a coordination team either way, but
-/// only a real member gets `assignee_persona_ids` populated on the Task it
-/// creates. So a hire has to reach the team of the community it was hired
-/// into, and on a device that never approved a blueprint there that team
-/// does not exist yet.
-///
-/// A blank `relay_url` names no community. `agent_belongs_to_workspace`
-/// reads a blank pin as unassigned and gives that agent to whoever is
-/// asking, so it joins every pinned coordination team and seeds none: a team
-/// named after the empty string would be one every community had to ignore.
-///
-/// Pure so the placement rule is testable without an `AppHandle`, which is
-/// also what lets `commands/initiative.rs` reuse it on the team list it has
-/// already loaded.
-///
-/// Returns whether anything changed.
-pub(crate) fn enrol_persona_for_relay(
-    teams: &mut Vec<TeamRecord>,
-    persona_id: &str,
-    relay_url: &str,
-    now: &str,
-) -> bool {
-    if relay_url.trim().is_empty() {
-        let mut changed = false;
-        for team in teams
-            .iter_mut()
-            .filter(|team| is_pinned_coordination_team(team))
-        {
-            changed |= add_team_member(team, persona_id, now);
-        }
-        return changed;
-    }
-
-    let mut changed = ensure_coordination_team_for_relay(teams, relay_url, now);
-    let pin = crate::relay::agent_boundary::canonical(relay_url);
-    if let Some(team) = teams
-        .iter_mut()
-        .find(|team| is_valid_coordination_team(team) && team_pinned_to_relay(team, &pin))
-    {
-        changed |= add_team_member(team, persona_id, now);
-    }
-    changed
-}
-
-/// Place every agent's persona on its own community's coordination team.
-///
-/// Two passes, relay-pinned agents first, so an unassigned persona lands on
-/// the teams this same call had to seed rather than only on the ones that
-/// already existed.
-///
-/// Returns whether anything changed.
-#[cfg(test)]
-pub(crate) fn enrol_agent_personas_by_relay(
-    teams: &mut Vec<TeamRecord>,
-    agents: &[ManagedAgentRecord],
-    now: &str,
-) -> bool {
-    let mut changed = false;
-    for pinned in [true, false] {
-        for agent in agents {
-            let Some(persona_id) = agent.persona_id.as_deref() else {
-                continue;
-            };
-            let relay_url = agent.relay_url.trim();
-            if relay_url.is_empty() == pinned {
-                continue;
-            }
-            changed |= enrol_persona_for_relay(teams, persona_id, relay_url, now);
-        }
-    }
-    changed
-}
-
-/// Add `persona_id` to the coordination team of the community reachable at
-/// `relay_url`, seeding that team if the community has none.
-///
-/// Explicit enrolment only. Hiring, launching, and direct chat must not call
-/// this function: a stand-alone agent needs no team to receive work.
-pub fn ensure_persona_in_coordination_team(
-    app: &AppHandle,
-    persona_id: &str,
-    relay_url: &str,
-) -> Result<(), String> {
-    let mut teams = load_teams(app)?;
-    if enrol_persona_for_relay(&mut teams, persona_id, relay_url, &now_iso()) {
-        save_teams(app, &teams)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "coordination_tests.rs"]
 mod coordination_tests;
 
 #[cfg(test)]
-#[path = "coordination_enrol_tests.rs"]
-mod coordination_enrol_tests;
+#[path = "coordination_publish_tests.rs"]
+mod coordination_publish_tests;
