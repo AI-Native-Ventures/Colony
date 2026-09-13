@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 544,
+    "rust_total": 546,
     "tauri_coupled": 214,
-    "portable": 330,
+    "portable": 332,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -254,6 +254,7 @@
       "src-tauri/src/commands/agent_models_databricks.rs",
       "src-tauri/src/commands/agent_models_databricks_tests.rs",
       "src-tauri/src/commands/agent_models_discovery_config.rs",
+      "src-tauri/src/commands/agent_models_discovery_tests.rs",
       "src-tauri/src/commands/agent_models_env.rs",
       "src-tauri/src/commands/agent_models_openrouter.rs",
       "src-tauri/src/commands/agent_models_tests.rs",
@@ -457,6 +458,7 @@
       "src-tauri/src/managed_agents/readiness/cli_login.rs",
       "src-tauri/src/managed_agents/readiness/cli_probe.rs",
       "src-tauri/src/managed_agents/readiness_goose_file_config_tests.rs",
+      "src-tauri/src/managed_agents/readiness_openrouter_tests.rs",
       "src-tauri/src/managed_agents/readiness_runtime_inherit_tests.rs",
       "src-tauri/src/managed_agents/reconcile/tests.rs",
       "src-tauri/src/managed_agents/relay_mesh.rs",
@@ -4111,7 +4113,7 @@
       "example_sites": [
         "src/features/agents/hooks.ts:726",
         "src/features/channels/hooks.ts:846",
-        "src/features/messages/ui/useMentionSendFlow.ts:446"
+        "src/features/messages/ui/useMentionSendFlow.ts:386"
       ]
     },
     "take_pending_activations": {

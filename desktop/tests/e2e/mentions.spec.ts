@@ -5,6 +5,7 @@ import {
   openChannelBrowser,
   TEST_IDENTITIES,
 } from "../helpers/bridge";
+import { GENERAL_CHANNEL_ID } from "../helpers/factoryAgent";
 import {
   GUIDE_NAME,
   mentionPrefix,

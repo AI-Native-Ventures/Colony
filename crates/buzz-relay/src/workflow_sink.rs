@@ -151,6 +151,13 @@ fn resolve_mention_pubkeys(text: &str, members: &[(String, String)]) -> Vec<Stri
 
 /// Append legacy routing tags from rendered output and authority-bearing tags
 /// only for targets also named in the workflow owner's stored step template.
+///
+/// Test-only here. Colony's `send_message` applies the same authored-versus-
+/// rendered split inline, interleaved with the owner-contact routing (Option C)
+/// that re-emits an owner mention as a reference-only `mention` tag — a routing
+/// decision this helper has no way to make. The helper stays as the executable
+/// statement of the split rule, exercised by the unit tests below.
+#[cfg(test)]
 fn append_workflow_mention_tags(
     tags: &mut Vec<Tag>,
     rendered_text: &str,
@@ -843,6 +850,13 @@ mod integration_tests {
         authored_text: &str,
         trigger_text: &str,
     ) -> String {
+        // Colony's engine takes its action sink at startup (main.rs), not in
+        // the test state builder, so a run executed here needs the same wiring
+        // the sibling owner-routing test gets by driving RelayActionSink
+        // directly.
+        state
+            .workflow_engine
+            .set_action_sink(Arc::new(RelayActionSink::new(state)));
         let definition = serde_json::json!({
             "name": name,
             "trigger": {"on": "message_posted"},

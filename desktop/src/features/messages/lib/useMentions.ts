@@ -34,7 +34,7 @@ import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { extractTypedActorPubkeys } from "./draftMentionRefs";
-import { flushMentionDebounce } from "./flushMentionDebounce";
+import { handleMentionKeyDownWith } from "./handleMentionKeyDown";
 import { useAgentMentionRevalidation } from "./agentMentionRevalidation";
 import {
   buildPersonaNameByPubkey,
@@ -907,74 +907,26 @@ export function useMentions(
     });
 
   const handleMentionKeyDown = React.useCallback(
-    (
-      event: React.KeyboardEvent,
-    ): { handled: boolean; suggestion?: MentionSuggestion } => {
-      if (!isMentionOpen) {
-        return { handled: false };
-      }
-
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setMentionSelectedIndex((current) =>
-          current < suggestions.length - 1 ? current + 1 : 0,
-        );
-        return { handled: true };
-      }
-
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setMentionSelectedIndex((current) =>
-          current > 0 ? current - 1 : suggestions.length - 1,
-        );
-        return { handled: true };
-      }
-
-      if (
-        event.key === "Tab" ||
-        (event.key === "Enter" &&
-          !event.ctrlKey &&
-          !event.metaKey &&
-          !event.altKey &&
-          !event.shiftKey)
-      ) {
-        event.preventDefault();
-
-        if (debounceTimerRef.current !== null) {
-          const flushed = flushMentionDebounce({
-            debounceTimerRef,
-            latestValueRef,
-            latestCursorRef,
-            searchableNamesLowerRef,
-            candidates: mentionCandidatesWithTeams,
-            activePersonaIds,
-            channelType: options?.channelType,
-            currentPubkey,
-            ownerProfiles: ownerProfilesQuery.data?.profiles,
-            profiles,
-          });
-          if (flushed?.type === "match") {
-            flushedMentionStartIndexRef.current = flushed.startIndex;
-            setMentionQuery(null); // reset so dropdown closes
-            return { handled: true, suggestion: flushed.suggestion };
-          }
-          if (flushed?.type === "no-match") {
-            setMentionQuery(null);
-            return { handled: true };
-          }
-        }
-
-        return { handled: true, suggestion: suggestions[mentionSelectedIndex] };
-      }
-
-      if (event.key === "Escape") {
-        event.preventDefault();
-        cancelMentionAutocomplete(); // full cancel incl. pending debounce
-        return { handled: true };
-      }
-
-      return { handled: false };
-    },
+    (event: React.KeyboardEvent) =>
+      handleMentionKeyDownWith(event, {
+        activePersonaIds,
+        cancelMentionAutocomplete,
+        candidates: mentionCandidatesWithTeams,
+        channelType: options?.channelType,
+        currentPubkey,
+        debounceTimerRef,
+        flushedMentionStartIndexRef,
+        isMentionOpen,
+        latestCursorRef,
+        latestValueRef,
+        mentionSelectedIndex,
+        ownerProfiles: ownerProfilesQuery.data?.profiles,
+        profiles,
+        searchableNamesLowerRef,
+        setMentionQuery,
+        setMentionSelectedIndex,
+        suggestions,
+      }),
     [
       activePersonaIds,
       cancelMentionAutocomplete,

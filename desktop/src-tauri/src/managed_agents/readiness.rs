@@ -649,7 +649,7 @@ mod tests {
     use crate::managed_agents::discovery::known_acp_runtime_exact;
 
     /// Build a minimal `EffectiveAgentEnv` with the given env map and command.
-    fn make_env(command: &str, env: BTreeMap<String, String>) -> EffectiveAgentEnv {
+    pub(super) fn make_env(command: &str, env: BTreeMap<String, String>) -> EffectiveAgentEnv {
         let runtime = known_acp_runtime_exact(command);
         EffectiveAgentEnv {
             env,
@@ -658,7 +658,7 @@ mod tests {
         }
     }
 
-    fn env_with(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pub(super) fn env_with(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1707,22 +1707,6 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn buzz_agent_openrouter_with_provider_model_fallback_is_ready() {
-        let env = make_env(
-            "buzz-agent",
-            env_with(&[
-                ("BUZZ_AGENT_PROVIDER", "openrouter"),
-                ("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
-                ("OPENROUTER_API_KEY", "sk-or-test-key"),
-            ]),
-        );
-        let result = agent_readiness(&env);
-        assert!(
-            result.is_ready(),
-            "OPENROUTER_MODEL fallback should satisfy model requirement"
-        );
-    }
 }
 
 // Goose file-config-aware requirement tests live in a sibling file so this
@@ -1736,3 +1720,8 @@ mod goose_file_config_tests;
 #[cfg(test)]
 #[path = "readiness_runtime_inherit_tests.rs"]
 mod runtime_inherit_tests;
+
+// OpenRouter provider/model readiness cases, same reason.
+#[cfg(test)]
+#[path = "readiness_openrouter_tests.rs"]
+mod openrouter_tests;

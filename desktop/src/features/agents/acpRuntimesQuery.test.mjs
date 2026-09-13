@@ -174,6 +174,19 @@ globalThis.__TAURI_INTERNALS__ = {
   transformCallback: () => Math.random(),
 };
 
+// Colony routes every native call through its installed bridge rather than
+// reading window.__TAURI_INTERNALS__ directly, so the interceptor above only
+// takes effect once it is installed as that bridge.
+const { setNativeBridge } = await import("@/shared/api/nativeBridge");
+const { createMockNativeBridge } = await import(
+  "@/testing/createMockNativeBridge"
+);
+setNativeBridge(
+  createMockNativeBridge((command, args) =>
+    globalThis.__TAURI_INTERNALS__.invoke(command, args),
+  ),
+);
+
 // ── Production imports (after shim + IPC stub) ────────────────────────────────
 
 import React from "react";

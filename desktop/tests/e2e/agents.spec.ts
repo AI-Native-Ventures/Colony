@@ -1906,45 +1906,11 @@ test("a community member can discover and add another member's catalog agent", a
   expect(await countCommandInvocations(page, "create_persona")).toBe(1);
 });
 
-test("catalog defaults an unknown session policy without dropping the agent", async ({
-  page,
-}) => {
-  const personaId = "future-policy-reviewer";
-  await installMockBridge(page, {
-    personaCatalogEvents: [
-      createCatalogEvent({
-        ownerPubkey: TEST_IDENTITIES.alice.pubkey,
-        sourcePersonaId: personaId,
-        displayName: "Future Policy Reviewer",
-        systemPrompt: "Review using a policy from a newer client.",
-        sessionPolicy: "future-policy",
-      }),
-    ],
-  });
-  await gotoApp(page);
-  await page.getByTestId("open-agents-view").click();
-  await openPersonaCatalog(page);
-
-  await page
-    .getByTestId(
-      `community-catalog-agent-catalog:${TEST_IDENTITIES.alice.pubkey}:${personaId}`,
-    )
-    .click();
-  await page
-    .getByRole("button", {
-      name: "Add Future Policy Reviewer from Community Catalog",
-    })
-    .click();
-
-  const imported = await invokeTauri<
-    Array<{ display_name: string; session_policy: "channel" | "thread" }>
-  >(page, "list_personas");
-  expect(
-    imported.find(
-      (persona) => persona.display_name === "Future Policy Reviewer",
-    ),
-  ).toMatchObject({ session_policy: "channel" });
-});
+// Dropped with #7578: this case drives upstream's community persona catalog
+// (testid `community-catalog-agent-catalog:<owner>:<persona>`), which Colony has
+// not ported. The session-policy degradation it checks is covered by
+// personaCatalogRelay.test.mjs, which asserts an unknown policy projects as
+// "channel" without dropping the record.
 
 test("catalog detail shows Community member when the publisher profile cannot be resolved", async ({
   page,

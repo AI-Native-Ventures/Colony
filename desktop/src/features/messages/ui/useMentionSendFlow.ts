@@ -3,7 +3,6 @@ import * as React from "react";
 import { validateReplyModelRecipient } from "@/features/agents/lib/replyModelSelection";
 import { toast } from "sonner";
 import {
-  type CreateChannelManagedAgentInput,
   useAttachManagedAgentToChannelMutation,
   useAvailableAcpRuntimes,
   useCreateChannelManagedAgentMutation,
@@ -13,7 +12,7 @@ import {
   useStartManagedAgentMutation,
 } from "@/features/agents/hooks";
 import { applyReusableAgentAccessPolicy } from "@/features/agents/channelAgents";
-import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
+import { createMentionedPersonaAgentsWith } from "./useMentionSendFlow.personaAgents";
 import {
   useAddChannelMembersMutation,
   useCanAddChannelMembers,
@@ -215,75 +214,16 @@ export function useMentionSendFlow({
     ],
   );
   const createMentionedPersonaAgents = React.useCallback(
-    async (trimmed: string, capturedChannelId: string) => {
-      const personaMentions = mentions.extractMentionPersonas(trimmed);
-      if (!capturedChannelId || personaMentions.length === 0) {
-        return {
-          errors: [] as string[],
-          agents: [] as ManagedAgent[],
-          pubkeys: [] as string[],
-        };
-      }
-      const runtimes = await getAvailableRuntimes();
-      const defaultRuntime = runtimes[0] ?? null;
-      const errors: string[] = [];
-      const agents: ManagedAgent[] = [];
-      const pubkeys: string[] = [];
-      const seenPersonaIds = new Set<string>();
-      const shouldProvisionForDm =
-        channelType === "dm" && Boolean(onPrepareSendChannel);
-      for (const { displayName, persona } of personaMentions) {
-        if (seenPersonaIds.has(persona.id)) {
-          continue;
-        }
-        seenPersonaIds.add(persona.id);
-        const { runtime } = resolvePersonaRuntime(
-          persona.runtime,
-          runtimes,
-          defaultRuntime,
-        );
-        if (!runtime) {
-          errors.push(`${displayName}: No agent runtime available.`);
-          continue;
-        }
-        try {
-          const input: CreateChannelManagedAgentInput & {
-            channelId: string;
-          } = {
-            channelId: capturedChannelId,
-            runtime,
-            name: persona.displayName,
-            personaId: persona.id,
-            systemPrompt: persona.systemPrompt,
-            avatarUrl: persona.avatarUrl ?? undefined,
-            model: persona.model ?? undefined,
-            role: "bot",
-            ensureRunning: true,
-          };
-          const result = shouldProvisionForDm
-            ? await provisionPersonaAgentMutation.mutateAsync(input)
-            : await createPersonaAgentMutation.mutateAsync(input);
-          const pubkey = normalizePubkey(result.agent.pubkey);
-          agents.push(result.agent);
-          pubkeys.push(pubkey);
-          mentions.registerMentionPubkey(displayName, pubkey, {
-            isAgent: true,
-          });
-        } catch (error) {
-          errors.push(
-            `${displayName}: ${getErrorMessage(
-              error,
-              "Could not create agent.",
-            )}`,
-          );
-        }
-      }
-      return {
-        agents,
-        errors,
-        pubkeys: uniqueNormalizedPubkeys(pubkeys),
-      };
-    },
+    (trimmed: string, capturedChannelId: string) =>
+      createMentionedPersonaAgentsWith(trimmed, capturedChannelId, {
+        channelType,
+        createPersonaAgentMutation,
+        extractMentionPersonas: mentions.extractMentionPersonas,
+        getAvailableRuntimes,
+        onPrepareSendChannel,
+        provisionPersonaAgentMutation,
+        registerMentionPubkey: mentions.registerMentionPubkey,
+      }),
     [
       createPersonaAgentMutation,
       channelType,

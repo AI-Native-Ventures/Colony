@@ -419,6 +419,12 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   managedAgentHeadEvents?: RelayEvent[];
   /** Reject successive relay-agent directory reads, then resume. */
   relayAgentListErrors?: (string | null)[];
+  /** Pubkeys the targeted revalidation must refuse, leaving the directory read
+   *  itself healthy (#6224's send-time bound). */
+  relayAgentRevalidationRevokedPubkeys?: string[];
+  /** Marked-build switch: the directory rejects records with no verified
+   *  NIP-OA owner (#6338). */
+  ownerOnlyAccessBuild?: boolean;
   /** Delay both managed and relay agent directory reads. */
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
