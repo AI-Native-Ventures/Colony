@@ -189,6 +189,9 @@ pub fn plan_implicit_task(
         updated_at: now,
     };
 
+    validate_task(&task, company, None, teams)
+        .map_err(|error| format!("this direct task is invalid: {error}"))?;
+
     let action = CompanyAction {
         relay_pubkey: relay_pubkey.to_string(),
         operation: CompanyActionOperation::Create,
