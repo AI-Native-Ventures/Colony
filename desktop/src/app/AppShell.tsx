@@ -1,3 +1,4 @@
+import { useWebsiteEvidenceGrantReconciliation } from "@/features/websiteIntegration/useWebsiteEvidenceGrantReconciliation";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useLocation } from "@tanstack/react-router";
@@ -291,6 +292,7 @@ export function AppShell() {
     () => channels.filter((channel) => channel.isMember),
     [channels],
   );
+  useWebsiteEvidenceGrantReconciliation(memberChannels);
   const sidebarChannels = React.useMemo(
     () =>
       memberChannels.filter(

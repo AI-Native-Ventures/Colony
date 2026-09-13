@@ -12,6 +12,7 @@ on:
     branches: [develop, main]
     paths:
       - desktop/src-electron/website-preview/**
+      - desktop/src-electron/worker-evidence/**
       - desktop/src-electron/main.mjs
       - desktop/src-electron/preload.cjs
       - desktop/src/shared/api/websitePreview.ts

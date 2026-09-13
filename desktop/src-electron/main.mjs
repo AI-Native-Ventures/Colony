@@ -35,6 +35,8 @@ import {
 import { loadVerifiedArtifact } from "./website-preview/artifacts.mjs";
 import {
   createAuthorizedDependencies,
+  createDefaultDependencies,
+  isCanonicalRelayMediaUrl,
   loadWebsitePreview,
 } from "./website-preview/artifact.mjs";
 import { downloadHandover } from "./website-preview/handover.mjs";
@@ -44,6 +46,10 @@ import {
   nativeWebsiteArtifactArgs,
 } from "./website-preview/native.mjs";
 import { PREVIEW_SCHEME_DESCRIPTOR } from "./website-preview/scheme.mjs";
+import { EvidenceAuthority } from "./worker-evidence/authority.mjs";
+import { createRelayTaskAssignmentResolver } from "./worker-evidence/assignment.mjs";
+import { createEvidenceBrowserHost } from "./worker-evidence/host.mjs";
+import { createVerifiedArtifactRenderer } from "./worker-evidence/artifact-renderer.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const packageMetadata = JSON.parse(
@@ -177,6 +183,10 @@ async function boot() {
   };
   let businessContext = null;
   let businessGeneration = 0;
+  let evidenceAuthority = null;
+  let evidenceHost = null;
+  let evidenceArtifactRenderer = null;
+  let managedBrowser = null;
   // Isolated website previews. The host owns its own ephemeral session per
   // preview and never touches the application session or its cookies.
   const previews = createWebsitePreviewHost({
@@ -208,6 +218,9 @@ async function boot() {
     businessAbort = new AbortController();
     previous.abort(new Error("The business context changed"));
     void previews.invalidateAll().catch(() => {});
+    evidenceAuthority?.revokeAll();
+    void evidenceHost?.invalidateAll().catch(() => {});
+    managedBrowser?.revokeEvidenceRenewals?.();
   };
   const requireBusiness = (payload) => {
     if (!businessContext) {
@@ -227,6 +240,20 @@ async function boot() {
       throw new Error("The business context changed during the request");
     }
   };
+
+  async function readTrustedOwnerPubkey() {
+    const identity = await rendererHost.request("invoke", {
+      command: "get_identity",
+      args: {},
+    });
+    if (
+      typeof identity?.pubkey !== "string" ||
+      !/^[a-f0-9]{64}$/i.test(identity.pubkey)
+    ) {
+      throw new Error("The active owner identity is unavailable");
+    }
+    return identity.pubkey.toLowerCase();
+  }
 
   function relayHttpOrigin(relay) {
     let parsed;
@@ -249,19 +276,12 @@ async function boot() {
 
   async function captureWebsiteScope(guard) {
     assertSameBusiness(guard);
-    const identity = await rendererHost.request("invoke", {
-      command: "get_identity",
-      args: {},
-    });
+    const ownerPubkey = await readTrustedOwnerPubkey();
     assertSameBusiness(guard);
-    if (
-      typeof identity?.pubkey !== "string" ||
-      !/^[a-f0-9]{64}$/i.test(identity.pubkey)
-    ) {
-      throw new Error("The active identity is unavailable for this artifact");
-    }
+    if (ownerPubkey !== guard.context.ownerPubkey)
+      throw new Error("The active owner identity changed during this request");
     return Object.freeze({
-      ownerPubkey: identity.pubkey.toLowerCase(),
+      ownerPubkey,
       relay: guard.context.relay,
     });
   }
@@ -295,12 +315,65 @@ async function boot() {
     });
   }
 
+  // Evidence pages use the same pinned HTTPS implementation as website
+  // previews. Public navigation stays on the default transport; only an
+  // exact canonical relay-media URL may reach the host-mediated authenticated
+  // reader, which captures owner identity again across the async boundary.
+  const defaultEvidenceDependencies = createDefaultDependencies();
+  const evidenceDependencies = {
+    lookup: defaultEvidenceDependencies.lookup,
+    open: defaultEvidenceDependencies.open,
+    isAuthorized: ({ initialUrl, url } = {}) => {
+      if (!businessContext?.relay) return false;
+      try {
+        return isCanonicalRelayMediaUrl({
+          initialUrl,
+          url,
+          relayOrigin: relayHttpOrigin(businessContext.relay),
+        });
+      } catch {
+        return false;
+      }
+    },
+    openAuthorized: async ({ url, signal } = {}) => {
+      const guard = {
+        context: businessContext,
+        generation: businessGeneration,
+      };
+      const dependencies = await websiteDependenciesFor(guard);
+      const response = await dependencies.openAuthorized({ url, signal });
+      assertSameBusiness(guard);
+      return response;
+    },
+  };
+
+  evidenceArtifactRenderer = createVerifiedArtifactRenderer({
+    BrowserWindow,
+    WebContentsView,
+    View,
+    session,
+    loadPreview: async ({ manifestRef, signal }) => {
+      const guard = {
+        context: businessContext,
+        generation: businessGeneration,
+      };
+      const site = await loadWebsitePreview({
+        manifestRef,
+        signal,
+        dependencies: evidenceDependencies,
+      });
+      assertSameBusiness(guard);
+      return site;
+    },
+  });
+
   resources.add(() => {
     const previous = businessAbort;
     businessAbort = new AbortController();
     previous.abort(new Error("The preview host is closing"));
     return previews.closeAll();
   });
+  resources.add(() => evidenceArtifactRenderer?.close?.());
   const views = new BrowserViews(window, (payload) =>
     send({ type: "browser", payload }),
   );
@@ -334,22 +407,174 @@ async function boot() {
   };
   let imports = createImports();
   const socketPath = path.join(runtime, "browser.sock");
-  const managedBrowser = new ManagedBrowser({
+  const readManagedAgentRows = () =>
+    rendererHost.request("invoke", {
+      command: "list_managed_agents",
+      args: {},
+    });
+  managedBrowser = new ManagedBrowser({
     root: runtime,
     socketPath,
     views,
     context: () => businessContext,
-    roster: () =>
-      rendererHost.request("invoke", {
-        command: "list_managed_agents",
-        args: {},
-      }),
+    roster: readManagedAgentRows,
   });
-  const stopBroker = await startBroker(socketPath, (request) =>
-    managedBrowser.bindings.has(request.token)
-      ? managedBrowser.request(request)
-      : views.request(request),
-  );
+
+  evidenceAuthority = new EvidenceAuthority({
+    context: () => businessContext,
+    roster: readManagedAgentRows,
+    assignment: createRelayTaskAssignmentResolver({
+      read: (request) =>
+        rendererHost.request("invoke", {
+          command: "read_evidence_assignment",
+          args: { request },
+        }),
+    }),
+    workspace: async ({
+      relayUrl,
+      ownerPubkey,
+      workerPubkey,
+      worker,
+    } = {}) => {
+      if (
+        worker === null ||
+        typeof worker !== "object" ||
+        !Number.isSafeInteger(worker.pid) ||
+        worker.pid <= 0 ||
+        typeof worker.last_started_at !== "string" ||
+        typeof worker.browser_generation !== "string"
+      ) {
+        throw new Error("The assigned worker has no live native generation");
+      }
+      const resolved = await rendererHost.request("invoke", {
+        command: "resolve_evidence_workspace",
+        args: {
+          request: {
+            relayUrl,
+            ownerPubkey,
+            workerPubkey,
+            pid: worker.pid,
+            startedAt: worker.last_started_at,
+            browserGeneration: worker.browser_generation,
+          },
+        },
+      });
+      if (typeof resolved !== "string" || !path.isAbsolute(resolved))
+        throw new Error("The assigned worker has no authorized workspace");
+      return resolved;
+    },
+  });
+  evidenceHost = createEvidenceBrowserHost({
+    BrowserWindow,
+    WebContentsView,
+    session,
+    authority: evidenceAuthority,
+    dependencies: evidenceDependencies,
+    writeCapture: async ({
+      ownerPubkey,
+      relayUrl,
+      workerPubkey,
+      expectedPid,
+      expectedStartNonce,
+      fileName,
+      bytesBase64,
+    } = {}) => {
+      if (
+        !Number.isSafeInteger(expectedPid) ||
+        expectedPid <= 0 ||
+        typeof expectedStartNonce !== "string" ||
+        typeof bytesBase64 !== "string"
+      ) {
+        throw new Error("Evidence capture arguments are invalid");
+      }
+      return rendererHost.request("invoke", {
+        command: "write_evidence_capture",
+        args: {
+          ownerPubkey,
+          relayUrl,
+          workerPubkey,
+          expectedPid,
+          expectedStartNonce,
+          fileName,
+          bytesBase64,
+        },
+      });
+    },
+    artifactRenderer: evidenceArtifactRenderer,
+  });
+  resources.add(() => evidenceAuthority?.revokeAll());
+  resources.add(() => managedBrowser?.revokeEvidenceRenewals?.());
+  resources.add(() => evidenceHost?.close?.());
+
+  async function issueEvidenceGrant(source = {}, { previousRenewalToken } = {}) {
+    if (source === null || typeof source !== "object" || Array.isArray(source))
+      throw new Error("Evidence scope is invalid");
+    const communityId = source.communityId ?? businessContext?.id;
+    const guard = requireBusiness({ communityId });
+    const relayUrl = source.relayUrl
+      ? normalizeRelay(source.relayUrl)
+      : guard.context.relay;
+    if (relayUrl !== guard.context.relay)
+      throw new Error("Evidence relay scope does not match the active business");
+    if (
+      source.ownerPubkey !== undefined &&
+      String(source.ownerPubkey).toLowerCase() !== guard.context.ownerPubkey
+    )
+      throw new Error("Evidence owner scope does not match the active identity");
+    const scope = {
+      communityId: guard.context.id,
+      relayUrl: guard.context.relay,
+      jobId: source.jobId,
+      taskId: source.taskId,
+      channelId: source.channelId,
+      workerPubkey: source.workerPubkey,
+      threadRoot: source.threadRoot,
+    };
+    const grant = await evidenceAuthority.issue(scope);
+    try {
+      assertSameBusiness(guard);
+      await managedBrowser.writeEvidenceGrantFromAuthority(
+        evidenceAuthority,
+        grant.token,
+        scope,
+        { previousRenewalToken },
+      );
+      assertSameBusiness(guard);
+      return Object.freeze({
+        granted: true,
+        communityId: scope.communityId,
+        jobId: scope.jobId,
+        taskId: scope.taskId,
+        channelId: scope.channelId,
+        workerPubkey: scope.workerPubkey,
+        threadRoot: scope.threadRoot,
+      });
+    } catch (error) {
+      evidenceAuthority.revoke(grant.token);
+      throw error;
+    }
+  }
+
+  const stopBroker = await startBroker(socketPath, async (request) => {
+    if (request?.method === "evidence_reacquire") {
+      const args = request.args;
+      if (args === null || typeof args !== "object" || Array.isArray(args))
+        throw new Error("Evidence renewal arguments are invalid");
+      const renewal = managedBrowser.getEvidenceRenewal(
+        args.renewalToken,
+        args.scope,
+      );
+      await issueEvidenceGrant(renewal.scope, {
+        previousRenewalToken: args.renewalToken,
+      });
+      return { reacquired: true };
+    }
+    if (managedBrowser.bindings.has(request?.token))
+      return managedBrowser.request(request);
+    if (evidenceHost?.has(request?.token))
+      return evidenceHost.request(request);
+    return views.request(request);
+  });
   resources.add(stopBroker);
   if (devUrl)
     window.webContents.session.webRequest.onHeadersReceived(
@@ -449,9 +674,16 @@ async function boot() {
     if (type === "shell") return shellCommand(window, payload);
     if (type === "business") {
       const relay = payload.relay ? normalizeRelay(payload.relay) : null;
+      const nextId = payload.id || null;
       if (
-        businessContext?.id !== payload.id ||
-        businessContext?.relay !== relay
+        nextId !== null &&
+        (typeof nextId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(nextId))
+      )
+        throw new Error("Invalid business");
+      if (
+        businessContext?.id !== nextId ||
+        businessContext?.relay !== relay ||
+        (nextId !== null && typeof businessContext?.ownerPubkey !== "string")
       ) {
         // Rotates the business generation, aborts in-flight website work,
         // and synchronously detaches every live preview before the new
@@ -459,9 +691,21 @@ async function boot() {
         // address a preview after this point.
         invalidatePreviews();
         views.setBusiness(null);
-        businessContext = payload.id ? { id: payload.id, relay } : null;
+        businessContext = null;
+        if (nextId !== null) {
+          const generation = businessGeneration;
+          const ownerPubkey = await readTrustedOwnerPubkey();
+          if (generation !== businessGeneration || businessContext !== null)
+            throw new Error("The business context changed during selection");
+          businessContext = Object.freeze({
+            id: nextId,
+            relay,
+            ownerPubkey,
+            epoch: generation,
+          });
+        }
       }
-      views.setBusiness(payload.id);
+      views.setBusiness(nextId);
       return;
     }
     if (type === "import:discover") return imports.discoverProfiles();
@@ -473,6 +717,8 @@ async function boot() {
     if (type === "browser:close") return views.close(payload.id);
     if (type === "browser:workers") return managedBrowser.list();
     if (type === "browser:share") return managedBrowser.share(payload);
+    if (type === "browser:evidence-grant")
+      return issueEvidenceGrant(payload.scope ?? payload);
     if (type === "browser:grant") {
       const tab = views.get(payload.id);
       const grant = views.authority.grant(tab.id, payload.worker, payload.mode);

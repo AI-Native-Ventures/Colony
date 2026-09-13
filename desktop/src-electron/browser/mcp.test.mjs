@@ -71,6 +71,32 @@ test("persistent MCP process starts without access and reads late grants on ever
       (await call("tools/call", args)).result.content[0].text,
       /Fixture/,
     );
+    const evidenceToken = "e".repeat(64);
+    expected = evidenceToken;
+    await writeFile(
+      file,
+      JSON.stringify({ socketPath, evidence: { token: evidenceToken } }),
+      { mode: 0o600 },
+    );
+    const evidenceTools = (await call("tools/list")).result.tools;
+    assert.equal(evidenceTools.length, 16);
+    assert.equal(
+      evidenceTools.some((tool) => tool.name === "evidence_capture_png"),
+      true,
+    );
+    assert.match(
+      (
+        await call("tools/call", {
+          name: "evidence_tabs_list",
+          arguments: {},
+        })
+      ).result.content[0].text,
+      /Fixture/,
+    );
+    assert.match(
+      (await call("tools/call", args)).result.content[0].text,
+      /No browser tab is shared/,
+    );
     await rm(file);
     assert.equal((await call("tools/call", args)).result.isError, true);
   } finally {

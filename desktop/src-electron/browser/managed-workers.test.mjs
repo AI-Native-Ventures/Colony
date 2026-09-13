@@ -255,3 +255,102 @@ test("restarting requires a new generation file and revokes the old capability",
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("an authority-bound evidence grant can exist without a shared tab", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "managed-browser-test-"));
+  try {
+    const s = setup(root);
+    const evidenceToken = "e".repeat(64);
+    let validations = 0;
+    const authority = {
+      async validate(token) {
+        assert.equal(token, evidenceToken);
+        validations++;
+        return {
+          workerPubkey: pubkey,
+          pid: 12,
+          started: "now",
+          generation: "b".repeat(32),
+        };
+      },
+    };
+    const result = await s.manager.writeEvidenceGrantFromAuthority(
+      authority,
+      evidenceToken,
+    );
+    assert.equal(result.token, evidenceToken);
+    assert.equal(validations, 2);
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(root, grantFilename(worker()))),
+      {
+        socketPath: "/tmp/test.sock",
+        evidence: {
+          token: evidenceToken,
+          renewalToken: result.renewalToken,
+          scope: {},
+        },
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("repeated authority delivery reuses the generation-scoped renewal", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "managed-browser-test-"));
+  try {
+    const s = setup(root);
+    const evidenceToken = "e".repeat(64);
+    const scope = {
+      communityId: "biz",
+      relayUrl: relay,
+      jobId: "11111111-1111-4111-8111-111111111111",
+      taskId: "thread-task:website",
+      channelId: "22222222-2222-4222-8222-222222222222",
+      workerPubkey: pubkey,
+      threadRoot: "c".repeat(64),
+    };
+    let validations = 0;
+    const authority = {
+      async validate(token) {
+        assert.equal(token, evidenceToken);
+        validations++;
+        return {
+          ...scope,
+          workerPubkey: pubkey,
+          pid: 12,
+          started: "now",
+          generation: "b".repeat(32),
+        };
+      },
+    };
+
+    const first = await s.manager.writeEvidenceGrantFromAuthority(
+      authority,
+      evidenceToken,
+      scope,
+    );
+    const repeated = await s.manager.writeEvidenceGrantFromAuthority(
+      authority,
+      evidenceToken,
+      scope,
+    );
+    assert.equal(repeated.token, first.token);
+    assert.equal(repeated.renewalToken, first.renewalToken);
+    assert.equal(s.manager.evidenceRenewals.size, 1);
+    assert.equal(validations, 4);
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(root, grantFilename(worker()))),
+      {
+        socketPath: "/tmp/test.sock",
+        evidence: {
+          token: evidenceToken,
+          renewalToken: first.renewalToken,
+          scope,
+        },
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

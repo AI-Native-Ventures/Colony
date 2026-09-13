@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { writeFile, rename, rm } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { readFile, writeFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 /** Mirrors buzz-core's canonical relay identity, including loopback aliases. */
@@ -56,10 +56,48 @@ function eligible(row, relay) {
   }
 }
 
+function validateEvidenceToken(value) {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
+    throw Error("Invalid evidence capability");
+  return value;
+}
+
+function validateRenewalToken(value) {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
+    throw Error("Invalid evidence renewal capability");
+  return value;
+}
+
+function evidenceScope(binding) {
+  return Object.freeze({
+    communityId: binding.communityId,
+    relayUrl: binding.relayUrl,
+    jobId: binding.jobId,
+    taskId: binding.taskId,
+    channelId: binding.channelId,
+    workerPubkey: binding.workerPubkey,
+    threadRoot: binding.threadRoot,
+  });
+}
+
+function sameEvidenceScope(left, right) {
+  return [
+    "communityId",
+    "relayUrl",
+    "jobId",
+    "taskId",
+    "channelId",
+    "workerPubkey",
+    "threadRoot",
+  ].every((key) => left?.[key] === right?.[key]);
+}
+
 /** Owner-selected grants. The native roster supplies ownership and live status. */
 export class ManagedBrowser {
   bindings = new Map();
   pendingShares = new Map();
+  grantQueues = new Map();
+  evidenceRenewals = new Map();
   constructor({
     root,
     socketPath,
@@ -102,6 +140,31 @@ export class ManagedBrowser {
       if (this.pendingShares.get(key) === task) this.pendingShares.delete(key);
     });
   }
+
+  /** Serialize tab/evidence grant writers so neither capability overwrites the other. */
+  grantFileQueue(file, work) {
+    const previous = this.grantQueues.get(file) || Promise.resolve();
+    const task = previous.catch(() => {}).then(work);
+    this.grantQueues.set(file, task);
+    return task.finally(() => {
+      if (this.grantQueues.get(file) === task) this.grantQueues.delete(file);
+    });
+  }
+
+  async writeGrantFile(file, value, nonce) {
+    const safeNonce = String(nonce).replace(/[^A-Za-z0-9._-]/g, "_");
+    const temporary = `${file}.${safeNonce}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(value), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      await this.replaceFile(temporary, file);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+
   async shareNow({ id, pubkey, mode }, { context, tab, epoch }) {
     const row = (await this.rows(context)).find((row) => row.pubkey === pubkey);
     if (!row)
@@ -138,19 +201,26 @@ export class ManagedBrowser {
       context,
     };
     this.bindings.set(grant.token, binding);
-    const temporary = `${file}.${grant.token}.tmp`;
     try {
-      await writeFile(
-        temporary,
-        JSON.stringify({ socketPath: this.socketPath, token: grant.token }),
-        { mode: 0o600, flag: "wx" },
-      );
-      if (
-        this.context() !== context ||
-        !this.views.authority.grants.has(grant.token)
-      )
-        throw Error("Browser sharing was cancelled");
-      await this.replaceFile(temporary, file);
+      await this.grantFileQueue(file, async () => {
+        let existing = null;
+        try {
+          existing = JSON.parse(await readFile(file, "utf8"));
+        } catch {}
+        const evidence =
+          existing?.socketPath === this.socketPath &&
+          typeof existing?.evidence?.token === "string"
+            ? existing.evidence
+            : undefined;
+        const next = { socketPath: this.socketPath, token: grant.token };
+        if (evidence) next.evidence = evidence;
+        if (
+          this.context() !== context ||
+          !this.views.authority.grants.has(grant.token)
+        )
+          throw Error("Browser sharing was cancelled");
+        await this.writeGrantFile(file, next, grant.token);
+      });
       if (
         this.context() !== context ||
         !this.views.authority.grants.has(grant.token)
@@ -161,9 +231,140 @@ export class ManagedBrowser {
     } catch (error) {
       this.views.authority.revokeToken(grant.token);
       this.bindings.delete(grant.token);
-      await rm(temporary, { force: true });
       throw error;
     }
+  }
+
+  /**
+   * Persist a native EvidenceAuthority grant without requiring an owner-shared
+   * tab. The authority validation is repeated inside the serialized write, so
+   * this path cannot turn a worker lifecycle row into job access by itself.
+   */
+  async writeEvidenceGrantFromAuthority(
+    authority,
+    token,
+    expected = {},
+    { previousRenewalToken } = {},
+  ) {
+    if (authority === null || typeof authority?.validate !== "function")
+      throw Error("Evidence authority is unavailable");
+    const checkedToken = validateEvidenceToken(token);
+    const binding = await authority.validate(checkedToken, expected);
+    const scope = evidenceScope(binding);
+    if (previousRenewalToken !== undefined) {
+      const previous = this.getEvidenceRenewal(previousRenewalToken, expected);
+      if (!sameEvidenceScope(previous.scope, scope))
+        throw Error("The evidence renewal scope changed; retry evidence access");
+    }
+    const context = this.context();
+    if (!context?.id || !context.relay)
+      throw Error("Choose a business before granting evidence access");
+    const row = (await this.rows(context)).find(
+      (candidate) =>
+        candidate.pubkey === binding.workerPubkey &&
+        candidate.pid === binding.pid &&
+        candidate.last_started_at === binding.started &&
+        candidate.browser_generation === binding.generation,
+    );
+    if (!row)
+      throw Error("The worker lifecycle changed; retry evidence access");
+    const file = path.join(this.root, grantFilename(row));
+    return this.grantFileQueue(file, async () => {
+      await authority.validate(checkedToken, expected);
+      if (
+        previousRenewalToken !== undefined &&
+        !this.evidenceRenewals.has(validateRenewalToken(previousRenewalToken))
+      )
+        throw Error("The evidence renewal capability is no longer valid");
+      let existing = null;
+      try {
+        existing = JSON.parse(await readFile(file, "utf8"));
+      } catch {}
+      if (existing !== null && existing?.socketPath !== this.socketPath)
+        throw Error("The worker browser grant belongs to another host");
+      if (this.context() !== context)
+        throw Error("The business context changed; retry evidence access");
+
+      // Repeated roster/head refreshes can ask for the same authority binding
+      // after the UI has already delivered it. Preserve the host-issued
+      // renewal token when the exact validated token and scope are still in
+      // the generation-specific file. A renewal request passes an explicit
+      // predecessor and intentionally rotates that token instead.
+      if (
+        previousRenewalToken === undefined &&
+        existing?.evidence?.token === checkedToken &&
+        sameEvidenceScope(existing.evidence.scope, scope)
+      ) {
+        let existingRenewalToken;
+        try {
+          existingRenewalToken = validateRenewalToken(
+            existing.evidence.renewalToken,
+          );
+        } catch {
+          existingRenewalToken = null;
+        }
+        if (existingRenewalToken !== null) {
+          this.evidenceRenewals.set(existingRenewalToken, { scope });
+          return {
+            token: checkedToken,
+            renewalToken: existingRenewalToken,
+            scope,
+            file,
+          };
+        }
+      }
+      const renewalToken = randomBytes(32).toString("hex");
+      await this.writeGrantFile(
+        file,
+        {
+          ...(existing ?? {}),
+          socketPath: this.socketPath,
+          evidence: {
+            token: checkedToken,
+            renewalToken,
+            scope,
+          },
+        },
+        `evidence-${checkedToken}`,
+      );
+      const previousFileRenewal = existing?.evidence?.renewalToken;
+      if (previousRenewalToken !== undefined)
+        this.evidenceRenewals.delete(validateRenewalToken(previousRenewalToken));
+      if (
+        typeof previousFileRenewal === "string" &&
+        previousFileRenewal !== renewalToken
+      ) {
+        try {
+          this.evidenceRenewals.delete(validateRenewalToken(previousFileRenewal));
+        } catch {}
+      }
+      this.evidenceRenewals.set(renewalToken, { scope });
+      return { token: checkedToken, renewalToken, scope, file };
+    });
+  }
+
+  /** Return the host-issued scope behind a renewal token, never caller authority. */
+  getEvidenceRenewal(renewalToken, expected = {}) {
+    const checked = validateRenewalToken(renewalToken);
+    const record = this.evidenceRenewals.get(checked);
+    if (!record) throw Error("The evidence renewal capability is no longer valid");
+    for (const key of [
+      "communityId",
+      "relayUrl",
+      "jobId",
+      "taskId",
+      "channelId",
+      "workerPubkey",
+      "threadRoot",
+    ]) {
+      if (expected[key] !== undefined && expected[key] !== record.scope[key])
+        throw Error("The evidence renewal scope does not match");
+    }
+    return record;
+  }
+
+  revokeEvidenceRenewals() {
+    this.evidenceRenewals.clear();
   }
   async validate(token) {
     const binding = this.bindings.get(token);

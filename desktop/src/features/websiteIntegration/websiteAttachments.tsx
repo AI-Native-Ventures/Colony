@@ -63,6 +63,7 @@ import { dispatchWebsiteStart } from "./websiteStartDispatch";
 import { ensureWebsiteCoordinatorReady } from "./websiteCoordinatorReadiness";
 import { submitWebsiteBeginWork } from "./websiteTransport";
 import { WebsiteThreadBody } from "./WebsiteThreadBody";
+import { ensureWebsiteEvidenceGrants } from "./websiteEvidenceGrant";
 
 function useWebsiteAttachmentContext(input: {
   channelId: string | null;
@@ -322,6 +323,13 @@ function WebsiteAttachmentInner({
     () => isWebsiteCompositeRendered(message.id),
     () => false,
   );
+  const managedAgentsQuery = useManagedAgentsQuery();
+  React.useEffect(() => {
+    if (!communityId || !head || !relayUrl) return;
+    void ensureWebsiteEvidenceGrants({ communityId, head, relayUrl }).catch(
+      () => {},
+    );
+  }, [communityId, head, managedAgentsQuery.data, relayUrl]);
   if (!communityId || !head || !relayUrl) return null;
   if (surface === "channel") {
     return (
