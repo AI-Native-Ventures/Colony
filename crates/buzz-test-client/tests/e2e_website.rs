@@ -786,6 +786,28 @@ fn qa_fixture(revision: u32) -> (&'static str, &'static str) {
     }
 }
 
+/// Signed builder work tied to the exact revision being handed over.
+fn builder_work_event(
+    builder: &Keys,
+    channel: &str,
+    thread_root: &str,
+    revision: u32,
+    manifest: &str,
+) -> nostr::Event {
+    EventBuilder::new(
+        Kind::Custom(KIND_STREAM_MESSAGE_V2 as u16),
+        "Built the reviewed website revision and prepared its source assets.",
+    )
+    .tags(vec![
+        Tag::parse(["h", channel]).expect("channel tag"),
+        Tag::parse(["e", thread_root, "", "root"]).expect("thread tag"),
+        Tag::parse(["revision", &revision.to_string()]).expect("revision tag"),
+        Tag::parse(["manifest", manifest]).expect("manifest tag"),
+    ])
+    .sign_with_keys(builder)
+    .expect("builder work signs")
+}
+
 async fn publish_qa_report(
     client: &mut BuzzTestClient,
     reviewer: &Keys,
@@ -1613,12 +1635,37 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
     assert!(review.active_approval_id.is_some());
     assert_eq!(review.decisions.len(), 2);
 
+    let work = builder_work_event(
+        &builder,
+        &fixture.channel,
+        &fixture.thread_root,
+        2,
+        REVISION_2_MANIFEST_SHA256,
+    );
+    let work_id = work.id.to_hex();
+    let work_ok = send_past_transport_stall(&mut builder_client, work, "builder evidence").await;
+    assert!(work_ok.accepted, "builder work is stored: {}", work_ok.message);
+    let evidence = update_action(
+        &fixture,
+        &builder,
+        10,
+        WebsiteActionOp::StageEvidence {
+            stage: buzz_core::website::Stage::DesignBuild,
+            revision: Some(2),
+            kind: buzz_core::website::StageEvidenceKind::WorkEvent,
+            event_id: work_id,
+        },
+    );
+    let evidence_ok = send_action(&mut builder_client, &builder, &evidence).await;
+    let (head, _) = website_head_from_response(&mut builder_client, &evidence_ok).await;
+    assert_head_generation(&head, 11);
+
     let revision_2_manifest = revision_manifest_ref(2);
     let revision_2_entry = revision_entry_ref(2);
     let handover = update_action(
         &fixture,
         &fixture.coordinator,
-        10,
+        11,
         WebsiteActionOp::Handover {
             approved_revision: 2,
             approved_manifest_sha256: REVISION_2_MANIFEST_SHA256.to_owned(),
@@ -1633,7 +1680,7 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
     );
     let handover_ok = send_action(&mut coordinator_client, &fixture.coordinator, &handover).await;
     let (head, review) = website_head_from_response(&mut coordinator_client, &handover_ok).await;
-    assert_head_generation(&head, 11);
+    assert_head_generation(&head, 12);
     assert_eq!(review.status, buzz_core::website::WebsiteStatus::HandedOver);
     assert_eq!(review.current_revision, 2);
     let saved_handover = review.handover.as_ref().expect("handover is persisted");
@@ -1816,7 +1863,7 @@ async fn duplicate_coordinator_request_changes_preserves_current_task_report() {
         duplicate_receipt.outcome, "duplicate",
         "the fresh-UUID semantic retry carries a duplicate receipt"
     );
-    assert_eq!(duplicate_receipt.revision, 1);
+    assert_eq!(duplicate_receipt.revision, 2);
     assert_eq!(
         job_row_generation(&fixture.task_id).await,
         Some(7),

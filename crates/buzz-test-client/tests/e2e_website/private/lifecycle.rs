@@ -307,10 +307,37 @@ async fn private_blossom_website_lifecycle_is_tenant_scoped() {
     assert_eq!(review.status, buzz_core::website::WebsiteStatus::Approved);
     assert_eq!(review.current_revision, 1);
 
+    let work = builder_work_event(
+        &fixture.builder,
+        &fixture.channel,
+        &fixture.thread_root,
+        1,
+        &manifest.sha256,
+    );
+    private_submit_event(&tenant, &fixture.builder, &work).await;
+    let evidence = private_update_action(
+        &fixture,
+        &fixture.builder,
+        6,
+        WebsiteActionOp::StageEvidence {
+            stage: buzz_core::website::Stage::DesignBuild,
+            revision: Some(1),
+            kind: buzz_core::website::StageEvidenceKind::WorkEvent,
+            event_id: work.id.to_hex(),
+        },
+    );
+    let (head, _) = private_website_head_from_response(
+        &fixture,
+        &fixture.builder,
+        private_send_action(&fixture, &fixture.builder, &evidence).await,
+    )
+    .await;
+    assert_head_generation(&head, 7);
+
     let handover = private_update_action(
         &fixture,
         &fixture.coordinator,
-        6,
+        7,
         WebsiteActionOp::Handover {
             approved_revision: 1,
             approved_manifest_sha256: manifest.sha256.clone(),
@@ -329,7 +356,7 @@ async fn private_blossom_website_lifecycle_is_tenant_scoped() {
         private_send_action(&fixture, &fixture.coordinator, &handover).await,
     )
     .await;
-    assert_head_generation(&head, 7);
+    assert_head_generation(&head, 8);
     assert_eq!(review.status, buzz_core::website::WebsiteStatus::HandedOver);
     assert_eq!(review.current_revision, 1);
     assert_eq!(
