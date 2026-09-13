@@ -122,27 +122,17 @@ pub(super) fn prepare_worker(
     let mut meter_upstream = None;
     if let Some((key, default)) = provider_url {
         let configured = get(key);
-        let url = if configured.is_empty() {
-            default
-        } else {
-            configured
-        };
-        destinations.push(Destination::resolve(url)?);
         let meter_key = if provider == "anthropic" {
             "BUZZ_METER_ANTHROPIC_UPSTREAM"
         } else {
             "BUZZ_METER_OPENAI_UPSTREAM"
         };
         let configured_meter = get(meter_key);
-        let (meter_key, upstream) = if !configured_meter.is_empty() {
-            (meter_key, configured_meter.to_owned())
-        } else if provider == "anthropic" {
-            (meter_key, url.trim_end_matches('/').to_owned())
-        } else {
-            // SDK base URLs already include their complete API path. Keep it
-            // distinct from the existing meter root override, which adds /v1.
-            ("BUZZ_METER_OPENAI_BASE_URL", url.to_owned())
-        };
+        let (provider_destination, meter_key, upstream) =
+            provider_destination_plan(&provider, default, configured, configured_meter);
+        if let Some(provider_destination) = provider_destination {
+            destinations.push(Destination::resolve(&provider_destination)?);
+        }
         destinations.push(Destination::resolve(&upstream)?);
         meter_upstream = Some((meter_key, upstream));
     }
@@ -273,6 +263,43 @@ pub(super) fn prepare_worker(
     Ok((command, network))
 }
 
+fn provider_destination_plan(
+    provider: &str,
+    provider_default: &'static str,
+    configured_provider: &str,
+    configured_meter: &str,
+) -> (Option<String>, &'static str, String) {
+    let url = if configured_provider.is_empty() {
+        provider_default
+    } else {
+        configured_provider
+    };
+    let meter_key = if provider == "anthropic" {
+        "BUZZ_METER_ANTHROPIC_UPSTREAM"
+    } else if !configured_meter.is_empty() {
+        // An explicit meter upstream is the only provider destination the
+        // provisioned worker will contact after ACP rewrites its SDK base URL.
+        "BUZZ_METER_OPENAI_UPSTREAM"
+    } else {
+        "BUZZ_METER_OPENAI_BASE_URL"
+    };
+    let upstream = if !configured_meter.is_empty() {
+        configured_meter.to_owned()
+    } else if provider == "anthropic" {
+        url.trim_end_matches('/').to_owned()
+    } else {
+        // SDK base URLs already include their complete API path. Keep it
+        // distinct from the existing meter root override, which adds /v1.
+        url.to_owned()
+    };
+    let provider_destination = if configured_meter.is_empty() {
+        Some(url.to_owned())
+    } else {
+        None
+    };
+    (provider_destination, meter_key, upstream)
+}
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BrowserRuntime {
@@ -314,6 +341,57 @@ mod tests {
             assert!(!permitted_env(key, "openai"), "{key}");
         }
     }
+
+    #[test]
+    fn explicit_meter_upstream_replaces_the_public_provider_destination() {
+        for (provider, provider_default) in [
+            ("openai", "https://api.openai.com/v1"),
+            ("deepseek", "https://api.deepseek.com/v1"),
+        ] {
+            let (provider_destination, meter_key, upstream) = provider_destination_plan(
+                provider,
+                provider_default,
+                "",
+                "https://horizon.invalid/gateway/openai",
+            );
+            assert_eq!(provider_destination, None, "{provider}");
+            assert_eq!(meter_key, "BUZZ_METER_OPENAI_UPSTREAM", "{provider}");
+            assert_eq!(
+                upstream, "https://horizon.invalid/gateway/openai",
+                "{provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_metered_custom_provider_keeps_its_sdk_destination() {
+        let (provider_destination, meter_key, upstream) = provider_destination_plan(
+            "openai-compat",
+            "https://api.openai.com/v1",
+            "https://llm.example/v1",
+            "",
+        );
+        assert_eq!(
+            provider_destination,
+            Some("https://llm.example/v1".to_owned())
+        );
+        assert_eq!(meter_key, "BUZZ_METER_OPENAI_BASE_URL");
+        assert_eq!(upstream, "https://llm.example/v1");
+    }
+
+    #[test]
+    fn anthropic_meter_override_preserves_the_configured_root() {
+        let (provider_destination, meter_key, upstream) = provider_destination_plan(
+            "anthropic",
+            "https://api.anthropic.com",
+            "",
+            "https://horizon.invalid/gateway/anthropic",
+        );
+        assert_eq!(provider_destination, None);
+        assert_eq!(meter_key, "BUZZ_METER_ANTHROPIC_UPSTREAM");
+        assert_eq!(upstream, "https://horizon.invalid/gateway/anthropic");
+    }
+
     #[cfg(unix)]
     #[test]
     fn worker_directory_refuses_a_symlink() {

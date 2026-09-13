@@ -182,10 +182,6 @@ async function launch() {
       BUZZ_SHARE_IDENTITY: "0",
       BUZZ_RELAY_URL: `wss://${proxy.bootstrapHost}`,
       BUZZ_RELAY_HTTP: proxy.bootstrapHttpUrl,
-      // The worker's isolation policy validates this inherited SDK origin
-      // before replacing it with the local meter. Keep it on the exact
-      // business route so the fixture never falls back to public OpenAI.
-      OPENAI_COMPAT_BASE_URL: `https://${proxy.businessHost}/gateway/openai/v1`,
       BUZZ_ONBOARDING_FIXTURE_TRANSPORT: proxy.transportConfig,
       BUZZ_ONBOARDING_FIXTURE_RECOVERY_PATH: recoveryPath,
     },
