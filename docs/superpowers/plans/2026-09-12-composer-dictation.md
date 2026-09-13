@@ -2,9 +2,9 @@
 
 **Goal:** Implement the approved mic → recording → editable draft → explicit Send interaction, using the selected theme colors.
 
-**Architecture:** Capture bounded mono PCM using an AudioWorklet. Decode on-device through the existing Parakeet model via NativeBridge, shared by Electron and Tauri. Keep dictation separate from the huddle pipeline so audio cannot become a posted huddle transcript. Recording is limited to 60 seconds; Stop flushes the final audio frame. A session controller invalidates pending capture/transcription on cancel, navigation, and unmount. Insert plain text at the captured editor selection, preserving surrounding rich text and attachments.
+**Architecture:** Capture bounded mono PCM using an AudioWorklet. Decode on-device through bundled quantized Whisper Base English via NativeBridge, shared by Electron and Tauri. Keep dictation separate from the huddle pipeline so audio cannot become a posted huddle transcript. Recording is limited to 60 seconds; Stop flushes the final audio frame. A session controller invalidates pending capture/transcription on cancel, navigation, and unmount. Insert plain text at the captured editor selection, preserving surrounding rich text and attachments.
 
-**Tech Stack:** React, Tiptap, Web Audio, NativeBridge, Rust, existing sherpa-onnx/Parakeet.
+**Tech Stack:** React, Tiptap, Web Audio, NativeBridge, Rust, whisper-rs/whisper.cpp. Model resource and portability gates are in the 2026-09-13 compact-dictation plan.
 
 ## Acceptance gates
 

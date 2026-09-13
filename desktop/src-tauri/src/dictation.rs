@@ -1,11 +1,8 @@
 //! Composer-only local dictation. Never signs or publishes transcript events.
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::State;
-
-use crate::app_state::AppState;
-
-use crate::huddle::models;
+use std::time::{Duration, Instant};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const MAX_SAMPLES: usize = 16_000 * 60;
 static DECODING: AtomicBool = AtomicBool::new(false);
@@ -17,16 +14,14 @@ impl Drop for DecodeGuard {
     }
 }
 
-/// Ensure the existing on-device English speech model is ready before capture.
+/// Verify the installer-supplied English speech model before capture.
 #[tauri::command]
-pub fn prepare_dictation(state: State<'_, AppState>) -> Result<(), String> {
-    let manager = models::global_model_manager()
-        .ok_or("Dictation is unavailable. Restart Colony and try again.")?;
-    if manager.is_stt_ready() {
-        return Ok(());
-    }
-    manager.start_stt_download(state.http_client.clone());
-    Err("Preparing on-device dictation for first use. Please try again shortly.".into())
+pub async fn prepare_dictation(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::dictation_model::verified_path(&app).map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("Dictation preparation failed: {e}"))?
 }
 
 fn parse_audio(bytes: &[u8]) -> Result<Vec<f32>, String> {
@@ -50,13 +45,14 @@ fn parse_audio(bytes: &[u8]) -> Result<Vec<f32>, String> {
 
 /// Decode a bounded 16 kHz mono f32-LE recording locally and return draft text.
 #[tauri::command]
-pub async fn transcribe_dictation(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+pub async fn transcribe_dictation(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
     let samples = match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => parse_audio(bytes)?,
         _ => return Err("Expected raw dictation audio.".into()),
     };
-    let model_dir =
-        models::stt_model_dir().ok_or("Dictation is still preparing. Please try again shortly.")?;
     DECODING
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .map_err(|_| "Another recording is still being transcribed. Please try again shortly.")?;
@@ -72,33 +68,62 @@ pub async fn transcribe_dictation(request: tauri::ipc::Request<'_>) -> Result<St
         if voiced < 12 {
             return Ok(String::new());
         }
-        let mut cfg = sherpa_onnx::OfflineRecognizerConfig::default();
-        cfg.model_config.nemo_ctc.model = Some(
-            model_dir
-                .join("model.int8.onnx")
-                .to_string_lossy()
-                .into_owned(),
-        );
-        cfg.model_config.tokens = Some(model_dir.join("tokens.txt").to_string_lossy().into_owned());
-        cfg.model_config.num_threads = 1;
-        cfg.model_config.debug = false;
-        let recognizer = sherpa_onnx::OfflineRecognizer::create(&cfg)
-            .ok_or("Could not load dictation. Restart Colony and try again.")?;
-        let stream = recognizer.create_stream();
-        stream.accept_waveform(16_000, &samples);
-        recognizer.decode(&stream);
-        Ok(stream
-            .get_result()
-            .map(|result| result.text.trim().to_string())
-            .unwrap_or_default())
+        let model_path = crate::dictation_model::verified_path(&app)?;
+        decode(&model_path, &samples)
     })
     .await
     .map_err(|e| format!("Dictation failed: {e}"))?
 }
 
+fn decode(model_path: &std::path::Path, samples: &[f32]) -> Result<String, String> {
+    let mut context_params = WhisperContextParameters::default();
+    context_params.use_gpu(false);
+    // Context and state are scoped to this recording: no model RAM retained idle.
+    let context = WhisperContext::new_with_params(model_path, context_params)
+        .map_err(|e| format!("Could not load offline dictation: {e}"))?;
+    let mut state = context.create_state().map_err(|e| e.to_string())?;
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_n_threads(2);
+    params.set_language(Some("en"));
+    params.set_no_context(true);
+    params.set_no_timestamps(true);
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    params.set_abort_callback_safe(move || Instant::now() >= deadline);
+    state
+        .full(params, samples)
+        .map_err(|e| format!("Dictation failed: {e}"))?;
+    let mut text = String::new();
+    for segment in state.as_iter() {
+        text.push_str(segment.to_str().map_err(|e| e.to_string())?);
+    }
+    Ok(text.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires staged model; explicitly run by hosted dictation proof"]
+    fn bundled_whisper_transcribes_speech() -> Result<(), String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/dictation/ggml-base.en-q5_1.bin");
+        let samples = parse_audio(include_bytes!("../tests/fixtures/dictation.f32"))?;
+        let text = decode(&path, &samples)?.to_lowercase();
+        assert!(
+            text.contains("best of times"),
+            "Missing expected phrase: {text}"
+        );
+        assert!(
+            text.contains("worst of times"),
+            "Missing expected phrase: {text}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn rejects_empty_misaligned_and_oversized_audio() {
