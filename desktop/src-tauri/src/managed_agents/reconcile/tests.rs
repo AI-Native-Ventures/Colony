@@ -465,3 +465,161 @@ fn retain_agent_record_is_noop_when_unchanged() {
         "no pending_sync churn for an unchanged record"
     );
 }
+
+/// Test (a): a record pinned to relay B retained while A is active lands
+/// in B's scope DB and A's active scope DB has no row from it.
+#[test]
+fn record_pinned_to_b_retains_into_b_scope_not_active() {
+    let app = tauri::test::mock_app();
+    let mut state = crate::app_state::build_app_state();
+    let keys = nostr::Keys::generate();
+    *state.keys.lock().unwrap() = keys;
+    let record = sample_record("a".repeat(64).as_str(), "agent-b");
+    let mut record_b = record.clone();
+    record_b.relay_url = "wss://other.example.com".to_string();
+
+    // Call the same retention path the interactive edit uses.
+    crate::managed_agents::reconcile::retain_managed_agent_pending(&app, &state, &record_b);
+
+    let scope_b =
+        crate::managed_agents::retention::retention_scope_for_record(&app, &state, &record_b)
+            .unwrap()
+            .expect("record pinned to B must resolve a scope");
+    let conn_b = crate::managed_agents::retention::open_retention_db(&scope_b.db_path).unwrap();
+    let pending_b = crate::managed_agents::retention::get_pending_sync(&conn_b).unwrap();
+    assert_eq!(
+        pending_b.len(),
+        1,
+        "B's scope DB must have the retained row"
+    );
+    assert_eq!(pending_b[0].kind, buzz_core_pkg::kind::KIND_MANAGED_AGENT);
+    assert_eq!(pending_b[0].d_tag, record_b.pubkey);
+
+    // A's active scope DB must have no row from B.
+    let scope_a = crate::managed_agents::retention::active_retention_scope(&app, &state).unwrap();
+    let conn_a = crate::managed_agents::retention::open_retention_db(&scope_a.db_path).unwrap();
+    let pending_a = crate::managed_agents::retention::get_pending_sync(&conn_a).unwrap();
+    assert!(
+        pending_a.iter().all(|r| r.d_tag != record_b.pubkey),
+        "A's scope DB must have no row whose d_tag matches B's agent"
+    );
+}
+
+/// Test (b): a blank pin is skipped (no retention DB write anywhere).
+#[test]
+fn blank_pin_is_skipped_and_not_retained() {
+    let app = tauri::test::mock_app();
+    let mut state = crate::app_state::build_app_state();
+    let keys = nostr::Keys::generate();
+    *state.keys.lock().unwrap() = keys;
+    let mut record = sample_record("b".repeat(64).as_str(), "unassigned-agent");
+    record.relay_url = String::new();
+
+    crate::managed_agents::reconcile::retain_managed_agent_pending(&app, &state, &record);
+
+    let scope = crate::managed_agents::retention::retention_scope_for_record(&app, &state, &record)
+        .unwrap();
+    assert!(scope.is_none(), "blank pin must return None scope");
+}
+
+/// Test (c): the flush skips a kind 30177 row whose local record is
+/// pinned to a different relay.
+#[test]
+fn flush_skips_30177_row_pinned_elsewhere() {
+    let app = tauri::test::mock_app();
+    let mut state = crate::app_state::build_app_state();
+    let keys = nostr::Keys::generate();
+    *state.keys.lock().unwrap() = keys;
+
+    // Build a retention DB that has a single 30177 pending row.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("retention.db");
+    {
+        let conn = crate::managed_agents::retention::open_retention_db(&db_path).unwrap();
+        let event = buzz_core_pkg::kind::build_agent_event(&sample_record(
+            "c".repeat(64).as_str(),
+            "agent-c",
+        ))
+        .unwrap();
+        crate::managed_agents::retention::retain_event(
+            &conn,
+            &crate::managed_agents::retention::RetainedEvent {
+                kind: buzz_core_pkg::kind::KIND_MANAGED_AGENT,
+                pubkey: keys.public_key().to_hex(),
+                d_tag: "c".repeat(64),
+                content: event.content.clone(),
+                created_at: event.created_at.as_secs() as i64,
+                raw_event: event.as_json(),
+                pending_sync: true,
+            },
+        )
+        .unwrap();
+    }
+
+    // Create managed-agents.json with the same agent pinned to another relay.
+    let mut pinned_record = sample_record("c".repeat(64).as_str(), "agent-c");
+    pinned_record.relay_url = "wss://other.example.com".to_string();
+    std::fs::create_dir_all(dir.path()).unwrap();
+    std::fs::write(
+        dir.path().join("managed-agents.json"),
+        serde_json::to_string(&vec![pinned_record]).unwrap(),
+    )
+    .unwrap();
+
+    // Place the file in the mock app's agents directory so the belt
+    // can read it via managed_agents_store_path(app).
+    let store_path = crate::managed_agents::storage::managed_agents_store_path(&app).unwrap();
+    std::fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &store_path,
+        serde_json::to_string(&vec![pinned_record]).unwrap(),
+    )
+    .unwrap();
+
+    // Create the retention DB at the ACTIVE scope's path (not B's) so
+    // the flush loop tries to drain it.
+    let active_scope =
+        crate::managed_agents::retention::active_retention_scope(&app, &state).unwrap();
+    {
+        let conn_active =
+            crate::managed_agents::retention::open_retention_db(&active_scope.db_path).unwrap();
+        let event = buzz_core_pkg::kind::build_agent_event(&sample_record(
+            "c".repeat(64).as_str(),
+            "agent-c",
+        ))
+        .unwrap();
+        crate::managed_agents::retention::retain_event(
+            &conn_active,
+            &crate::managed_agents::retention::RetainedEvent {
+                kind: buzz_core_pkg::kind::KIND_MANAGED_AGENT,
+                pubkey: keys.public_key().to_hex(),
+                d_tag: "c".repeat(64),
+                content: event.content.clone(),
+                created_at: event.created_at.as_secs() as i64,
+                raw_event: event.as_json(),
+                pending_sync: true,
+            },
+        )
+        .unwrap();
+    }
+
+    // Run the flush with the mock app so the belt reads managed-agents.json.
+    use tokio::runtime::Runtime;
+    let rt = Runtime::new().expect("tokio runtime");
+    rt.block_on(async {
+        let flushed =
+            crate::managed_agents::persona_events::flush_active_pending_events(&app, &state)
+                .await
+                .expect("flush");
+        assert_eq!(flushed, 0, "flush must skip the pinned-elsewhere 30177 row");
+        let conn_after =
+            crate::managed_agents::retention::open_retention_db(&active_scope.db_path).unwrap();
+        let pending_after =
+            crate::managed_agents::retention::get_pending_sync(&conn_after).unwrap();
+        assert_eq!(
+            pending_after.len(),
+            1,
+            "skipped row must stay pending (not deleted)"
+        );
+    });
+}
