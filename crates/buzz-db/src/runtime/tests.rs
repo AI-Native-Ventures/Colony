@@ -11,7 +11,7 @@ use super::*;
 use crate::*;
 use buzz_core::CommunityId;
 use nostr::{Event, EventBuilder, Keys, Kind, Tag, Timestamp};
-use sqlx::PgPool;
+use sqlx::{Connection, PgPool};
 use uuid::Uuid;
 
 const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
@@ -101,6 +101,245 @@ async fn setup_db() -> Db {
         .await
         .expect("connect to test DB");
     Db::from_pool(pool)
+}
+
+#[tokio::test]
+async fn begin_transaction_compatibility_alias_is_preserved() {
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy(&crate::test_support::database_url())
+        .expect("construct lazy compatibility pool");
+    pool.close().await;
+    let db = Db::from_pool(pool);
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    #[allow(deprecated)]
+    let result = db.begin_transaction().await;
+    assert!(matches!(
+        result,
+        Err(DbError::Sqlx(sqlx::Error::PoolClosed))
+    ));
+
+    let counters = snapshotter
+        .snapshot()
+        .into_vec()
+        .into_iter()
+        .filter_map(|(key, _, _, value)| {
+            let name = key.key().name();
+            if ![
+                "buzz_db_pool_acquire_attempts_total",
+                "buzz_db_pool_acquisitions_total",
+            ]
+            .contains(&name)
+            {
+                return None;
+            }
+            let DebugValue::Counter(value) = value else {
+                panic!("pool acquisition terminals must be counters");
+            };
+            let labels = key
+                .key()
+                .labels()
+                .map(|label| (label.key().to_owned(), label.value().to_owned()))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            Some(((name.to_owned(), labels), value))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let expected = [
+        (
+            (
+                "buzz_db_pool_acquire_attempts_total".to_owned(),
+                [
+                    ("operation".to_owned(), "event_write".to_owned()),
+                    ("outcome".to_owned(), "error".to_owned()),
+                    ("pool_role".to_owned(), "writer".to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            1,
+        ),
+        (
+            (
+                "buzz_db_pool_acquisitions_total".to_owned(),
+                [
+                    ("outcome".to_owned(), "error".to_owned()),
+                    ("pool_role".to_owned(), "writer".to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            1,
+        ),
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(counters, expected);
+}
+
+#[test]
+fn nip43_reconciliation_compatibility_alias_is_preserved() {
+    #[allow(deprecated)]
+    async fn call(
+        db: &Db,
+        community_id: CommunityId,
+        relay_pubkey: &nostr::PublicKey,
+    ) -> crate::Result<bool> {
+        db.nip43_membership_snapshot_needs_reconciliation(community_id, relay_pubkey)
+            .await
+    }
+
+    let _ = call;
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn readiness_check_distinguishes_pool_exhaustion_from_success() {
+    let database_url = crate::test_support::database_url();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect size-one readiness test pool");
+    let held = pool
+        .acquire()
+        .await
+        .expect("hold the only readiness test connection");
+    let db = Db::from_pool(pool);
+
+    let exhausted = db
+        .readiness_check(tokio::time::Instant::now() + std::time::Duration::from_millis(25))
+        .await;
+    assert_eq!(exhausted, DbReadinessOutcome::PoolTimeout);
+
+    drop(held);
+    let recovered = db
+        .readiness_check(tokio::time::Instant::now() + std::time::Duration::from_secs(1))
+        .await;
+    assert_eq!(recovered, DbReadinessOutcome::Success);
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn readiness_check_classifies_closed_pool_query_timeout_and_query_error() {
+    let database_url = crate::test_support::database_url();
+
+    let closed_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect closed readiness test pool");
+    closed_pool.close().await;
+    let closed = Db::from_pool(closed_pool)
+        .readiness_check(tokio::time::Instant::now() + std::time::Duration::from_secs(1))
+        .await;
+    assert_eq!(closed, DbReadinessOutcome::PoolError);
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect query classification test pool");
+    let db = Db::from_pool(pool);
+
+    let timed_out = db
+        .readiness_check_sql(
+            tokio::time::Instant::now() + std::time::Duration::from_millis(25),
+            "SELECT pg_sleep(0.2)",
+        )
+        .await;
+    assert_eq!(timed_out, DbReadinessOutcome::QueryTimeout);
+
+    let query_error = db
+        .readiness_check_sql(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            "SELECT 1 / 0",
+        )
+        .await;
+    assert_eq!(query_error, DbReadinessOutcome::QueryError);
+
+    assert_eq!(
+        db.readiness_check(tokio::time::Instant::now() + std::time::Duration::from_secs(1))
+            .await,
+        DbReadinessOutcome::Success,
+        "query failures must return the acquired connection to the pool"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn readiness_check_cancellation_balances_waiter_and_inflight_connection() {
+    let database_url = crate::test_support::database_url();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect cancellation readiness test pool");
+    let held = pool
+        .acquire()
+        .await
+        .expect("hold sole connection before waiter cancellation");
+    let db = Db::from_pool(pool);
+
+    let waiting_db = db.clone();
+    let waiting = tokio::spawn(async move {
+        waiting_db
+            .readiness_check(tokio::time::Instant::now() + std::time::Duration::from_secs(5))
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    waiting.abort();
+    assert!(waiting
+        .await
+        .expect_err("waiting check must be cancelled")
+        .is_cancelled());
+    drop(held);
+
+    assert_eq!(
+        db.readiness_check(tokio::time::Instant::now() + std::time::Duration::from_secs(1))
+            .await,
+        DbReadinessOutcome::Success,
+        "cancelled pool waiter must not consume the released connection"
+    );
+
+    let querying_db = db.clone();
+    let querying = tokio::spawn(async move {
+        querying_db
+            .readiness_check_sql(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                "SELECT pg_sleep(5)",
+            )
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    querying.abort();
+    assert!(querying
+        .await
+        .expect_err("querying check must be cancelled")
+        .is_cancelled());
+
+    let recovered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let outcome = db
+                .readiness_check(
+                    tokio::time::Instant::now() + std::time::Duration::from_millis(250),
+                )
+                .await;
+            match outcome {
+                DbReadinessOutcome::Success => break outcome,
+                DbReadinessOutcome::PoolTimeout => tokio::task::yield_now().await,
+                unexpected => panic!(
+                    "cancelled in-flight query produced unexpected recovery outcome: {unexpected:?}"
+                ),
+            }
+        }
+    })
+    .await
+    .expect("cancelled in-flight query must return or replace its connection");
+    assert_eq!(recovered, DbReadinessOutcome::Success);
 }
 
 async fn make_community(pool: &PgPool) -> Uuid {
@@ -1381,9 +1620,13 @@ async fn admin_url() -> String {
     std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| TEST_DB_URL.into())
 }
 
-/// Create a fresh scratch database on the same server and run migrations.
-/// Returns (pool, db_name); callers should `drop_scratch_db` when done.
-async fn create_scratch_db(admin: &PgPool, prefix: &str) -> (PgPool, String) {
+/// Create a fresh scratch database on the same server and optionally run
+/// migrations only up to `target`.
+async fn create_scratch_db_through(
+    admin: &PgPool,
+    prefix: &str,
+    target: Option<i64>,
+) -> (PgPool, String) {
     let name = format!("{}_{}", prefix, Uuid::new_v4().simple());
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
         .execute(admin)
@@ -1398,10 +1641,136 @@ async fn create_scratch_db(admin: &PgPool, prefix: &str) -> (PgPool, String) {
     let pool = PgPool::connect(&scratch_url)
         .await
         .expect("connect scratch db");
+    match target {
+        Some(target) => crate::runtime::migration::run_migrations_through(&pool, target)
+            .await
+            .expect("migrate scratch db through target"),
+        None => crate::migration::run_migrations(&pool)
+            .await
+            .expect("migrate scratch db"),
+    }
+    (pool, name)
+}
+
+/// Create a fresh scratch database on the same server and run migrations.
+/// Returns (pool, db_name); callers should `drop_scratch_db` when done.
+async fn create_scratch_db(admin: &PgPool, prefix: &str) -> (PgPool, String) {
+    create_scratch_db_through(admin, prefix, None).await
+}
+
+/// Migration 0073's roster fence is a schema-before-code boundary: a relay
+/// whose database predates it must refuse to open listeners, because the new
+/// replacement protocol would look safe while an old pod could still overwrite
+/// a newer canonical roster.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn unmigrated_roster_fence_blocks_startup_until_0073_is_applied() {
+    let admin = PgPool::connect(&admin_url().await)
+        .await
+        .expect("connect admin");
+    let (pool, scratch_name) =
+        create_scratch_db_through(&admin, "roster_fence_unmigrated", Some(72)).await;
+    let db = Db::from_pool(pool.clone());
+
+    let error = db
+        .verify_channel_roster_fence()
+        .await
+        .expect_err("pre-0073 schema must block roster publishers");
+    assert!(
+        error.to_string().contains("channel roster fence trigger"),
+        "startup gate must report the missing schema fence: {error}"
+    );
+    let rows_before: i64 = sqlx::query_scalar("SELECT count(*) FROM events WHERE kind = 39002")
+        .fetch_one(&pool)
+        .await
+        .expect("count pre-migration rosters");
+    assert_eq!(
+        rows_before, 0,
+        "failed startup gate must not publish a roster"
+    );
+
     crate::migration::run_migrations(&pool)
         .await
-        .expect("migrate scratch db");
-    (pool, name)
+        .expect("apply migration 0073");
+    db.verify_channel_roster_fence()
+        .await
+        .expect("0073 must open the startup gate");
+
+    drop_scratch_db(&admin, pool, &scratch_name).await;
+}
+
+/// The catalog check cannot see a trigger function that was replaced with an
+/// inert body, so the behavior probe has to prove the semantics.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn channel_roster_fence_behavior_verification_detects_inert_function() {
+    let admin = PgPool::connect(&admin_url().await)
+        .await
+        .expect("connect admin");
+    let (pool, scratch_name) = create_scratch_db(&admin, "roster_fence_inert").await;
+    let db = Db::from_pool(pool.clone());
+
+    sqlx::raw_sql(
+        "CREATE OR REPLACE FUNCTION guard_channel_roster_snapshot() \
+         RETURNS TRIGGER AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql;",
+    )
+    .execute(&pool)
+    .await
+    .expect("replace roster fence with inert body");
+    let error = db
+        .verify_channel_roster_fence()
+        .await
+        .expect_err("inert roster fence must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("stale probe roster was accepted"),
+        "behavior probe must identify inert semantics: {error}"
+    );
+
+    drop_scratch_db(&admin, pool, &scratch_name).await;
+}
+
+/// Every attached partition needs the fence, not just the parent: a disabled
+/// child trigger is an unfenced insert path.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn channel_roster_fence_catalog_verification_fails_closed() {
+    let admin = PgPool::connect(&admin_url().await)
+        .await
+        .expect("connect admin");
+    let (pool, scratch_name) = create_scratch_db(&admin, "roster_fence_catalog").await;
+    let db = Db::from_pool(pool.clone());
+
+    db.verify_channel_roster_fence()
+        .await
+        .expect("migrated roster fence must verify");
+
+    let child: String = sqlx::query_scalar(
+        "SELECT n.nspname || '.' || c.relname \
+         FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE i.inhparent = 'public.events'::regclass ORDER BY i.inhrelid LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("load event partition");
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "ALTER TABLE {child} DISABLE TRIGGER trg_events_guard_channel_roster_snapshot"
+    )))
+    .execute(&pool)
+    .await
+    .expect("disable partition roster trigger");
+    let error = db
+        .verify_channel_roster_fence()
+        .await
+        .expect_err("disabled partition roster fence must fail closed");
+    assert!(
+        error.to_string().contains(&child),
+        "verification must identify the unfenced partition: {error}"
+    );
+
+    drop_scratch_db(&admin, pool, &scratch_name).await;
 }
 
 async fn drop_scratch_db(admin: &PgPool, pool: PgPool, name: &str) {
@@ -3121,6 +3490,233 @@ async fn created_at_floor_guard_aborts_old_channel_rows_at_commit() {
     insert_top_level(&pool, community, channel, &old_backfill).await;
 
     drop_scratch_db(&admin, pool, &name).await;
+}
+
+#[test]
+fn writer_pool_safety_hook_is_single_and_composed() {
+    let source = include_str!("mod.rs");
+    let connect_pool = source
+        .split("async fn connect_writer_pool")
+        .nth(1)
+        .and_then(|tail| tail.split("const READER_ACQUIRE_TIMEOUT").next())
+        .expect("connect_writer_pool source block");
+    assert_eq!(
+        connect_pool.matches(".after_connect(").count(),
+        1,
+        "SQLx replaces after_connect hooks; writer safety must use exactly one"
+    );
+    assert!(connect_pool.contains("buzz.created_at_floor"));
+    assert!(connect_pool.contains("SHOW transaction_isolation"));
+    assert!(connect_pool.contains("'lock_timeout'"));
+    assert!(connect_pool.contains("'idle_in_transaction_session_timeout'"));
+    assert!(connect_pool.contains("'statement_timeout'"));
+    assert!(!connect_pool.contains("arm_floor_guard"));
+    assert!(!connect_pool.contains("_arm_floor_guard"));
+    assert!(!connect_pool.contains("allow(unused_variables)"));
+
+    let reader_doc = source
+        .split("fn connect_read_pool")
+        .next()
+        .and_then(|prefix| prefix.rsplit("/// Connect the read-replica").next())
+        .expect("reader pool documentation");
+    assert!(reader_doc.contains("replica sessions are"));
+    assert!(reader_doc.contains("read-only"));
+    assert!(!reader_doc.contains("Db::connect_writer_pool"));
+}
+
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn writer_pool_rejects_non_read_committed_database_default() {
+    let admin = PgPool::connect(&admin_url().await)
+        .await
+        .expect("connect admin");
+    let (seed_pool, name) = create_scratch_db(&admin, "writer_isolation").await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "ALTER DATABASE {name} SET default_transaction_isolation = 'repeatable read'"
+    )))
+    .execute(&admin)
+    .await
+    .expect("set unsafe database default");
+    seed_pool.close().await;
+
+    let base = admin_url().await;
+    let idx = base.rfind('/').expect("db url has a path segment");
+    let scratch_url = format!("{}/{}", &base[..idx], name);
+    let error = Db::new(&DbConfig {
+        database_url: scratch_url,
+        max_connections: 1,
+        min_connections: 1,
+        acquire_timeout_secs: 1,
+        ..DbConfig::default()
+    })
+    .await
+    .expect_err("writer pool must reject pinned-snapshot database defaults");
+    assert!(
+        error.to_string().contains("requires READ COMMITTED")
+            || error.to_string().contains("pool timed out"),
+        "unexpected isolation rejection: {error}"
+    );
+
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .expect("drop isolation test database");
+}
+
+/// Session-timeout environment overrides retain PostgreSQL's `0 = disabled`
+/// semantics and ignore invalid values.
+#[test]
+fn session_timeout_env_overlay_zero_passthrough_and_invalid_fallback() {
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = ENV_LOCK.lock().unwrap();
+    let keys = [
+        "BUZZ_DB_LOCK_TIMEOUT_MS",
+        "BUZZ_DB_IDLE_TXN_TIMEOUT_MS",
+        "BUZZ_DB_STATEMENT_TIMEOUT_MS",
+    ];
+    let previous: Vec<_> = keys.iter().map(std::env::var_os).collect();
+    let read = |config: DbConfig| {
+        (
+            config.lock_timeout_ms,
+            config.idle_txn_timeout_ms,
+            config.statement_timeout_ms,
+        )
+    };
+
+    for key in keys {
+        std::env::remove_var(key);
+    }
+    let unset = read(DbConfig::default().with_session_timeouts_from_env());
+
+    std::env::set_var("BUZZ_DB_LOCK_TIMEOUT_MS", "2000");
+    std::env::set_var("BUZZ_DB_IDLE_TXN_TIMEOUT_MS", "30000");
+    std::env::set_var("BUZZ_DB_STATEMENT_TIMEOUT_MS", "10000");
+    let overridden = read(DbConfig::default().with_session_timeouts_from_env());
+
+    for key in keys {
+        std::env::set_var(key, "0");
+    }
+    let zero = read(DbConfig::default().with_session_timeouts_from_env());
+
+    for key in keys {
+        std::env::set_var(key, "not-a-number");
+    }
+    let junk = read(DbConfig::default().with_session_timeouts_from_env());
+
+    for (key, value) in keys.iter().zip(previous) {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    let defaults = (DEFAULT_LOCK_TIMEOUT_MS, DEFAULT_IDLE_TXN_TIMEOUT_MS, 0);
+    assert_eq!(unset, defaults, "unset env must keep the defaults");
+    assert_eq!(overridden, (2000, 30000, 10000));
+    assert_eq!(zero, (0, 0, 0), "explicit 0 must disable each timeout");
+    assert_eq!(junk, defaults, "junk env must keep the defaults");
+}
+
+/// The production writer constructor installs all three timeout GUCs, bounds
+/// ordinary lock waits, and exempts the intentional migration lock wait.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn session_timeouts_install_through_db_new_and_bound_lock_waits() {
+    let admin = PgPool::connect(&admin_url().await)
+        .await
+        .expect("connect admin");
+    let (seed_pool, name) = create_scratch_db(&admin, "session_timeouts").await;
+    seed_pool.close().await;
+
+    let base = admin_url().await;
+    let idx = base.rfind('/').expect("db url has a path segment");
+    let scratch_url = format!("{}/{}", &base[..idx], name);
+    let db = Db::new(&DbConfig {
+        database_url: scratch_url.clone(),
+        max_connections: 2,
+        lock_timeout_ms: 500,
+        idle_txn_timeout_ms: 60_000,
+        statement_timeout_ms: 0,
+        ..DbConfig::default()
+    })
+    .await
+    .expect("connect Db with session timeouts");
+
+    let (lock, idle, statement): (String, String, String) = sqlx::query_as(
+        "SELECT current_setting('lock_timeout'), \
+                current_setting('idle_in_transaction_session_timeout'), \
+                current_setting('statement_timeout')",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .expect("read effective GUCs");
+    assert_eq!(lock, "500ms");
+    assert_eq!(idle, "1min");
+    assert_eq!(statement, "0");
+
+    // SQLx keeps exactly one `after_connect` hook, so the session timeouts and
+    // the replica-fence floor guard share it. Asserting the timeouts alone
+    // would still pass if a future edit dropped the floor guard, and the
+    // serving write fence would then be unarmed on every writer connection.
+    let floor: String = sqlx::query_scalar("SELECT current_setting('buzz.created_at_floor')")
+        .fetch_one(&db.pool)
+        .await
+        .expect("writer connections must arm the created_at floor guard");
+    assert_eq!(
+        floor,
+        crate::replica_fence::CREATED_AT_FLOOR_SECS.to_string(),
+        "the floor guard GUC must carry the compiled-in floor"
+    );
+
+    let mut holder = db.pool.acquire().await.expect("holder connection");
+    sqlx::raw_sql("BEGIN; LOCK TABLE events IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *holder)
+        .await
+        .expect("hold relation lock");
+    let waited = std::time::Instant::now();
+    let mut waiter_txn = db.pool.begin().await.expect("waiter transaction");
+    let error = sqlx::query("LOCK TABLE events IN ACCESS SHARE MODE")
+        .execute(&mut *waiter_txn)
+        .await
+        .expect_err("waiter must time out, not park");
+    drop(waiter_txn);
+    let code = match &error {
+        sqlx::Error::Database(db_error) => db_error.code().map(|code| code.to_string()),
+        other => panic!("expected database error, got {other:?}"),
+    };
+    assert_eq!(code.as_deref(), Some("55P03"));
+    assert!(waited.elapsed() < std::time::Duration::from_secs(5));
+
+    let mut advisory_holder = PgPool::connect(&scratch_url)
+        .await
+        .expect("advisory holder pool")
+        .acquire()
+        .await
+        .expect("advisory holder conn")
+        .detach();
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(crate::deletion::SCHEMA_DESTRUCTION_LOCK_KEY)
+        .execute(&mut advisory_holder)
+        .await
+        .expect("hold schema advisory lock");
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(crate::deletion::SCHEMA_DESTRUCTION_LOCK_KEY)
+            .execute(&mut advisory_holder)
+            .await;
+        let _ = advisory_holder.close().await;
+    });
+    db.migrate()
+        .await
+        .expect("migrate must wait out the advisory holder");
+    release.await.expect("release task");
+
+    let _ = sqlx::query("ROLLBACK").execute(&mut *holder).await;
+    drop(holder);
+    drop_scratch_db(&admin, db.pool.clone(), &name).await;
 }
 
 /// The armed writer pool (`Db::new`) must enforce the floor end-to-end

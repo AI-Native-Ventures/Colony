@@ -4,6 +4,7 @@
 //! - `open`: searchable, anyone can join
 //! - `private`: hidden, invite-only
 
+use buzz_datastore_tracing::datastore_span;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -16,6 +17,27 @@ use buzz_core::CommunityId;
 // These live in core (zero I/O deps) so the SDK can share them
 // without pulling in sqlx/tokio.
 pub use buzz_core::channel::{ChannelType, ChannelVisibility, MemberRole};
+
+async fn begin_event_write_transaction(
+    pool: &PgPool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let connection = crate::observability::acquire_writer(
+        pool,
+        crate::observability::WriterOperation::EventWrite,
+    )
+    .await?;
+    Ok(sqlx::Transaction::begin(connection, None).await?)
+}
+
+async fn acquire_event_write_connection(
+    pool: &PgPool,
+) -> Result<sqlx::pool::PoolConnection<sqlx::Postgres>> {
+    Ok(crate::observability::acquire_writer(
+        pool,
+        crate::observability::WriterOperation::EventWrite,
+    )
+    .await?)
+}
 
 /// A channel row as returned from the database.
 #[derive(Debug, Clone)]
@@ -90,7 +112,7 @@ pub async fn create_channel(
 
     let id = Uuid::new_v4();
 
-    let mut tx = pool.begin().await?;
+    let mut tx = begin_event_write_transaction(pool).await?;
 
     sqlx::query(
         r#"
@@ -183,7 +205,7 @@ pub async fn create_channel_with_id(
         return Err(DbError::InvalidData("channel name is required".into()));
     }
 
-    let mut tx = pool.begin().await?;
+    let mut tx = begin_event_write_transaction(pool).await?;
 
     let rows_affected = sqlx::query(
         r#"
@@ -255,6 +277,22 @@ pub async fn get_channel(
     community_id: CommunityId,
     channel_id: Uuid,
 ) -> Result<ChannelRecord> {
+    get_channel_with_operation(
+        pool,
+        community_id,
+        channel_id,
+        crate::observability::WriterOperation::Authorization,
+    )
+    .await
+}
+
+async fn get_channel_with_operation(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    operation: crate::observability::WriterOperation,
+) -> Result<ChannelRecord> {
+    let mut connection = crate::observability::acquire_writer(pool, operation).await?;
     let row = sqlx::query(
         r#"
         SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
@@ -269,7 +307,7 @@ pub async fn get_channel(
     )
     .bind(community_id.as_uuid())
     .bind(channel_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?
     .ok_or(DbError::ChannelNotFound(channel_id))?;
 
@@ -282,6 +320,22 @@ pub async fn list_channels(
     community_id: CommunityId,
     visibility: Option<&str>,
 ) -> Result<Vec<ChannelRecord>> {
+    list_channels_with_operation(
+        pool,
+        community_id,
+        visibility,
+        crate::observability::WriterOperation::Authorization,
+    )
+    .await
+}
+
+async fn list_channels_with_operation(
+    pool: &PgPool,
+    community_id: CommunityId,
+    visibility: Option<&str>,
+    operation: crate::observability::WriterOperation,
+) -> Result<Vec<ChannelRecord>> {
+    let mut connection = crate::observability::acquire_writer(pool, operation).await?;
     let rows = if let Some(vis) = visibility {
         sqlx::query(
             r#"
@@ -300,7 +354,7 @@ pub async fn list_channels(
         )
         .bind(community_id.as_uuid())
         .bind(vis)
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await?
     } else {
         sqlx::query(
@@ -319,7 +373,7 @@ pub async fn list_channels(
             "#,
         )
         .bind(community_id.as_uuid())
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await?
     };
 
@@ -477,7 +531,7 @@ pub async fn update_channel(
     // this transition — whose own deadline reset is then the latest word.
     // Non-TTL updates don't touch the fast path and skip the lock.
     if updates.ttl_seconds.is_some() {
-        let mut tx = pool.begin().await?;
+        let mut tx = begin_event_write_transaction(pool).await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(format!(
                 "buzz_channel_ttl:{}:{}",
@@ -492,13 +546,20 @@ pub async fn update_channel(
         }
         tx.commit().await?;
     } else {
-        let result = q.execute(pool).await?;
+        let mut connection = acquire_event_write_connection(pool).await?;
+        let result = q.execute(&mut *connection).await?;
         if result.rows_affected() == 0 {
             return Err(DbError::ChannelNotFound(channel_id));
         }
     }
 
-    get_channel(pool, community_id, channel_id).await
+    get_channel_with_operation(
+        pool,
+        community_id,
+        channel_id,
+        crate::observability::WriterOperation::EventWrite,
+    )
+    .await
 }
 
 /// Sets the topic for a channel, recording who set it and when.
@@ -509,6 +570,7 @@ pub async fn set_topic(
     topic: &str,
     set_by: &[u8],
 ) -> Result<()> {
+    let mut connection = acquire_event_write_connection(pool).await?;
     let result = sqlx::query(
         "UPDATE channels SET topic = $1, topic_set_by = $2, topic_set_at = NOW() \
          WHERE community_id = $3 AND id = $4 AND deleted_at IS NULL",
@@ -517,7 +579,7 @@ pub async fn set_topic(
     .bind(set_by)
     .bind(community_id.as_uuid())
     .bind(channel_id)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     if result.rows_affected() == 0 {
         return Err(DbError::ChannelNotFound(channel_id));
@@ -533,6 +595,7 @@ pub async fn set_purpose(
     purpose: &str,
     set_by: &[u8],
 ) -> Result<()> {
+    let mut connection = acquire_event_write_connection(pool).await?;
     let result = sqlx::query(
         "UPDATE channels SET purpose = $1, purpose_set_by = $2, purpose_set_at = NOW() \
          WHERE community_id = $3 AND id = $4 AND deleted_at IS NULL",
@@ -541,7 +604,7 @@ pub async fn set_purpose(
     .bind(set_by)
     .bind(community_id.as_uuid())
     .bind(channel_id)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     if result.rows_affected() == 0 {
         return Err(DbError::ChannelNotFound(channel_id));
@@ -558,13 +621,14 @@ pub async fn archive_channel(
     community_id: CommunityId,
     channel_id: Uuid,
 ) -> Result<()> {
+    let mut connection = acquire_event_write_connection(pool).await?;
     // First check: does the channel exist and what is its state?
     let row = sqlx::query(
         "SELECT archived_at FROM channels WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
     )
         .bind(community_id.as_uuid())
         .bind(channel_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
     match row {
@@ -585,7 +649,7 @@ pub async fn archive_channel(
     )
     .bind(community_id.as_uuid())
     .bind(channel_id)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
 
     Ok(())
@@ -600,13 +664,14 @@ pub async fn unarchive_channel(
     community_id: CommunityId,
     channel_id: Uuid,
 ) -> Result<()> {
+    let mut connection = acquire_event_write_connection(pool).await?;
     // First check: does the channel exist and what is its state?
     let row = sqlx::query(
         "SELECT archived_at FROM channels WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
     )
         .bind(community_id.as_uuid())
         .bind(channel_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
     match row {
@@ -629,7 +694,7 @@ pub async fn unarchive_channel(
     )
     .bind(community_id.as_uuid())
     .bind(channel_id)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
 
     Ok(())
@@ -644,12 +709,13 @@ pub async fn soft_delete_channel(
     community_id: CommunityId,
     channel_id: Uuid,
 ) -> Result<bool> {
+    let mut connection = acquire_event_write_connection(pool).await?;
     let result = sqlx::query(
         "UPDATE channels SET deleted_at = NOW() WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
     )
             .bind(community_id.as_uuid())
             .bind(channel_id)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
 
     Ok(result.rows_affected() > 0)
@@ -661,6 +727,11 @@ pub async fn soft_delete_channel(
 /// `archived_at IS NULL` guard prevents double-archiving even if called
 /// concurrently from multiple relay pods.
 pub async fn reap_expired_ephemeral_channels(pool: &PgPool) -> Result<Vec<ReapedEphemeralChannel>> {
+    let mut connection = crate::observability::acquire_writer(
+        pool,
+        crate::observability::WriterOperation::Maintenance,
+    )
+    .await?;
     let rows = sqlx::query(
         "UPDATE channels AS ch SET archived_at = NOW() \
          FROM communities AS c \
@@ -673,7 +744,7 @@ pub async fn reap_expired_ephemeral_channels(pool: &PgPool) -> Result<Vec<Reaped
            AND community_write_allowed(ch.community_id) \
          RETURNING ch.community_id, c.host, ch.id",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
 
     rows.into_iter()
@@ -754,6 +825,23 @@ impl Db {
         get_channel(&self.pool, community_id, channel_id).await
     }
 
+    /// Fetch a channel whose result directly gates an event mutation or
+    /// post-commit event side effect.
+    #[datastore_span(name = "get_channel_for_event_write", system = "postgresql")]
+    pub async fn get_channel_for_event_write(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<ChannelRecord> {
+        get_channel_with_operation(
+            &self.pool,
+            community_id,
+            channel_id,
+            crate::observability::WriterOperation::EventWrite,
+        )
+        .await
+    }
+
     /// Lists channels, optionally filtered by visibility.
     pub async fn list_channels(
         &self,
@@ -761,6 +849,22 @@ impl Db {
         visibility: Option<&str>,
     ) -> Result<Vec<ChannelRecord>> {
         list_channels(&self.pool, community_id, visibility).await
+    }
+
+    /// Lists channels during startup reconciliation.
+    #[datastore_span(name = "list_channels_for_bootstrap", system = "postgresql")]
+    pub async fn list_channels_for_bootstrap(
+        &self,
+        community_id: CommunityId,
+        visibility: Option<&str>,
+    ) -> Result<Vec<ChannelRecord>> {
+        list_channels_with_operation(
+            &self.pool,
+            community_id,
+            visibility,
+            crate::observability::WriterOperation::Bootstrap,
+        )
+        .await
     }
 
     /// Updates a channel's name and/or description.

@@ -1287,7 +1287,7 @@ impl crate::Db {
         limit: i64,
     ) -> Result<Vec<OperatorActivityBatchRow>> {
         let limit = bounded_rollup_limit(limit);
-        let mut tx = self.begin_transaction().await?;
+        let mut tx = self.begin_event_write_transaction().await?;
         let rows = fetch_activity_batch_on(&mut tx, community_id, cursor, limit, None).await?;
         tx.rollback().await?;
         Ok(rows)
@@ -1298,7 +1298,7 @@ impl crate::Db {
         &self,
         community_id: CommunityId,
     ) -> Result<OperatorActivityCursor> {
-        let mut tx = self.begin_transaction().await?;
+        let mut tx = self.begin_event_write_transaction().await?;
         let cursor = read_operator_cursor_on(&mut tx, community_id, false)
             .await?
             .unwrap_or_else(OperatorActivityCursor::start);
@@ -1316,7 +1316,7 @@ impl crate::Db {
         limit: i64,
     ) -> Result<OperatorRollupBatchResult> {
         let limit = bounded_rollup_limit(limit);
-        let mut tx = self.begin_transaction().await?;
+        let mut tx = self.begin_event_write_transaction().await?;
         let lock_key = activity_lock_key(community_id);
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(lock_key)
@@ -1405,7 +1405,7 @@ impl crate::Db {
                 "operator activity rebuild batch size must be between 100 and 5000".to_owned(),
             ));
         }
-        let mut tx = self.begin_transaction().await?;
+        let mut tx = self.begin_event_write_transaction().await?;
         let lock_key = activity_lock_key(community_id);
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(lock_key)

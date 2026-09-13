@@ -507,9 +507,49 @@ buzz messages thread --channel "$CHANNEL" --event "$EVENT_ID" | jq .
 
 A successful run prints `{"event_id":"…","accepted":true,"message":""}` for
 the send, and the message body in the `get` output. `thread` returns `[]`
-for a leaf message — populated only after a reply comes in (see §5).
+for a leaf message — populated only after a reply comes in (see §6).
 
-### 5. Going deeper
+### 5. Verify a roster beyond 1,000 members
+
+Use the focused live-relay script when changing channel membership, discovery,
+or reconciliation. It proves the three boundaries that DB-only tests cannot:
+the relay-served kind 39002 includes a member at roster position 1,501, that
+identity can publish a channel message, and targeted reconciliation preserves
+its discoverability.
+
+Run this only against an isolated local database. The script inserts fixture
+members directly, then drives discovery and messaging through the release CLI
+and relay. Keep the release relay from step 3 running and use its configured
+relay key for authoritative replacement:
+
+```bash
+export PATH="$PWD/target/release:$PATH"
+export DATABASE_URL="postgres://buzz:buzz_dev@localhost:5432/buzz_roster_e2e"
+export BUZZ_RELAY_URL="http://localhost:3030"  # match the relay from step 3
+export RELAY_URL="ws://localhost:3030"
+export BUZZ_RELAY_PRIVATE_KEY="<same key used by buzz-relay>"
+
+scripts/e2e-large-channel-roster.sh
+```
+
+Success is directly observable as four `PASS` lines. The first and fourth
+include a member count greater than 1,000 and the same late-member pubkey; the
+second includes the accepted kind 9 event ID, and the third proves targeted
+repair left kind 39000/39001 IDs and tags unchanged:
+
+```text
+PASS discovery-before-republish channel=<uuid> members=1502 late_pubkey=<hex>
+PASS late-member-action event_id=<hex>
+PASS targeted-repair-preserves-metadata-and-admin-events channel=<uuid>
+PASS discovery-after-republish channel=<uuid> members=1502 late_pubkey=<hex>
+```
+
+The script refuses debug binaries and refuses a `buzz` or `buzz-admin` resolved
+outside this checkout's `target/release`. It also requires the targeted admin
+operation to use `BUZZ_RELAY_PRIVATE_KEY`; never substitute an ephemeral signer
+for an authoritative replacement.
+
+### 6. Going deeper
 
 For full coverage of every CLI command (54 subcommands across 12 groups),
 follow [`crates/buzz-cli/TESTING.md`](crates/buzz-cli/TESTING.md).
@@ -652,7 +692,7 @@ CLI-side, only two matter for testing:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `relay error 500` or `400: restricted: not a channel member` after a code change | Stale binary | Rebuild and re-export `PATH`; or `cargo run` directly |
-| `Address already in use` on relay start (os error 48 on macOS, 98 on Linux) | Another relay (or stale process) holding `:3000` / `:8080` / `:9102` (or your override ports) | The panic line names the failing port — read it first. Then `lsof -iTCP:3000,8080,9102 -sTCP:LISTEN` (or your override equivalents). Kill the offender (`pkill -f buzz-relay`) or use the port-override block in step 3. If you already overrode and *still* collide, a prior reviewer left a relay running on the same alt ports — kill it or pick fresh ports |
+| `Address already in use` on relay start (os error 48 on macOS, 98 on Linux) | Another relay (or stale process) holding `:3000` / `:8080` / `:9102` (or your override ports) | Metrics-listener failures emit a `metrics_bind` lifecycle terminal with reason `bind`. Check the configured ports with `lsof -iTCP:3000,8080,9102 -sTCP:LISTEN` (or your override equivalents). Kill the offender (`pkill -f buzz-relay`) or use the port-override block in step 3. If you already overrode and *still* collide, a prior reviewer left a relay running on the same alt ports — kill it or pick fresh ports |
 | `auth_error: BUZZ_PRIVATE_KEY is required` | Env not exported into the CLI's shell | `export BUZZ_PRIVATE_KEY=...` (or pass `--private-key`) |
 | `auth_error: BUZZ_AUTH_TAG verification failed … signature verification failed` | A stale `BUZZ_AUTH_TAG` inherited from a parent shell. The local dev relay rejects it. | `unset BUZZ_AUTH_TAG` (see the scrub block in step 1) |
 | `auth-required: verification failed` on a closed relay | NIP-OA attestation needed | Set `BUZZ_AUTH_TAG` to the owner-issued JSON, or relax `BUZZ_REQUIRE_RELAY_MEMBERSHIP` |

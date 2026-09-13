@@ -22,7 +22,7 @@
 //                                   refused and no head was ever authored
 //
 // Partition children (`CREATE TABLE ... PARTITION OF ...`) are excluded: CI
-// creates those with scripts/attach-schema-partitions.sql, not schema.sql.
+// creates those with scripts/reconcile-schema-after-pgschema.sql, not schema.sql.
 //
 // KNOWN_DRIFT below is a burn-down list, not a permanent exemption. Adding an
 // entry means you are knowingly shipping a table CI cannot see -- do not,

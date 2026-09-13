@@ -839,16 +839,12 @@ async fn test_ws_quota_rejection_retries_identical_event_after_expiry() {
         .send_raw(&frame)
         .await
         .expect("send quota-blocked event");
-    let notice = match client
-        .recv_event(Duration::from_secs(5))
-        .await
-        .expect("quota NOTICE")
-    {
-        RelayMessage::Notice { message } => message,
-        other => panic!("expected quota NOTICE, got {other:?}"),
-    };
-    assert!(notice.starts_with("rate-limited: quota exceeded; retry in "));
-    match client
+    // A refused EVENT is answered on its own acknowledgement channel first, so
+    // a client keyed by event id can settle the exact pending publish without
+    // waiting out its publish timeout. The NOTICE follows as a compatibility
+    // frame for clients shipped before Colony armed back-pressure from the OK
+    // reason; both must arrive, in this order.
+    let reason = match client
         .recv_event(Duration::from_secs(5))
         .await
         .expect("event-scoped quota OK")
@@ -856,9 +852,27 @@ async fn test_ws_quota_rejection_retries_identical_event_after_expiry() {
         RelayMessage::Ok(response) => {
             assert_eq!(response.event_id, event_id);
             assert!(!response.accepted);
-            assert_eq!(response.message, notice);
+            assert!(
+                response
+                    .message
+                    .starts_with("rate-limited: quota exceeded; retry in "),
+                "the retry hint must survive so the client can arm its gate, got {:?}",
+                response.message
+            );
+            response.message
         }
         other => panic!("expected exact event rejection, got {other:?}"),
+    };
+    match client
+        .recv_event(Duration::from_secs(5))
+        .await
+        .expect("quota NOTICE")
+    {
+        RelayMessage::Notice { message } => assert_eq!(
+            message, reason,
+            "the compatibility NOTICE must repeat the OK's reason verbatim"
+        ),
+        other => panic!("expected the compatibility quota NOTICE, got {other:?}"),
     }
     let rejected_count: i64 = sqlx::query_scalar("SELECT count(*) FROM events WHERE id = $1")
         .bind(event.id.to_bytes().to_vec())
