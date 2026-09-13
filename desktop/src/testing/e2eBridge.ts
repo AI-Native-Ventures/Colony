@@ -9793,7 +9793,7 @@ function handleManagedAgentRuntimeAction(
     const activeOwner = normalizePubkey(
       getActiveIdentity(getConfig())?.pubkey ?? "",
     );
-    const activeRelay = getRelayWsUrl(getConfig());
+    const activeRelay = mockAppliedRelayWsUrl ?? getRelayWsUrl(getConfig());
     if (
       normalizePubkey(args.expectedOwnerPubkey) !== activeOwner ||
       normalizeRelay(args.relayUrl) !== normalizeRelay(activeRelay)
@@ -9845,7 +9845,7 @@ async function handleStartManagedAgent(
     const activeOwner = normalizePubkey(
       getActiveIdentity(getConfig())?.pubkey ?? "",
     );
-    const activeRelay = getRelayWsUrl(getConfig());
+    const activeRelay = mockAppliedRelayWsUrl ?? getRelayWsUrl(getConfig());
     if (
       normalizePubkey(args.expectedOwnerPubkey) !== activeOwner ||
       normalizeRelay(args.expectedRelayUrl) !== normalizeRelay(activeRelay)
