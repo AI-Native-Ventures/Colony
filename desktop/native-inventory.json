@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 518,
-    "tauri_coupled": 208,
-    "portable": 310,
+    "rust_total": 519,
+    "tauri_coupled": 210,
+    "portable": 309,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -40,6 +40,7 @@
       "src-tauri/src/commands/agents_roster.rs",
       "src-tauri/src/commands/block_data.rs",
       "src-tauri/src/commands/canvas.rs",
+      "src-tauri/src/commands/channel_reconnect_repair.rs",
       "src-tauri/src/commands/channel_templates.rs",
       "src-tauri/src/commands/channel_window.rs",
       "src-tauri/src/commands/channels.rs",
@@ -176,6 +177,7 @@
       "src-tauri/src/managed_agents/runtime/summary.rs",
       "src-tauri/src/managed_agents/runtime_commands.rs",
       "src-tauri/src/managed_agents/runtime_commands/start.rs",
+      "src-tauri/src/managed_agents/runtime_commands/tests.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
       "src-tauri/src/managed_agents/storage.rs",
       "src-tauri/src/managed_agents/subscriptions/codex_account.rs",
@@ -457,7 +459,6 @@
       "src-tauri/src/managed_agents/runtime/tests.rs",
       "src-tauri/src/managed_agents/runtime/workdir.rs",
       "src-tauri/src/managed_agents/runtime_commands/start_scope.rs",
-      "src-tauri/src/managed_agents/runtime_commands/tests.rs",
       "src-tauri/src/managed_agents/runtime_types.rs",
       "src-tauri/src/managed_agents/snapshot_avatar.rs",
       "src-tauri/src/managed_agents/spawn_snapshot.rs",
@@ -530,10 +531,10 @@
     ]
   },
   "commands": {
-    "registered": 378,
-    "defined": 378,
+    "registered": 379,
+    "defined": 379,
     "by_reach": {
-      "frontend": 367,
+      "frontend": 368,
       "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
@@ -551,7 +552,7 @@
   },
   "params": {
     "AppHandle": 417,
-    "State": 271,
+    "State": 272,
     "Window": 7,
     "ipc::Request": 2,
     "ipc::Channel": 4
@@ -559,7 +560,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 414,
-      "State": 271,
+      "State": 272,
       "Window": 7,
       "ipc::Request": 2,
       "ipc::Channel": 4
@@ -722,6 +723,7 @@
     "src-tauri/src/commands/join_policy.rs": 1,
     "src-tauri/src/commands/link_preview.rs": 1,
     "src-tauri/src/commands/engrams.rs": 1,
+    "src-tauri/src/commands/channel_reconnect_repair.rs": 1,
     "src-tauri/src/commands/channel_window.rs": 1,
     "src-tauri/src/commands/legacy_storage.rs": 1,
     "src-tauri/src/commands/agent_logs.rs": 1,
@@ -1183,7 +1185,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1077",
         "src/parity/session/script.ts:1078",
-        "src/shared/ui/markdown.tsx:1163"
+        "src/shared/ui/markdown.tsx:176"
       ]
     },
     "copy_text_to_clipboard": {
@@ -1793,7 +1795,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1043",
         "src/parity/session/script.ts:1044",
-        "src/shared/lib/useResolvedLinkPreviews.ts:202"
+        "src/shared/lib/useResolvedLinkPreviews.ts:226"
       ]
     },
     "fetch_media_bytes": {
@@ -1968,6 +1970,15 @@
       "example_sites": [
         "src/parity/session/script.ts:599",
         "src/shared/api/tauriChannels.ts:232"
+      ]
+    },
+    "get_channel_reconnect_repair": {
+      "defining_file": "src-tauri/src/commands/channel_reconnect_repair.rs",
+      "module": "channel_reconnect_repair",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/channelReconnectRepair.ts:20"
       ]
     },
     "get_channel_window": {
