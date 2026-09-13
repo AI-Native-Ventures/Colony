@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 519,
+    "rust_total": 522,
     "tauri_coupled": 210,
-    "portable": 309,
+    "portable": 312,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -229,6 +229,8 @@
       "src-tauri/src/archive/mod_agent_metric_tests.rs",
       "src-tauri/src/archive/mod_tests.rs",
       "src-tauri/src/archive/pipeline.rs",
+      "src-tauri/src/archive/retention.rs",
+      "src-tauri/src/archive/retention_tests.rs",
       "src-tauri/src/archive/store.rs",
       "src-tauri/src/archive/store_migration_tests.rs",
       "src-tauri/src/archive/store_migrations.rs",
@@ -422,6 +424,7 @@
       "src-tauri/src/managed_agents/managed_node_paths.rs",
       "src-tauri/src/managed_agents/mod.rs",
       "src-tauri/src/managed_agents/model_effort.rs",
+      "src-tauri/src/managed_agents/nest/render_tests.rs",
       "src-tauri/src/managed_agents/nest/tests.rs",
       "src-tauri/src/managed_agents/owner_scope.rs",
       "src-tauri/src/managed_agents/parallelism.rs",
@@ -531,14 +534,16 @@
     ]
   },
   "commands": {
-    "registered": 379,
-    "defined": 379,
+    "registered": 382,
+    "defined": 382,
     "by_reach": {
       "frontend": 368,
-      "NO CALLER FOUND": 9,
-      "frontend-plugin-prefixed": 2
+      "NO CALLER FOUND": 10,
+      "frontend-plugin-prefixed": 2,
+      "rust-internal": 2
     },
     "no_caller": [
+      "archive_size_stats",
       "download_voice_models",
       "electron_export_frontend_state",
       "electron_finish_frontend_migration",
@@ -551,7 +556,7 @@
     ]
   },
   "params": {
-    "AppHandle": 417,
+    "AppHandle": 419,
     "State": 272,
     "Window": 7,
     "ipc::Request": 2,
@@ -559,7 +564,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 414,
+      "AppHandle": 416,
       "State": 272,
       "Window": 7,
       "ipc::Request": 2,
@@ -640,9 +645,9 @@
     "src-tauri/src/commands/identity.rs": 23,
     "src-tauri/src/commands/channels.rs": 16,
     "src-tauri/src/huddle/mod.rs": 14,
+    "src-tauri/src/archive/mod.rs": 14,
     "src-tauri/src/commands/web.rs": 12,
     "src-tauri/src/commands/messages.rs": 11,
-    "src-tauri/src/archive/mod.rs": 11,
     "src-tauri/src/commands/workflows.rs": 11,
     "src-tauri/src/terminal_runtime.rs": 9,
     "src-tauri/src/commands/social.rs": 8,
@@ -881,6 +886,13 @@
       "example_sites": [
         "src/shared/api/tauriIdentityArchive.ts:55"
       ]
+    },
+    "archive_size_stats": {
+      "defining_file": "src-tauri/src/archive/mod.rs",
+      "module": "mod",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "assign_managed_agents_to_community": {
       "defining_file": "src-tauri/src/commands/agents_assign.rs",
@@ -1185,7 +1197,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1077",
         "src/parity/session/script.ts:1078",
-        "src/shared/ui/markdown.tsx:176"
+        "src/shared/ui/markdown.tsx:150"
       ]
     },
     "copy_text_to_clipboard": {
@@ -2259,6 +2271,17 @@
       "example_sites": [
         "src/parity/session/script.ts:312",
         "src/shared/api/tauriIdentity.ts:29"
+      ]
+    },
+    "get_observer_retention_days": {
+      "defining_file": "src-tauri/src/archive/mod.rs",
+      "module": "mod",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "rust-internal",
+      "example_sites": [
+        "src-tauri/src/archive/retention_tests.rs:77",
+        "src-tauri/src/archive/retention_tests.rs:87",
+        "src-tauri/src/archive/retention_tests.rs:89"
       ]
     },
     "get_os_idle_seconds": {
@@ -3772,6 +3795,17 @@
         "src/shared/api/tauriManagedAgents.ts:30"
       ]
     },
+    "set_observer_retention_days": {
+      "defining_file": "src-tauri/src/archive/mod.rs",
+      "module": "mod",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "rust-internal",
+      "example_sites": [
+        "src-tauri/src/archive/mod.rs:788",
+        "src-tauri/src/archive/retention_tests.rs:86",
+        "src-tauri/src/archive/retention_tests.rs:88"
+      ]
+    },
     "set_persona_active": {
       "defining_file": "src-tauri/src/commands/personas/mod.rs",
       "module": "mod",
@@ -3860,7 +3894,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/notifications/lib/desktop.ts:371",
+        "src/features/notifications/lib/desktop.ts:433",
         "src/parity/session/script.ts:1533"
       ]
     },
@@ -4025,7 +4059,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/hooks.ts:694",
-        "src/features/channels/hooks.ts:794",
+        "src/features/channels/hooks.ts:846",
         "src/features/messages/ui/useMentionSendFlow.ts:442"
       ]
     },
