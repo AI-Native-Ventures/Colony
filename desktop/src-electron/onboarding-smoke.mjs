@@ -174,7 +174,11 @@ async function launch() {
       bundle,
       "Contents/MacOS/Colony Onboarding Fixture",
     ),
-    args: proxy.chromiumArgs,
+    args: proxy.chromiumArgs.map((argument) =>
+      liveWebsite && argument.startsWith("--host-resolver-rules=")
+        ? argument.replace("MAP * ~NOTFOUND", "EXCLUDE example.com, MAP * ~NOTFOUND")
+        : argument,
+    ),
     cwd: data,
     timeout: 30_000,
     // Whitelist only runtime plumbing. User provider keys, proxy variables and
