@@ -35,7 +35,7 @@ const EVIDENCE_DIRECTORY: &str = ".colony-evidence";
 // expands the PNG, so keep the raw payload below that transport ceiling with
 // room for the command envelope and identity fields.
 const MAX_EVIDENCE_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_EVIDENCE_CAPTURE_BASE64_BYTES: usize = ((MAX_EVIDENCE_CAPTURE_BYTES + 2) / 3) * 4;
+const MAX_EVIDENCE_CAPTURE_BASE64_BYTES: usize = MAX_EVIDENCE_CAPTURE_BYTES.div_ceil(3) * 4;
 
 /// Result returned after a native evidence capture has been durably written.
 #[derive(Debug, Clone, Serialize)]

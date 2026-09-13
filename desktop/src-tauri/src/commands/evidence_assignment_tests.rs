@@ -126,10 +126,12 @@ fn signed_website_event(scope: &VerifiedScope, website: &WebsiteReview, signer: 
 }
 
 fn signed_managed_agent_event(scope: &VerifiedScope, owner: &Keys, persona_id: &str) -> Event {
-    let mut record = crate::managed_agents::ManagedAgentRecord::default();
-    record.pubkey = scope.worker_pubkey.to_hex();
-    record.name = "Website Builder".to_owned();
-    record.persona_id = Some(persona_id.to_owned());
+    let record = crate::managed_agents::ManagedAgentRecord {
+        pubkey: scope.worker_pubkey.to_hex(),
+        name: "Website Builder".to_owned(),
+        persona_id: Some(persona_id.to_owned()),
+        ..Default::default()
+    };
     crate::managed_agents::agent_events::build_agent_event(&record)
         .expect("managed-agent head uses the production serializer")
         .sign_with_keys(owner)
