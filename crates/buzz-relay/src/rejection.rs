@@ -44,6 +44,27 @@ pub(crate) fn request_rejection_message(target: RejectionTarget<'_>, reason: &st
     }
 }
 
+/// Sends `reason` on `target`'s acknowledgement channel, and — for an EVENT —
+/// repeats it as a `NOTICE`.
+///
+/// The `OK` is what a current client settles its pending publish from, and it
+/// goes first so nothing waits on the compatibility frame. The `NOTICE` is
+/// there for clients shipped before Colony started arming back-pressure from
+/// the `OK` reason: the relay outlives the app versions talking to it, and a
+/// Desktop or Canary install from before that change arms its rate-limit gate
+/// from `NOTICE` alone. Drop the extra frame once every channel has been on an
+/// OK-arming client for a release.
+pub(crate) fn send_request_rejection(
+    conn: &ConnectionState,
+    target: RejectionTarget<'_>,
+    reason: &str,
+) {
+    conn.send(request_rejection_message(target, reason));
+    if matches!(target, RejectionTarget::Event(_)) {
+        conn.send(RelayMessage::notice(reason));
+    }
+}
+
 /// Applies the WebSocket admission quotas to `msg`, returning whether it may be
 /// handled. A rejection is addressed to the frame's own acknowledgement channel.
 pub(crate) async fn enforce_ws_admission(
@@ -122,18 +143,16 @@ fn send_admission_result(
         Ok(()) => true,
         Err(AdmissionError::Exceeded { reset_in_secs }) => {
             metrics::counter!("buzz_admission_rejections_total", "transport" => "websocket", "reason" => "quota").increment(1);
-            conn.send(request_rejection_message(
+            send_request_rejection(
+                conn,
                 target,
                 &format!("rate-limited: quota exceeded; retry in {reset_in_secs}s"),
-            ));
+            );
             false
         }
         Err(AdmissionError::Unavailable) => {
             metrics::counter!("buzz_admission_rejections_total", "transport" => "websocket", "reason" => "unavailable").increment(1);
-            conn.send(request_rejection_message(
-                target,
-                "rate-limited: shared admission unavailable",
-            ));
+            send_request_rejection(conn, target, "rate-limited: shared admission unavailable");
             false
         }
     }
@@ -185,6 +204,66 @@ mod tests {
         let event_id = event.id.to_hex();
         let frame = serde_json::json!(["EVENT", event]).to_string();
         (ClientMessage::parse(&frame).expect("parse EVENT"), event_id)
+    }
+
+    /// A refused EVENT must still carry the legacy `NOTICE` behind its `OK`.
+    ///
+    /// Desktop and Canary builds shipped before Colony armed back-pressure from
+    /// the `OK` reason arm their rate-limit gate from `NOTICE` alone, and the
+    /// relay outlives the client versions connected to it. Deleting the second
+    /// frame makes those installs retry straight back into the same quota.
+    #[test]
+    fn a_refused_event_keeps_the_notice_behind_the_correlated_ok() {
+        let (conn, mut rx) = test_conn();
+        let (msg, event_id) = parsed_event_message();
+        let reason = "rate-limited: quota exceeded; retry in 7s";
+
+        let admitted = send_admission_result(
+            &conn,
+            Err(AdmissionError::Exceeded { reset_in_secs: 7 }),
+            &msg,
+        );
+
+        assert!(!admitted, "an over-quota frame is not admitted");
+        assert_eq!(
+            sent_frame(&mut rx),
+            serde_json::json!(["OK", event_id, false, reason]),
+            "the correlated OK goes first so a current client settles its \
+             pending publish without waiting on the compatibility frame"
+        );
+        assert_eq!(
+            sent_frame(&mut rx),
+            serde_json::json!(["NOTICE", reason]),
+            "and the NOTICE follows for clients that only arm backoff from it"
+        );
+    }
+
+    /// A refused REQ or COUNT must NOT gain the compatibility NOTICE: `CLOSED`
+    /// already names the subscription, and a second frame would arm the gate
+    /// twice for one refusal.
+    #[test]
+    fn a_refused_subscription_does_not_gain_a_compatibility_notice() {
+        let (conn, mut rx) = test_conn();
+        let reason = "rate-limited: shared admission unavailable";
+        let msg = ClientMessage::parse(
+            &serde_json::json!(["REQ", "history-1", { "kinds": [1] }]).to_string(),
+        )
+        .expect("parse REQ");
+
+        assert!(!send_admission_result(
+            &conn,
+            Err(AdmissionError::Unavailable),
+            &msg
+        ));
+
+        assert_eq!(
+            sent_frame(&mut rx),
+            serde_json::json!(["CLOSED", "history-1", reason])
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a subscription refusal is one frame: CLOSED already correlates it"
+        );
     }
 
     /// The regression: an over-quota EVENT must be rejected with

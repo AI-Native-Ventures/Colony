@@ -20,7 +20,7 @@ use nostr::Filter;
 
 use crate::handlers;
 use crate::protocol::{ClientMessage, RelayMessage};
-use crate::rejection::{enforce_ws_admission, request_rejection_message, RejectionTarget};
+use crate::rejection::{enforce_ws_admission, send_request_rejection, RejectionTarget};
 use crate::state::{
     run_registered_community_connection, AppState, CommunityConnectionControl,
     CommunityDisconnectReason,
@@ -567,10 +567,11 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
                 Err(_) => {
                     // Correlate to the event id: a bare NOTICE here strands the
                     // client's pending publish exactly as an over-quota one did.
-                    conn.send(request_rejection_message(
+                    send_request_rejection(
+                        &conn,
                         RejectionTarget::Event(event.id),
                         "rate-limited: too many concurrent requests",
-                    ));
+                    );
                     return;
                 }
             };
@@ -596,10 +597,11 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
             let permit = match state.handler_semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(_) => {
-                    conn.send(request_rejection_message(
+                    send_request_rejection(
+                        &conn,
                         RejectionTarget::Subscription(&sub_id),
                         "rate-limited: too many concurrent requests",
-                    ));
+                    );
                     return;
                 }
             };
@@ -618,10 +620,11 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
             let permit = match state.handler_semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(_) => {
-                    conn.send(request_rejection_message(
+                    send_request_rejection(
+                        &conn,
                         RejectionTarget::Subscription(&sub_id),
                         "rate-limited: too many concurrent requests",
-                    ));
+                    );
                     return;
                 }
             };
