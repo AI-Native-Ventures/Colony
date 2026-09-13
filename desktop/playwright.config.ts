@@ -44,6 +44,7 @@ export default defineConfig({
       testMatch: [
         "**/smoke.spec.ts",
         "**/inline-reply-model.spec.ts",
+        "**/composer-dictation.spec.ts",
         "**/rich-document-previews.spec.ts",
         "**/rich-media-previews.spec.ts",
         "**/approved-blocks-design.spec.ts",

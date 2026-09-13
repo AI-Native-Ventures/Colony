@@ -56,11 +56,15 @@ mod tests {
     fn scoped_path_binds_the_launch_generation_and_contains_no_credentials() {
         let generation = "b".repeat(32);
         let key = ManagedAgentRuntimeKey::new("a".repeat(64), "wss://LOCALHOST:443/").unwrap();
+        let base = std::env::temp_dir();
+        let root = base.join("private-runtime");
+        let command = base.join("electron");
+        let adapter = base.join("browser.mjs");
         let value: serde_json::Value = serde_json::from_str(
             &configuration(
-                "/private/runtime",
-                "/Applications/Beta.app/Contents/MacOS/Beta",
-                "/app.asar/browser.mjs",
+                root.to_str().unwrap(),
+                command.to_str().unwrap(),
+                adapter.to_str().unwrap(),
                 &key,
                 &generation,
             )
@@ -69,7 +73,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             value["grant"],
-            format!("/private/runtime/{}__{generation}.json", key.runtime_id())
+            root.join(format!("{}__{generation}.json", key.runtime_id()))
+                .to_str()
+                .unwrap()
         );
         assert_eq!(value.as_object().unwrap().len(), 3);
         assert!(configuration("relative", "/electron", "/adapter", &key, &generation).is_err());
