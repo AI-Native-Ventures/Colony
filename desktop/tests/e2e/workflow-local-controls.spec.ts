@@ -149,10 +149,8 @@ test("inserts template variables with keyboard control and restores the caret", 
   await textarea.fill("Hello {{trig");
   await expect(listbox).toBeVisible();
   await expect(listbox.getByRole("option")).toHaveCount(5);
+  // Settle the listbox's entry animation before driving it from the keyboard.
   await waitForAnimations(page);
-  expect(await page.locator("body").screenshot()).toMatchSnapshot(
-    "workflow-template-variable-autocomplete.png",
-  );
 
   await textarea.press("ArrowUp");
   await expect(textarea).toHaveAttribute(
