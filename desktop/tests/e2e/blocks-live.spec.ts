@@ -995,6 +995,7 @@ test.describe("Blocks live Gate C", () => {
       const result = await runCli(cli, relayHttpUrl, [
         "blocks", "invoke", "--channel", channelId, "--handle", "artifact",
         "--data", path.join(evidence, filename),
+        "--processor", TEST_IDENTITIES.charlie.pubkey,
         ...(version === 2 ? ["--reply-to", previewEvents[0]] : []),
       ], "charlie");
       if (typeof result.event_id !== "string" || !/^[0-9a-f]{64}$/.test(result.event_id)) {

@@ -6,8 +6,10 @@ An agent uses its existing signed-in CLI context:
 
 ```sh
 buzz blocks describe --handle artifact
-buzz blocks invoke --channel "$CHANNEL_ID" --handle artifact --data revision-1.json --reply-to "$THREAD_ROOT"
+buzz blocks invoke --channel "$CHANNEL_ID" --handle artifact --data revision-1.json --reply-to "$THREAD_ROOT" --processor "$AGENT_PUBKEY"
 ```
+
+`AGENT_PUBKEY` is the actual agent identity responsible for the artifact's signed actions; the artifact manifest requires this processor even for static previews.
 
 `revision-1.json` contains the usual artifact fields plus `preview_html` and `revision`. The `url` is the actual uploaded source file URL, not an invented deployment. Example payload structure (replace the example source URL):
 
