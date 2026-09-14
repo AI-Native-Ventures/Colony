@@ -44,15 +44,22 @@ test("an agent's message row and a person's differ in shape", async ({
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
-  const shapes = await page
-    .getByTestId("message-avatar")
-    .evaluateAll((nodes) =>
-      nodes.map((node) => (node as HTMLElement).dataset.avatarShape),
-    );
+  // A loaded runner paints the title before the timeline, so read the rows
+  // only once one exists, then poll: rows stream in, and the first batch can
+  // legitimately carry one shape. The callback returns the array instead of
+  // throwing, because expect.poll does not retry a throwing callback.
+  await expect(page.getByTestId("message-avatar").first()).toBeVisible();
   // The seeded channel carries both, and the timeline is the surface a reader
   // spends their day on, so both shapes have to appear there.
-  expect(shapes).toContain("squircle");
-  expect(shapes).toContain("circle");
+  await expect
+    .poll(async () =>
+      page
+        .getByTestId("message-avatar")
+        .evaluateAll((nodes) =>
+          nodes.map((node) => (node as HTMLElement).dataset.avatarShape),
+        ),
+    )
+    .toEqual(expect.arrayContaining(["squircle", "circle"]));
 });
 
 for (const fontSize of ["default", "larger"] as const) {
