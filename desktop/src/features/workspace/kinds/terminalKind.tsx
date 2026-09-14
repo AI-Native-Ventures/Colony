@@ -122,9 +122,7 @@ function chunkLength(chunk: TerminalChunk): number {
  */
 function terminalTypeRemPx(): number {
   const styles = globalThis.getComputedStyle(document.documentElement);
-  const typeRem = Number.parseFloat(
-    styles.getPropertyValue("--buzz-type-rem"),
-  );
+  const typeRem = Number.parseFloat(styles.getPropertyValue("--buzz-type-rem"));
   return Number.isFinite(typeRem)
     ? typeRem
     : Number.parseFloat(styles.fontSize);
