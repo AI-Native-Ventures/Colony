@@ -5,15 +5,6 @@ import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
 import { openSidebarDestination } from "../helpers/sidebar";
 
-declare global {
-  interface Window {
-    __BUZZ_WORKFLOW_BATCH_CALLS__?: {
-      eventBatches: number[];
-      userBatches: number[];
-    };
-  }
-}
-
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -499,36 +490,39 @@ test("workflow grid batches card author and message presentation reads", async (
       });
     }
 
-    const calls = { eventBatches: [], userBatches: [] };
-    window.__BUZZ_WORKFLOW_BATCH_CALLS__ = calls;
-    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
-      if (command === "get_events") {
-        calls.eventBatches.push(
-          (args?.eventIds as unknown[] | undefined)?.length ?? 0,
-        );
-      }
-      if (command === "get_users_batch") {
-        calls.userBatches.push(
-          (args?.pubkeys as unknown[] | undefined)?.length ?? 0,
-        );
-      }
-      return invoke(command, args);
-    };
+    // The app reaches the mock through the shared NativeBridge, not through
+    // `window.__TAURI_INTERNALS__.invoke` — that stays only as a legacy seam
+    // for specs that drive the mock directly. Read the bridge's own command
+    // log instead; wrapping the legacy seam records nothing the app does.
+    window.__BUZZ_E2E_COMMAND_LOG__ = [];
   });
 
-  await page.getByTestId("open-workflows-view").click();
+  await openSidebarDestination(page, "open-workflows-view");
   await expect(
     page.locator('[data-testid^="workflow-card-mock-wf-"]'),
   ).toHaveCount(40);
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const calls = window.__BUZZ_WORKFLOW_BATCH_CALLS__;
+        const log = window.__BUZZ_E2E_COMMAND_LOG__ ?? [];
+        const batchSizes = (command: string, key: string) =>
+          log
+            .filter((entry) => entry.command === command)
+            .map(
+              (entry) =>
+                (
+                  (entry.payload as Record<string, unknown> | null)?.[key] as
+                    | unknown[]
+                    | undefined
+                )?.length ?? 0,
+            );
         return {
-          eventBatchCount: calls?.eventBatches.filter((size) => size === 40)
-            .length,
-          userBatchCount: calls?.userBatches.filter((size) => size === 40)
-            .length,
+          eventBatchCount: batchSizes("get_events", "eventIds").filter(
+            (size) => size === 40,
+          ).length,
+          userBatchCount: batchSizes("get_users_batch", "pubkeys").filter(
+            (size) => size === 40,
+          ).length,
         };
       }),
     )
@@ -549,7 +543,7 @@ test("does not select stale picker results when Enter outruns deferred filtering
       id: "d".repeat(64),
     });
   });
-  await page.getByTestId("open-workflows-view").click();
+  await openSidebarDestination(page, "open-workflows-view");
   await page.getByRole("button", { name: "Create Workflow" }).click();
   const dialog = page.getByRole("dialog", { name: "Create workflow" });
   const channelList = page.getByTestId("channel-combobox-list");
