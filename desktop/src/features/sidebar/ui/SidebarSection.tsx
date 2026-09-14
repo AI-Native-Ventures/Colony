@@ -209,6 +209,7 @@ function DmChannelIcon({
           identitySeed={
             primaryParticipant.isAgent ? primaryParticipant.pubkey : undefined
           }
+          shape={primaryParticipant.isAgent ? "squircle" : "circle"}
           size={DM_AVATAR_SIZE}
           status={presenceStatus}
           statusTestId={`channel-presence-${channelName}`}

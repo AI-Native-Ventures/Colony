@@ -42,6 +42,7 @@ export default defineConfig({
     {
       name: "smoke",
       testMatch: [
+        "**/avatar-shape.spec.ts",
         "**/smoke.spec.ts",
         "**/inline-reply-model.spec.ts",
         "**/composer-dictation.spec.ts",

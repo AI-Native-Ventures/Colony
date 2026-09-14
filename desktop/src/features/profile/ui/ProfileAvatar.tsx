@@ -83,6 +83,7 @@ export function ProfileAvatar({
         plain || animated ? "bg-transparent shadow-none" : "bg-primary/20",
         className,
       )}
+      data-avatar-shape={shape}
       data-testid={testId}
       onMouseEnter={animated ? () => setIsHovered(true) : undefined}
       onMouseLeave={animated ? () => setIsHovered(false) : undefined}

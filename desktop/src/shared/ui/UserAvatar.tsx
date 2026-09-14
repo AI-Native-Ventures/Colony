@@ -75,6 +75,7 @@ export function UserAvatar({
         !animated && "shadow-xs",
         className,
       )}
+      data-avatar-shape={shape}
       data-testid={testId}
       onMouseEnter={animated ? () => setIsHovered(true) : undefined}
       onMouseLeave={animated ? () => setIsHovered(false) : undefined}
