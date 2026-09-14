@@ -94,7 +94,7 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
             stream: false,
             max_tokens: MAX_OUTPUT_TOKENS,
             reasoning: { effort: "high" },
-            provider: { allow_fallbacks: false },
+            provider: { allow_fallbacks: true },
           }),
         });
         upstreamStatus = upstream.status;

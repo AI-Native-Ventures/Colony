@@ -50,6 +50,8 @@ test("parallel teammates serialize; client cannot change model or forward upstre
       assert.equal(body.model, MODEL);
       assert.equal(body.max_tokens, 8192);
       assert.equal(body.stream, false);
+      assert.equal(body.provider.allow_fallbacks, true);
+      assert.equal(body.models, undefined);
       assert.equal(body.api_key, undefined);
       assert.equal(options.redirect, "error");
       await new Promise((resolve) => setTimeout(resolve, 10));
