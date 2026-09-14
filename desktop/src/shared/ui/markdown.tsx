@@ -1743,7 +1743,7 @@ function MarkdownInner({
       onImportSnapshotFromUrl: (
         fileBytes: number[],
         fileName: string,
-        snapshotKind: "agent" | "team",
+        snapshotKind: "agent",
       ) => {
         requestOpenSnapshotImport({ fileBytes, fileName, snapshotKind });
         void goAgents();

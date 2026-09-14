@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { finalizeEvent } from "nostr-tools/pure";
 import { PassThrough } from "node:stream";
 import { once } from "node:events";
+import { waitForScoutPublication } from "./scout-publication.mjs";
 import { runInNewContext } from "node:vm";
 import {
   installNativePublishObserver,
@@ -22,6 +23,73 @@ import {
   observeEventResponse,
   projectIngestFailures,
 } from "./failure-diagnostics.mjs";
+
+test("reload baseline waits for the initial Scout publication", async () => {
+  const key = new Uint8Array(32);
+  key[31] = 1;
+  const scoutPubkey = "a".repeat(64);
+  const head = finalizeEvent(
+    {
+      kind: 30177,
+      created_at: 1,
+      tags: [["d", scoutPubkey]],
+      content: JSON.stringify({ persona_id: "builtin:fizz" }),
+    },
+    key,
+  );
+  let reads = 0;
+  const published = await waitForScoutPublication({
+    relay: { query: async () => JSON.stringify(++reads === 1 ? [] : [head]) },
+    host: "horizon-labs.onboarding-0123456789abcdef.invalid",
+    ownerPubkey: head.pubkey,
+    scoutPubkey,
+    timeoutMs: 100,
+    pollIntervalMs: 1,
+  });
+  assert.equal(reads, 2);
+  assert.equal(published.id, head.id);
+});
+
+test("Scout publication wait remains bounded when no identity is published", async () => {
+  await assert.rejects(
+    waitForScoutPublication({
+      relay: { query: async () => "[]" },
+      host: "horizon-labs.onboarding-0123456789abcdef.invalid",
+      ownerPubkey: "b".repeat(64),
+      scoutPubkey: "a".repeat(64),
+      timeoutMs: 1,
+      pollIntervalMs: 1,
+    }),
+    /baseline deadline/,
+  );
+});
+
+test("Scout publication requires the expected owner and agent coordinate", async () => {
+  const key = new Uint8Array(32);
+  key[31] = 1;
+  const head = finalizeEvent(
+    {
+      kind: 30177,
+      created_at: 1,
+      tags: [["d", "a".repeat(64)]],
+      content: JSON.stringify({ persona_id: "builtin:fizz" }),
+    },
+    key,
+  );
+  for (const [ownerPubkey, scoutPubkey] of [
+    ["b".repeat(64), "a".repeat(64)],
+    [head.pubkey, "c".repeat(64)],
+  ]) {
+    await assert.rejects(
+      waitForScoutPublication({
+        relay: { query: async () => JSON.stringify([head]) },
+        host: "horizon-labs.onboarding-0123456789abcdef.invalid",
+        ownerPubkey,
+        scoutPubkey,
+      }),
+    );
+  }
+});
 
 test("passive refused response capture preserves streamed bytes and exact event correlation", async () => {
   const eventId = "a".repeat(64);

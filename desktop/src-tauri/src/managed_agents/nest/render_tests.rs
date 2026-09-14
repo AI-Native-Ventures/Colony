@@ -39,6 +39,7 @@ fn make_persona(id: &str, display_name: &str) -> AgentDefinition {
 
 fn make_agent(name: &str, persona_id: Option<&str>) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        superseded_by: None,
         session_policy: Default::default(),
         provider_policy_pending: false,
         effort_level: None,

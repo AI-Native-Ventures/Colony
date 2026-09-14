@@ -173,9 +173,9 @@ export type CompanyTask = {
   initiativeId: string | null;
   title: string;
   status: TaskStatus;
-  owningTeamId: string;
+  owningTeamId: string | null;
   assigneePersonaIds: string[];
-  qaPersonaId: string;
+  qaPersonaId: string | null;
   /** Team that reviews this task, when the owning team does not review itself. */
   reviewerTeamId: string | null;
   costCentreId: string;
@@ -462,9 +462,9 @@ const TASK_FIELDS: Record<string, FieldKind> = {
   initiativeId: { type: "optionalString" },
   title: { type: "string" },
   status: { type: "enum", values: TASK_STATUSES },
-  owningTeamId: { type: "string" },
+  owningTeamId: { type: "optionalString" },
   assigneePersonaIds: { type: "stringArray" },
-  qaPersonaId: { type: "string" },
+  qaPersonaId: { type: "optionalString" },
   reviewerTeamId: { type: "optionalString" },
   costCentreId: { type: "string" },
   commercialPurpose: { type: "enum", values: COMMERCIAL_PURPOSES },
@@ -496,6 +496,8 @@ const TASK_FIELDS: Record<string, FieldKind> = {
  * values before the exact-shape check instead of refusing every older head.
  */
 const TASK_FIELD_DEFAULTS: Record<string, unknown> = {
+  owningTeamId: null,
+  qaPersonaId: null,
   dependsOn: [],
   subject: null,
   stage: null,
@@ -650,7 +652,9 @@ export function parseTaskHead(
   }
   if (
     exactlyOneTag(event, "d") !== task.id ||
-    exactlyOneTag(event, "team") !== task.owningTeamId ||
+    (task.owningTeamId === null
+      ? event.tags.some((tag) => tag[0] === "team")
+      : exactlyOneTag(event, "team") !== task.owningTeamId) ||
     exactlyOneTag(event, "cost-centre") !== task.costCentreId ||
     exactlyOneTag(event, "initiative") !== task.initiativeId
   ) {

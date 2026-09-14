@@ -22,7 +22,13 @@ on:
       - 'scripts/ci-mesh-lifecycle-smoke.sh'
       - 'scripts/start-relay-for-tests.sh'
       - '.github/workflows/mesh-lifecycle.yml'
+  # Tier C proof: about 25 minutes and a cold relay compile per run, never
+  # a required check. Since 2026-09-14 it runs nightly against develop, on
+  # demand, on a push to main, and on a promotion pull request to main.
+  schedule:
+    - cron: "0 3 * * *"
   pull_request:
+    branches: [main]
     paths:
       - 'crates/buzz-relay/examples/mesh_*.rs'
       - 'crates/buzz-relay/Cargo.toml'

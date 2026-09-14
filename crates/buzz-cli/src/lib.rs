@@ -966,7 +966,7 @@ pub enum LedgerCmd {
         #[arg(long)]
         cost_centre: String,
         #[arg(long)]
-        team: String,
+        team: Option<String>,
         /// clientDelivery, sales, marketing, administration, internalProduct, uncertain
         #[arg(long)]
         purpose: String,
@@ -983,7 +983,7 @@ pub enum LedgerCmd {
         #[arg(long)]
         cost_centre: String,
         #[arg(long)]
-        team: String,
+        team: Option<String>,
         #[arg(long)]
         purpose: String,
         #[arg(long)]
@@ -1619,14 +1619,14 @@ pub enum MessagesCmd {
         /// Company Task this message's work is charged to
         ///
         /// A paid agent turn with no Task is spend that no cost centre, team,
-        /// or commercial purpose can be traced to. Requires --team; the two
-        /// name the record and who is accountable for it.
+        /// or commercial purpose can be traced to. Direct assignments need
+        /// only --task; add --team only when the Task belongs to a team.
         #[arg(long)]
         task: Option<String>,
         /// Initiative containing that Task, when it has one
         #[arg(long)]
         initiative: Option<String>,
-        /// Team accountable for that Task
+        /// Team accountable for that Task, when explicitly team-owned
         #[arg(long)]
         team: Option<String>,
     },

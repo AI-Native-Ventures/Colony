@@ -19,9 +19,8 @@ use std::sync::Arc;
 
 use buzz_core::{
     company::{
-        all_assignees_reported, validate_task, CommercialPurpose, CompanyTask, CompanyTeamRef,
-        DoerKind, TaskStatus, ThreadAttach, ThreadAttachMode, MAX_THREAD_SUBTASKS,
-        THREAD_TASK_PREFIX,
+        all_assignees_reported, validate_task, CommercialPurpose, CompanyTask, DoerKind,
+        TaskStatus, ThreadAttach, ThreadAttachMode, MAX_THREAD_SUBTASKS, THREAD_TASK_PREFIX,
     },
     kind::{
         KIND_COMPANY_ACTION, KIND_COMPANY_RECEIPT, KIND_MANAGED_AGENT, KIND_TASK, KIND_TASK_REPORT,
@@ -30,7 +29,7 @@ use buzz_core::{
 use buzz_db::thread_tasks::{ThreadClaim, ThreadSlot as DbThreadSlot, ThreadSlotKey};
 use buzz_sdk::{
     company::{CompanyAction, CompanyActionPayload, CompanyReceiptOutcome},
-    implicit_task::{internal_cost_centre, owning_team_for_chat},
+    implicit_task::internal_cost_centre,
     thread_task::{thread_key, thread_task_id, ThreadSlot},
 };
 use nostr::Event;
@@ -39,8 +38,8 @@ use buzz_core::tenant::TenantContext;
 
 use crate::{
     company_broker::{
-        build_head, build_receipt, emit_task_transition, load_company, load_head, load_team_refs,
-        refuse, CompanyBrokerOutcome,
+        build_head, build_receipt, emit_task_transition, load_company, load_head, refuse,
+        CompanyBrokerOutcome,
     },
     handlers::event::dispatch_persistent_event,
     state::AppState,
@@ -51,8 +50,6 @@ const TASK_SCHEMA: &str = "colony.task/v1";
 /// not work. It exists so a greeting still charges somewhere; it is never
 /// shown, so the wording only has to be honest in a database.
 const CHAT_TASK_TITLE: &str = "Thread chat";
-/// Upper bound on owner rows read while collecting a community's teams.
-const MAX_OWNER_LOOKUP: i64 = 8;
 
 /// Resolve which task one send is charged to, opening one when the thread has
 /// none, and answer with a receipt naming that task's head.
@@ -93,6 +90,12 @@ pub(crate) async fn handle_thread_attach(
     // any thread and charge turns to a team that never took the work.
     if actor_is_agent {
         if let Err(message) = authorize_agent_subtask(tenant, state, action_event, request).await {
+            return refuse(state, tenant, action_event, action, message).await;
+        }
+    }
+
+    if let Some(persona) = request.agent_persona_id.as_deref() {
+        if let Err(message) = validate_direct_personas(tenant, state, &[persona.to_owned()]).await {
             return refuse(state, tenant, action_event, action, message).await;
         }
     }
@@ -400,12 +403,10 @@ async fn build_thread_task(
     action_event: &Event,
 ) -> Result<CompanyTask, String> {
     let company = load_company(tenant, state).await?;
-    let teams = load_thread_teams(tenant, state, action_event.pubkey).await?;
     let persona = request.agent_persona_id.as_deref().unwrap_or_default();
-    let team = owning_team_for_chat(&teams, persona)?;
     let cost_centre_id = internal_cost_centre(&company)?.to_owned();
 
-    let assignees = if !persona.is_empty() && team.persona_ids.iter().any(|id| id == persona) {
+    let assignees = if !persona.is_empty() {
         vec![persona.to_owned()]
     } else {
         Vec::new()
@@ -423,9 +424,9 @@ async fn build_thread_task(
             request.title.clone()
         },
         status: TaskStatus::InProgress,
-        owning_team_id: team.id.clone(),
+        owning_team_id: None,
         assignee_persona_ids: assignees,
-        qa_persona_id: team.lead_persona_id.clone(),
+        qa_persona_id: None,
         reviewer_team_id: None,
         cost_centre_id,
         commercial_purpose: match request.client_organization_id.as_deref() {
@@ -455,59 +456,26 @@ async fn build_thread_task(
         created_at: now,
         updated_at: now,
     };
-    validate_task(&task, &company, None, &teams)
+    validate_task(&task, &company, None, &[])
         .map_err(|error| format!("this thread's task cannot be opened: {error}"))?;
     Ok(task)
 }
 
-/// Every team this community's owners have published, and the asking member's
-/// own, in that member's favour when both name a team.
-///
-/// Team events are client-authored, so "whose teams are canonical" has to be
-/// decided rather than assumed. Reading one arbitrary owner's teams is what
-/// this did first, and it was wrong the moment a community had two owner rows:
-/// a relay that bootstraps its configured owner at startup, plus whoever the
-/// workspace actually belongs to, is the ordinary case, and picking the first
-/// row returned meant every attach in that community refused with "this
-/// company has no coordination team to own ambiguous work" while the teams sat
-/// in the database under the other key.
-///
-/// The asking member is read first so a member who publishes their own teams
-/// is not overruled by an owner's stale head at the same id, and the first
-/// live head for an id wins after that.
-async fn load_thread_teams(
+/// Validate direct assignees against trusted, current-community agent definitions.
+/// Team membership grants no authority for this path.
+pub(crate) async fn validate_direct_personas(
     tenant: &TenantContext,
-    state: &Arc<AppState>,
-    actor: nostr::PublicKey,
-) -> Result<Vec<CompanyTeamRef>, String> {
-    let owners = state
-        .db
-        .list_relay_owners(tenant.community(), MAX_OWNER_LOOKUP)
-        .await
-        .map_err(|error| format!("database error reading this community's owners: {error}"))?;
-
-    let mut authors = vec![actor];
-    for owner in owners {
-        match nostr::PublicKey::parse(&owner) {
-            Ok(owner) if owner != actor => authors.push(owner),
-            Ok(_) => {}
-            // One unreadable owner row must not blank the whole team list: the
-            // other owners still hold usable teams.
-            Err(error) => {
-                tracing::warn!(%error, "skipping an unreadable community owner key");
-            }
-        }
+    state: &AppState,
+    personas: &[String],
+) -> Result<(), String> {
+    if personas.is_empty() {
+        return Ok(());
     }
-
-    let mut teams: Vec<CompanyTeamRef> = Vec::new();
-    for author in authors {
-        for team in load_team_refs(tenant, state, &author).await? {
-            if !teams.iter().any(|held| held.id == team.id) {
-                teams.push(team);
-            }
-        }
+    let known = crate::interrupt_runtime::trusted_assignment_personas(tenant, state).await?;
+    if personas.iter().any(|persona| !known.contains(persona)) {
+        return Err("the assigned agent is not available in this workspace".to_owned());
     }
-    Ok(teams)
+    Ok(())
 }
 
 /// Check that an agent opening a sub-task is assigned to its parent.
@@ -912,9 +880,9 @@ mod tests {
             initiative_id: None,
             title: "ship the release".to_owned(),
             status: TaskStatus::InProgress,
-            owning_team_id: "engineering".to_owned(),
+            owning_team_id: Some("engineering".to_owned()),
             assignee_persona_ids: vec!["persona-a".to_owned(), "persona-b".to_owned()],
-            qa_persona_id: "persona-a".to_owned(),
+            qa_persona_id: Some("persona-a".to_owned()),
             reviewer_team_id: None,
             cost_centre_id: "internal-coordination".to_owned(),
             commercial_purpose: CommercialPurpose::Administration,

@@ -11,6 +11,7 @@ import {
   ensureRelayObserverSubscription,
   getAgentObserverSnapshot,
 } from "@/features/agents/observerRelayStore";
+import { isProvisionedChiefOfStaff } from "@/features/agents/provisionedChief";
 import { relayClient } from "@/shared/api/relayClient";
 import { parseRateLimitHint } from "@/shared/api/relayRateLimitGate";
 import { listRelayMembers } from "@/shared/api/relayMembers";
@@ -153,24 +154,29 @@ export function createFirstJobTeamAdapter(deps: FirstJobTeamDependencies) {
       employees.map((head) => [head.pubkey, head]),
     );
     const employeesByRole = new Map(employees.map((head) => [head.role, head]));
+    // The gates every candidate clears whichever route it holds its office by:
+    // it is this community's, it is in the channel, it runs here, and it
+    // answers only its owner.
+    const runnableHere = (agent: ManagedAgent) =>
+      /^[a-f0-9]{64}$/.test(normalizePubkey(agent.pubkey)) &&
+      canonicalRelayUrl(agent.relayUrl) === relay &&
+      memberPubkeys.has(normalizePubkey(agent.pubkey)) &&
+      agent.backend.type === "local" &&
+      agent.respondTo === "owner-only" &&
+      runtimes.some(
+        (runtime) =>
+          runtime.availability === "available" &&
+          runtime.command !== null &&
+          commandsMatch(agent.agentCommand, runtime.command),
+      );
     const approved = agents
       .flatMap((agent) => {
         const pubkey = normalizePubkey(agent.pubkey);
         if (
-          !/^[a-f0-9]{64}$/.test(pubkey) ||
-          canonicalRelayUrl(agent.relayUrl) !== relay ||
-          !memberPubkeys.has(pubkey) ||
-          agent.backend.type !== "local" ||
-          agent.respondTo !== "owner-only" ||
+          !runnableHere(agent) ||
           !agent.personaId ||
           !activePersonas.has(agent.personaId) ||
-          agent.personaOrphaned ||
-          !runtimes.some(
-            (runtime) =>
-              runtime.availability === "available" &&
-              runtime.command !== null &&
-              commandsMatch(agent.agentCommand, runtime.command),
-          )
+          agent.personaOrphaned
         )
           return [];
         const event = newestOwnerAuthoredHeadEvent(heads, ownerPubkeys, pubkey);
@@ -189,11 +195,30 @@ export function createFirstJobTeamAdapter(deps: FirstJobTeamDependencies) {
           : [];
       })
       .sort((left, right) => left.pubkey.localeCompare(right.pubkey));
-    const scouts = approved.filter(
-      (agent) =>
-        agent.personaId === STARTER_PERSONA_IDS.fizz &&
-        agent.rank === "executive",
-    );
+    // The employee Colony provisions IS the Chief of Staff wherever it exists,
+    // so it is preferred over the desktop-builtin instance rather than sitting
+    // beside it. It cannot come through `approved`: it carries no persona and
+    // publishes its own kind:30177 head instead of an owner-authored one, which
+    // is exactly what the relay's `provisioned` tag already vouches for (see
+    // `trustedManagedAgentHeads`). Its rank is the office, not a head field.
+    const provisionedScouts = agents
+      .filter(
+        (agent) => isProvisionedChiefOfStaff(agent) && runnableHere(agent),
+      )
+      .map((agent) => ({
+        pubkey: normalizePubkey(agent.pubkey),
+        personaId: agent.personaId,
+        rank: "executive" as const,
+      }))
+      .sort((left, right) => left.pubkey.localeCompare(right.pubkey));
+    const scouts =
+      provisionedScouts.length > 0
+        ? provisionedScouts
+        : approved.filter(
+            (agent) =>
+              agent.personaId === STARTER_PERSONA_IDS.fizz &&
+              agent.rank === "executive",
+          );
     const workers = approved.filter((agent) => agent.rank === "worker");
     // This is direct messaging inside the owner's job thread. Typed asks retain
     // their existing worker → leader → executive route; no manager tag is changed.

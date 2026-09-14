@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 558,
+    "rust_total": 561,
     "tauri_coupled": 216,
-    "portable": 342,
+    "portable": 345,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -160,7 +160,6 @@
       "src-tauri/src/linux_media.rs",
       "src-tauri/src/macos_notifications.rs",
       "src-tauri/src/managed_agents/config_start.rs",
-      "src-tauri/src/managed_agents/coordination.rs",
       "src-tauri/src/managed_agents/global_config/mod.rs",
       "src-tauri/src/managed_agents/isolation/launch.rs",
       "src-tauri/src/managed_agents/isolation/network.rs",
@@ -187,6 +186,7 @@
       "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
       "src-tauri/src/managed_agents/storage.rs",
       "src-tauri/src/managed_agents/subscriptions/codex_account.rs",
+      "src-tauri/src/managed_agents/supersede.rs",
       "src-tauri/src/managed_agents/teams.rs",
       "src-tauri/src/media_proxy.rs",
       "src-tauri/src/mesh_llm/coordinator.rs",
@@ -272,6 +272,7 @@
       "src-tauri/src/commands/global_agent_config/restart_policy.rs",
       "src-tauri/src/commands/global_agent_config_scope_tests.rs",
       "src-tauri/src/commands/identity_key_backup_tests.rs",
+      "src-tauri/src/commands/initiative_agent_identity.rs",
       "src-tauri/src/commands/initiative_dispatch_binding.rs",
       "src-tauri/src/commands/initiative_scope_tests.rs",
       "src-tauri/src/commands/initiative_team_readiness_policy.rs",
@@ -410,7 +411,8 @@
       "src-tauri/src/managed_agents/config_bridge/schema_walker.rs",
       "src-tauri/src/managed_agents/config_bridge/types.rs",
       "src-tauri/src/managed_agents/config_start/tests.rs",
-      "src-tauri/src/managed_agents/coordination_enrol_tests.rs",
+      "src-tauri/src/managed_agents/coordination.rs",
+      "src-tauri/src/managed_agents/coordination_publish_tests.rs",
       "src-tauri/src/managed_agents/coordination_tests.rs",
       "src-tauri/src/managed_agents/custom_harnesses.rs",
       "src-tauri/src/managed_agents/definition_validation.rs",
@@ -477,6 +479,7 @@
       "src-tauri/src/managed_agents/reserved_env_keys.rs",
       "src-tauri/src/managed_agents/retention/legacy_migration.rs",
       "src-tauri/src/managed_agents/retention/legacy_migration/tests.rs",
+      "src-tauri/src/managed_agents/retention/tests.rs",
       "src-tauri/src/managed_agents/role_backfill.rs",
       "src-tauri/src/managed_agents/runtime/cli_tests.rs",
       "src-tauri/src/managed_agents/runtime/electron_browser.rs",
@@ -592,7 +595,7 @@
     ]
   },
   "params": {
-    "AppHandle": 430,
+    "AppHandle": 431,
     "State": 281,
     "Window": 7,
     "ipc::Request": 2,
@@ -600,7 +603,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 427,
+      "AppHandle": 428,
       "State": 281,
       "Window": 7,
       "ipc::Request": 2,
@@ -619,7 +622,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 129,
+    ".state::<": 128,
     ".emit(": 50,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -2810,7 +2813,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/ledger/corrections.ts:89",
+        "src/features/ledger/corrections.ts:90",
         "src/parity/session/script.ts:1250"
       ]
     },

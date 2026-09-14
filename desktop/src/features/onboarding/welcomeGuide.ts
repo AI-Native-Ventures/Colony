@@ -3,7 +3,12 @@ import {
   resolveStartRuntimeForDefinition,
 } from "@/features/agents/lib/instanceInputForDefinition";
 import {
+  isProvisionedChiefOfStaff,
+  PROVISIONED_CHIEF_OF_STAFF_HANDLE,
+} from "@/features/agents/provisionedChief";
+import {
   addChannelMembers,
+  adoptProvisionedEmployees,
   createManagedAgent,
   getChannelMembers,
   listManagedAgents,
@@ -319,7 +324,21 @@ async function provisionWelcomeTeam(
   channelId: string,
   relayUrl?: string | null,
 ): Promise<WelcomeTeamProvisioning> {
+  // Adoption first, and awaited. Colony provisions the Chief of Staff into
+  // every community and this flow must not mint a built-in one seconds before
+  // that record lands: the community would be left with two, which is the
+  // duplicate this whole change exists to stop. A relay that is slow, absent
+  // or refusing simply leaves no provisioned record, and the built-in path
+  // below still runs, so the failure shape is the pre-existing one rather
+  // than a community with no Chief of Staff at all.
+  await adoptProvisionedEmployees().catch((error) => {
+    console.warn("[welcome] provisioned adoption failed:", error);
+  });
   const existingAgents = await listManagedAgents();
+  const provisionedChief = existingAgents.find(
+    (agent) =>
+      isProvisionedChiefOfStaff(agent) && isAgentScopedToRelay(agent, relayUrl),
+  );
 
   // A joiner still mints its own instance of the role - that instance is what
   // answers them, on their machine and their subscription, and the UI merges
@@ -346,6 +365,17 @@ async function provisionWelcomeTeam(
 
   const agents: ManagedAgent[] = [];
   for (const starter of WELCOME_TEAM_STARTERS) {
+    // Where Colony provisions the role, that record IS the employee. Minting
+    // the built-in instance next to it is what produced two Chiefs of Staff.
+    // Checked before the built-in persona is required, because a community
+    // served by Colony's employee does not need the starter definition at all.
+    if (
+      provisionedChief &&
+      starter.roleId === PROVISIONED_CHIEF_OF_STAFF_HANDLE
+    ) {
+      agents.push(provisionedChief);
+      continue;
+    }
     const persona = personasById.get(starter.personaId);
     if (!persona) {
       throw new Error(`${starter.name} agent not found.`);
