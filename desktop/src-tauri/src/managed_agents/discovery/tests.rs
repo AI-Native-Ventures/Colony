@@ -653,48 +653,6 @@ fn apply_agent_command_update_inherit_sentinel_clears_pin_and_runtime() {
 }
 
 #[test]
-fn apply_agent_command_update_clears_effort_when_the_harness_changes() {
-    // A persisted effort pins one adapter's advertised thought_level options.
-    // Switching harness must drop it rather than assert a value the new
-    // adapter never offered.
-    let personas = vec![persona_with_runtime("p1", Some("claude"))];
-    let mut record = record_with(Some("codex"), Some("p1"), Some("codex-acp"));
-    record.effort_level = Some("high".to_string());
-
-    apply_agent_command_update(&mut record, &personas, "", false);
-
-    assert_eq!(record_agent_command(&record, &personas), "claude-agent-acp");
-    assert_eq!(record.effort_level, None);
-}
-
-#[test]
-fn apply_agent_command_update_keeps_effort_when_the_harness_is_unchanged() {
-    // An edit that re-picks the same harness is not a harness change, so the
-    // effort the user chose for it survives.
-    let personas = vec![persona_with_runtime("p1", Some("codex"))];
-    let mut record = record_with(Some("codex"), Some("p1"), Some("codex-acp"));
-    record.effort_level = Some("high".to_string());
-
-    apply_agent_command_update(&mut record, &personas, "codex-acp", true);
-
-    assert_eq!(record.effort_level, Some("high".to_string()));
-}
-
-#[test]
-fn apply_agent_command_update_sentinel_keeps_runtime_for_definition_less_record() {
-    // For a record with no persona link the materialized runtime is the only
-    // harness source left once the pin is cleared — a stray empty
-    // agent_command must not change what the agent runs.
-    let mut record = record_with(Some("claude"), None, Some("codex-acp"));
-
-    apply_agent_command_update(&mut record, &[], "", false);
-
-    assert_eq!(record.agent_command_override, None);
-    assert_eq!(record.runtime.as_deref(), Some("claude"));
-    assert_eq!(record_agent_command(&record, &[]), "claude-agent-acp");
-}
-
-#[test]
 fn apply_agent_command_update_concrete_pin_keeps_materialized_runtime() {
     // A concrete pick only sets the pin; the materialized runtime is left for
     // the next snapshot apply. The pin shadows it in resolution either way.
@@ -1698,3 +1656,6 @@ fn discovery_publish_path_drops_mid_flight_delete() {
         "discovery's publish must not resurrect a harness deleted mid-discovery"
     );
 }
+
+#[path = "effort_tests.rs"]
+mod effort_tests;

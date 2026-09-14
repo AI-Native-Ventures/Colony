@@ -531,10 +531,8 @@ mod tests {
         for (canonical, expected) in [(None, "low"), (Some("high".to_string()), "high")] {
             let mut record = record();
             record.effort_level = canonical;
-            let local = crate::managed_agents::spawn_snapshot::effective_effort(
-                &record,
-                &descriptor.env,
-            );
+            let local =
+                crate::managed_agents::spawn_snapshot::effective_effort(&record, &descriptor.env);
             let launch = build_launch_block(
                 &record,
                 &descriptor,
@@ -549,7 +547,11 @@ mod tests {
                 .or_else(|| launch["env"].get("BUZZ_ACP_EFFORT_LEVEL"))
                 .and_then(|value| value.as_str());
             assert_eq!(local.as_deref(), Some(expected));
-            assert_eq!(remote, Some(expected), "remote must start on the same effort");
+            assert_eq!(
+                remote,
+                Some(expected),
+                "remote must start on the same effort"
+            );
         }
     }
 
