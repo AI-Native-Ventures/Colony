@@ -4143,7 +4143,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/hooks.ts:726",
-        "src/features/channels/hooks.ts:846",
+        "src/features/channels/hooks.ts:779",
         "src/features/messages/ui/useMentionSendFlow.ts:396"
       ]
     },
