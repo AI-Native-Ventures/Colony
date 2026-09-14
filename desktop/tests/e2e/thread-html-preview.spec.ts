@@ -98,9 +98,14 @@ test("saved HTML artifact renders and expands with a contained mobile preview", 
     handle: "artifact", instanceId: fixtureUuid(9202), manifestId: signed.id, processorPubkey: OWNER_PUBKEY,
   });
   await emitSignedEvent(page, "general", revision);
-  const rootRow = page.getByTestId("message-row").filter({ has: preview });
-  await rootRow.hover();
-  await rootRow.getByRole("button", { name: "Reply", exact: true }).click();
+  const summary = page.locator(
+    `[data-testid="message-thread-summary"][data-thread-head-id="${event.id}"]`,
+  );
+  await expect(summary).toBeVisible();
+  await summary.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await waitForAnimations(page);
+  await summary.click();
+  await expect(page.getByTestId("message-thread-panel")).toBeVisible();
   await expect(page.frameLocator('section[aria-label="Website preview"]:has-text("Version 2") iframe').getByRole("heading", { name: "Revised layout" })).toBeVisible();
   await expect(page.getByText("Version 2", { exact: true })).toBeVisible();
   await waitForAnimations(page);
