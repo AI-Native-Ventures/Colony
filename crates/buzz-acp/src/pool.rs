@@ -11691,7 +11691,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
@@ -11719,7 +11719,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("rejection is non-fatal; session creation still succeeds");
@@ -11744,7 +11744,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
@@ -11768,7 +11768,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
@@ -11799,7 +11799,7 @@ exit 0"#
 
         let ctx = make_prompt_context_no_owner();
         let err = create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect_err("transport-class effort failure must propagate as Err");
@@ -11918,7 +11918,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
@@ -11980,7 +11980,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("an application-level rejection is non-fatal");
@@ -12026,7 +12026,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("an application-level rejection is non-fatal");
@@ -12059,7 +12059,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
@@ -12091,7 +12091,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("an unresolvable model is non-fatal");
@@ -12148,7 +12148,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
@@ -12176,7 +12176,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
@@ -12241,7 +12241,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
@@ -12273,7 +12273,7 @@ done"#
 
         let ctx = make_prompt_context_no_owner();
         create_session_and_apply_model(
-            &mut agent, &ctx, None, None, None, None, None, None, None, None,
+            &mut agent, &ctx, None, None, None, None, None, None, None, None, None,
         )
         .await
         .expect("session creation must succeed");
