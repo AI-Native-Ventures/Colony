@@ -1,9 +1,6 @@
-import { Check, ExternalLink, Play, X } from "lucide-react";
+import { ExternalLink, Play } from "lucide-react";
 
-import {
-  useApprovalMutation,
-  useTriggerWorkflowMutation,
-} from "@/features/workflows/hooks";
+import { useTriggerWorkflowMutation } from "@/features/workflows/hooks";
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
 import { isRetryableWorkflowRunStatus } from "@/features/workflows/ui/workflowRunRecovery";
 import type { ActionWorkflowSource } from "../contracts";
@@ -18,7 +15,6 @@ export function ActionCenterWorkflowDetail({
   source: ActionWorkflowSource;
 }) {
   const triggerMutation = useTriggerWorkflowMutation(source.workflow.id);
-  const approvalMutation = useApprovalMutation();
   const approval = source.approval;
   const isRetryable = isRetryableWorkflowRunStatus(source.run.status);
 
@@ -55,37 +51,13 @@ export function ActionCenterWorkflowDetail({
             <p className="mt-1 text-sm text-muted-foreground">
               {approval.stepId} · Approver {approval.approverSpec}
             </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                disabled={approvalMutation.isPending}
-                onClick={() =>
-                  approvalMutation.mutate({
-                    action: "grant",
-                    note: undefined,
-                    token: approval.token,
-                  })
-                }
-                size="sm"
-              >
-                <Check className="mr-2 size-4" />
-                Approve
-              </Button>
-              <Button
-                disabled={approvalMutation.isPending}
-                onClick={() =>
-                  approvalMutation.mutate({
-                    action: "deny",
-                    note: undefined,
-                    token: approval.token,
-                  })
-                }
-                size="sm"
-                variant="destructive"
-              >
-                <X className="mr-2 size-4" />
-                Deny
-              </Button>
-            </div>
+            {/* What the relay stores for an approval is a hash, not something
+                that can be presented back to grant or deny. Buttons built on
+                it looked live and could never work, so the Action Center says
+                what is true, the same as the workflow panel's approval card. */}
+            <p className="mt-4 text-xs text-muted-foreground" role="status">
+              Approval actions are not yet available in Desktop.
+            </p>
           </div>
         ) : null}
 
@@ -108,10 +80,10 @@ export function ActionCenterWorkflowDetail({
             </Button>
           ) : null}
         </div>
-        {triggerMutation.isError || approvalMutation.isError ? (
+        {triggerMutation.isError ? (
           <p className="text-sm text-destructive">
-            {(triggerMutation.error ?? approvalMutation.error) instanceof Error
-              ? (triggerMutation.error ?? approvalMutation.error)?.message
+            {triggerMutation.error instanceof Error
+              ? triggerMutation.error.message
               : "Workflow action failed."}
           </p>
         ) : null}

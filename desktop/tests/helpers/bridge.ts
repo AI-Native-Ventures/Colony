@@ -336,6 +336,7 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   acpAuthMethods?: Record<string, { methods: Record<string, unknown>[] }>;
   acpAuthMethodsError?: string;
   /** When set, the `delete_custom_harness` mock command throws with this message. */
+  workflowUpdateError?: string;
   deleteCustomHarnessError?: string;
   connectAcpRuntimeResult?: { launched: boolean };
   connectAcpRuntimeDelayMs?: number;

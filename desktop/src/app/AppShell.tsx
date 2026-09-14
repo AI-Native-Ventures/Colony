@@ -102,7 +102,7 @@ import { SidebarProvider } from "@/shared/ui/sidebar";
 import { RelayConnectionOverlay } from "@/app/RelayConnectionOverlay";
 import { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { useChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMode";
-import { AppProfilePanelProvider } from "@/app/AppProfilePanelProvider";
+import { AppShellProviders } from "@/app/AppShellProviders";
 import { LazySettingsScreen } from "@/app/LazySettingsScreen";
 
 const EMPTY_CHANNELS: Channel[] = [];
@@ -762,7 +762,7 @@ export function AppShell() {
                 }}
                 open={effectiveSidebarOpen}
               >
-                <AppProfilePanelProvider>
+                <AppShellProviders>
                   {!settingsOpen && !isHuddleRoom ? (
                     <AppTopChrome
                       canGoBack={canGoBack}
@@ -976,7 +976,7 @@ export function AppShell() {
                     onOpenChange={setIsSendFeedbackOpen}
                     open={isSendFeedbackOpen}
                   />
-                </AppProfilePanelProvider>
+                </AppShellProviders>
               </SidebarProvider>
             </AppHuddleShell>
           </ActionCenterProvider>

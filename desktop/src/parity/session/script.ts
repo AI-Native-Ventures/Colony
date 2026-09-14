@@ -820,13 +820,23 @@ export const SESSION_STEPS: SessionStep[] = [
       createWorkflow(ctx.channelId, WORKFLOW_YAML(ctx.fixture("workflow"))),
     {
       capture: (ctx, r) => {
-        ctx.workflowId = (r as { workflow: { id: string } }).workflow.id;
+        const { workflow } = r as {
+          workflow: { id: string; revision: string };
+        };
+        ctx.workflowId = workflow.id;
+        // update_workflow refuses a save that does not name the revision it
+        // was loaded from, so the parity script has to carry it forward.
+        ctx.workflowRevision = workflow.revision;
       },
     },
   ),
   step("workflows-get", "get_workflow", (ctx) => getWorkflow(ctx.workflowId)),
   step("workflows-update", "update_workflow", (ctx) =>
-    updateWorkflow(ctx.workflowId, WORKFLOW_YAML(ctx.fixture("workflow"))),
+    updateWorkflow(
+      ctx.workflowId,
+      WORKFLOW_YAML(ctx.fixture("workflow")),
+      ctx.workflowRevision,
+    ),
   ),
   step("workflows-runs", "get_workflow_runs", (ctx) =>
     getWorkflowRuns(ctx.workflowId),
@@ -1771,7 +1781,7 @@ export const REPLAY_CAPTURES: Record<
     args: { channelId: "channelId" },
   },
   create_workflow: {
-    result: { workflowId: "id" },
+    result: { workflowId: "id", workflowRevision: "revision" },
     args: { channelId: "channelId" },
   },
   create_team: { result: { teamId: "id" } },

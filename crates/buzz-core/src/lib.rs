@@ -67,6 +67,8 @@ pub mod workspace_tab;
 pub mod ledger;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
+/// NIP-10 thread-marker parsing — shared `root`/`reply` marker resolver.
+pub mod nip10;
 /// Agent observer frame helpers.
 pub mod observer;
 pub mod onboarding_facts;

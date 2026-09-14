@@ -10,6 +10,8 @@ export type SessionContext = {
   /** created_at (epoch seconds) of the script's probe message. */
   messageCreatedAt: number;
   workflowId: string;
+  /** Revision of the script's workflow; update_workflow now requires it. */
+  workflowRevision: string;
   teamId: string;
   templateId: string;
   /** Id of the template created by the duplicate step (teardown target). */
