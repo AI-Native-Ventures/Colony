@@ -7,9 +7,7 @@ use tauri::{AppHandle, Manager};
 use crate::{
     app_state::AppState,
     company::transaction::is_event_id,
-    managed_agents::{
-        load_teams_readonly, owner_scope::effective_owner_pubkey, ManagedAgentRecord, TeamRecord,
-    },
+    managed_agents::{owner_scope::effective_owner_pubkey, ManagedAgentRecord, TeamRecord},
 };
 
 /// A first-job attach signs against existing approved local staffing only.
@@ -19,12 +17,30 @@ pub(super) struct AttachScope {
 }
 
 impl AttachScope {
-    pub(super) fn owner(&self) -> &str {
-        &self.owner
-    }
-
-    pub(super) fn relay(&self) -> &str {
-        &self.relay
+    /// Sign with the same identity and workspace checks held through the signature.
+    pub(super) fn sign(
+        &self,
+        app: &AppHandle,
+        state: &AppState,
+        pubkey: Option<&str>,
+        action: &buzz_sdk_pkg::company::CompanyAction,
+        keys: &nostr::Keys,
+    ) -> Result<String, String> {
+        let _community = state
+            .community_operation_lock
+            .try_read()
+            .map_err(|_| "The business connection is changing. Try again.".to_string())?;
+        let _identity = state
+            .identity_mutation
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let _store = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|error| error.to_string())?;
+        self.check(state)?;
+        self.persona(app, pubkey)?;
+        buzz_sdk_pkg::company_blueprint::sign_action(action, keys)
     }
 
     /// Both optional fields are required together; omitted fields preserve legacy attach behavior.
@@ -83,18 +99,17 @@ impl AttachScope {
         let records: Vec<ManagedAgentRecord> = serde_json::from_slice(&bytes).map_err(|_| {
             "The approved team could not be read. Review your team and try again.".to_string()
         })?;
-        let teams = load_teams_readonly(&directory.join("teams.json"))?;
-        self.existing_persona(&records, &teams, pubkey)
+        self.existing_persona(&records, &[], pubkey)
     }
 
     fn existing_persona(
         &self,
         records: &[ManagedAgentRecord],
-        teams: &[TeamRecord],
+        _teams: &[TeamRecord],
         pubkey: Option<&str>,
     ) -> Result<String, String> {
         let refused = || {
-            "This job needs its existing approved Chief of Staff and business team. Review your team and try again.".to_string()
+            "This job needs its existing approved Chief of Staff and agent definition. Review your agent and try again.".to_string()
         };
         let pubkey = pubkey
             .filter(|pubkey| is_event_id(pubkey))
@@ -114,14 +129,6 @@ impl AttachScope {
                 definition.pubkey.is_empty()
                     && definition.slug.as_deref() == Some(persona)
                     && definition.is_active
-            })
-            || !teams.iter().any(|team| {
-                team.relay_url
-                    .as_deref()
-                    .and_then(|relay| canonical_relay(relay).ok())
-                    .as_deref()
-                    == Some(self.relay.as_str())
-                    && team.persona_ids.iter().any(|id| id == persona)
             })
         {
             return Err(refused());

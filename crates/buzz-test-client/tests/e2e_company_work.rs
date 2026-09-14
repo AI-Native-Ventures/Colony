@@ -35,7 +35,8 @@ use buzz_core::job::{TaskArtifact, TaskArtifactKind, TaskCheckpoint};
 use buzz_core::kind::{
     KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_EMPLOYEE,
     KIND_HIRE_REQUEST, KIND_INITIATIVE, KIND_JOB_CHECKPOINT, KIND_JOB_CLAIM, KIND_JOB_FILING,
-    KIND_JOB_HEAD, KIND_JOB_OUTCOME, KIND_STREAM_MESSAGE_V2, KIND_TASK, KIND_TEAM,
+    KIND_JOB_HEAD, KIND_JOB_OUTCOME, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE_V2, KIND_TASK,
+    KIND_TEAM,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
@@ -147,9 +148,9 @@ fn task(id: &str, team: &CompanyTeamRef, now: i64) -> CompanyTask {
         initiative_id: None,
         title: "Draft the first prospect list".to_string(),
         status: TaskStatus::Ready,
-        owning_team_id: team.id.clone(),
+        owning_team_id: Some(team.id.clone()),
         assignee_persona_ids: vec![team.lead_persona_id.clone()],
-        qa_persona_id: team.lead_persona_id.clone(),
+        qa_persona_id: Some(team.lead_persona_id.clone()),
         reviewer_team_id: None,
         cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::Administration,
@@ -684,6 +685,19 @@ async fn setup(client: &mut BuzzTestClient, owner: Keys) -> Fixture {
         persona_ids: vec![format!("lead-{}", &suffix[..12])],
     };
     publish_team(client, &owner, &team).await;
+    let agent = Keys::generate();
+    let definition = EventBuilder::new(
+        Kind::Custom(KIND_MANAGED_AGENT as u16),
+        serde_json::json!({"persona_id": team.lead_persona_id}).to_string(),
+    )
+    .tags([Tag::parse(["d", agent.public_key().to_hex().as_str()]).expect("agent tag")])
+    .sign_with_keys(&owner)
+    .expect("agent definition");
+    assert!(
+        send_past_transport_stall(client, definition, "agent definition")
+            .await
+            .accepted
+    );
     Fixture {
         owner,
         relay,
@@ -742,7 +756,7 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
         stamp + 1,
     )
     .expect("implicit chat task plans");
-    assert_eq!(plan.owning_team_id, fixture.team.id);
+    assert_eq!(plan.owning_team_id, None);
     let planned_task = match &plan.action.payload {
         CompanyActionPayload::Task(task) => task.as_ref(),
         other => panic!("implicit plan produced {other:?}"),
@@ -1664,8 +1678,14 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
         .await
         .expect("the kickoff task exists");
     let record = buzz_sdk::company::parse_task_event(&stored).expect("task parses");
-    assert_eq!(record.owning_team_id, fixture.team.id);
-    assert_eq!(record.qa_persona_id, fixture.team.lead_persona_id);
+    assert_eq!(
+        record.owning_team_id.as_deref(),
+        Some(fixture.team.id.as_str())
+    );
+    assert_eq!(
+        record.qa_persona_id.as_deref(),
+        Some(fixture.team.lead_persona_id.as_str())
+    );
     assert_eq!(
         record.initiative_id.as_deref(),
         Some(initiative_id.as_str())
@@ -1729,7 +1749,7 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
     let work = AgentWorkContext {
         task_id: format!("co{}:chat:0001", &suffix[..12]),
         initiative_id: Some(format!("co{}:launch", &suffix[..12])),
-        owning_team_id: format!("team-{}", &suffix[..12]),
+        owning_team_id: Some(format!("team-{}", &suffix[..12])),
         cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::ClientDelivery,
         cost_classification: buzz_core::company::classify_cost(
@@ -2038,7 +2058,7 @@ async fn inspect_live_turn_metrics() {
                     "a stored classification must match what its own fields imply"
                 );
                 println!(
-                    "METRIC {} harness={} stop={:?} task={} initiative={:?} team={} cost_centre={} purpose={:?} classification={:?} client={:?}",
+                    "METRIC {} harness={} stop={:?} task={} initiative={:?} team={:?} cost_centre={} purpose={:?} classification={:?} client={:?}",
                     &event.id.to_hex()[..12],
                     payload.harness,
                     payload.stop_reason,

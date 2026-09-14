@@ -20,11 +20,6 @@ import { readFixtureInstruction } from "./instruction.mjs";
 import { readApprovalAttempt } from "./approval-diagnostics.mjs";
 import { assertCreditsProof, creditsProofQuery } from "./credits-proof.mjs";
 import {
-  loseSyncedFixtureTeam,
-  proveFixtureTeamRecovery,
-  readFixtureTeamReadiness,
-} from "./team-recovery.mjs";
-import {
   installNativePublishObserver,
   readNativePublishObservations,
 } from "./native-publish-diagnostics.mjs";
@@ -36,8 +31,6 @@ export async function completeFixtureWork({
   proxy,
   relay,
   provider,
-  directory,
-  bundle,
   proofDirectory,
   repositoryModuleUrls = [],
   onProgress = () => {},
@@ -239,16 +232,18 @@ export async function completeFixtureWork({
     .first()
     .getByRole("button", { name: "Approve team and start", exact: true });
   await expect(start).toBeEnabled();
-  const teamLoss = await loseSyncedFixtureTeam({
-    directory,
-    account,
-    reader,
-    relay,
-  });
-  onEvidence({ teamLoss });
+  const initialOwnerTeamHeads = (await reader.events(30176)).filter(
+    (event) => event.pubkey === account.ownerPubkey,
+  ).length;
+  assert.equal(
+    initialOwnerTeamHeads,
+    0,
+    "Direct work starts with no automatically created team",
+  );
+  onEvidence({ initialOwnerTeamHeads });
   assert.equal(provider.receivedCallCount, preJobCalls);
   assert.equal((await reader.events(30181)).length, 0);
-  onProgress("genuine-synced-team-projection-loss-injected");
+  onProgress("direct-work-starts-without-a-team");
   await page.evaluate(installNativePublishObserver, {
     ownerPubkey: account.ownerPubkey,
     relayUrl: account.relayUrl,
@@ -390,9 +385,6 @@ export async function completeFixtureWork({
     .catch(async (error) => {
       onEvidence({
         nativePublishResponses: await readNativePublishObservations(page),
-        teamReadiness: await readFixtureTeamReadiness(directory, account).catch(
-          () => ({ unavailable: true }),
-        ),
       });
       const taskFailure = await reader
         .failureEvidence()
@@ -415,19 +407,28 @@ export async function completeFixtureWork({
   });
   const task = await approved.readTask();
   assert.equal(task.status, "completed");
-  onEvidence({
-    teamReadiness: await readFixtureTeamReadiness(directory, account).catch(
-      () => ({ unavailable: true }),
-    ),
-  });
-  const teamRecovery = await proveFixtureTeamRecovery({
-    directory,
-    account,
-    reader,
-    loss: teamLoss,
-    task,
-  });
-  onEvidence({ teamRecovery });
+  assert.equal(task.owningTeamId, null, "Direct work has no mandatory team");
+  assert.equal(
+    task.qaPersonaId,
+    null,
+    "Direct work has no fabricated reviewer",
+  );
+  const finalOwnerTeamHeads = (await reader.events(30176)).filter(
+    (event) => event.pubkey === account.ownerPubkey,
+  ).length;
+  assert.equal(
+    finalOwnerTeamHeads,
+    0,
+    "Completing direct work creates no team",
+  );
+  const directTaskWithoutTeam = {
+    taskId: task.id,
+    owningTeamId: task.owningTeamId,
+    initialOwnerTeamHeads,
+    finalOwnerTeamHeads,
+    status: task.status,
+  };
+  onEvidence({ directTaskWithoutTeam });
   const actualAgents = await invoke("list_managed_agents");
   const isolatedRuntimes = [approved.scout, approved.worker].map((ref) => {
     const agent = actualAgents.find(
@@ -487,7 +488,7 @@ export async function completeFixtureWork({
         ["h", account.channelId],
         ["e", account.rootEventId],
         ["task", task.id],
-        ["team", task.owningTeamId],
+        ...(task.owningTeamId ? [["team", task.owningTeamId]] : []),
       ]) {
         assert.ok(
           event.tags.some((tag) => tag[0] === name && tag[1] === value),
@@ -774,7 +775,7 @@ export async function completeFixtureWork({
     deliveredDrafts,
     taskId: task.id,
     status: task.status,
-    teamRecovery,
+    directTaskWithoutTeam,
     instructionCount,
     taskCount,
     modelResponses: "deterministic local fixture",

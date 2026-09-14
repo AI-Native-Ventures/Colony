@@ -161,6 +161,56 @@ test("signed action and message are durable before their publication, task befor
   ]);
 });
 
+test("direct first-job receipt dispatches and resumes without a team tag", async () => {
+  const directWork = { ...work, tags: [["task", work.taskId]] };
+  const directMessage = {
+    ...outgoing,
+    tags: outgoing.tags.filter((tag) => tag[0] !== "team"),
+  };
+  const f = fixture({
+    resolveWork: async () => directWork,
+    prepareMessage: async () => directMessage,
+  });
+  const dispatch = createFirstJobDispatcher(f.deps);
+  const expected = { eventId: directMessage.id, taskId: work.taskId };
+  assert.deepEqual(await dispatch(input), expected);
+  assert.deepEqual(await dispatch(input), expected);
+  assert.deepEqual(f.read().work.tags, [["task", work.taskId]]);
+  assert.equal(f.effects.size, 1);
+  assert.equal(f.calls.filter((call) => call === "plan").length, 1);
+});
+
+test("optional work references never admit duplicate or empty receipt tags", async () => {
+  for (const tags of [
+    [
+      ["task", work.taskId],
+      ["task", "another-task"],
+    ],
+    [
+      ["task", work.taskId],
+      ["team", "one"],
+      ["team", "two"],
+    ],
+    [
+      ["task", work.taskId],
+      ["initiative", "one"],
+      ["initiative", "two"],
+    ],
+    [
+      ["task", work.taskId],
+      ["team", ""],
+    ],
+  ]) {
+    const f = fixture({ resolveWork: async () => ({ ...work, tags }) });
+    await assert.rejects(
+      createFirstJobDispatcher(f.deps)(input),
+      /receipt could not be verified/,
+    );
+    assert.equal(f.effects.size, 0);
+    assert.equal(f.calls.includes("start"), false);
+  }
+});
+
 test("a message signed after delayed readiness can be newer than its accepted task action", async () => {
   const f = fixture({
     prepareMessage: async () => ({ ...outgoing, created_at: 1015 }),

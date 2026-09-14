@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 519,
-    "tauri_coupled": 209,
-    "portable": 310,
+    "rust_total": 520,
+    "tauri_coupled": 208,
+    "portable": 312,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -153,7 +153,6 @@
       "src-tauri/src/linux_media.rs",
       "src-tauri/src/macos_notifications.rs",
       "src-tauri/src/managed_agents/config_start.rs",
-      "src-tauri/src/managed_agents/coordination.rs",
       "src-tauri/src/managed_agents/global_config/mod.rs",
       "src-tauri/src/managed_agents/isolation/launch.rs",
       "src-tauri/src/managed_agents/isolation/network.rs",
@@ -258,6 +257,7 @@
       "src-tauri/src/commands/global_agent_config/restart_policy.rs",
       "src-tauri/src/commands/global_agent_config_scope_tests.rs",
       "src-tauri/src/commands/identity_key_backup_tests.rs",
+      "src-tauri/src/commands/initiative_agent_identity.rs",
       "src-tauri/src/commands/initiative_dispatch_binding.rs",
       "src-tauri/src/commands/initiative_scope_tests.rs",
       "src-tauri/src/commands/initiative_team_readiness_policy.rs",
@@ -385,7 +385,8 @@
       "src-tauri/src/managed_agents/config_bridge/schema_walker.rs",
       "src-tauri/src/managed_agents/config_bridge/types.rs",
       "src-tauri/src/managed_agents/config_start/tests.rs",
-      "src-tauri/src/managed_agents/coordination_enrol_tests.rs",
+      "src-tauri/src/managed_agents/coordination.rs",
+      "src-tauri/src/managed_agents/coordination_publish_tests.rs",
       "src-tauri/src/managed_agents/coordination_tests.rs",
       "src-tauri/src/managed_agents/custom_harnesses.rs",
       "src-tauri/src/managed_agents/discovery.rs",
@@ -551,7 +552,7 @@
     ]
   },
   "params": {
-    "AppHandle": 420,
+    "AppHandle": 418,
     "State": 271,
     "Window": 7,
     "ipc::Request": 2,
@@ -559,7 +560,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 417,
+      "AppHandle": 415,
       "State": 271,
       "Window": 7,
       "ipc::Request": 2,
@@ -578,7 +579,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 126,
+    ".state::<": 125,
     ".emit(": 48,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -2672,7 +2673,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/ledger/corrections.ts:89",
+        "src/features/ledger/corrections.ts:90",
         "src/parity/session/script.ts:1240"
       ]
     },
