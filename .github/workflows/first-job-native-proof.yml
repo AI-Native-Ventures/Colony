@@ -1,9 +1,16 @@
 name: Native first-job proof
 
+# Tier C proof: one macOS-15 job of about half an hour. It ran on every
+# pull request touching the relay or onboarding and was never a required
+# check; since 2026-09-14 it runs nightly against develop, on demand, and
+# on a promotion pull request to main. Merges to develop are proven by
+# ci.yml on the develop push.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
   pull_request:
-    branches: [develop, main]
+    branches: [main]
     paths:
       - desktop/src-electron/**
       - desktop/src-tauri/**
