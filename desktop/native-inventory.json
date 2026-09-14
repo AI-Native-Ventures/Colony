@@ -1,7 +1,7 @@
 {
   "files": {
-    "rust_total": 539,
-    "tauri_coupled": 223,
+    "rust_total": 540,
+    "tauri_coupled": 224,
     "portable": 316,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
@@ -187,6 +187,7 @@
       "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
       "src-tauri/src/managed_agents/storage.rs",
       "src-tauri/src/managed_agents/subscriptions/codex_account.rs",
+      "src-tauri/src/managed_agents/supersede.rs",
       "src-tauri/src/managed_agents/teams.rs",
       "src-tauri/src/managed_agents/teams_tests.rs",
       "src-tauri/src/managed_agents/website_team/adoption.rs",
@@ -575,7 +576,7 @@
     ]
   },
   "params": {
-    "AppHandle": 432,
+    "AppHandle": 435,
     "State": 278,
     "Window": 7,
     "ipc::Request": 2,
@@ -583,7 +584,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 429,
+      "AppHandle": 432,
       "State": 278,
       "Window": 7,
       "ipc::Request": 2,
@@ -2861,6 +2862,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/agents/lib/teamsSectionVisibility.ts:16",
         "src/parity/session/script.ts:855",
         "src/shared/api/tauriTeams.ts:47"
       ]
