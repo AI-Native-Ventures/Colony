@@ -487,9 +487,8 @@ export function AgentDefinitionDialog({
   const modelFieldVisible =
     runtime.trim().length > 0 || blankRuntimeModelProviderEditable;
   const isExplicitModelRequired = aiConfigurationMode === "custom";
-  // The pair gate stops a user SAVING an incomplete custom pair, so it applies
-  // only once that pair is touched: a runtime-only definition opens in
-  // Customize with an empty pair and would otherwise block every edit.
+  // An untouched pair is exempt so a runtime-only definition stays editable.
+  // With no runtime there is no inherited model, so the pair stays required.
   const customAiPairSatisfied =
     agentAiConfigurationModeSatisfied(
       aiConfigurationMode,
@@ -497,6 +496,7 @@ export function AgentDefinitionDialog({
       runtimeCanChooseLlmProvider,
     ) ||
     (!isCreateMode &&
+      runtime.trim().length > 0 &&
       provider.trim() === (initialValues?.provider ?? "").trim() &&
       model.trim() === (initialValues?.model ?? "").trim());
   const selectedRuntimeIsAvailable =
