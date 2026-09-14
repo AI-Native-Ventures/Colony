@@ -33,7 +33,17 @@ export function ProfileAvatar({
   plain = false,
   testId,
 }: ProfileAvatarProps) {
-  const initials = getInitials(identitySeed ?? label);
+  // `identitySeed` carries two jobs: a stable per-identity fallback colour,
+  // and (for key-only identities) the label initials come from. A raw 64-hex
+  // key is only ever the first: abbreviating it puts a bare hex digit on the
+  // avatar, which is the partial-key display #7495 removed everywhere else.
+  // Colour still keys off the seed; initials fall back to the visible label,
+  // which is the npub form when there is no authored name.
+  const initialsSeed =
+    identitySeed && /^[0-9a-f]{64}$/i.test(identitySeed.trim())
+      ? undefined
+      : identitySeed;
+  const initials = getInitials(initialsSeed ?? label);
   const presentation = useAvatarPresentation(avatarUrl);
   const presentedAvatarUrl = presentation?.displayUrl ?? avatarUrl;
 
