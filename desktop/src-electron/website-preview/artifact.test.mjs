@@ -24,7 +24,7 @@ const MEDIA_HASH =
   "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 const VECTORS_PATH = fileURLToPath(
   new URL(
-    "../../../crates/buzz-core/testdata/website/preview_manifest_vectors.json",
+    "./fixtures/preview_manifest_vectors.json",
     import.meta.url,
   ),
 );
@@ -845,7 +845,7 @@ test("pinned HTTPS options carry no credentials and pin the resolved address", (
   assert.equal(literal.headers.host, "[2606:4700::1]");
 });
 
-test("matches the shared core manifest vectors", () => {
+test("matches the retained preview manifest compatibility vectors", () => {
   const vectors = JSON.parse(readFileSync(VECTORS_PATH, "utf8"));
   assert.equal(vectors.schema, "colony.website-test-vectors/1");
   assert.ok(vectors.cases.length >= 30);
