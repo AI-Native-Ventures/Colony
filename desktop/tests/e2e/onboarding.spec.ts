@@ -453,6 +453,10 @@ async function expectWelcomeView(page: Page) {
   await expectWelcomeComposerBannerLayout(page);
 }
 
+// Upstream's #7133 version of this helper asserts "The mention @Fizz is
+// ambiguous." - its new binding model refuses a manually typed name that two
+// identities share. Colony keeps its own model (see that commit's body), so
+// the helper stays Colony's: the guide banner completes on the mention.
 async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
   page: Page,
 ) {

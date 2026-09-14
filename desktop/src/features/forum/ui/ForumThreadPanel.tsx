@@ -1,6 +1,7 @@
 import { ArrowLeft, MessageSquare } from "lucide-react";
 import * as React from "react";
 
+import { handleTimelineMentionCopy } from "@/features/messages/lib/timelineMentionCopy";
 import {
   resolveUserLabel,
   type UserProfileLookup,
@@ -80,7 +81,7 @@ function ReplyRow({
   const {
     mentionNames: replyMentionNames,
     mentionPubkeysByName: replyMentionPubkeysByName,
-  } = resolveMentionProps(reply.tags, profiles);
+  } = resolveMentionProps(reply.tags, profiles, reply.content);
 
   return (
     <div
@@ -202,7 +203,7 @@ export function ForumThreadPanel({
   const {
     mentionNames: postMentionNames,
     mentionPubkeysByName: postMentionPubkeysByName,
-  } = resolveMentionProps(post.tags, profiles);
+  } = resolveMentionProps(post.tags, profiles, post.content);
   const postAuthorLabel = resolveUserLabel({
     pubkey: post.pubkey,
     currentPubkey,
@@ -229,6 +230,7 @@ export function ForumThreadPanel({
       <div
         className="flex-1 overflow-y-auto"
         data-scroll-restoration-id={`forum-thread:${channelId}`}
+        onCopy={handleTimelineMentionCopy}
         ref={scrollRef}
       >
         <div

@@ -1,6 +1,5 @@
 import * as React from "react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
-import { handleAgentSnapshotPaste } from "@/features/messages/lib/agentSnapshotClipboard";
 import { useComposerAutofocus } from "@/features/messages/lib/useComposerAutofocus";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
@@ -26,10 +25,6 @@ import { useMentions } from "@/features/messages/lib/useMentions";
 import { getPersistentAgentAudienceScope } from "@/features/messages/lib/persistentAgentAudience";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import {
-  hasMentionClipboardHtml,
-  normalizeMentionClipboardHtml,
-} from "@/features/messages/lib/normalizeMentionClipboard";
-import {
   type AutocompleteEdit,
   type LinkSelectionInfo,
   useRichTextEditor,
@@ -37,7 +32,6 @@ import {
 import { useLinkEditor } from "@/features/messages/lib/useLinkEditor";
 import { useComposerSpoilerParticles } from "@/features/messages/lib/useComposerSpoilerParticles";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
-import { getBuzzCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
 import { cn } from "@/shared/lib/cn";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerReplyEditBanner } from "./ComposerReplyEditBanner";
@@ -63,6 +57,7 @@ import { useManagedComposerLinkPreviews } from "./useComposerLinkPreviews";
 import { useComposerAutoSubmit } from "./useComposerAutoSubmit";
 import { insertComposerEmoji } from "./insertComposerEmoji";
 import { useComposerReplyRecipients } from "./useComposerReplyRecipients";
+import { useComposerMediaPaste } from "./useComposerMediaPaste";
 import type {
   ComposerPreEditSnapshot,
   MessageComposerProps,
@@ -267,6 +262,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     channelNames: channelLinks.knownChannelNames,
     messageLinkChannels: channelLinks.channels,
     customEmoji,
+    getMentionIdentities: mentions.getMentionIdentities,
     onSubmit: () => submitMessageRef.current(),
     onEditLastOwnMessage: () => {
       // An existing edit target prevents re-entering edit, even for empty text.
@@ -514,6 +510,9 @@ function MessageComposerImpl(props: MessageComposerProps) {
     // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
       if (isEditSubmissionLocked) return;
+      // An edit extracts from the same mention map a pasted identity binds
+      // into, so wait on any check still deciding. Bounded internally.
+      await mentions.settlePendingMentionBindings();
       // Empty edits delete the message through handleEditSave.
       await submitMessageEdit({
         content: trimmed,
@@ -641,6 +640,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     mentions.getDraftMentionRefs,
     mentions.restoreDraftMentionRefs,
     mentions.revalidateMentionPubkeys,
+    mentions.settlePendingMentionBindings,
   ]);
   submitMessageRef.current = submitMessage;
   useComposerAutoSubmit(
@@ -718,74 +718,13 @@ function MessageComposerImpl(props: MessageComposerProps) {
       richText.editor,
     ],
   );
-  // ── Media paste + ⌘K link shortcut via Tiptap editorProps ──────────
-  const uploadFileRef = React.useRef(media.uploadFile);
-  uploadFileRef.current = media.uploadFile;
-  React.useEffect(() => {
-    if (!richText.editor) return;
-    richText.editor.setOptions({
-      editorProps: {
-        ...richText.editor.options.editorProps,
-        handlePaste: (_view, event) => {
-          // --- File paste ---
-          // Any actual file (image, video, document, …) pastes as an
-          // attachment. String/text items have kind "string", so plain-text
-          // and code-block paste fall through to the handlers below.
-          const items = Array.from(event.clipboardData?.items ?? []);
-          const mediaItem = items.find((item) => item.kind === "file");
-          if (mediaItem) {
-            const file = mediaItem.getAsFile();
-            if (file) {
-              void uploadFileRef.current(file);
-            }
-            return true;
-          }
-          // --- Buzz code-block paste ---
-          // The code block copy button writes a small Buzz marker alongside
-          // plain text. Use it to paste back as a literal code block so Markdown
-          // parsing cannot reshape indentation, fence markers, or headings.
-          const codeBlockText = getBuzzCodeBlockClipboardText(
-            event.clipboardData,
-          );
-          if (codeBlockText !== null) {
-            event.preventDefault();
-            richText.editor
-              ?.chain()
-              .focus()
-              .insertContent([
-                {
-                  type: "codeBlock",
-                  content:
-                    codeBlockText.length > 0
-                      ? [{ type: "text", text: codeBlockText }]
-                      : [],
-                },
-                { type: "paragraph" },
-              ])
-              .run();
-            scrollComposerToBottom();
-            return true;
-          }
-          // Restore Buzz snapshots before normal styled-HTML normalization.
-          if (handleAgentSnapshotPaste(event, media.setPendingImeta))
-            return true;
-          // Strip mention/channel wrappers that Tiptap would misread as bold.
-          const html = event.clipboardData?.getData("text/html");
-          if (html && hasMentionClipboardHtml(html)) {
-            const cleanHtml = normalizeMentionClipboardHtml(html);
-            event.preventDefault();
-            _view.pasteHTML(cleanHtml);
-            return true;
-          }
-          const plainText = event.clipboardData?.getData("text/plain") ?? "";
-          if (plainText.includes("\n")) {
-            scrollComposerToBottom();
-          }
-          return false;
-        },
-      },
-    });
-  }, [media.setPendingImeta, richText.editor, scrollComposerToBottom]);
+  // Media paste and the ⌘K link shortcut, including #7228's paste binding.
+  useComposerMediaPaste({
+    bindPastedMentionIdentities: mentions.bindPastedMentionIdentities,
+    editor: richText.editor,
+    media,
+    scrollComposerToBottom,
+  });
   // ── Send button state ───────────────────────────────────────────────
   const sendDisabled =
     composerDisabled ||

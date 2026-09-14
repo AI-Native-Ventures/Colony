@@ -38,6 +38,10 @@ import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { extractTypedActorPubkeys } from "./draftMentionRefs";
 import { handleMentionKeyDownWith } from "./handleMentionKeyDown";
 import { useAgentMentionRevalidation } from "./agentMentionRevalidation";
+import { collectMentionIdentities } from "./collectMentionIdentities";
+import type { MentionIdentity } from "./mentionClipboard";
+import { useMentionIdentityBindings } from "./useMentionIdentityBindings";
+import { useMentionReset } from "./useMentionReset";
 import {
   buildPersonaNameByPubkey,
   buildPersonaRoleById,
@@ -604,7 +608,18 @@ export function useMentions(
   }, [suggestions.length]);
 
   const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
-
+  const { pasteBinding, registerMentionPubkey } = useMentionIdentityBindings({
+    appendUniqueMentionName,
+    reclaimEntityMentionName: entityMentions.reclaimName,
+    mentionCandidates,
+    mentionMapRef,
+    personaMentionMapRef,
+    profiles,
+    selectedAgentMentionNamesRef,
+    setSelectedAgentMentionNames,
+    setSelectedMentionNames,
+    trimMapToSize,
+  });
   const insertMention = React.useCallback(
     (suggestion: MentionSuggestion, selectionEnd: number): AutocompleteEdit => {
       if (debounceTimerRef.current !== null) {
@@ -656,6 +671,10 @@ export function useMentions(
       const selectedMentions = rebindsTarget ? (teamMembers ?? [resolved]) : [];
       for (const selected of selectedMentions) {
         entityMentions.reclaimName(selected.displayName);
+        // A picked name is the user's newest word on that label, so it retires
+        // any pasted identity still being verified for it — persona routing
+        // included, since a settled paste would delete that entry.
+        pasteBinding.claimMentionIntent(selected.displayName);
         if (selected.kind === "persona" && selected.personaId) {
           personaMentions.set(selected.displayName, selected.personaId);
           mentions.delete(selected.displayName);
@@ -714,36 +733,23 @@ export function useMentions(
       entityMentions.insertSuggestion,
       knownAgentPubkeys,
       mentionStartIndex,
+      pasteBinding.claimMentionIntent,
     ],
   );
 
-  const registerMentionPubkey = React.useCallback(
-    (displayName: string, pubkey: string, options?: { isAgent?: boolean }) => {
-      const trimmedName = displayName.trim();
-      if (!trimmedName) {
-        return;
-      }
-
-      entityMentions.reclaimName(trimmedName);
-      mentionMapRef.current.set(trimmedName, pubkey);
-      personaMentionMapRef.current.delete(trimmedName);
-      trimMapToSize(mentionMapRef.current, 200);
-
-      setSelectedMentionNames((current) =>
-        appendUniqueMentionName(current, trimmedName),
-      );
-
-      if (options?.isAgent) {
-        setSelectedAgentMentionNames((current) => {
-          const next = appendUniqueMentionName(current, trimmedName);
-          selectedAgentMentionNamesRef.current = next;
-          return next;
-        });
-      }
-    },
-    [entityMentions.reclaimName],
+  // Every caller is explicit user intent — a resolved insert, an agent-address
+  // lock, a persona created at send time — so this claims the label before
+  // writing it, and a paste still verifying that name settles into nothing.
+  const getMentionIdentities = React.useCallback(
+    (): MentionIdentity[] =>
+      collectMentionIdentities({
+        knownAgentPubkeys,
+        mentionCandidates,
+        mentionMap: mentionMapRef.current,
+        selectedAgentMentionNames: selectedAgentMentionNamesRef.current,
+      }),
+    [knownAgentPubkeys, mentionCandidates],
   );
-
   const insertResolvedMention = React.useCallback(
     ({
       displayName,
@@ -877,27 +883,21 @@ export function useMentions(
     [activePersonaById],
   );
 
-  const cancelMentionAutocomplete = React.useCallback(() => {
-    autocompleteGenerationRef.current += 1;
-    if (debounceTimerRef.current !== null) {
-      clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
-    flushedMentionStartIndexRef.current = null;
-    setMentionQuery(null);
-    setMentionSelectedIndex(0);
-  }, []);
-  const clearMentions = React.useCallback(() => {
-    cancelMentionAutocomplete();
-    mentionMapRef.current.clear();
-    personaMentionMapRef.current.clear();
-    entityMentions.clear();
-    selectedAgentMentionNamesRef.current = [];
-    selectedAgentMentionPubkeysRef.current.clear();
-    setSelectedMentionNames([]);
-    setSelectedAgentMentionNames([]);
-  }, [entityMentions.clear, cancelMentionAutocomplete]);
-
+  const { cancelMentionAutocomplete, clearMentions } = useMentionReset({
+    autocompleteGenerationRef,
+    clearEntityMentions: entityMentions.clear,
+    clearMentionIntents: pasteBinding.clearMentionIntents,
+    debounceTimerRef,
+    flushedMentionStartIndexRef,
+    mentionMapRef,
+    personaMentionMapRef,
+    selectedAgentMentionNamesRef,
+    selectedAgentMentionPubkeysRef,
+    setMentionQuery,
+    setMentionSelectedIndex,
+    setSelectedAgentMentionNames,
+    setSelectedMentionNames,
+  });
   const { getDraftMentionRefs, restoreDraftMentionRefs } =
     useDraftMentionRouting({
       mentionMapRef,
@@ -953,6 +953,7 @@ export function useMentions(
   );
 
   return {
+    bindPastedMentionIdentities: pasteBinding.bindPastedMentionIdentities,
     cancelMentionAutocomplete,
     clearMentions,
     extractBlockReferenceTags: entityMentions.extractBlockReferenceTags,
@@ -963,6 +964,7 @@ export function useMentions(
     extractMentionPubkeys,
     revalidateMentionPubkeys,
     getDraftMentionRefs,
+    getMentionIdentities,
     getMentionDisplayName,
     handleMentionKeyDown,
     hasResolvedMembers: members !== undefined,
@@ -977,6 +979,7 @@ export function useMentions(
     mentionSelectedIndex,
     registerMentionPubkey,
     restoreDraftMentionRefs,
+    settlePendingMentionBindings: pasteBinding.settlePendingMentionBindings,
     suggestions,
     fetchMoreSuggestions,
     hasMoreSuggestions: Boolean(userSearchQuery.hasNextPage),

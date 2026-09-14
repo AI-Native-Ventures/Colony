@@ -22,6 +22,15 @@ async function waitForReadyComposerSnapshots(
   );
 }
 
+// Edit starts only when Radix finishes closing. An enabled reply input is
+// not evidence that edit content/focus (and the navigation guard) are ready.
+async function expectReplyEditReady(threadPanel: Locator, content: string) {
+  await expect(threadPanel.getByTestId("edit-target")).toBeVisible();
+  const input = threadPanel.getByTestId("message-input");
+  await expect(input).toHaveText(content);
+  await expect(input).toBeFocused();
+}
+
 async function expectThreadReplyUnobscured(row: Locator) {
   await expect
     .poll(async () =>

@@ -599,6 +599,7 @@ test("duplicate owned agents preserve provenance and exact pubkey selection", as
     // In-channel selections send immediately without opening the prompt.
   }
   await expect
+    // Sending the first root message clears its draft-local label reservation.
     .poll(() => readOutgoingMentionPubkeys(page, "@carl remote"))
     .toEqual([relayPubkey]);
 });
@@ -1127,6 +1128,128 @@ test("selecting a person mention inserts @Name into input", async ({
     ),
   );
   expect(iconMask).toContain("data:image/svg+xml");
+  // Upstream asserts `inline-block` here, which comes with its inline-flow
+  // chip icons for human and channel chips. Colony carries that rule for its
+  // agent decoration only (see #7242), so the human chip's icon stays a block.
+  expect(
+    await mentionChip.evaluate(
+      (element) => getComputedStyle(element, "::before").display,
+    ),
+  ).toBe("block");
+  await expect(
+    input.locator(".mention-prefix-hidden", { hasText: "@" }),
+  ).toHaveCSS("opacity", "0");
+  await expect(mentionChip).toHaveCSS("line-height", "18px");
+  const scrollViewport = page.getByTestId("message-input-scroll");
+  const paintedBounds = await mentionChip.evaluate((element) => {
+    const chip = element.getBoundingClientRect();
+    const viewport = element
+      .closest("[data-testid='message-input-scroll']")
+      ?.getBoundingClientRect();
+    if (!viewport)
+      throw new Error("Mention chip is missing its scroll viewport");
+    return {
+      chipTop: chip.top,
+      chipBottom: chip.bottom,
+      viewportTop: viewport.top,
+      viewportBottom: viewport.bottom,
+    };
+  });
+  expect(paintedBounds.chipTop).toBeGreaterThanOrEqual(
+    paintedBounds.viewportTop,
+  );
+  expect(paintedBounds.chipBottom).toBeLessThanOrEqual(
+    paintedBounds.viewportBottom,
+  );
+  const humanIconTranslateY = await mentionChip.evaluate(
+    (element) =>
+      new DOMMatrix(getComputedStyle(element, "::before").transform).m42,
+  );
+  const channelIconTranslateY = await input.evaluate((composer) => {
+    const probe = document.createElement("span");
+    probe.className =
+      "mention-chip inline-chip-with-icon inline-chip-icon-channel";
+    composer.append(probe);
+    const translateY = new DOMMatrix(
+      getComputedStyle(probe, "::before").transform,
+    ).m42;
+    probe.remove();
+    return translateY;
+  });
+  // Upstream nudges its human chip icon down 1px (#6718's
+  // `.inline-chip-icon-human::before`). Colony has no human chip decoration -
+  // it decorates agent mentions only - so both probes read the same offset.
+  expect(humanIconTranslateY - channelIconTranslateY).toBeCloseTo(0);
+
+  await input.fill("@bo");
+  await dropdown.getByText("bob").click();
+  await input.press("Shift+Enter");
+  await page.keyboard.type("@bo");
+  await dropdown.getByText("bob").click();
+  await input.press("Shift+Enter");
+  await page.keyboard.type("@bo");
+  await dropdown.getByText("bob").click();
+  const multilineChips = input.locator(".human-mention-highlight");
+  await expect(multilineChips).toHaveCount(3);
+  const multilinePaintBounds = await multilineChips.evaluateAll((elements) => {
+    const viewport = elements[0]
+      ?.closest("[data-testid='message-input-scroll']")
+      ?.getBoundingClientRect();
+    if (!viewport) {
+      throw new Error("Mention chips are missing their scroll viewport");
+    }
+    return elements.map((element) => {
+      const chip = element.getBoundingClientRect();
+      return {
+        chipTop: chip.top,
+        chipBottom: chip.bottom,
+        viewportTop: viewport.top,
+        viewportBottom: viewport.bottom,
+      };
+    });
+  });
+  for (const bounds of multilinePaintBounds) {
+    expect(bounds.chipTop).toBeGreaterThanOrEqual(bounds.viewportTop);
+    expect(bounds.chipBottom).toBeLessThanOrEqual(bounds.viewportBottom);
+  }
+
+  await scrollViewport.evaluate((element) => {
+    element.style.width = "8rem";
+  });
+  await input.fill("A deliberately long prefix that forces @bo");
+  await dropdown.getByText("bob").click();
+  const wrappedChip = input.locator(".human-mention-highlight", {
+    hasText: "bob",
+  });
+  const wrappedPaintBounds = await wrappedChip.evaluate((element) => {
+    const chip = element.getBoundingClientRect();
+    const viewport = element
+      .closest("[data-testid='message-input-scroll']")
+      ?.getBoundingClientRect();
+    if (!viewport)
+      throw new Error("Mention chip is missing its scroll viewport");
+    return {
+      chipTop: chip.top,
+      chipBottom: chip.bottom,
+      viewportTop: viewport.top,
+      viewportBottom: viewport.bottom,
+    };
+  });
+  expect(wrappedPaintBounds.chipTop).toBeGreaterThanOrEqual(
+    wrappedPaintBounds.viewportTop,
+  );
+  expect(wrappedPaintBounds.chipBottom).toBeLessThanOrEqual(
+    wrappedPaintBounds.viewportBottom,
+  );
+  await expect(input).toHaveCSS("height", /^(?!20px$)/);
+  await scrollViewport.evaluate((element) => {
+    element.style.removeProperty("width");
+  });
+
+  await waitForAnimations(page);
+  await page.getByTestId("message-composer").screenshot({
+    path: "test-results/inline-chip-polish/composer-after.png",
+  });
 });
 
 test("immediate ArrowLeft after a person mention is not bounced past the trailing space", async ({
@@ -1250,6 +1373,16 @@ test("channel references keep caret movement through the channel name", async ({
     ),
   );
   expect(iconMask).toContain("data:image/svg+xml");
+  // Same as the person-mention case above: Colony's channel chip icon is not
+  // on upstream's inline-flow rule.
+  expect(
+    await channelChip.evaluate(
+      (element) => getComputedStyle(element, "::before").display,
+    ),
+  ).toBe("block");
+  await expect(
+    input.locator(".mention-prefix-hidden", { hasText: "#" }),
+  ).toHaveCSS("opacity", "0");
 
   await input.focus();
   await input.press("ArrowLeft");
@@ -1292,6 +1425,14 @@ test("selecting a managed agent mention inserts @Name into input", async ({
   // their icon on the first line; the agent chip joins that treatment.
   await expect(agentMentionChip).toHaveCSS("display", "inline");
   await expect(agentMentionChip).toHaveCSS("border-top-width", "0px");
+  expect(
+    await agentMentionChip.evaluate(
+      (element) => getComputedStyle(element, "::before").display,
+    ),
+  ).toBe("inline-block");
+  await expect(
+    input.locator(".mention-prefix-hidden", { hasText: "@" }),
+  ).toHaveCSS("opacity", "0");
 });
 
 test("selecting a persona mention creates a channel agent before sending", async ({

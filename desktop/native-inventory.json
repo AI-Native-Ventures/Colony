@@ -1283,7 +1283,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1087",
         "src/parity/session/script.ts:1088",
-        "src/shared/ui/markdown.tsx:154"
+        "src/shared/ui/markdown.tsx:153"
       ]
     },
     "copy_text_to_clipboard": {
