@@ -228,6 +228,10 @@ export function HuddleProvider({
     async (mode: VoiceInputMode) => {
       await invoke("set_voice_input_mode", { mode });
       setVoiceInputModeState(mode);
+      // Re-sync the PTT-only STT gate with the visible mute state (best-effort).
+      void invoke("set_huddle_manual_mic_unmuted", {
+        enabled: !isMutedRef.current,
+      }).catch(() => {});
       if (ownsAudioSession) {
         workletRef.current?.setMode(mode);
       } else {
@@ -630,8 +634,10 @@ export function HuddleProvider({
       tokenRef.current += 1;
       const myToken = tokenRef.current;
 
-      isMutedRef.current = false;
-      setIsMuted(false);
+      // PTT starts muted (must match the Rust manual_mic_unmuted default).
+      const startMuted = getVoiceInputMode() === "push_to_talk";
+      isMutedRef.current = startMuted;
+      setIsMuted(startMuted);
       setHuddleError(null);
       setIsStarting(true);
       onHuddleStartPendingChange?.(true);
@@ -681,6 +687,7 @@ export function HuddleProvider({
       cleanupFailedStart,
       cleanupSupersededStart,
       connectAndSetupMedia,
+      getVoiceInputMode,
       onHuddleStartPendingChange,
       onHuddleStarted,
     ],
@@ -705,8 +712,9 @@ export function HuddleProvider({
       busyRef.current = true;
       tokenRef.current += 1;
       const myToken = tokenRef.current;
-      isMutedRef.current = false;
-      setIsMuted(false);
+      const startMuted = getVoiceInputMode() === "push_to_talk";
+      isMutedRef.current = startMuted;
+      setIsMuted(startMuted);
       setHuddleError(null);
       setIsStarting(true);
 
@@ -756,6 +764,7 @@ export function HuddleProvider({
       cleanupFailedStart,
       cleanupSupersededStart,
       connectAndSetupMedia,
+      getVoiceInputMode,
       onHuddleStarted,
     ],
   );

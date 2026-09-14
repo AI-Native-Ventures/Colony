@@ -666,6 +666,7 @@ export function AppShell() {
     workflowsEnabled,
   });
   useAppShellKeyboardShortcuts({
+    activeChannelId: selectedView === "channel" ? selectedChannelId : null,
     canSearchCurrentChannel:
       selectedView === "channel" && activeChannel !== null,
     disabled: settingsOpen || isHuddleRoom,
