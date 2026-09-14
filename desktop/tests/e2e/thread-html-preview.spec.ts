@@ -67,7 +67,9 @@ test("saved HTML artifact renders and expands with a contained mobile preview", 
   ).toBeVisible();
   await expect(page.getByText("COMPROMISED", { exact: true })).toHaveCount(0);
   await waitForAnimations(page);
-  await preview.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await preview.evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
   await page.screenshot({ path: info.outputPath("desktop-preview.png") });
   await preview.getByRole("button", { name: "Mobile", exact: true }).click();
   await expect(preview.locator("iframe")).toHaveAttribute(
@@ -92,23 +94,54 @@ test("saved HTML artifact renders and expands with a contained mobile preview", 
     parentEventId: event.id,
     content: "Updated layout after feedback",
     data: {
-      title: "Homepage revision", description: "Updated heading", url: "https://example.com/revision-2.html", alt: "Revision 2 source", status: "ready-for-review", revision: 2, previous_artifact: event.id,
-      preview_html: "<h1>Revised layout</h1><p>Your feedback is reflected here.</p>",
+      title: "Homepage revision",
+      description: "Updated heading",
+      url: "https://example.com/revision-2.html",
+      alt: "Revision 2 source",
+      status: "ready-for-review",
+      revision: 2,
+      previous_artifact: event.id,
+      preview_html:
+        "<h1>Revised layout</h1><p>Your feedback is reflected here.</p>",
     },
-    handle: "artifact", instanceId: fixtureUuid(9202), manifestId: signed.id, processorPubkey: OWNER_PUBKEY,
+    handle: "artifact",
+    instanceId: fixtureUuid(9202),
+    manifestId: signed.id,
+    processorPubkey: OWNER_PUBKEY,
   });
   await emitSignedEvent(page, "general", revision);
   const summary = page.locator(
     `[data-testid="message-thread-summary"][data-thread-head-id="${event.id}"]`,
   );
   await expect(summary).toBeVisible();
-  await summary.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await summary.evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
   await waitForAnimations(page);
   await summary.click();
   await expect(page.getByTestId("message-thread-panel")).toBeVisible();
-  await expect(page.frameLocator('section[aria-label="Website preview"]:has-text("Version 2") iframe').getByRole("heading", { name: "Revised layout" })).toBeVisible();
+  await expect(
+    page
+      .frameLocator(
+        'section[aria-label="Website preview"]:has-text("Version 2") iframe',
+      )
+      .getByRole("heading", { name: "Revised layout" }),
+  ).toBeVisible();
   await expect(page.getByText("Version 2", { exact: true })).toBeVisible();
   await waitForAnimations(page);
   await page.screenshot({ path: info.outputPath("thread-revision.png") });
+  const panel = page.getByTestId("message-thread-panel");
+  await panel.getByRole("button", { name: "Close panel", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await summary.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await waitForAnimations(page);
+  await summary.click();
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("Version 1", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Version 2", { exact: true })).toBeVisible();
+  await expect(
+    panel.locator('section[aria-label="Website preview"]').filter({ hasText: "Version 2" })
+      .frameLocator("iframe").getByRole("heading", { name: "Revised layout" }),
+  ).toBeVisible();
 
 });
