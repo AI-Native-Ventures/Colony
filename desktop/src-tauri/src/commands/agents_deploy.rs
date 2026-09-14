@@ -514,6 +514,45 @@ mod tests {
         );
     }
 
+    /// The remote payload carries whatever `effective_effort` would apply
+    /// locally, through exactly one tier: a canonical value as tier-1 policy
+    /// (with the tier-2 copy stripped), and a definition-supplied one as
+    /// tier-2 passthrough. Either way the child starts on the same effort a
+    /// local spawn would use, which is the parity that matters; promoting the
+    /// passthrough case to policy_env would overturn Colony's deliberate rule
+    /// in `launch_block_user_effort_env_survives_when_no_canonical_value`.
+    #[test]
+    fn launch_block_effort_matches_the_local_effective_value() {
+        let descriptor = EffectiveHarnessDescriptor {
+            command: "claude".into(),
+            args: vec![],
+            env: BTreeMap::from([("BUZZ_ACP_EFFORT_LEVEL".to_string(), "low".to_string())]),
+        };
+        for (canonical, expected) in [(None, "low"), (Some("high".to_string()), "high")] {
+            let mut record = record();
+            record.effort_level = canonical;
+            let local = crate::managed_agents::spawn_snapshot::effective_effort(
+                &record,
+                &descriptor.env,
+            );
+            let launch = build_launch_block(
+                &record,
+                &descriptor,
+                &[],
+                None,
+                None,
+                "owner-hex",
+                Default::default(),
+            );
+            let remote = launch["policy_env"]
+                .get("BUZZ_ACP_EFFORT_LEVEL")
+                .or_else(|| launch["env"].get("BUZZ_ACP_EFFORT_LEVEL"))
+                .and_then(|value| value.as_str());
+            assert_eq!(local.as_deref(), Some(expected));
+            assert_eq!(remote, Some(expected), "remote must start on the same effort");
+        }
+    }
+
     #[test]
     fn launch_block_does_not_inject_effort_level_when_absent() {
         // I-4: no BUZZ_ACP_EFFORT_LEVEL in policy_env when record.effort_level is None.
