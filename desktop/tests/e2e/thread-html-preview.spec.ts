@@ -85,7 +85,7 @@ test("saved HTML artifact renders and expands with a contained mobile preview", 
   await dialog.screenshot({
     path: info.outputPath("expanded-mobile-preview.png"),
   });
-  await page.keyboard.press("Escape");
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   const revision = signBlockInstance({
     channelId: GENERAL_CHANNEL_ID,
