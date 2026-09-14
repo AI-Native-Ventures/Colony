@@ -39,7 +39,7 @@ export function ArtifactHtmlPreview({ data }: { data: unknown }) {
         style={{
           width: mobile ? 390 : "100%",
           maxWidth: "100%",
-          height: large ? "70vh" : 460,
+          height: large ? "70vh" : "min(300px, 35vh)",
         }}
         title={mobile ? "Mobile HTML preview" : "Desktop HTML preview"}
       />
