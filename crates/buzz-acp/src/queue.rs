@@ -1938,6 +1938,8 @@ fn format_conversation_context(
 #[derive(Default)]
 pub struct FormatPromptArgs<'a> {
     pub agent_core: Option<&'a str>,
+    /// Owner-signed instructions for an active huddle channel.
+    pub huddle_instructions: Option<&'a str>,
     pub channel_info: Option<&'a PromptChannelInfo>,
     pub conversation_context: Option<&'a ConversationContext>,
     /// Rendered `[Thread Record]` section — structured protocol events tied
@@ -2003,6 +2005,7 @@ pub(crate) struct StandingContext<'a> {
     pub system_prompt: Option<&'a str>,
     pub team_instructions: Option<&'a str>,
     pub agent_core: Option<&'a str>,
+    pub huddle_instructions: Option<&'a str>,
     pub agent_canvas: Option<&'a str>,
     /// `[Thread Canvas]` section with the thread's canvas content inline,
     /// scoped to the session's originating thread.
@@ -2028,6 +2031,13 @@ impl StandingContext<'_> {
         }
         if let Some(core) = self.agent_core {
             sections.push(core.to_string());
+        }
+        if let Some(instructions) = self
+            .huddle_instructions
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            sections.push(format!("[Huddle Instructions]\n{instructions}"));
         }
         if let Some(canvas) = self.agent_canvas {
             sections.push(canvas.to_string());
@@ -2102,6 +2112,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
                 system_prompt: args.system_prompt,
                 team_instructions: args.team_instructions,
                 agent_core: args.agent_core,
+                huddle_instructions: args.huddle_instructions,
                 agent_canvas: args.agent_canvas,
                 agent_thread_canvas: args.agent_thread_canvas,
             }
@@ -3456,6 +3467,7 @@ mod tests {
             system_prompt: Some("test system prompt"),
             team_instructions: Some("ship small"),
             agent_core: Some(core),
+            huddle_instructions: None,
             agent_canvas: Some(canvas),
             standing_context_sent: sent,
             ..Default::default()

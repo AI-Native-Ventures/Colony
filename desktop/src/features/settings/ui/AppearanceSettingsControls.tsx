@@ -15,6 +15,7 @@ import {
   useLinkPreviewStyle,
   type LinkPreviewStyle,
 } from "@/shared/lib/linkPreviewStylePreference";
+import { isLinuxPlatform } from "@/shared/lib/platform";
 import type { ResolvedLinkPreview } from "@/shared/lib/useResolvedLinkPreviews";
 import { LinkPreviewAttachmentPresentation } from "@/shared/ui/link-preview-attachment";
 import type { LinkPreviewImageLightboxProps } from "@/shared/ui/rich-link-preview-attachment";
@@ -401,6 +402,9 @@ export function GlassBackgroundSetting() {
     setGlassOpacity,
   } = useTheme();
   const shouldReduceMotion = useReducedMotion();
+
+  if (isLinuxPlatform()) return null;
+
   const shouldShowOpacity = glassBackgroundSupported && glassBackground;
   const opacityRow = (
     <SettingsOptionRow data-testid="glass-opacity-row">
