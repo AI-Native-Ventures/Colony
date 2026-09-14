@@ -133,13 +133,12 @@ export function CreateChannelFormFields({
       <ChannelTypeSettings
         disabled={isCreating}
         label="Type"
-        onOpenChange={form.setTypePopoverOpen}
         onTemporaryChange={form.setEphemeral}
         onTtlSecondsChange={form.setTtlSeconds}
-        open={form.typePopoverOpen}
         temporary={form.ephemeral}
         testIdPrefix="create-channel"
         ttlSeconds={form.ttlSeconds}
+        variant="segmented"
       />
 
       <ChannelPermissionsSettings
@@ -147,6 +146,7 @@ export function CreateChannelFormFields({
         onVisibilityChange={form.setVisibility}
         testIdPrefix="create-channel"
         visibility={form.visibility}
+        variant="segmented"
       />
 
       {form.project.enabled && form.project.options.length > 0 ? (
@@ -206,13 +206,15 @@ export function CreateChannelFormFields({
       ) : null}
 
       <div
-        className={cn(
-          "flex min-h-12 items-center justify-between gap-4 rounded-xl border border-input bg-background px-3 py-3",
-          isCreating && "opacity-50",
-        )}
+        className="flex min-h-12 items-center justify-between gap-4 rounded-xl border border-input bg-background px-3 py-3"
         data-testid="create-channel-template-container"
       >
-        <span className="text-sm font-medium text-foreground">
+        <span
+          className={cn(
+            "text-sm font-medium text-foreground",
+            isCreating && "opacity-50",
+          )}
+        >
           Template
           <span className={CREATE_LABEL_OPTIONAL_CLASS}>Optional</span>
         </span>

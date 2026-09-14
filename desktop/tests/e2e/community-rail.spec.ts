@@ -4,6 +4,7 @@ import { installMockBridge } from "../helpers/bridge";
 import { FEATURE_OVERRIDES_STORAGE_KEY } from "../helpers/features";
 
 const RELAY_URL = "ws://localhost:3000";
+const THEME_STORAGE_KEY = "buzz-theme";
 const OWNER_PUBKEY = "deadbeef".repeat(8);
 
 function snapshotKey(relayUrl: string) {
@@ -22,6 +23,28 @@ const COMMUNITY_B = {
   relayUrl: "ws://localhost:3001",
   addedAt: "2026-01-02T00:00:00.000Z",
 };
+
+// Upstream measures 1px left and 8px right here. Colony's chrome layout sets
+// its own inset, so the values below are Colony's: the point of the assertion
+// is that the collapsed gutter adds its strip without shifting the right edge.
+async function expectContentSurfaceHorizontalGutters(
+  page: import("@playwright/test").Page,
+  expectedLeftGutter = 0,
+) {
+  const [mainInsetBox, contentBox] = await Promise.all([
+    page.locator("[data-buzz-glass-inset]").boundingBox(),
+    page.locator("[data-buzz-content-surface]").first().boundingBox(),
+  ]);
+  expect(mainInsetBox).not.toBeNull();
+  expect(contentBox).not.toBeNull();
+  const leftGutter = (contentBox?.x ?? 0) - (mainInsetBox?.x ?? 0);
+  const rightGutter =
+    (mainInsetBox?.x ?? 0) +
+    (mainInsetBox?.width ?? 0) -
+    ((contentBox?.x ?? 0) + (contentBox?.width ?? 0));
+  expect(Math.abs(leftGutter - expectedLeftGutter)).toBeLessThan(0.5);
+  expect(Math.abs(rightGutter - 12)).toBeLessThan(0.5);
+}
 
 async function seedCommunities(
   page: import("@playwright/test").Page,
@@ -64,7 +87,7 @@ test.describe("community rail", () => {
       "overflow",
       "visible",
     );
-    await expect(rail).toHaveCSS("z-index", "0");
+    await expect(rail).toHaveCSS("z-index", "20");
 
     const buttonA = page.getByTestId(`community-rail-button-${COMMUNITY_A.id}`);
     const buttonB = page.getByTestId(`community-rail-button-${COMMUNITY_B.id}`);
@@ -137,6 +160,7 @@ test.describe("community rail", () => {
 
     // The add-community affordance lives at the bottom of the rail.
     await expect(page.getByTestId("community-rail-add")).toBeVisible();
+    await expectContentSurfaceHorizontalGutters(page);
   });
 
   test("restores pointer events after dismissing community settings", async ({
@@ -1050,6 +1074,34 @@ test.describe("community rail", () => {
     await expect(page.getByTestId("add-community-dialog")).toBeVisible();
     await expect(page.getByTestId("add-community-create")).toBeVisible();
     await expect(page.getByTestId("add-community-join")).toBeVisible();
+
+    // Colony keeps the rail for a single community, and hides it with the
+    // sidebar, so the collapsed state is where #6000's gutter applies here.
+    await page.evaluate(() => {
+      const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform);
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "s",
+          ctrlKey: !isMac,
+          metaKey: isMac,
+        }),
+      );
+    });
+    await expect(page.getByTestId("community-rail")).toHaveCount(0);
+    await expect(page.locator("[data-collapsed-content-gutter]")).toHaveCSS(
+      "width",
+      "8px",
+    );
+    const sidebarBackground = await page
+      .locator("[data-buzz-glass-inset]")
+      .evaluate((element) => getComputedStyle(element).backgroundColor);
+    await expect(page.locator("[data-collapsed-content-gutter]")).toHaveCSS(
+      "background-color",
+      sidebarBackground,
+    );
+    await expectContentSurfaceHorizontalGutters(page, 20);
   });
 
   test("hides the rail when the sidebar is collapsed and restores it", async ({
@@ -1087,6 +1139,10 @@ test.describe("community rail", () => {
       page.getByTestId(`community-rail-button-${COMMUNITY_B.id}`),
     ).toBeVisible();
     await expect(page.getByTestId("community-rail-add")).toBeVisible();
+    await expect(page.locator("[data-collapsed-content-gutter]")).toHaveCount(
+      0,
+    );
+    await expectContentSurfaceHorizontalGutters(page);
   });
 
   for (const { theme, classicScrollbars } of [

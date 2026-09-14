@@ -113,13 +113,24 @@ function chunkLength(chunk: TerminalChunk): number {
   return typeof chunk === "string" ? chunk.length : chunk.byteLength;
 }
 
+/**
+ * Terminal type follows the virtual typography rem, not the real root size.
+ * Cmd +/- and the Font size preference both compose on `--buzz-type-rem`
+ * while the root stays 16px (#5644), so reading the root froze the terminal
+ * at every zoom step. The default virtual rem is 16px, so nothing moves at
+ * the default preference.
+ */
+function terminalTypeRemPx(): number {
+  const styles = globalThis.getComputedStyle(document.documentElement);
+  const typeRem = Number.parseFloat(styles.getPropertyValue("--buzz-type-rem"));
+  return Number.isFinite(typeRem)
+    ? typeRem
+    : Number.parseFloat(styles.fontSize);
+}
+
 function computedTerminalFontSize(): number {
-  const rootSize = Number.parseFloat(
-    globalThis.getComputedStyle(document.documentElement).fontSize,
-  );
-  return Number.isFinite(rootSize)
-    ? Math.max(10, rootSize * TERMINAL_FONT_SCALE)
-    : 14;
+  const base = terminalTypeRemPx();
+  return Number.isFinite(base) ? Math.max(10, base * TERMINAL_FONT_SCALE) : 14;
 }
 
 /**
@@ -354,8 +365,7 @@ export function TerminalBody({
         const fontSize = computedTerminalFontSize();
         if (terminal) terminal.options.fontSize = fontSize;
         host.dataset.terminalFontSize = String(fontSize);
-        host.dataset.terminalRootFontSize =
-          document.documentElement.style.fontSize;
+        host.dataset.terminalRootFontSize = `${terminalTypeRemPx()}px`;
         coalesceSync();
       });
       rootObserver.observe(document.documentElement, {
@@ -416,9 +426,7 @@ export function TerminalBody({
         void writeTerminalInput(tab.id, data);
       });
 
-      host.dataset.terminalRootFontSize = getComputedStyle(
-        document.documentElement,
-      ).fontSize;
+      host.dataset.terminalRootFontSize = `${terminalTypeRemPx()}px`;
       host.dataset.terminalFontSize = String(computedTerminalFontSize());
 
       // Initial sync after fonts ready

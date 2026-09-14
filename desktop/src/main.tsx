@@ -23,6 +23,8 @@ import { PoofBurstProvider } from "@/shared/ui/PoofBurstProvider";
 import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
+import { initializeConversationDensityPreference } from "@/shared/lib/conversationDensityPreference";
+import { initializeFontSizePreference } from "@/shared/lib/fontSizePreference";
 import { installTauriNativeBridge } from "@/shared/api/tauriNativeBridge";
 import { installElectronNativeBridge } from "@/shared/api/electronNativeBridge";
 import { registerAllTabKinds } from "@/features/workspace/kinds";
@@ -191,6 +193,8 @@ async function bootstrap() {
   configureDevE2eBridgeFromUrl();
   registerAllTabKinds();
   recoverLocalStorageQuotaOnStartup();
+  initializeConversationDensityPreference();
+  initializeFontSizePreference();
   await installE2eBridgeIfConfigured();
   await installRealShellHarnessIfConfigured();
   await migrateLegacyCommunityStorageBeforeRender();

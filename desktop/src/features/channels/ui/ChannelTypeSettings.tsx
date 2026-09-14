@@ -1,10 +1,11 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ClockFading, Hash } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import {
   DEFAULT_EPHEMERAL_TTL_SECONDS,
   formatTtlDuration,
 } from "@/features/channels/lib/ephemeralChannel";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -13,7 +14,13 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { SegmentedControl } from "@/shared/ui/segmented-control";
 import { ChannelTypePicker } from "./ChannelTypePicker";
+
+const CHANNEL_TYPE_OPTIONS = [
+  { value: "temporary", label: "Temporary", Icon: ClockFading },
+  { value: "ongoing", label: "Ongoing", Icon: Hash },
+] as const;
 
 const EPHEMERAL_TIMEOUT_OPTIONS = [
   { label: "30 minutes", seconds: 30 * 60 },
@@ -42,6 +49,7 @@ export function ChannelTypeSettings({
   temporary,
   testIdPrefix,
   ttlSeconds,
+  variant = "dropdown",
 }: {
   disabled?: boolean;
   label?: string;
@@ -52,6 +60,7 @@ export function ChannelTypeSettings({
   temporary: boolean;
   testIdPrefix: string;
   ttlSeconds: number;
+  variant?: "dropdown" | "segmented";
 }) {
   const shouldReduceMotion = useReducedMotion();
   const channelTypeResizeTransition = shouldReduceMotion
@@ -79,17 +88,36 @@ export function ChannelTypeSettings({
         className="flex items-center justify-between gap-3 px-3 py-3"
         data-testid={`${testIdPrefix}-channel-type-row`}
       >
-        <span className="text-sm font-medium text-foreground">{label}</span>
-        <ChannelTypePicker
-          align="end"
-          className="-mr-2.5"
-          disabled={disabled}
-          onOpenChange={onOpenChange}
-          onTemporaryChange={onTemporaryChange}
-          open={open}
-          temporary={temporary}
-          testId={`${testIdPrefix}-channel-type`}
-        />
+        <span
+          className={cn(
+            "text-sm font-medium text-foreground",
+            disabled && variant === "segmented" && "opacity-50",
+          )}
+        >
+          {label}
+        </span>
+        {variant === "segmented" ? (
+          <SegmentedControl
+            disabled={disabled}
+            legend="Channel type"
+            onValueChange={(value) => onTemporaryChange(value === "temporary")}
+            optionTestIdPrefix={`${testIdPrefix}-channel-type-option`}
+            options={CHANNEL_TYPE_OPTIONS}
+            testId={`${testIdPrefix}-channel-type`}
+            value={temporary ? "temporary" : "ongoing"}
+          />
+        ) : (
+          <ChannelTypePicker
+            align="end"
+            className="-mr-2.5"
+            disabled={disabled}
+            onOpenChange={onOpenChange}
+            onTemporaryChange={onTemporaryChange}
+            open={open}
+            temporary={temporary}
+            testId={`${testIdPrefix}-channel-type`}
+          />
+        )}
       </div>
       <AnimatePresence initial={false}>
         {temporary ? (
@@ -106,7 +134,10 @@ export function ChannelTypeSettings({
               data-testid={`${testIdPrefix}-ephemeral-settings`}
             >
               <label
-                className="text-sm font-medium"
+                className={cn(
+                  "text-sm font-medium",
+                  disabled && variant === "segmented" && "opacity-50",
+                )}
                 htmlFor={`${testIdPrefix}-ttl`}
               >
                 Expires after

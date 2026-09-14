@@ -42,7 +42,7 @@ export type AppSidebarPinnedHeaderProps = {
   onCreateChannel: () => void;
   commandActions?: readonly SearchCommand[];
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
-  onOpenSearchResult: (hit: SearchHit) => void;
+  onOpenSearchResult: (hit: SearchHit, query: string) => void;
   onSelectChannel: (channelId: string) => void;
   searchChannels: Channel[];
   searchFocusRequest: number;

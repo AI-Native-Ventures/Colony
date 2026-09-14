@@ -14,7 +14,7 @@ export function MessageHeaderRow({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0 leading-4",
+        "flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0 leading-message-author",
         className,
       )}
       data-testid="message-header"
@@ -94,7 +94,7 @@ export function MessageAuthorText({
   return (
     <Component
       className={cn(
-        "truncate text-sm font-bold leading-4 tracking-tight",
+        "truncate text-message font-semibold leading-message-author tracking-normal",
         hoverUnderline && "hover:underline",
         className,
       )}

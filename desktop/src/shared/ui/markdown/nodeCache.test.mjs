@@ -207,9 +207,27 @@ test("oversized content bypasses the cache", () => {
   assert.notEqual(first, second);
 });
 
-test("active search queries bypass the cache", () => {
+test("single-character scoped search stays on lexeme boundaries", () => {
+  const html = renderToStaticMarkup(
+    renderCachedMarkdown({ ...BASE, content: "A plan", searchQuery: "a" }),
+  );
+
+  assert.equal((html.match(/data-search-match="true"/g) ?? []).length, 1);
+});
+
+test("active search queries bypass the cache and highlight every match", () => {
   clearMarkdownNodeCache();
-  const first = renderCachedMarkdown({ ...BASE, searchQuery: "bold" });
-  const second = renderCachedMarkdown({ ...BASE, searchQuery: "bold" });
+  const input = {
+    ...BASE,
+    content: "Bold and bold, but not code `bold`.",
+    searchQuery: "bold",
+  };
+  const first = renderCachedMarkdown(input);
+  const second = renderCachedMarkdown(input);
+  const html = renderToStaticMarkup(first);
+
   assert.notEqual(first, second);
+  assert.equal((html.match(/data-search-match="true"/g) ?? []).length, 2);
+  assert.match(html, /bg-yellow-300/);
+  assert.match(html, /<code>bold<\/code>/);
 });

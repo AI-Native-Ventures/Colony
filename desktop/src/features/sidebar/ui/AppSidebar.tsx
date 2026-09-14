@@ -157,7 +157,7 @@ type AppSidebarProps = {
   onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
-  onOpenSearchResult: (hit: SearchHit) => void;
+  onOpenSearchResult: (hit: SearchHit, query: string) => void;
   /**
    * Full channel set used for global search. Unlike `channels` (which is
    * scoped to the viewer's joined sidebar list), this includes open channels

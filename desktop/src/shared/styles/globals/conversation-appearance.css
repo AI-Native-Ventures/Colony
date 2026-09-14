@@ -25,7 +25,7 @@
 }
 
 :root[data-buzz-sidebar] .colony-message-header [data-testid="message-author"] {
-  font-size: 0.8125rem;
+  font-size: calc(var(--buzz-type-rem) * 0.8125);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -33,7 +33,7 @@
 :root[data-buzz-sidebar]
   .colony-message-header
   [data-testid="message-agent-role"] {
-  font-size: 0.75rem;
+  font-size: calc(var(--buzz-type-rem) * 0.75);
   line-height: 1.4;
 }
 
@@ -95,7 +95,7 @@
 }
 
 :root[data-buzz-sidebar] [data-colony-thread-header] h2 {
-  font-size: 1.25rem;
+  font-size: calc(var(--buzz-type-rem) * 1.25);
   line-height: 1.2;
   letter-spacing: -0.025em;
 }
@@ -167,7 +167,7 @@
   margin-top: 0.75rem;
   padding: 0.25rem 0;
   color: color-mix(in srgb, hsl(var(--primary)), hsl(var(--foreground)));
-  font-size: 0.75rem;
+  font-size: calc(var(--buzz-type-rem) * 0.75);
   font-weight: 500;
   cursor: pointer;
 }
@@ -208,6 +208,6 @@
   position: relative;
   background: hsl(var(--background));
   color: hsl(var(--muted-foreground));
-  font-size: 0.75rem;
+  font-size: calc(var(--buzz-type-rem) * 0.75);
   line-height: 1rem;
 }

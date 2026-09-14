@@ -145,57 +145,106 @@ export function useThreadViewModeSwitch({
     [],
   );
 
-  const preserveThreadScrollPosition = React.useCallback(() => {
-    const body = document.querySelector<HTMLElement>(
-      '[data-testid="message-thread-body"]',
-    );
-    const target = getLayoutScrollTarget(body, activeThreadHeadId, channelId);
-    const token = layoutRestoreTokenRef.current + 1;
-    layoutRestoreTokenRef.current = token;
-    setLayoutScrollTarget(null);
-    if (!body || !target || !channelId) return;
+  // Per-presentation scroll memory: `channelId|threadHeadId|mode` to the
+  // scroll position and content height last seen in that presentation.
+  const presentationScrollRef = React.useRef(
+    new Map<string, { scrollHeight: number; scrollTop: number }>(),
+  );
 
-    let remainingFrames = 24;
-    let settledFrames = 0;
-    const restoreAfterLayout = () => {
-      requestAnimationFrame(() => {
-        const scope = activeScopeRef.current;
-        if (
-          layoutRestoreTokenRef.current !== token ||
-          scope.channelId !== channelId ||
-          scope.activeThreadHeadId !== target.threadHeadId ||
-          document.querySelector('[data-testid="message-thread-body"]') !== body
-        ) {
-          return;
-        }
+  const preserveThreadScrollPosition = React.useCallback(
+    (presentation?: { from: string; to: string }) => {
+      const body = document.querySelector<HTMLElement>(
+        '[data-testid="message-thread-body"]',
+      );
+      const target = getLayoutScrollTarget(body, activeThreadHeadId, channelId);
+      // `scrollTop` is integer-quantised, so a row-plus-offset restore can only
+      // land within half a pixel, and the reading anchor is the first row whose
+      // bottom crosses the top edge: a row straddling it by a fraction
+      // (measured: 0.08px) flips to the next row on that residual, which reads
+      // as the thread jumping a row. Returning to a presentation you already
+      // left is exempt from that: its geometry is the geometry you measured, so
+      // the position is restored verbatim and the anchor cannot flip.
+      const presentationKey =
+        presentation && channelId && activeThreadHeadId
+          ? `${channelId}|${activeThreadHeadId}|${presentation.to}`
+          : null;
+      const remembered = presentationKey
+        ? presentationScrollRef.current.get(presentationKey)
+        : undefined;
+      if (body && presentation && channelId && activeThreadHeadId) {
+        presentationScrollRef.current.set(
+          `${channelId}|${activeThreadHeadId}|${presentation.from}`,
+          { scrollHeight: body.scrollHeight, scrollTop: body.scrollTop },
+        );
+      }
+      const token = layoutRestoreTokenRef.current + 1;
+      layoutRestoreTokenRef.current = token;
+      setLayoutScrollTarget(null);
+      if (!body || !target || !channelId) return;
 
-        const row = Array.from(
-          body.querySelectorAll<HTMLElement>("[data-message-id]"),
-        ).find((candidate) => candidate.dataset.messageId === target.messageId);
-        if (!row) {
-          setLayoutScrollTarget(target);
-          return;
-        }
+      let remainingFrames = 24;
+      let settledFrames = 0;
+      const restoreAfterLayout = () => {
+        requestAnimationFrame(() => {
+          const scope = activeScopeRef.current;
+          if (
+            layoutRestoreTokenRef.current !== token ||
+            scope.channelId !== channelId ||
+            scope.activeThreadHeadId !== target.threadHeadId ||
+            document.querySelector('[data-testid="message-thread-body"]') !==
+              body
+          ) {
+            return;
+          }
 
-        const delta = getLayoutScrollOffsetDelta(body, row, target.topOffsetPx);
-        if (Math.abs(delta) <= 0.5) {
-          settledFrames += 1;
-        } else {
-          body.scrollTop += delta;
-          settledFrames = 0;
-        }
+          const row = Array.from(
+            body.querySelectorAll<HTMLElement>("[data-message-id]"),
+          ).find(
+            (candidate) => candidate.dataset.messageId === target.messageId,
+          );
+          if (!row) {
+            setLayoutScrollTarget(target);
+            return;
+          }
 
-        remainingFrames -= 1;
-        if (remainingFrames > 0 && settledFrames < 3) restoreAfterLayout();
-      });
-    };
-    restoreAfterLayout();
-  }, [activeThreadHeadId, channelId]);
+          if (remembered && remembered.scrollHeight === body.scrollHeight) {
+            if (body.scrollTop !== remembered.scrollTop) {
+              body.scrollTop = remembered.scrollTop;
+              settledFrames = 0;
+            } else {
+              settledFrames += 1;
+            }
+            remainingFrames -= 1;
+            if (remainingFrames > 0 && settledFrames < 3) restoreAfterLayout();
+            return;
+          }
+
+          const delta = getLayoutScrollOffsetDelta(
+            body,
+            row,
+            target.topOffsetPx,
+          );
+          if (Math.abs(delta) <= 0.5) {
+            settledFrames += 1;
+          } else {
+            body.scrollTop += delta;
+            settledFrames = 0;
+          }
+
+          remainingFrames -= 1;
+          if (remainingFrames > 0 && settledFrames < 3) restoreAfterLayout();
+        });
+      };
+      restoreAfterLayout();
+    },
+    [activeThreadHeadId, channelId],
+  );
 
   React.useEffect(() => {
     if (!channelId) return;
     return subscribeBeforeChannelSurfaceModeChange((change) => {
-      if (change.channelId === channelId) preserveThreadScrollPosition();
+      if (change.channelId === channelId)
+        preserveThreadScrollPosition({ from: change.from, to: change.to });
     });
   }, [channelId, preserveThreadScrollPosition]);
 

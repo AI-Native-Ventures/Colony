@@ -304,7 +304,7 @@
 }
 
 :root[data-buzz-sidebar][data-workspace-gradient] [data-testid="chat-title"] {
-  font-size: 1.25rem;
+  font-size: calc(var(--buzz-type-rem) * 1.25);
   line-height: 1.5rem;
 }
 

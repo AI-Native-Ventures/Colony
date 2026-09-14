@@ -2,6 +2,8 @@ import { Search } from "lucide-react";
 import * as React from "react";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { getMinimumSearchQueryLength } from "@/features/search/hooks";
+import { parseSearchOperators } from "@/features/search/lib/parseSearchOperators";
+import { buildSearchResultPreview } from "@/features/search/lib/searchMatch";
 import { useSearchResults } from "@/features/search/useSearchResults";
 import {
   resultIcon,
@@ -15,10 +17,20 @@ import {
   getChannelScopeLabel,
   SearchDialogInputRow,
 } from "@/features/search/ui/SearchScopeControls";
+import { HighlightedSearchText } from "@/features/search/ui/HighlightedSearchText";
+import {
+  formatRelativeTime,
+  getChannelActivityTime,
+  getChannelDisplayName,
+  getChannelPreview,
+  getChannelSuggestionMeta,
+  getUserDisplayName,
+  getUserSecondaryLabel,
+} from "@/features/search/ui/searchResultLabels";
 import { useSearchMenuKeyboardNavigation } from "@/features/search/ui/useSearchMenuKeyboardNavigation";
 import type { Channel, SearchHit, UserSearchResult } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
-import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Dialog, DialogContent, DialogTitle } from "@/shared/ui/dialog";
 import { useDeferredModalOpen } from "@/shared/ui/deferredModalOpen";
 import {
@@ -35,7 +47,7 @@ type TopbarSearchProps = {
   currentChannelId?: string | null;
   focusRequest?: number;
   onOpenChannel: (channelId: string) => void;
-  onOpenResult: (hit: SearchHit) => void;
+  onOpenResult: (hit: SearchHit, query: string) => void;
   onOpenUser?: (user: UserSearchResult) => void | Promise<void>;
   onBrowseChannels?: () => void | Promise<void>;
   onCreateAgent?: () => void | Promise<void>;
@@ -67,93 +79,6 @@ type SearchHitContextLabel = {
   channelLabel: string | null;
   text: string;
 };
-function truncateResultText(content: string, maxLength = 96) {
-  const trimmed = content.trim();
-  if (trimmed.length === 0) {
-    return "No message body.";
-  }
-  if (trimmed.length <= maxLength) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, maxLength - 3).trimEnd()}...`;
-}
-
-function formatRelativeTime(unixSeconds: number) {
-  const diff = Math.floor(Date.now() / 1_000) - unixSeconds;
-  if (diff < 60) {
-    return "just now";
-  }
-  if (diff < 60 * 60) {
-    return `${Math.floor(diff / 60)}m ago`;
-  }
-  if (diff < 60 * 60 * 24) {
-    return `${Math.floor(diff / (60 * 60))}h ago`;
-  }
-  if (diff < 60 * 60 * 24 * 7) {
-    return `${Math.floor(diff / (60 * 60 * 24))}d ago`;
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(unixSeconds * 1_000));
-}
-
-function getChannelActivityTime(channel: Channel) {
-  if (!channel.lastMessageAt) {
-    return 0;
-  }
-
-  const timestamp = Date.parse(channel.lastMessageAt);
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function getChannelSuggestionMeta(channel: Channel) {
-  const activityTime = getChannelActivityTime(channel);
-
-  if (activityTime > 0) {
-    return formatRelativeTime(Math.floor(activityTime / 1_000));
-  }
-
-  return null;
-}
-
-function getChannelDisplayName(
-  channel: Channel,
-  channelLabels?: Record<string, string>,
-) {
-  return channelLabels?.[channel.id]?.trim() || channel.name;
-}
-
-function getChannelPreview(channel: Channel) {
-  if (channel.channelType === "dm") {
-    return "";
-  }
-
-  if (channel.description.trim()) {
-    return channel.description;
-  }
-
-  return "";
-}
-
-function getUserDisplayName(user: UserSearchResult) {
-  return (
-    user.displayName?.trim() ||
-    user.nip05Handle?.trim() ||
-    truncatePubkey(user.pubkey)
-  );
-}
-
-function getUserSecondaryLabel(user: UserSearchResult) {
-  const displayName = user.displayName?.trim();
-  const nip05Handle = user.nip05Handle?.trim();
-
-  if (nip05Handle && nip05Handle !== displayName) {
-    return nip05Handle;
-  }
-
-  return null;
-}
 
 function getSearchHitChannelName(
   hit: SearchHit,
@@ -425,6 +350,10 @@ export function TopbarSearch({
     scopeChannelId,
   });
   const trimmedQuery = query.trim();
+  // Bind highlights to the debounced result source so stale results can never
+  // pair with newly typed text during the debounce window.
+  const resultQuery = parseSearchOperators(debouncedQuery).text;
+  const resultsAreCurrent = debouncedQuery === trimmedQuery;
   const isIconVariant = variant === "icon";
   const currentChannel = currentChannelId
     ? (channelLookup.get(currentChannelId) ?? null)
@@ -522,9 +451,16 @@ export function TopbarSearch({
     suggestionActionResults,
     trimmedQuery,
   ]);
+  // Results from a stale query keep painting the old matches while the new
+  // ones load, and the highlight would then mark the wrong terms (#6702).
+  const visibleSearchableResults = resultsAreCurrent ? searchableResults : [];
   const searchResultSections = React.useMemo(
-    () => groupSearchResults([...filteredCommandResults, ...searchableResults]),
-    [filteredCommandResults, searchableResults],
+    () =>
+      groupSearchResults([
+        ...filteredCommandResults,
+        ...visibleSearchableResults,
+      ]),
+    [filteredCommandResults, visibleSearchableResults],
   );
   const groupedSearchResults = React.useMemo(
     () => searchResultSections.flatMap((section) => section.results),
@@ -534,8 +470,11 @@ export function TopbarSearch({
     ? scopeChannel
       ? []
       : suggestionResults
-    : groupedSearchResults;
+    : resultsAreCurrent
+      ? groupedSearchResults
+      : [];
   const isSearchLoading =
+    (!isShowingSuggestions && !resultsAreCurrent) ||
     isWaitingOnFromResolution ||
     searchQuery.isFetching ||
     fuzzyUserCandidatesQuery.isFetching ||
@@ -589,9 +528,16 @@ export function TopbarSearch({
         return;
       }
 
-      onOpenResult(result.hit);
+      onOpenResult(result.hit, resultQuery);
     },
-    [onOpenChannel, onOpenResult, onOpenUser, openAfterExit, setQuery],
+    [
+      onOpenChannel,
+      onOpenResult,
+      onOpenUser,
+      openAfterExit,
+      resultQuery,
+      setQuery,
+    ],
   );
 
   // Edge-trigger: the counter never resets, so `!== 0` would replay on remount.
@@ -696,7 +642,7 @@ export function TopbarSearch({
           ? result.action.description
           : result.kind === "user"
             ? getUserSecondaryLabel(result.user)
-            : truncateResultText(result.hit.content);
+            : buildSearchResultPreview(result.hit.content, resultQuery);
     const trailingLabel =
       result.kind === "channel"
         ? getChannelSuggestionMeta(result.channel)
@@ -770,7 +716,7 @@ export function TopbarSearch({
               ) : null}
               {preview ? (
                 <span className="col-start-1 mt-1.5 block min-w-0 truncate text-sm leading-5 text-muted-foreground">
-                  {preview}
+                  <HighlightedSearchText query={resultQuery} text={preview} />
                 </span>
               ) : null}
             </span>
@@ -964,7 +910,7 @@ export function TopbarSearch({
           )}
         </button>
         <DialogContent
-          aria-busy={isSearchLoading && searchableResults.length === 0}
+          aria-busy={isSearchLoading && visibleSearchableResults.length === 0}
           className="mt-[18vh] max-w-2xl self-start gap-0 overflow-hidden rounded-2xl p-0 shadow-2xl"
           data-testid="search-results"
           onOpenAutoFocus={(event) => {

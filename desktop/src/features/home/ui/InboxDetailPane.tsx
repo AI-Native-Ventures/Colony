@@ -1,11 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  AlertCircle,
-  ArrowLeft,
-  ExternalLink,
-  LoaderCircle,
-  Mail,
-} from "lucide-react";
+import { AlertCircle, ArrowLeft, LoaderCircle, Mail } from "lucide-react";
 import * as React from "react";
 
 import { answerAsk, type AskAnswerInput } from "@/features/asks/answerAsk";
@@ -61,14 +55,14 @@ import { KIND_ASK } from "@/shared/constants/kinds";
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
+import {
+  InboxContextTitle,
+  InboxOpenContextAction,
+  InboxReopenStatus,
+} from "@/features/home/ui/InboxDetailHeaderParts";
 import { Button } from "@/shared/ui/button";
 import { VideoReviewNavigationProvider } from "@/shared/ui/VideoReviewNavigation";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/ui/tooltip";
+import { TooltipProvider } from "@/shared/ui/tooltip";
 
 const MembersSidebar = React.lazy(async () => {
   const module = await import("@/features/channels/ui/MembersSidebar");
@@ -131,6 +125,10 @@ type InboxDetailPaneProps = {
     messageId: string,
     threadRootId?: string | null,
   ) => void;
+  /** True while the selected hidden DM is being reopened on the relay. */
+  reopenPending?: boolean;
+  /** True when the last reopen of the selected hidden DM failed. */
+  reopenErrored?: boolean;
   onSendReply: (input: {
     content: string;
     mediaTags?: string[][];
@@ -195,6 +193,8 @@ function InboxMessageDetailPane({
   onRequestEmptyEditDelete,
   onManageChannel,
   onOpenContext,
+  reopenPending = false,
+  reopenErrored = false,
   onSendReply,
   onToggleReaction,
 }: InboxDetailPaneProps) {
@@ -707,67 +707,53 @@ function InboxMessageDetailPane({
                     <ArrowLeft />
                   </Button>
                 ) : null}
-                <div className="min-w-0">
-                  {canOpenChannel && contextChannelId ? (
-                    <h2 className="min-w-0">
-                      <button
-                        className="block min-w-0 max-w-full text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                        data-testid="home-inbox-context-title"
-                        onClick={() =>
+                <InboxContextTitle
+                  fullTimestampLabel={item.fullTimestampLabel}
+                  label={contextLabel}
+                  onOpen={
+                    canOpenChannel && contextChannelId
+                      ? () =>
                           onOpenContext(
                             contextChannelId,
                             sourceEventId,
                             contextThreadRootId,
                           )
-                        }
-                        title={openContextLabel}
-                        type="button"
-                      >
-                        <span className="block min-w-0 translate-y-px truncate">
-                          {contextLabel}
-                        </span>
-                      </button>
-                    </h2>
-                  ) : (
-                    <h2
-                      className="min-w-0 text-sm font-semibold leading-5 tracking-tight text-foreground"
-                      title={item.fullTimestampLabel}
-                    >
-                      <span className="block min-w-0 translate-y-px truncate">
-                        {contextLabel}
-                      </span>
-                    </h2>
-                  )}
-                </div>
+                      : null
+                  }
+                  openLabel={openContextLabel}
+                />
               </div>
 
               <TooltipProvider>
                 <div className="flex shrink-0 items-center gap-1">
                   <UpdateIndicator />
-                  {canOpenChannel && contextChannelId ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          aria-label={openContextLabel}
-                          className="rounded-full text-muted-foreground"
-                          data-testid="home-inbox-open-context"
-                          onClick={() =>
+                  <InboxReopenStatus
+                    errored={reopenErrored}
+                    onRetry={
+                      contextChannelId
+                        ? () =>
                             onOpenContext(
                               contextChannelId,
                               sourceEventId,
                               contextThreadRootId,
                             )
-                          }
-                          size="icon"
-                          type="button"
-                          variant="ghost"
-                        >
-                          <ExternalLink />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>{openContextLabel}</TooltipContent>
-                    </Tooltip>
-                  ) : null}
+                        : null
+                    }
+                    pending={reopenPending}
+                  />
+                  <InboxOpenContextAction
+                    label={openContextLabel}
+                    onOpen={
+                      canOpenChannel && contextChannelId
+                        ? () =>
+                            onOpenContext(
+                              contextChannelId,
+                              sourceEventId,
+                              contextThreadRootId,
+                            )
+                        : null
+                    }
+                  />
                   {channel ? (
                     <ChannelMembersBar
                       channel={channel}
@@ -796,7 +782,7 @@ function InboxMessageDetailPane({
 
         <div
           aria-busy={isThreadContextLoading}
-          className="-mt-13 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-32 pt-13 [overflow-anchor:none]"
+          className="-mt-13 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-32 pt-13"
           data-testid="home-inbox-detail-scroll"
           onScroll={onScroll}
           ref={scrollContainerRef}

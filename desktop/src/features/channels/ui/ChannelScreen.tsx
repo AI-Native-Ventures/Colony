@@ -8,25 +8,15 @@ import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandle
 import { useMessageEventProfilePubkeys } from "@/features/channels/useMessageEventProfilePubkeys";
 import { useMessageOwnerProfiles } from "@/features/channels/useMessageOwnerProfiles";
 import { useThreadTargetSync } from "@/features/channels/useThreadTargetSync";
-import {
-  useChannelMembersQuery,
-  useJoinChannelMutation,
-} from "@/features/channels/hooks";
-import {
-  MSG_PREFIX,
-  THREAD_PREFIX,
-} from "@/features/channels/readState/readStateFormat";
+import * as channelHooks from "@/features/channels/hooks";
+import * as readStateFormat from "@/features/channels/readState/readStateFormat";
 import { ChannelScreenEmptyState } from "@/features/channels/ui/ChannelScreenEmptyState";
 import { ChannelScreenHeader } from "@/features/channels/ui/ChannelScreenHeader";
 import { ChannelPane } from "@/features/channels/ui/ChannelScreenLazyViews";
 import { WelcomeAgentCreateDialog } from "@/features/channels/ui/WelcomeAgentCreateDialog";
 import { ForumChannelContent } from "@/features/channels/ui/ForumChannelContent";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
-import {
-  useManagedAgentsQuery,
-  usePersonasQuery,
-  useRelayAgentsQuery,
-} from "@/features/agents/hooks";
+import * as agentHooks from "@/features/agents/hooks";
 import { mergeChannelKnownAgentPubkeys } from "@/features/agents/knownAgentPubkeys";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
 import { pickWelcomeGuideAgent } from "@/features/onboarding/welcomeGuide";
@@ -46,7 +36,7 @@ import {
 import { buildMessageComposerEditTarget } from "@/features/messages/lib/draftMentionRefs";
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
 import { DeleteMessageConfirmDialog } from "@/features/messages/ui/DeleteMessageConfirmDialog";
-import { getThreadReference } from "@/features/messages/lib/threading";
+import * as threading from "@/features/messages/lib/threading";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useIndependentThreadPanel } from "@/features/messages/useIndependentThreadPanel";
 import { useThreadReplies } from "@/features/messages/useThreadReplies";
@@ -58,10 +48,7 @@ import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import type { RelayEvent, RespondToMode, SearchHit } from "@/shared/api/types";
 import { useChannelFind } from "@/features/search/useChannelFind";
 import { ChannelScreenLoadingFallback } from "@/features/channels/ui/ChannelScreenLoadingFallback";
-import {
-  useHuddleChannelMessages,
-  useIsHuddleTranscript,
-} from "@/features/channels/ui/useHuddleChannelMessages";
+import * as huddleMessages from "@/features/channels/ui/useHuddleChannelMessages";
 import { useHuddleReadMarker } from "@/features/channels/ui/useHuddleReadMarker";
 import { useHuddleThreadIsolation } from "@/features/channels/ui/useHuddleThreadIsolation";
 import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
@@ -93,6 +80,8 @@ export function ChannelScreen({
   targetForumReplyId,
   targetMessageEvents,
   targetMessageId,
+  targetSearchMessageId,
+  targetSearchQuery,
 }: ChannelScreenProps) {
   const queryClient = useQueryClient();
   const { goHome } = useAppNavigation();
@@ -163,7 +152,8 @@ export function ChannelScreen({
   const mainInsetRef = useMainInsetRef();
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
-  const isHuddleTranscript = useIsHuddleTranscript(activeChannelId);
+  const isHuddleTranscript =
+    huddleMessages.useIsHuddleTranscript(activeChannelId);
   const relaySelfPubkey = useRelaySelfQuery(activeChannel !== null).data;
   const effectiveOpenThreadHeadId = useHuddleThreadIsolation({
     closeThread: setOpenThreadHeadId,
@@ -203,7 +193,7 @@ export function ChannelScreen({
     const messages = messagesQuery.data;
     if (!messages) return null;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (getThreadReference(messages[index].tags).parentId === null)
+      if (threading.getThreadReference(messages[index].tags).parentId === null)
         return messages[index];
     }
     return null;
@@ -222,7 +212,8 @@ export function ChannelScreen({
       return;
     }
     setContextParentResolver((contextId) =>
-      contextId.startsWith(THREAD_PREFIX) || contextId.startsWith(MSG_PREFIX)
+      contextId.startsWith(readStateFormat.THREAD_PREFIX) ||
+      contextId.startsWith(readStateFormat.MSG_PREFIX)
         ? activeChannelId
         : null,
     );
@@ -242,20 +233,22 @@ export function ChannelScreen({
   const toggleReactionMutation = useToggleReactionMutation();
   const deleteMessageMutation = useDeleteMessageMutation(activeChannel);
   const editMessageMutation = useEditMessageMutation(activeChannel);
-  const joinChannelMutation = useJoinChannelMutation(activeChannelId);
+  const joinChannelMutation =
+    channelHooks.useJoinChannelMutation(activeChannelId);
   const [findEvents, setFindEvents] = React.useState<RelayEvent[]>([]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional
   React.useEffect(() => {
     setFindEvents([]);
   }, [activeChannelId]);
-  const { resolvedMessages, threadSummaries } = useHuddleChannelMessages({
-    activeChannel,
-    findEvents,
-    isHuddleTranscript,
-    messages: messagesQuery.data ?? EMPTY_RELAY_EVENTS,
-    targetMessageEvents,
-    windowStore: windowQuery.data,
-  });
+  const { resolvedMessages, threadSummaries } =
+    huddleMessages.useHuddleChannelMessages({
+      activeChannel,
+      findEvents,
+      isHuddleTranscript,
+      messages: messagesQuery.data ?? EMPTY_RELAY_EVENTS,
+      targetMessageEvents,
+      windowStore: windowQuery.data,
+    });
   useHuddleReadMarker({
     activeChannelId,
     activeChannelIsMember: activeChannel?.isMember,
@@ -295,9 +288,11 @@ export function ChannelScreen({
         : [],
     [activeChannel],
   );
-  const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
+  const channelMembersQuery = channelHooks.useChannelMembersQuery(
+    activeChannel?.id ?? null,
+  );
   const channelMembers = channelMembersQuery.data;
-  const managedAgentsQuery = useManagedAgentsQuery();
+  const managedAgentsQuery = agentHooks.useManagedAgentsQuery();
   const managedAgents = managedAgentsQuery.data ?? [];
   const welcomeGuideAgent = React.useMemo(
     () => pickWelcomeGuideAgent(managedAgents),
@@ -308,7 +303,7 @@ export function ChannelScreen({
     currentIdentity,
     welcomeGuideAgent,
   });
-  const relayAgentsQuery = useRelayAgentsQuery();
+  const relayAgentsQuery = agentHooks.useRelayAgentsQuery();
   const relayAgents = relayAgentsQuery.data ?? [];
   const knownAgentPubkeys = React.useMemo(
     () =>
@@ -375,7 +370,7 @@ export function ChannelScreen({
     }
     return pubkeys;
   }, [knownAgentPubkeys, messageProfiles, communityAgentPubkeys]);
-  const personasQuery = usePersonasQuery();
+  const personasQuery = agentHooks.usePersonasQuery();
   const { personaLookup, respondToLookup } = React.useMemo(() => {
     const agents = managedAgentsQuery.data ?? [];
     const personaById = new Map(
@@ -825,6 +820,8 @@ export function ChannelScreen({
                 profilePanelView={profilePanelView}
                 selectedPostId={selectedForumPostId}
                 targetReplyId={targetForumReplyId}
+                targetSearchMessageId={targetSearchMessageId}
+                targetSearchQuery={targetSearchQuery}
               />
             ) : (
               <React.Suspense
@@ -836,6 +833,8 @@ export function ChannelScreen({
               >
                 <ChannelPane
                   activeChannel={activeChannel}
+                  targetSearchMessageId={targetSearchMessageId}
+                  targetSearchQuery={targetSearchQuery}
                   activityAgents={channelAgentSessionAgents}
                   agentPubkeys={agentPubkeys}
                   agentPubkeysPending={agentPubkeysPending}
