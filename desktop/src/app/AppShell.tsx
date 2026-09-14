@@ -21,6 +21,7 @@ import { useCommunityDestinationRestore } from "@/app/useCommunityDestinationRes
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
 import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
 import { useAppShellDesktopNotifications } from "@/app/useAppShellDesktopNotifications";
+import { useThreadFollowActions } from "@/app/useThreadFollowActions";
 import { useAppShellLifecycleEffects } from "@/app/useAppShellLifecycleEffects";
 import { useTauriWindowDrag } from "@/app/useTauriWindowDrag";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
@@ -62,6 +63,7 @@ import {
 import {
   useSetUserStatusMutation,
   useUserStatusQuery,
+  visibleUserStatus,
   useUserStatusSubscription,
 } from "@/features/user-status/hooks";
 import { useCommunityEmojiLiveUpdates } from "@/features/custom-emoji/hooks";
@@ -459,36 +461,18 @@ export function AppShell() {
     identityQuery.data?.pubkey,
     notificationSettings.settings.homeBadgeEnabled,
   );
-  const isNotifiedForThread = React.useCallback(
-    (rootId: string) =>
-      !mutedRootIds.has(rootId) &&
-      (followedRootIds.has(rootId) ||
-        participatedRootIds.has(rootId) ||
-        authoredRootIds.has(rootId) ||
-        mentionedRootIds.has(rootId)),
-    [
+  const { handleFollowThread, handleUnfollowThread, isNotifiedForThread } =
+    useThreadFollowActions({
+      authoredRootIds,
+      followThread,
       followedRootIds,
+      mentionedRootIds,
+      muteThread,
       mutedRootIds,
       participatedRootIds,
-      authoredRootIds,
-      mentionedRootIds,
-    ],
-  );
-  const handleFollowThread = React.useCallback(
-    (rootId: string) => {
-      followThread(rootId);
-      unmuteThread(rootId);
-    },
-    [followThread, unmuteThread],
-  );
-
-  const handleUnfollowThread = React.useCallback(
-    (rootId: string) => {
-      unfollowThread(rootId);
-      muteThread(rootId);
-    },
-    [unfollowThread, muteThread],
-  );
+      unfollowThread,
+      unmuteThread,
+    });
 
   const createChannelMutation = useCreateChannelMutation(),
     createForumMutation = useCreateChannelMutation();
@@ -918,13 +902,17 @@ export function AppShell() {
                             profile={profileQuery.data}
                             selfUserStatus={
                               deferredPubkey
-                                ? (selfStatusQuery.data?.[
+                                ? (visibleUserStatus(
+                                  selfStatusQuery.data?.[
                                     deferredPubkey.toLowerCase()
-                                  ] ?? undefined)
+                                  ],
+                                ) ?? undefined)
                                 : undefined
                             }
                             selectedChannelId={selectedChannelId}
                             selectedView={selectedView}
+                            unreadThreadChannelIds={unreadThreadChannelIds}
+                            highPriorityUnreadChannelIds={highPriorityUnreadChannelIds}
                             unreadChannelIds={unreadChannelIds}
                             unreadChannelCounts={unreadChannelCounts}
                             mutedChannelIds={mutedChannelIds}

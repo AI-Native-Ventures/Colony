@@ -39,6 +39,8 @@ type ChatHeaderProps = {
    */
   showDescription?: boolean;
   statusBadge?: React.ReactNode;
+  /** Identity adornment rendered exactly 4px after a DM title. */
+  titleAdornment?: React.ReactNode;
   /** Render the chrome wrapper without an individual backdrop when a parent supplies shared blur. */
   transparentChrome?: boolean;
 };
@@ -103,6 +105,7 @@ export function ChatHeader({
   overlaysContent = false,
   showDescription = false,
   statusBadge,
+  titleAdornment,
   transparentChrome = false,
 }: ChatHeaderProps) {
   const trimmedDescription = description?.trim() ?? "";
@@ -150,6 +153,7 @@ export function ChatHeader({
             >
               {title}
             </h1>
+            {titleAdornment}
             <Button
               aria-label={`Copy channel name: ${title}`}
               className="h-6 w-6 shrink-0 opacity-0 text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/title:opacity-100"

@@ -1669,15 +1669,18 @@ test("create ephemeral stream shows sidebar and header affordances", async ({
     },
   );
 
-  // Colony marks a top-level channel unread by bolding the row (the dot is for
-  // thread unreads, the count badge was retired in #1253), so that is the
-  // affordance the ephemeral badge has to stand down for.
-  await expect(page.getByTestId(`channel-${channelName}`)).toHaveClass(
-    /font-bold/,
+  // Colony retired the non-DM count badge in #1253, and #7134 makes bold the
+  // shared unread affordance, so this asserts both halves.
+  await expect(page.getByTestId(`channel-${channelName}`)).toHaveCSS(
+    "font-weight",
+    "700",
+  );
+  await expect(page.getByTestId(`channel-unread-${channelName}`)).toHaveCount(
+    0,
   );
   await expect(
     page.getByTestId(`channel-ephemeral-${channelName}`),
-  ).toHaveCount(0);
+  ).toBeVisible();
 });
 
 test("ephemeral countdown refreshes when switching channels after a clock jump", async ({

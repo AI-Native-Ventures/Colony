@@ -2,6 +2,7 @@ import type * as React from "react";
 
 import { AgentRoleSubtitle } from "@/features/agents/ui/AgentRoleSubtitle";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
+import { UserNameIndicators } from "@/features/user-status/ui/UserNameIndicators";
 import { MessageHeaderRow, MessageMetaSegments } from "./MessageHeader";
 
 /**
@@ -51,6 +52,7 @@ export function MessageRowHeader({
       ) : (
         authorNode
       )}
+      <UserNameIndicators pubkey={pubkey} />
       {/* Author is not a segment: "Alice 9:53 AM" needs no divider. */}
       <MessageMetaSegments
         segments={[

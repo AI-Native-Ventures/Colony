@@ -40,6 +40,7 @@ import {
 } from "@/shared/ui/sidebar";
 import { ChannelActivityPopover } from "@/features/sidebar/ui/ChannelActivityPopover";
 import { useAppShell } from "@/app/AppShellContext";
+import { UserNameIndicators } from "@/features/user-status/ui/UserNameIndicators";
 
 const SECTION_LABEL_BUTTON_CLASS =
   "group/section-label flex w-fit max-w-[calc(100%-3rem)] cursor-pointer appearance-none items-center gap-1 text-left transition-colors hover:text-sidebar-foreground focus-visible:text-sidebar-foreground";
@@ -282,7 +283,6 @@ export function ChannelMenuButton({
   label?: string;
   isActive: boolean;
   hasUnread: boolean;
-  unreadCount?: number;
   activeWorking?: ActiveChannelTurnSummary;
   isMuted?: boolean;
   isProjectChannel?: boolean;
@@ -300,38 +300,19 @@ export function ChannelMenuButton({
       ? dmParticipants[0]
       : undefined;
   const ephemeralDisplay = getEphemeralChannelDisplay(channel);
-  const {
-    hasSidebarUnreadProjections,
-    topLevelUnreadChannelIds,
-    unreadThreadChannelIds,
-  } = useAppShell();
-  const hasTopLevelUnread =
-    channel.channelType === "dm"
-      ? hasUnread
-      : hasSidebarUnreadProjections
-        ? topLevelUnreadChannelIds.has(channel.id)
-        : hasUnread;
+  const { hasSidebarUnreadProjections, unreadThreadChannelIds } = useAppShell();
   const hasThreadUnread =
     channel.channelType !== "dm" &&
     (hasSidebarUnreadProjections
       ? unreadThreadChannelIds.has(channel.id)
       : hasUnread);
-  // Colony renders a solid dot rather than a count on channel rows (#1253),
-  // so the "a higher-priority unread status is showing" signal upstream reads
-  // off the count comes from the top-level unread projection here.
-  const showsUnreadCount =
-    !isActive && channel.channelType !== "dm" && hasTopLevelUnread;
   const showsEphemeralBadge =
-    Boolean(ephemeralDisplay) &&
-    !activeWorking &&
-    !isMuted &&
-    !showsUnreadCount &&
-    !hasThreadUnread;
+    Boolean(ephemeralDisplay) && !activeWorking && !isMuted && !hasThreadUnread;
   const inactiveContentOpacity = cn(
-    !isActive && !hasTopLevelUnread && !isMuted && "opacity-80",
+    !isActive && !hasUnread && !isMuted && "opacity-80",
     !isActive &&
       isMuted &&
-      !hasTopLevelUnread &&
+      !hasUnread &&
       !hasThreadUnread &&
       "sidebar-muted-content opacity-50 dark:opacity-45",
   );
@@ -344,7 +325,7 @@ export function ChannelMenuButton({
         isActive
           ? "group-hover/menu-item:bg-sidebar-active group-hover/menu-item:text-sidebar-active-foreground"
           : "group-hover/menu-item:bg-sidebar-accent group-hover/menu-item:text-sidebar-foreground",
-        hasTopLevelUnread &&
+        hasUnread &&
           "font-bold text-sidebar-foreground hover:text-sidebar-foreground data-[active=true]:font-bold",
       )}
       data-channel-id={channel.id}
@@ -364,7 +345,10 @@ export function ChannelMenuButton({
         presenceStatus={presenceStatus}
       />
       <span
-        className={cn("min-w-0 flex-1 truncate", inactiveContentOpacity)}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-1",
+          inactiveContentOpacity,
+        )}
         data-sidebar-row-label
       >
         <span className="block truncate">{resolvedLabel}</span>
@@ -375,6 +359,15 @@ export function ChannelMenuButton({
           >
             {agentRoleLabel(agentParticipant.roleTitle)}
           </span>
+        ) : null}
+        {channel.channelType === "dm" &&
+        (channel.participantPubkeys.length === 2 ||
+          dmParticipants?.length === 1) ? (
+          <UserNameIndicators
+            className="ml-1"
+            pubkey={dmParticipants?.[0]?.pubkey}
+            size="dm"
+          />
         ) : null}
       </span>
       {trailingMeta ? (
@@ -542,7 +535,6 @@ export function SidebarSection({
                       activeWorking={activeWorkingByChannelId?.get(channel.id)}
                       dmParticipants={dmParticipantsByChannelId?.[channel.id]}
                       hasUnread={unreadChannelIds.has(channel.id)}
-                      unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                       isMuted={mutedChannelIds?.has(channel.id)}
                       isActive={
                         isActiveChannel && selectedChannelId === channel.id
