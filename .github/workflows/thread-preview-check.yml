@@ -28,6 +28,8 @@ jobs:
       - name: Preview safety and existing Block contracts
         working-directory: desktop
         run: node --import ./test-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/blockContracts.test.mjs src/features/blocks/ui/primitives/primitives.test.mjs
+      - name: Website bundle validation
+        run: node --test desktop/src-electron/website-preview/address.test.mjs desktop/src-electron/website-preview/manifest.test.mjs
       - name: Typecheck
         working-directory: desktop
         run: pnpm exec tsc --noEmit
