@@ -465,3 +465,126 @@ fn retain_agent_record_is_noop_when_unchanged() {
         "no pending_sync churn for an unchanged record"
     );
 }
+
+/// Test (a): a record pinned to relay B is retained into B's scope database,
+/// and A's scope database (the one that was active) stays empty.
+///
+/// This fails on the unfixed code: `retain_managed_agent_pending` resolved the
+/// ACTIVE scope, so `retention_db_path_for_record` did not exist and the write
+/// landed in A's database. The path assertion pins the record's own pin as the
+/// only input to the choice, and the emptiness assertion on A is what the leak
+/// violated.
+#[test]
+fn record_pinned_to_b_retains_into_own_scope_db() {
+    use crate::managed_agents::retention::{
+        get_pending_sync, open_retention_db, retention_db_path_for_record, scoped_retention_db_path,
+    };
+
+    let keys = nostr::Keys::generate();
+    let base = tempfile::tempdir().unwrap();
+    let owner = keys.public_key().to_hex();
+    let pubkey = "a".repeat(64);
+    let pinned_relay = "wss://b.example";
+    let active_relay = "wss://a.example";
+    let mut record = sample_record(&pubkey, "agent-b");
+    record.relay_url = pinned_relay.to_string();
+
+    // The record's OWN pin decides the database, not whatever is active.
+    let scope_b_path = retention_db_path_for_record(base.path(), &owner, &record)
+        .expect("a pinned record must resolve a retention database");
+    assert_eq!(
+        scope_b_path,
+        scoped_retention_db_path(base.path(), pinned_relay, &owner),
+        "a record pinned to B must resolve B's scope database"
+    );
+    let scope_a_path = scoped_retention_db_path(base.path(), active_relay, &owner);
+    assert_ne!(
+        scope_b_path, scope_a_path,
+        "B and A scopes must have different database paths"
+    );
+
+    // Retain through the shared engine, exactly as the retain path does.
+    std::fs::create_dir_all(scope_b_path.parent().unwrap()).unwrap();
+    let conn_b = open_retention_db(&scope_b_path).unwrap();
+    assert!(
+        retain_agent_record(&conn_b, &keys, &record).unwrap(),
+        "a fresh record must retain into its own scope"
+    );
+    let pending_b = get_pending_sync(&conn_b).unwrap();
+    assert_eq!(pending_b.len(), 1, "B's scope database must hold the head");
+    assert_eq!(pending_b[0].kind, KIND_MANAGED_AGENT);
+    assert_eq!(pending_b[0].d_tag, pubkey);
+
+    // A's scope database was never touched: either it does not exist at all,
+    // or it holds nothing pending.
+    if scope_a_path.exists() {
+        let conn_a = open_retention_db(&scope_a_path).unwrap();
+        assert!(
+            get_pending_sync(&conn_a).unwrap().is_empty(),
+            "the active community's scope database must stay empty"
+        );
+    }
+}
+
+/// Test (b): a blank pin resolves no retention database at all, so an
+/// unassigned agent is published nowhere rather than into whichever community
+/// happens to be open. Whitespace is a blank pin too.
+#[test]
+fn blank_pin_skips_retention_for_unpinned_record() {
+    use crate::managed_agents::retention::retention_db_path_for_record;
+
+    let keys = nostr::Keys::generate();
+    let base = tempfile::tempdir().unwrap();
+    let owner = keys.public_key().to_hex();
+    let mut record = sample_record(&"b".repeat(64), "unassigned-agent");
+
+    for blank in ["", "   "] {
+        record.relay_url = blank.to_string();
+        assert!(
+            retention_db_path_for_record(base.path(), &owner, &record).is_none(),
+            "a blank pin ({blank:?}) must resolve no retention database"
+        );
+    }
+}
+
+/// Test (c): the flush belt holds back a kind:30177 row whose local record is
+/// pinned to another community, and holds back nothing else. Without the belt
+/// every case below returns false, so the first assertion fails on the
+/// unfixed code.
+#[test]
+fn flush_belt_skips_30177_row_pinned_elsewhere() {
+    use crate::managed_agents::persona_events::flush_row_pinned_elsewhere;
+
+    let pubkey = "c".repeat(64);
+    let active_relay = "wss://a.example";
+    let record_pinned_to = |relay: &str| {
+        let mut record = sample_record(&pubkey, "agent-c");
+        record.relay_url = relay.to_string();
+        vec![record]
+    };
+
+    assert!(
+        flush_row_pinned_elsewhere(&record_pinned_to("wss://b.example"), &pubkey, active_relay),
+        "a head pinned to B must not publish into A"
+    );
+    assert!(
+        !flush_row_pinned_elsewhere(&record_pinned_to(active_relay), &pubkey, active_relay),
+        "a head pinned to this community must publish"
+    );
+    assert!(
+        !flush_row_pinned_elsewhere(&record_pinned_to("ws://a.example"), &pubkey, active_relay),
+        "a scheme difference is the same community, not a foreign pin"
+    );
+    assert!(
+        !flush_row_pinned_elsewhere(&record_pinned_to(""), &pubkey, active_relay),
+        "a blank pin keeps today's behaviour and publishes"
+    );
+    assert!(
+        !flush_row_pinned_elsewhere(
+            &record_pinned_to("wss://b.example"),
+            &"d".repeat(64),
+            active_relay
+        ),
+        "a row with no matching local record publishes"
+    );
+}

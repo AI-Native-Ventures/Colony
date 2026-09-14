@@ -70,6 +70,13 @@ test("current canonical task is loaded by stable task ID on every validation", a
   assert.deepEqual(f.calls, [work.taskId, work.taskId]);
 });
 
+test("direct task validates without a team and rejects an invented team reference", async () => {
+  const f = fixture({ owningTeamId: null });
+  const validate = createFirstJobWorkValidator(f.deps);
+  await validate(scope, team, { ...work, tags: [["task", work.taskId]] });
+  await assert.rejects(validate(scope, team, work), /task/);
+});
+
 for (const [label, change] of Object.entries({
   cancelled: { status: "cancelled" },
   completed: { status: "completed" },

@@ -148,7 +148,6 @@ pub(crate) fn build_head(
         CompanyActionPayload::Task(task) => {
             let mut tags = vec![
                 scalar_tag("d", &task.id)?,
-                scalar_tag("team", &task.owning_team_id)?,
                 scalar_tag("cost-centre", &task.cost_centre_id)?,
                 // Mirror of the status in the signed content.
                 scalar_tag("w", &serialized_slug(&task.status)?)?,
@@ -158,11 +157,14 @@ pub(crate) fn build_head(
             // when a reviewer team is named, and that is exactly the case
             // where a reviewer asking "what needs my team?" would otherwise
             // find nothing.
-            tags.push(scalar_tag("g", &task.owning_team_id)?);
+            if let Some(team) = task.owning_team_id.as_deref() {
+                tags.push(scalar_tag("team", team)?);
+                tags.push(scalar_tag("g", team)?);
+            }
             if let Some(reviewer_team_id) = task
                 .reviewer_team_id
                 .as_deref()
-                .filter(|reviewer| *reviewer != task.owning_team_id)
+                .filter(|reviewer| Some(*reviewer) != task.owning_team_id.as_deref())
             {
                 tags.push(scalar_tag("g", reviewer_team_id)?);
             }
@@ -784,7 +786,17 @@ async fn validate_payload_against_state(
                 }
                 None => None,
             };
-            let teams = load_team_refs(tenant, state, &action_author).await?;
+            let teams = if task.owning_team_id.is_some() || task.reviewer_team_id.is_some() {
+                load_team_refs(tenant, state, &action_author).await?
+            } else {
+                Vec::new()
+            };
+            if task.owning_team_id.is_none() {
+                let mut personas = task.assignee_persona_ids.clone();
+                personas.extend(task.qa_persona_id.iter().cloned());
+                crate::thread_task_broker::validate_direct_personas(tenant, state, &personas)
+                    .await?;
+            }
             validate_task(task, &company, initiative.as_ref(), &teams)
                 .map_err(|error| error.to_string())?;
             if let Some(previous) = previous_head {
@@ -1648,9 +1660,9 @@ mod tests {
             initiative_id: Some("init-homepage".to_string()),
             title: "Write homepage copy".to_string(),
             status: buzz_core::company::TaskStatus::InProgress,
-            owning_team_id: "team-marketing".to_string(),
+            owning_team_id: Some("team-marketing".to_string()),
             assignee_persona_ids: vec!["builtin:content".to_string()],
-            qa_persona_id: "builtin:marketing-lead".to_string(),
+            qa_persona_id: Some("builtin:marketing-lead".to_string()),
             reviewer_team_id: None,
             cost_centre_id: "internal".to_string(),
             commercial_purpose: buzz_core::company::CommercialPurpose::Marketing,
@@ -1718,7 +1730,7 @@ mod tests {
         assert_eq!(task_head.kind.as_u16() as u32, KIND_TASK);
         assert!(!task_head.tags.iter().any(|tag| tag.as_slice()[0] == "h"));
         let parsed = parse_task_event(&task_head).expect("parse task head");
-        assert_eq!(parsed.owning_team_id, "team-marketing");
+        assert_eq!(parsed.owning_team_id.as_deref(), Some("team-marketing"));
         assert_eq!(parsed.initiative_id.as_deref(), Some("init-homepage"));
         assert_eq!(parsed.client_organization_id.as_deref(), Some("acme-corp"));
 
@@ -1954,7 +1966,7 @@ mod tests {
             )
         });
         let parsed = parse_task_event(&head).expect("pre-mirror head parses");
-        assert_eq!(parsed.owning_team_id, "team-marketing");
+        assert_eq!(parsed.owning_team_id.as_deref(), Some("team-marketing"));
         assert_eq!(parsed.status, buzz_core::company::TaskStatus::InProgress);
         assert_eq!(parsed.initiative_id.as_deref(), Some("init-homepage"));
     }

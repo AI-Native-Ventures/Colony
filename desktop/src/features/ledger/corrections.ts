@@ -21,7 +21,7 @@ export interface CorrectionRequest {
   /** Cost centre charged. */
   costCentreId: string;
   /** Team accountable. */
-  owningTeamId: string;
+  owningTeamId: string | null;
   /** Commercial reason for the work. */
   commercialPurpose: CommercialPurpose;
   /** Client receiving the work, when this is client delivery. */
@@ -69,7 +69,8 @@ export function correctionProblem(request: CorrectionRequest): string | null {
   }
   if (!request.costCentreId.trim())
     return "Name the cost centre being charged.";
-  if (!request.owningTeamId.trim()) return "Name the team accountable for it.";
+  if (request.owningTeamId !== null && !request.owningTeamId.trim())
+    return "Choose a team or leave it unassigned.";
   if (!request.reason.trim()) {
     return "Give a reason. It is the record of why this changed.";
   }

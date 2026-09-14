@@ -95,9 +95,12 @@ agent; branch protection may not mechanically enforce all of it, so agents
 enforce it themselves.
 
 - **`develop`** is the default and integration branch. All day-to-day PRs
-  target it. They **do** run CI, path-filtered, and a ruleset requires
-  `Detect Changed Paths`, `Desktop`, `Desktop Core`, `Rust Lint`, `Unit Tests`
-  and `Relay Suites` to pass. Run the local gates below anyway: they are
+  target it. A PR runs the **Tier A gate** only (about 10 minutes, see
+  below); the merged tree is proven by the **Tier B** run on the develop
+  push. A ruleset requires `Detect Changed Paths`, `Desktop`, `Desktop Core`,
+  `Rust Lint`, `Unit Tests` and `Relay Suites`; a check that ci.yml skips for
+  the event or the diff satisfies the ruleset, which is how `Relay Suites`
+  passes on a PR without running. Run the local gates below anyway: they are
   faster than a CI round trip and catch the same things.
 - **`main`** is production. Two things merge into main, and both run the full
   CI matrix: a promotion PR from develop, and a PR from a **`hotfix/*`** branch
@@ -132,36 +135,33 @@ Auto-merge never merges a red PR. It waits for the required checks and honours
 the same ruleset you would be checking by hand, so this is automation of the
 gate, not an exemption from it.
 
-### The merge queue
+### CI tiers: what runs where
 
-`develop` has a merge queue (ruleset "develop: CI gate + merge queue"), so
-arming auto-merge **enqueues** the PR rather than merging it directly. The
-queue then rebases each entry on whatever merged before it, runs CI on that
-combination, and merges it. Current settings: squash, batches of up to 5 with
-`ALLGREEN` grouping, a 5-minute minimum wait, and a 90-minute check timeout.
+There is no merge queue on develop (removed 2026-09-14; the ruleset is now
+"develop: CI gate + merge queue" in name only). Auto-merge merges the PR
+directly when its required checks pass, one CI run per merge.
+
+| Tier | Runs on | Jobs | Budget |
+|---|---|---|---|
+| A, the PR gate | every push to an ordinary PR (base is not `main`) | Detect Changed Paths, Rust Lint, Unit Tests, Desktop Core without the plain Tauri lanes, Desktop Smoke E2E on 4 shards without screenshot specs | about 10 minutes |
+| Draft | every push to a draft PR | Rust Lint only. Converting the draft to ready starts Tier A. | minutes |
+| B, the post-merge proof | every push to `develop`, every promotion PR to `main` | everything: relay archive and its three suites, integration shards, Blocks Live Gate, Server Cross-Compile, Desktop Tauri Flags, Mobile, Web, Security, screenshot specs | about 20 minutes, never cancelled by the next merge |
+| C, nightly | 03:00 UTC on develop, `workflow_dispatch`, promotion PRs | Electron production candidate, Native first-job proof, Mesh Lifecycle | as long as they take |
 
 What this means in practice:
 
-- **Merging is a two-CI-run operation.** Your PR runs the matrix, then the
-  queue runs it again on the merge-group ref. Budget roughly 25 extra minutes
-  per merge, and note that entries merge in order, so a slow one holds up the
-  ones behind it.
-- **`gh pr merge` without `--auto` is refused** with "the merge strategy for
-  develop is set by the merge queue". That is the queue talking, not a
-  permissions problem.
-- **The queue only works because CI triggers on `merge_group`.** If that
-  trigger is ever removed from `.github/workflows/ci.yml`, every queued PR
-  waits forever on checks that cannot run, and the branch stops merging
-  entirely. This happened on 2026-08-08: four PRs sat in `AWAITING_CHECKS`
-  for about two hours before anyone noticed.
-- **Never add a required check the queue cannot satisfy.** Also on
-  2026-08-08, `Relay Suites` was made required before any run had produced
-  it, which blocked every open PR at once, including the PR that would have
-  fixed it.
-
-An entry sitting in `AWAITING_CHECKS` far longer than one CI matrix means the
-queue is broken again, not busy. Check that a `merge_group` run exists for it:
-`gh run list --repo AI-Native-Ventures/Colony --event merge_group`.
+- **Green Tier A means safe to integrate, not safe to ship.** A relay
+  regression that only the integration lanes catch merges to develop and
+  surfaces on the develop push about 20 minutes later. That is intended:
+  develop is an integration branch, canary and `main` only ever take a
+  develop commit whose Tier B run is green.
+- **When the develop push goes red, the merge that caused it is reverted.**
+  Do not stack work on a red develop; rebase on the revert.
+- **Every Rust job compiles through sccache.** A PR that does not touch
+  `Cargo.lock` should compile only the crates it changed. If a job's
+  `sccache stats` step shows near-zero hits, the cache is broken, not busy.
+- **Never add a required check that Tier A cannot produce on a PR.** A
+  required context that no job reports blocks every PR at once.
 
 Two traps worth knowing:
 

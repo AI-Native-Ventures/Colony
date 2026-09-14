@@ -427,7 +427,9 @@ export function nativeRequestActor(messages, team, task) {
   assert.equal(blocks.length, 1, "Unambiguous current harness work context");
   const lines = blocks[0][1].split("\n");
   assert.ok(lines.includes(`Task id: ${task.id}`));
-  assert.ok(lines.includes(`Owning team: ${task.owningTeamId}`));
+  assert.ok(
+    lines.includes(`Owning team: ${task.owningTeamId ?? "Direct assignment"}`),
+  );
   // Managed first-job agents have signed30177 ranks. ACP only hydrates rank lines
   // for company employee30190 heads, so absent lines are current product behavior.
   const ranks = lines.filter((line) => line.startsWith("Your rank: "));

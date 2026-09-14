@@ -58,7 +58,7 @@ NostrEvent signedTaskHead({
   String id = 'thread-task:sample',
   String title = 'Cut the release video',
   String status = 'inProgress',
-  String owningTeamId = 'team-coordination',
+  String? owningTeamId = 'team-coordination',
   String sourceChannelId = 'engineering',
   String? threadRoot = 'abc',
   String? initiativeId,
@@ -101,5 +101,6 @@ NostrEvent signedTaskHead({
   }),
   tags: [
     ['d', id],
+    if (owningTeamId != null) ['team', owningTeamId],
   ],
 );

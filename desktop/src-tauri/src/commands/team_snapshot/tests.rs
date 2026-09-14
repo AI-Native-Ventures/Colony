@@ -188,6 +188,7 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
 
     // Build a fake instance record tied to this team+persona.
     let instance = ManagedAgentRecord {
+        superseded_by: None,
         provisioned: None,
         provisioned_version: None,
         provisioned_requires_commands: Vec::new(),

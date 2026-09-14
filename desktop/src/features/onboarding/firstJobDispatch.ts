@@ -177,11 +177,13 @@ export function isFirstJobDispatchAttempt(
               tag.length === 2 &&
               ["task", "team", "initiative"].includes(tag[0] ?? "") &&
               typeof tag[1] === "string" &&
+              tag[1].length > 0 &&
               tag[1].length <= 128,
           ) &&
           work.tags.filter((tag) => tag[0] === "task" && tag[1] === work.taskId)
             .length === 1 &&
-          work.tags.filter((tag) => tag[0] === "team").length === 1,
+          // Direct work has no team tag; every supplied reference stays unique.
+          new Set(work.tags.map((tag) => tag[0])).size === work.tags.length,
       )) &&
     (item.message === null || Boolean(work && isEvent(item.message))) &&
     typeof item.acknowledged === "boolean" &&
