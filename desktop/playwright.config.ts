@@ -18,22 +18,13 @@ function screenshotSpecs(): string[] {
     )
     .map((name) => `**/${name}`);
 }
-// Timing-sensitive specs that fail deterministically when two workers share
-// the 4 vCPU runner (3 of 3 attempts on 2026-09-14, green at one worker on
-// the same shard the run before). They stay on the develop push, which runs
-// one worker. Add a file here only with a run that shows it failing under
-// PLAYWRIGHT_WORKERS=2 and passing at 1.
-const timingSensitiveSpecs = [
-  "**/send-channel-binding.spec.ts",
-  "**/virtualization.spec.ts",
-];
 const skipScreenshotSpecs =
-  process.env.PLAYWRIGHT_SKIP_SCREENSHOT_SPECS === "1"
-    ? [...screenshotSpecs(), ...timingSensitiveSpecs]
-    : [];
+  process.env.PLAYWRIGHT_SKIP_SCREENSHOT_SPECS === "1" ? screenshotSpecs() : [];
 
-// ci.yml sets PLAYWRIGHT_WORKERS=2 on the pull request gate; everywhere else
-// one worker keeps the timing-sensitive specs on a quiet runner.
+// One worker unless PLAYWRIGHT_WORKERS says otherwise. Two workers on the
+// 4 vCPU CI runner made three timing-sensitive specs fail 3 of 3 attempts
+// across two runs on 2026-09-14 (send-channel-binding, virtualization,
+// community-rail), so CI does not set it.
 const workers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10) || 1;
 
 const previewPort = process.env.PLAYWRIGHT_PORT ?? "4173";

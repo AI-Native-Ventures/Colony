@@ -75,7 +75,6 @@ jobs:
       # draft: lint only. Agents push to drafts every few minutes; each push
       # used to cancel and restart a 45 minute matrix.
       draft: ${{ github.event.pull_request.draft == true && 'true' || 'false' }}
-      smoke-shards: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main') && '[1, 2, 3, 4]' || '[1, 2, 3, 4, 5, 6]' }}
       release-push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || 'false' }}
       rust: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || steps.filter.outputs.rust }}
       desktop: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || steps.filter.outputs.desktop }}
@@ -575,7 +574,7 @@ jobs:
         # itself was already even and reordering testMatch buys nothing. The
         # remaining spread is retry cost. Spreading 49.8 minutes of test time
         # over six shards puts every shard near 8 minutes instead of one at 15.
-        shard: ${{ fromJSON(needs.changes.outputs.smoke-shards) }}
+        shard: [1, 2, 3, 4, 5, 6]
     permissions:
       contents: read
     steps:
@@ -628,10 +627,11 @@ jobs:
         run: cd desktop && pnpm exec playwright test --project=smoke --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         env:
           # On the PR gate the 100 specs that take screenshots are left to
-          # the develop push (they exist to produce PR images), and two
-          # Playwright workers share the 4 vCPU runner.
+          # the develop push (they exist to produce PR images). One worker:
+          # two workers on the 4 vCPU runner made three timing-sensitive
+          # specs fail 3 of 3 attempts across two runs on 2026-09-14
+          # (send-channel-binding, virtualization, community-rail).
           PLAYWRIGHT_SKIP_SCREENSHOT_SPECS: ${{ needs.changes.outputs.pr-gate == 'true' && '1' || '' }}
-          PLAYWRIGHT_WORKERS: ${{ needs.changes.outputs.pr-gate == 'true' && '2' || '1' }}
       - name: Summarize flaky tests
         if: ${{ !cancelled() }}
         run: node scripts/summarize-flaky-tests.mjs playwright-report.json "Desktop Smoke E2E (${{ matrix.shard }})"
