@@ -75,7 +75,10 @@ fn signed_task_event(task: &CompanyTask, signer: &Keys) -> Event {
     EventBuilder::new(Kind::Custom(KIND_TASK as u16), content)
         .tags([
             tag("d", &task.id),
-            tag("team", task.owning_team_id.as_deref().expect("fixture team")),
+            tag(
+                "team",
+                task.owning_team_id.as_deref().expect("fixture team"),
+            ),
             tag("cost-centre", &task.cost_centre_id),
             tag("w", &status),
             tag("g", task.owning_team_id.as_deref().expect("fixture team")),
