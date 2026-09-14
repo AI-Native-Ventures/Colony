@@ -258,6 +258,19 @@ async fn broker(
         ok.message
     );
 
+    // Re-signing a replay across a second boundary produces a different event
+    // ID. The relay names the original action; only that action has a receipt.
+    let action_id = if !ok.accepted {
+        ok.message
+            .strip_prefix("conflict: superseded by original action ")
+            .map(str::trim)
+            .filter(|id| id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit()))
+            .map(str::to_owned)
+            .unwrap_or(action_id)
+    } else {
+        action_id
+    };
+
     for _ in 0..40 {
         let id = sub_id("receipt");
         let filter = Filter::new()
