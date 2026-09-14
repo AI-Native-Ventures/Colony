@@ -364,10 +364,17 @@ function agentIdentityKey<T extends AgentAutocompleteCandidate>(
     ? normalizePubkey(candidate.ownerPubkey)
     : null;
   if (ownerPubkey) {
+    // One owner can run the same name on two devices (a managed agent here
+    // and a relay-owned one elsewhere). Authorization is per pubkey, so the
+    // two must stay separately addressable; the name key therefore carries
+    // the pubkey and only collapses records that have none (#6337).
+    const device = candidate.pubkey
+      ? `:${normalizePubkey(candidate.pubkey)}`
+      : "";
     if (currentPubkey && ownerPubkey === normalizePubkey(currentPubkey)) {
-      return `local:name:${label}`;
+      return `local:name:${label}${device}`;
     }
-    return `owner:${ownerPubkey}:name:${label}`;
+    return `owner:${ownerPubkey}:name:${label}${device}`;
   }
 
   return null;

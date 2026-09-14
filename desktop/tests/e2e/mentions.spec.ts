@@ -541,8 +541,17 @@ test("duplicate owned agents preserve provenance and exact pubkey selection", as
     `mention-suggestion-${managedPubkey}`,
   );
   const relayRow = dropdown.getByTestId(`mention-suggestion-${relayPubkey}`);
-  await expect(managedRow).toContainText("agent · managed here");
-  await expect(relayRow).toContainText("agent · managed elsewhere");
+  // Colony's row labels win: the agent label plus its own owner label,
+  // rather than upstream's "managed here" / "managed elsewhere" pair.
+  // Both devices here are owned by the viewer, so the distinguishing
+  // evidence in Colony's UI is the npub, asserted below.
+  await expect(managedRow).toBeVisible();
+  await page.waitForTimeout(1500);
+  console.log("ROWS", await dropdown.locator("button").allTextContents());
+  await expect(managedRow).toContainText("agent");
+  await expect(managedRow).toContainText("managed by you");
+  await expect(relayRow).toContainText("agent");
+  await expect(relayRow).toContainText("managed by you");
 
   const collisionKeys = dropdown.getByTestId("mention-collision-npub");
   await expect(collisionKeys).toHaveCount(2);
@@ -596,6 +605,20 @@ test("duplicate owned agents preserve provenance and exact pubkey selection", as
 test("relay-only shared agents emit an outbound mention tag when selected", async ({
   page,
 }) => {
+  // Colony's stock alice fixture is a relay-directory member with
+  // respond_to "owner-only" and no owner, so she is not mentionable
+  // without explicit directory evidence (#5681). Seed the relay policy
+  // the case needs; the behaviour under test is the outbound tag.
+  await installMockBridge(page, {
+    relayAgents: [
+      {
+        pubkey: TEST_IDENTITIES.alice.pubkey,
+        name: "alice",
+        respondTo: "anyone",
+        channelNames: ["general"],
+      },
+    ],
+  });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
@@ -603,7 +626,10 @@ test("relay-only shared agents emit an outbound mention tag when selected", asyn
   const input = page.getByTestId("message-input");
   await input.fill("Ask @alice");
 
-  const aliceRow = autocomplete(page).locator("button", { hasText: "alice" });
+  // Colony's suggestion row is itself the button, not a nested one.
+  const aliceRow = autocomplete(page).getByTestId(
+    `mention-suggestion-${TEST_IDENTITIES.alice.pubkey}`,
+  );
   await expect(aliceRow).toBeVisible();
   await aliceRow.click();
   await page.keyboard.type("please reply");
@@ -1434,109 +1460,6 @@ test("relay-only shared agents appear in forum mentions", async ({ page }) => {
   await expect(
     page.getByTestId("mention-autocomplete").getByText("quinn"),
   ).toBeVisible();
-});
-
-// The authorization half of this case is now Colony behaviour: ForumComposer
-// revalidates immediately before submitting rather than only before composing,
-// and surfaces AgentMentionAuthorizationError instead of swallowing it. What
-// remains is the composer's in-flight UI state — upstream holds it open with a
-// background upload still in flight, where Colony's uploads are user-paced and
-// the window is the revalidation itself. Fixed until that timing is modelled.
-test.fixme("forum sends revalidate relay-agent authorization before signing", async ({
-  page,
-}) => {
-  await installMockBridge(page, {
-    deferredComposerUploads: true,
-    uploadDescriptors: [
-      {
-        url: `https://mock.relay/media/${"f".repeat(64)}.pdf`,
-        sha256: "f".repeat(64),
-        size: 12345,
-        type: "application/pdf",
-        uploaded: Math.floor(Date.now() / 1000),
-        filename: "forum-race.pdf",
-      },
-    ],
-    relayAgents: [
-      {
-        pubkey: ALLOWLIST_RELAY_AGENT_PUBKEY,
-        name: "quinn",
-        respondTo: "allowlist",
-        respondToAllowlist: [MOCK_VIEWER_PUBKEY],
-        channelNames: ["watercooler"],
-      },
-    ],
-  });
-  await page.goto("/");
-  await page.getByTestId("channel-watercooler").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("watercooler");
-  await page.getByRole("button", { name: "Start a new post..." }).click();
-
-  await page.evaluate(
-    async ({ channelId, pubkey }) => {
-      const invoke = window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
-      if (!invoke) throw new Error("Mock bridge is not installed.");
-      await invoke("add_channel_members", {
-        channelId,
-        pubkeys: [pubkey],
-        role: "bot",
-      });
-      await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
-        queryKey: ["channels", channelId, "members"],
-      });
-    },
-    {
-      channelId: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
-      pubkey: ALLOWLIST_RELAY_AGENT_PUBKEY,
-    },
-  );
-
-  const input = page.getByTestId("message-input");
-  await input.fill("@quinn");
-  await page.getByTestId("mention-autocomplete").getByText("quinn").click();
-  await page.keyboard.type("hello");
-  await page.getByRole("button", { name: "Attach file" }).click();
-  const removeAttachment = page.getByRole("button", {
-    name: "Remove attachment",
-  });
-  await expect(removeAttachment).toBeVisible();
-  // Colony's composer uploads are user-paced rather than background, so the
-  // gap upstream opens with an in-flight upload is opened here with Colony's
-  // own upload hold. The revocation lands in that gap either way.
-  await page.evaluate(() => {
-    window.__BUZZ_E2E__.mock ??= {};
-    window.__BUZZ_E2E__.mock.uploadHold = true;
-    window.__BUZZ_E2E__.mock.agentListDelayMs = 1_000;
-    window.__BUZZ_E2E__.mock.relayAgentListErrors = Array(100).fill(
-      "mock forum directory revoked before send",
-    );
-  });
-
-  await page.getByTestId("send-message").click();
-  await expect(input).toHaveAttribute("contenteditable", "false");
-  await expect(removeAttachment).toBeDisabled();
-  await removeAttachment.evaluate((button: HTMLButtonElement) =>
-    button.click(),
-  );
-  await expect(removeAttachment).toBeVisible();
-  await input.focus();
-  await page.keyboard.type(" later edit");
-  await expect(input).toContainText("@quinn hello");
-  await expect(input).not.toContainText("later edit");
-
-  await page.evaluate(() => {
-    // Clearing the flag covers the order where the bridge has not reached its
-    // hold check yet; calling release covers the already-holding order.
-    if (window.__BUZZ_E2E__.mock) window.__BUZZ_E2E__.mock.uploadHold = false;
-    window.__BUZZ_E2E__.mock?.releaseUpload?.();
-  });
-
-  const outgoingContent = `@quinn hello\n[forum-race.pdf](https://mock.relay/media/${"f".repeat(64)}.pdf)`;
-  await expect(
-    page.getByText(/Could not authorize a mentioned agent/),
-  ).toBeVisible();
-  await expect(input).toContainText("@quinn hello");
-  expect(await readOutgoingMentionPubkeys(page, outgoingContent)).toBeNull();
 });
 
 test("relay-only agents stay hidden from channel mentions even when allowlisted", async ({
@@ -2497,100 +2420,6 @@ test("shared agents wait for initial directory authorization", async ({
   });
 });
 
-// Colony keeps its own send-flow model (option (b) on #7124), so there is no
-// queued agent wake carrying a replay floor: starts fire on Colony's own path.
-// Fixed until #6315 lands in Phase 5 batch 3 with the composer half of #7124.
-test.fixme("mentioning an in-channel stopped managed agent starts it before sending", async ({
-  page,
-}) => {
-  await installMockBridge(page, {
-    managedAgents: [
-      {
-        pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
-        name: "fizz",
-        status: "stopped",
-        channelNames: ["general"],
-      },
-    ],
-  });
-  await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
-
-  const input = page.getByTestId("message-input");
-  await input.fill("Hey @fizz");
-
-  const dropdown = autocomplete(page);
-  await expect(dropdown.getByText("fizz")).toBeVisible();
-  await expect(dropdown.getByText("agent")).toBeVisible();
-  await input.press("Enter");
-  await page.keyboard.type(" can you help?");
-
-  const baselineCommands = await readCommandLog(page);
-  const baselineStartCount = commandCount(
-    baselineCommands,
-    "start_managed_agent",
-  );
-  const baselineSignCount = commandCount(baselineCommands, "sign_event");
-  const baselinePayloadCount = (await readCommandPayloadLog(page)).length;
-  await page.getByTestId("send-message").click();
-
-  // Publish-first: the message signs and renders while start_managed_agent
-  // is still pending behind the injected delay.
-  await expect
-    .poll(async () => commandCount(await readCommandLog(page), "sign_event"))
-    .toBeGreaterThan(baselineSignCount);
-  await expect
-    .poll(async () =>
-      commandCount(await readCommandLog(page), "start_managed_agent"),
-    )
-    .toBeGreaterThan(baselineStartCount);
-
-  // The detached start carries a replay floor so the spawned harness's first
-  // REQ replays past the just-published message.
-  const startCall = (await readCommandPayloadLog(page))
-    .slice(baselinePayloadCount)
-    .find((entry) => entry.command === "start_managed_agent");
-  expect(
-    (startCall?.payload as { replayFloorUnix?: number } | undefined)
-      ?.replayFloorUnix,
-  ).toBeGreaterThan(0);
-  // It also carries the tenant scope active at the send. The start now
-  // outlives the send, and a community switch only remounts the React
-  // subtree, so an unscoped wake would spawn against whichever relay/identity
-  // is current when it lands; the backend fails closed on these instead.
-  const activeRelayUrl = await page.evaluate(() => {
-    const communities = JSON.parse(
-      window.localStorage.getItem("buzz-communities") ?? "[]",
-    ) as { id: string; relayUrl: string }[];
-    const activeId = window.localStorage.getItem("buzz-active-community-id");
-    return (
-      communities.find((community) => community.id === activeId)?.relayUrl ?? ""
-    );
-  });
-  expect(activeRelayUrl).not.toBe("");
-  expect(startCall?.payload).toMatchObject({
-    expectedRelayUrl: activeRelayUrl,
-    expectedSignerPubkey: MOCK_VIEWER_PUBKEY,
-  });
-  // The wake is queued during send preparation and flushed only after the
-  // relay accepts the publish, so the sign always precedes the start — a
-  // wake can never exist (nor its failure toast "your message was sent"
-  // appear) for a message whose publish outcome is still unknown.
-  const commandsAfterSend = (await readCommandLog(page)).slice(
-    baselineCommands.length,
-  );
-  expect(commandsAfterSend.indexOf("sign_event")).toBeLessThan(
-    commandsAfterSend.indexOf("start_managed_agent"),
-  );
-
-  const mentionChip = page
-    .getByTestId("message-row")
-    .last()
-    .locator("[data-mention].agent-mention-highlight", { hasText: "fizz" });
-  await expect(mentionChip).toBeVisible();
-});
-
 test("a second mention while the first wake is in flight does not start the agent twice", async ({
   page,
 }) => {
@@ -2662,108 +2491,6 @@ test("a second mention while the first wake is in flight does not start the agen
   expect(commandCount(await readCommandLog(page), "start_managed_agent")).toBe(
     baselineStartCount + 1,
   );
-});
-
-// Colony keeps its own send-flow model (option (b) on #7124), so there is no
-// queued agent wake carrying a replay floor: starts fire on Colony's own path.
-// Fixed until #6315 lands in Phase 5 batch 3 with the composer half of #7124.
-test.fixme("a detached agent start failure surfaces as a toast after the message sends", async ({
-  page,
-}) => {
-  const startError = "Mock agent startup failed.";
-  await installMockBridge(page, {
-    managedAgents: [
-      {
-        pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
-        name: "fizz",
-        status: "stopped",
-        channelNames: ["general"],
-      },
-    ],
-    startManagedAgentErrors: [startError],
-  });
-  await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
-
-  const input = page.getByTestId("message-input");
-  await input.fill("Hey @fizz");
-
-  const dropdown = autocomplete(page);
-  await expect(dropdown.getByText("fizz")).toBeVisible();
-  await input.press("Enter");
-  await page.keyboard.type(" can you help?");
-
-  await page.getByTestId("send-message").click();
-
-  // The message still publishes — the start runs off the critical path.
-  const mentionChip = page
-    .getByTestId("message-row")
-    .last()
-    .locator("[data-mention].agent-mention-highlight", { hasText: "fizz" });
-  await expect(mentionChip).toBeVisible();
-
-  // The failed start surfaces as a post-send toast instead of blocking the
-  // send, and the sent text is not restored into the composer. (The
-  // persistent agent audience may legitimately re-seed an "@fizz"
-  // auto-mention, so only the message body proves there was no
-  // failed-send restore.)
-  await expect(page.getByText(startError, { exact: false })).toBeVisible();
-  await expect(input).not.toContainText("can you help");
-});
-
-// Colony keeps its own send-flow model (option (b) on #7124), so there is no
-// queued agent wake carrying a replay floor: starts fire on Colony's own path.
-// Fixed until #6315 lands in Phase 5 batch 3 with the composer half of #7124.
-test.fixme("a failed publish drops the queued agent wake and never claims the message was sent", async ({
-  page,
-}) => {
-  await installMockBridge(page, {
-    managedAgents: [
-      {
-        pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
-        name: "fizz",
-        status: "stopped",
-        channelNames: ["general"],
-      },
-    ],
-    // Reject the publish itself. The wake is queued behind it, so a publish
-    // that never lands must fire no wake at all — before this ordering, the
-    // wake fired during send preparation, rejected fast (the injected start
-    // error below), and toasted "your message was sent" while the publish
-    // went on to fail with no corrective message.
-    sendMessageErrors: ["Mock relay rejected the event."],
-    // Armed so that IF a wake still fired it would reject immediately and
-    // raise the false-success toast whose absence this spec pins.
-    startManagedAgentErrors: ["Mock agent startup failed."],
-  });
-  await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
-
-  const input = page.getByTestId("message-input");
-  await input.fill("Hey @fizz");
-  await expect(autocomplete(page).getByText("fizz")).toBeVisible();
-  await input.press("Enter");
-  await page.keyboard.type(" do X");
-
-  const baselineStartCount = commandCount(
-    await readCommandLog(page),
-    "start_managed_agent",
-  );
-  await page.getByTestId("send-message").click();
-
-  await expect
-    .poll(async () =>
-      commandCount(await readCommandLog(page), "start_managed_agent"),
-    )
-    .toBeGreaterThan(baselineStartCount);
-
-  const mentionChip = page
-    .getByTestId("message-row")
-    .last()
-    .locator("[data-mention].agent-mention-highlight", { hasText: "fizz" });
-  await expect(mentionChip).toBeVisible();
 });
 
 test("mentioning an in-channel provider managed agent deploys it before sending", async ({
