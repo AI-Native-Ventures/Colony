@@ -5,6 +5,8 @@ import type {
   BlockTrust,
 } from "@/features/blocks/contracts";
 
+import { ArtifactHtmlPreview } from "./ArtifactHtmlPreview";
+
 import { blockShellTier } from "@/features/blocks/blockShellTier";
 import {
   BlockRenderProvider,
@@ -13,10 +15,12 @@ import {
 import { BlockPrimitive, type BlockPrimitiveNode } from "./primitives";
 
 function BlockTree({
+  trust,
   data,
   manifest,
 }: {
   data: unknown;
+  trust: BlockTrust;
   manifest: BlockManifest;
 }) {
   const {
@@ -38,6 +42,7 @@ function BlockTree({
         }}
         node={manifest.tree as BlockPrimitiveNode}
       />
+      {trust === "core" && manifest.handle === "artifact" ? <ArtifactHtmlPreview data={data} /> : null}
       {actionError ? (
         <p className="mt-2 text-xs text-destructive" role="alert">
           {actionError}
@@ -127,7 +132,7 @@ export function BlockRenderer({
         data-block-handle={manifest.handle}
         data-block-trust={trust}
       >
-        <BlockTree data={data} manifest={manifest} />
+        <BlockTree data={data} manifest={manifest} trust={trust} />
         {latestStatus ? (
           <p
             className={

@@ -42,6 +42,8 @@ export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
   "c5b46825bef5d607bdd0b897f9626bb2e535537c1ce6e6b4672781e2f2ee4018",
   // approval 1.1.0; retain historical digests below.
   "5f939e1b2fa7053483cf27ad38abb7335388fce2e5da30579eda17276fa3fda1",
+  // artifact 1.2.0: optional static HTML preview.
+  "9e293ce4af3e38592f56fa368fe0fbcae2abae93adf8e9f97f083a19d12b26a1",
   // artifact 1.1.0; retain historical digests below.
   "5434b4ff68d181b1f4029653152f2d0084692f3467749cb7e0ab150fa480b8ad",
   // brainstorm 1.1.0; retain historical digests below.

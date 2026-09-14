@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office.block-manifest/1",
   "handle": "artifact",
-  "version": "1.1.0",
-  "created_at": 1785369601,
+  "version": "1.2.0",
+  "created_at": 1789387200,
   "name": "Artifact",
   "description": "A delivered website, image, video, document, or file.",
   "origin": "core",
@@ -16,6 +16,9 @@
       "description": { "type": "string", "maxLength": 2000 },
       "url": { "type": "string", "format": "uri", "pattern": "^https?://" },
       "alt": { "type": "string", "minLength": 1, "maxLength": 500 },
+      "preview_html": { "type": "string", "minLength": 1, "maxLength": 20000 },
+      "revision": { "type": "integer", "minimum": 1 },
+      "previous_artifact": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
       "status": {
         "type": "string",
         "enum": ["draft", "ready-for-review", "approved", "superseded"]
