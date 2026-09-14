@@ -564,10 +564,10 @@
     ]
   },
   "commands": {
-    "registered": 388,
+    "registered": 389,
     "defined": 389,
     "by_reach": {
-      "frontend": 374,
+      "frontend": 375,
       "NO CALLER FOUND": 10,
       "frontend-plugin-prefixed": 2,
       "rust-internal": 2
@@ -734,6 +734,7 @@
     "src-tauri/src/commands/personas/snapshot.rs": 2,
     "src-tauri/src/commands/company_scan.rs": 2,
     "src-tauri/src/commands/provisioned_credits.rs": 2,
+    "src-tauri/src/commands/messages/event_batch.rs": 2,
     "src-tauri/src/commands/messages/forum.rs": 2,
     "src-tauri/src/commands/global_agent_config.rs": 2,
     "src-tauri/src/commands/project_git_diff.rs": 2,
@@ -762,7 +763,6 @@
     "src-tauri/src/commands/engrams.rs": 1,
     "src-tauri/src/commands/channel_reconnect_repair.rs": 1,
     "src-tauri/src/commands/channel_window.rs": 1,
-    "src-tauri/src/commands/messages/event_batch.rs": 1,
     "src-tauri/src/commands/legacy_storage.rs": 1,
     "src-tauri/src/commands/agent_logs.rs": 1,
     "src-tauri/src/commands/os_idle.rs": 1,
@@ -828,7 +828,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:93",
         "src/features/agents/ui/agentSessionToolCatalog.ts:135",
-        "src/features/workflows/ui/WorkflowFormBuilder.tsx:719"
+        "src/features/workflows/ui/WorkflowFormBuilder.tsx:708"
       ]
     },
     "add_relay_member": {
@@ -2136,6 +2136,15 @@
         "src/features/agents/ui/agentSessionToolCatalog.ts:83",
         "src/features/messages/lib/useDraftRootStatus.ts:11",
         "src/parity/session/script.ts:564"
+      ]
+    },
+    "get_events": {
+      "defining_file": "src-tauri/src/commands/messages/event_batch.rs",
+      "module": "event_batch",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriEvents.ts:13"
       ]
     },
     "get_feed": {
