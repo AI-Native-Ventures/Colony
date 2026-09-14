@@ -316,8 +316,8 @@ async fn publish_managed_agent(
     .expect("managed agent signs");
     let ok = send_past_transport_stall(client, event, "managed agent head").await;
     assert!(
-        ok.accepted,
-        "the relay must accept the unique managed-agent head: {}",
+        ok.accepted || ok.message.contains("superseded"),
+        "the relay must accept the managed-agent head: {}",
         ok.message
     );
 }
@@ -469,14 +469,16 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
     let coordinator = Keys::generate();
     let research = Keys::generate();
     let builder = Keys::generate();
-    let reviewer = Keys::generate();
+    // Immutable QA report bytes pin this reviewer key. Its persona must also
+    // stay stable when another test has already published its managed head.
+    let reviewer = agent_keys(0x54);
     for agent in [&coordinator, &research, &builder, &reviewer] {
         seed_member(agent, "member", Some(owner)).await;
     }
     let personas = TeamPersonas {
         research: format!("persona-research-{}", &suffix[..12]),
         build: format!("persona-build-{}", &suffix[..12]),
-        review: format!("persona-review-{}", &suffix[..12]),
+        review: "persona-website-fixture-reviewer".to_owned(),
     };
     let coordinator_persona = format!("persona-coordinator-{}", &suffix[..12]);
     // Keep the id ending in the coordination slug as well as naming the
