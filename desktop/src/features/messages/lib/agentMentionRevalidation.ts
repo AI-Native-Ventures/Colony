@@ -1,5 +1,4 @@
 import {
-  filterAdmittedMentionPubkeys,
   getAgentMentionAdmission,
   getMentionableAgentPubkeys,
   type AgentEligibilityScope,
@@ -37,10 +36,8 @@ export async function revalidateAgentMentionPubkeys({
   refetchManagedAgents,
   fetchRelayAgents,
   phase = "publish",
-  intendedAgentPubkeys,
 }: {
   phase?: "prepare" | "publish";
-  intendedAgentPubkeys?: readonly string[];
   pubkeys: readonly string[];
   agentPubkeys: ReadonlySet<string>;
   currentPubkey: string | null;
@@ -57,16 +54,16 @@ export async function revalidateAgentMentionPubkeys({
   }
 
   const [managedResult, relayAgents] = await Promise.all([
-    refetchManagedAgents(),
+    refetchManagedAgents().catch(() => null),
     fetchRelayAgents([...requestedAgentPubkeys]).catch(() => null),
   ]);
   const relayDirectoryReady = relayAgents !== null;
-  if (managedResult.error !== null || managedResult.data === undefined) {
-    return filterAdmittedMentionPubkeys(pubkeys, agentPubkeys, new Set());
-  }
-
+  // Each directory proves only its own identities. A failed local runtime
+  // query must neither veto fresh relay evidence nor admit stale local data.
   const managedPubkeys = new Set(
-    managedResult.data.map((agent) => normalizePubkey(agent.pubkey)),
+    (managedResult?.error === null ? (managedResult.data ?? []) : []).map(
+      (agent) => normalizePubkey(agent.pubkey),
+    ),
   );
   const mentionablePubkeys = getMentionableAgentPubkeys({
     currentPubkey,
@@ -90,20 +87,12 @@ export async function revalidateAgentMentionPubkeys({
       );
     }),
   );
-  // An agent the composer intended to address and that is no longer admitted
-  // fails the send loudly instead of publishing a message that silently drops
-  // it. Only the intended set raises this: a stale key nobody asked for is
-  // still filtered out quietly.
-  const intended = (intendedAgentPubkeys ?? []).map(normalizePubkey);
   if (
-    intended.some(
-      (pubkey) =>
-        requestedAgentPubkeys.has(pubkey) && !admittedPubkeys.has(pubkey),
-    )
+    [...requestedAgentPubkeys].some((pubkey) => !admittedPubkeys.has(pubkey))
   ) {
     throw new AgentMentionAuthorizationError();
   }
-  return filterAdmittedMentionPubkeys(pubkeys, agentPubkeys, admittedPubkeys);
+  return [...pubkeys];
 }
 
 export function useAgentMentionRevalidation({
@@ -130,11 +119,19 @@ export function useAgentMentionRevalidation({
       // A new DM can acquire its channel during preparation. Validate the
       // actual destination at publication, not the composer's original null id.
       const scope: AgentEligibilityScope = destinationChannelId
-        ? { type: "channel", channelId: destinationChannelId }
+        ? {
+            type: eligibilityScope.type === "owned" ? "owned" : "channel",
+            channelId: destinationChannelId,
+          }
         : eligibilityScope;
       return revalidateAgentMentionPubkeys({
         pubkeys,
-        agentPubkeys: new Set([...agentPubkeys, ...getSelectedAgentPubkeys()]),
+        agentPubkeys: new Set([
+          ...agentPubkeys,
+          ...getSelectedAgentPubkeys(),
+          ...(options.intendedAgentPubkeys ?? []).map(normalizePubkey),
+        ]),
+        phase: options.phase,
         currentPubkey,
         eligibilityScope: scope,
         sharedChannelIds,
@@ -144,8 +141,6 @@ export function useAgentMentionRevalidation({
             requestedPubkeys,
             "channelId" in scope ? (scope.channelId ?? undefined) : undefined,
           ),
-        phase: options.phase,
-        intendedAgentPubkeys: options.intendedAgentPubkeys,
       });
     },
     [

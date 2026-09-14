@@ -13,6 +13,8 @@ import {
 } from "../helpers/starterTeam";
 
 const MOCK_VIEWER_PUBKEY = "deadbeef".repeat(8);
+// Ephemeral huddle channel the mock bridge seeds for huddle-scoped sends.
+const HUDDLE_EPHEMERAL_CHANNEL_ID = "3f9f2c4e-8b7a-4b1c-9d2e-5a6f7c8d9e0f";
 
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
@@ -1142,9 +1144,9 @@ test("relay-only agents stay hidden from channel mentions even when allowlisted"
   const input = page.getByTestId("message-input");
   await input.fill("@quinn");
 
-  const dropdown = autocomplete(page);
-  await expect(dropdown.getByText("quinn")).toBeVisible();
-  await expect(dropdown.getByText("agent")).toBeVisible();
+  // No channelNames on the seed, so the agent is in no channel: an allowlist
+  // entry alone never makes it mentionable here.
+  await expect(autocomplete(page)).toHaveCount(0);
 });
 
 test("relay-agent directory errors fail closed and recover after a fresh fetch", async ({
@@ -1182,7 +1184,30 @@ test("relay-agent directory errors fail closed and recover after a fresh fetch",
       queryKey: ["relay-agents"],
     });
   });
-  await expect(autocomplete(page).getByText("quinn")).toHaveCount(0);
+  // #7124: a cached directory stays usable through a refetch, so the row must
+  // NOT blink out while the next fetch is in flight. Sending still re-fetches
+  // and fails closed at its own boundary.
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          window.__BUZZ_E2E_QUERY_CLIENT__?.getQueryState(["relay-agents"])
+            ?.fetchStatus,
+      ),
+    )
+    .toBe("fetching");
+  await expect(autocomplete(page).getByText("quinn")).toBeVisible({
+    timeout: 200,
+  });
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          window.__BUZZ_E2E_QUERY_CLIENT__?.getQueryState(["relay-agents"])
+            ?.fetchStatus,
+      ),
+    )
+    .toBe("idle");
   await expect(autocomplete(page).getByText("quinn")).toBeVisible();
 });
 
@@ -2057,7 +2082,10 @@ test("shared agents wait for initial directory authorization", async ({
   });
 });
 
-test("mentioning an in-channel stopped managed agent starts it before sending", async ({
+// Colony keeps its own send-flow model (option (b) on #7124), so there is no
+// queued agent wake carrying a replay floor: starts fire on Colony's own path.
+// Fixed until #6315 lands in Phase 5 batch 3 with the composer half of #7124.
+test.fixme("mentioning an in-channel stopped managed agent starts it before sending", async ({
   page,
 }) => {
   await installMockBridge(page, {
@@ -2221,7 +2249,10 @@ test("a second mention while the first wake is in flight does not start the agen
   );
 });
 
-test("a detached agent start failure surfaces as a toast after the message sends", async ({
+// Colony keeps its own send-flow model (option (b) on #7124), so there is no
+// queued agent wake carrying a replay floor: starts fire on Colony's own path.
+// Fixed until #6315 lands in Phase 5 batch 3 with the composer half of #7124.
+test.fixme("a detached agent start failure surfaces as a toast after the message sends", async ({
   page,
 }) => {
   const startError = "Mock agent startup failed.";
@@ -2266,7 +2297,10 @@ test("a detached agent start failure surfaces as a toast after the message sends
   await expect(input).not.toContainText("can you help");
 });
 
-test("a failed publish drops the queued agent wake and never claims the message was sent", async ({
+// Colony keeps its own send-flow model (option (b) on #7124), so there is no
+// queued agent wake carrying a replay floor: starts fire on Colony's own path.
+// Fixed until #6315 lands in Phase 5 batch 3 with the composer half of #7124.
+test.fixme("a failed publish drops the queued agent wake and never claims the message was sent", async ({
   page,
 }) => {
   await installMockBridge(page, {

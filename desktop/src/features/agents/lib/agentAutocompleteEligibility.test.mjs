@@ -9,6 +9,7 @@ import {
   getMentionableAgentPubkeys,
   getSharedChannelIds,
   isAgentIdentityInAllowedList,
+  isAgentDirectoryReady,
   isAgentMentionChannelType,
   relayAgentCanRespondInChannel,
   relayAgentIsSharedWithUser,
@@ -644,5 +645,30 @@ test("DM ownership is independent of local configuration and still requires memb
       phase: "prepare",
     }),
     new Set([PUB_A, PUB_B]),
+  );
+});
+
+test("isAgentDirectoryReady: requires successful cached directory evidence", () => {
+  assert.equal(isAgentDirectoryReady({ data: [], error: null }), true);
+  assert.equal(isAgentDirectoryReady({ data: undefined, error: null }), false);
+  assert.equal(
+    isAgentDirectoryReady({ data: [], error: new Error("offline") }),
+    false,
+  );
+});
+
+test("relayAgentIsSharedWithUser: accepts verified same-owner agents across machines", () => {
+  assert.equal(
+    relayAgentIsSharedWithUser(
+      {
+        ownerPubkey: CURRENT_PUBKEY.toUpperCase(),
+        respondTo: "owner-only",
+        respondToAllowlist: [],
+        channelIds: ["general"],
+      },
+      new Set(["general"]),
+      CURRENT_PUBKEY,
+    ),
+    true,
   );
 });

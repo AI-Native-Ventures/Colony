@@ -18,6 +18,7 @@ import {
   getAgentIdentityPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
+  isAgentDirectoryReady,
   isAgentMentionChannelType,
   rememberSelectedAgentPubkeys,
   shouldHideAgentFromMentions,
@@ -112,14 +113,8 @@ export function useMentions(
   });
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
-  const managedAgentDirectoryReady =
-    managedAgentsQuery.data !== undefined &&
-    managedAgentsQuery.error === null &&
-    !managedAgentsQuery.isFetching;
-  const relayAgentDirectoryReady =
-    relayAgentsQuery.data !== undefined &&
-    relayAgentsQuery.error === null &&
-    !relayAgentsQuery.isFetching;
+  const managedAgentDirectoryReady = isAgentDirectoryReady(managedAgentsQuery);
+  const relayAgentDirectoryReady = isAgentDirectoryReady(relayAgentsQuery);
   const agentDirectoriesReady =
     managedAgentDirectoryReady && relayAgentDirectoryReady;
   const canSearchGlobalUsers = canSearchGlobalPeople && agentDirectoriesReady;
