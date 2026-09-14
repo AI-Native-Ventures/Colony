@@ -286,6 +286,9 @@ function readAttribute(tag: string, name: string): string | null {
  * the result never depends on how a pasteboard round-trip reformatted the
  * markup. Malformed or oversized records are dropped, not repaired.
  */
+/** Separates label from pubkey in a record dedupe key; never valid in either. */
+const MENTION_RECORD_KEY_SEPARATOR = "\u0000";
+
 export function parseMentionClipboardRecords(html: string): MentionIdentity[] {
   const tagPattern = new RegExp(
     `<[a-zA-Z][^>]*\\b${MENTION_PUBKEY_ATTRIBUTE}\\s*=[^>]*>`,
@@ -308,7 +311,10 @@ export function parseMentionClipboardRecords(html: string): MentionIdentity[] {
     ) {
       continue;
     }
-    const key = `${label.toLowerCase()} ${pubkey}`;
+    // Sentinel between the two halves of the dedupe key, written as an
+    // escape rather than a raw byte: a literal NUL makes git, grep and the
+    // audit scripts treat this source file as binary.
+    const key = `${label.toLowerCase()}${MENTION_RECORD_KEY_SEPARATOR}${pubkey}`;
     if (seen.has(key)) continue;
     seen.add(key);
     records.push({

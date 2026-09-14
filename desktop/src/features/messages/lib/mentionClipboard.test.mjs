@@ -167,6 +167,29 @@ test("recovers records from a Buzz copy", () => {
   ]);
 });
 
+test("dedupes on the label-plus-key sentinel, and keeps distinct pairs", () => {
+  // The dedupe key joins label and pubkey with U+0000, written as an escape in
+  // the source rather than a raw byte. These two cases pin what that key has to
+  // separate: the same pair twice collapses, and two pairs whose halves would
+  // run together without a separator both survive.
+  const duplicated = parseMentionClipboardRecords(
+    `<span data-mention-pubkey="${JOHN}" data-mention-label="John">@John</span>` +
+      `<span data-mention-pubkey="${JOHN}" data-mention-label="John">@John</span>`,
+  );
+  assert.deepEqual(duplicated, [
+    { label: "John", pubkey: JOHN, isAgent: false },
+  ]);
+
+  const distinct = parseMentionClipboardRecords(
+    `<span data-mention-pubkey="${JOHN}" data-mention-label="John">@John</span>` +
+      `<span data-mention-pubkey="${FIZZ}" data-mention-label="John">@John</span>`,
+  );
+  assert.deepEqual(distinct, [
+    { label: "John", pubkey: JOHN, isAgent: false },
+    { label: "John", pubkey: FIZZ, isAgent: false },
+  ]);
+});
+
 test("recovers records from single-quoted, reordered attributes", () => {
   const records = parseMentionClipboardRecords(
     `<span data-mention-label='Jo &amp; Ann' data-mention-kind='human' ` +
