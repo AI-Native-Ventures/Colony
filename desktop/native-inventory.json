@@ -564,10 +564,10 @@
     ]
   },
   "commands": {
-    "registered": 389,
-    "defined": 389,
+    "registered": 392,
+    "defined": 392,
     "by_reach": {
-      "frontend": 375,
+      "frontend": 378,
       "NO CALLER FOUND": 10,
       "frontend-plugin-prefixed": 2,
       "rust-internal": 2
@@ -586,16 +586,16 @@
     ]
   },
   "params": {
-    "AppHandle": 429,
-    "State": 278,
+    "AppHandle": 430,
+    "State": 281,
     "Window": 7,
     "ipc::Request": 2,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 426,
-      "State": 278,
+      "AppHandle": 427,
+      "State": 281,
       "Window": 7,
       "ipc::Request": 2,
       "ipc::Channel": 4
@@ -613,8 +613,8 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 128,
-    ".emit(": 49,
+    ".state::<": 129,
+    ".emit(": 50,
     ".emit_to(": 2,
     ".dialog()": 5,
     ".shell()": 0,
@@ -631,12 +631,13 @@
     ".exit(": 5
   },
   "events": {
-    "distinct": 34,
-    "emit_sites": 51,
+    "distinct": 35,
+    "emit_sites": 52,
     "names": [
       "acp-install-output",
       "agents-data-changed",
       "deep-link-add-community",
+      "deep-link-channel",
       "deep-link-connect",
       "deep-link-join",
       "deep-link-message",
@@ -694,6 +695,7 @@
     "src-tauri/src/managed_agents/runtime_commands.rs": 6,
     "src-tauri/src/commands/mesh_llm.rs": 6,
     "src-tauri/src/commands/terminal.rs": 6,
+    "src-tauri/src/deep_link.rs": 5,
     "src-tauri/src/commands/project_git_workflow.rs": 5,
     "src-tauri/src/commands/channel_templates.rs": 5,
     "src-tauri/src/commands/initiative.rs": 4,
@@ -723,7 +725,6 @@
     "src-tauri/src/commands/media.rs": 3,
     "src-tauri/src/commands/workspace_files.rs": 3,
     "src-tauri/src/commands/agent_settings.rs": 3,
-    "src-tauri/src/deep_link.rs": 2,
     "src-tauri/src/huddle/window.rs": 2,
     "src-tauri/src/commands/company_blueprint.rs": 2,
     "src-tauri/src/commands/personas/snapshot/import.rs": 2,
@@ -796,7 +797,16 @@
       "example_sites": [
         "src/parity/session/script.ts:1326",
         "src/parity/session/script.ts:1327",
-        "src/shared/deep-link.ts:80"
+        "src/shared/deep-link.ts:90"
+      ]
+    },
+    "acknowledge_pending_navigation_deep_link": {
+      "defining_file": "src-tauri/src/deep_link.rs",
+      "module": "deep_link",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/deep-link.ts:221"
       ]
     },
     "add_agent_to_huddle": {
@@ -885,7 +895,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:296",
+        "src/features/communities/useCommunityInit.ts:298",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -1071,6 +1081,15 @@
         "src/parity/session/script.ts:713"
       ]
     },
+    "clear_pending_navigation_deep_links": {
+      "defining_file": "src-tauri/src/deep_link.rs",
+      "module": "deep_link",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/deep-link.ts:175"
+      ]
+    },
     "clear_pending_signup": {
       "defining_file": "src-tauri/src/commands/onboarding_recovery.rs",
       "module": "onboarding_recovery",
@@ -1217,7 +1236,7 @@
       "registered_in": "src-tauri/src/native_websocket.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/deep-link.ts:54",
+        "src/shared/deep-link.ts:64",
         "src/shared/useMessageDeepLinks.ts:13"
       ]
     },
@@ -1258,7 +1277,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1087",
         "src/parity/session/script.ts:1088",
-        "src/shared/ui/markdown.tsx:150"
+        "src/shared/ui/markdown.tsx:154"
       ]
     },
     "copy_text_to_clipboard": {
@@ -1772,7 +1791,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/ParticipantList.tsx:181"
+        "src/features/huddle/components/ParticipantList.tsx:189"
       ]
     },
     "ensure_starter_channels": {
@@ -2654,7 +2673,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:282",
+        "src/features/communities/useCommunityInit.ts:284",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:88"
       ]
@@ -2929,7 +2948,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/huddle/components/ParticipantList.tsx:183",
+        "src/features/huddle/components/ParticipantList.tsx:191",
         "src/features/settings/ui/VoiceSettingsCard.tsx:62"
       ]
     },
@@ -4156,8 +4175,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/hooks.ts:726",
-        "src/features/channels/hooks.ts:779",
-        "src/features/messages/ui/useMentionSendFlow.ts:396"
+        "src/features/channels/hooks.ts:754",
+        "src/features/messages/ui/useMentionSendFlow.ts:394"
       ]
     },
     "take_pending_activations": {
@@ -4177,7 +4196,16 @@
       "example_sites": [
         "src/parity/session/script.ts:1323",
         "src/parity/session/script.ts:1324",
-        "src/shared/deep-link.ts:89"
+        "src/shared/deep-link.ts:99"
+      ]
+    },
+    "take_pending_navigation_deep_link": {
+      "defining_file": "src-tauri/src/deep_link.rs",
+      "module": "deep_link",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/deep-link.ts:201"
       ]
     },
     "take_tray_actions": {
