@@ -336,7 +336,13 @@ export function useMentions(
         kind: "identity",
         pubkey,
         displayName: agent.name,
-        isMember: false,
+        // The directory record lists the channels this agent serves. One that
+        // names the current channel is reachable here, so the row must not
+        // read "not in channel" — it is in it, as an agent rather than a
+        // roster member.
+        isMember: mentionChannelId
+          ? agent.channelIds.includes(mentionChannelId)
+          : false,
         personaId:
           managedAgentPersonaIdsByPubkey.get(pubkey) ??
           (activePersonaById.has(pubkey) ? pubkey : undefined),

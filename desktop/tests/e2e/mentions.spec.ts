@@ -978,7 +978,21 @@ test("relay-only shared agents stay hidden from DM mentions", async ({
 test("cached relay-agent suggestions are removed when channel authorization disappears", async ({
   page,
 }) => {
-  await installMockBridge(page, { userSearchDelayMs: 10_000 });
+  await installMockBridge(page, {
+    userSearchDelayMs: 10_000,
+    // alice is an agent in the mock roster, and #5681 makes a channel-member
+    // agent mentionable only with current directory evidence. The seed gives
+    // her that evidence so this case can test what it is named for: a cached
+    // suggestion disappearing once channel authorization does.
+    relayAgents: [
+      {
+        pubkey: TEST_IDENTITIES.alice.pubkey,
+        name: "alice",
+        respondTo: "anyone",
+        channelNames: ["general"],
+      },
+    ],
+  });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
