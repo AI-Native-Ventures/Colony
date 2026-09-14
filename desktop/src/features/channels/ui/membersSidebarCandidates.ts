@@ -3,7 +3,7 @@ import type {
   ManagedAgent,
   UserSearchResult,
 } from "@/shared/api/types";
-import { formatMemberName } from "@/features/channels/lib/memberUtils";
+import { compareMemberNames } from "@/features/channels/lib/memberUtils";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 /**
@@ -69,5 +69,7 @@ export function compareMembersForModal(
   if (currentPubkey && left.pubkey === currentPubkey) return -1;
   if (currentPubkey && right.pubkey === currentPubkey) return 1;
 
-  return formatMemberName(left).localeCompare(formatMemberName(right));
+  // Colony's sidebar sorts through this comparator rather than
+  // `compareMembers`, so #7503's full-npub ordering is wired here.
+  return compareMemberNames(left, right);
 }

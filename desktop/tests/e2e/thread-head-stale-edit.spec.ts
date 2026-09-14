@@ -118,8 +118,19 @@ test("thread head reflects the channel-window edit even before thread aux loads"
   await expect(timelineRow).not.toContainText("these two PRs?");
 
   // 3. Open the thread via the reply action (the flow in the bug report).
+  //
+  // Hover first, and click without `force`. Colony reveals a row's action rail
+  // on hover (#5821), so before that the rail is painted but the row is the
+  // element at the button's centre - measured with `elementFromPoint`, which
+  // returns `article[message-row]` unhovered and the reply button after a
+  // hover. A forced click dispatches at those coordinates regardless, so it
+  // landed on the row and opened the thread only when the row's own handler
+  // happened to take it; under CI load it did not, and the panel never
+  // appeared. Hovering makes the click hit what the user would hit.
   const replyButton = page.getByTestId(`reply-message-${rootId}`);
-  await replyButton.click({ force: true });
+  await timelineRow.hover();
+  await expect(replyButton).toBeVisible();
+  await replyButton.click();
   const threadPanel = page.getByTestId("message-thread-panel");
   await expect(threadPanel).toBeVisible();
 

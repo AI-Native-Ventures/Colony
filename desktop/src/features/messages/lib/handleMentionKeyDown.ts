@@ -3,7 +3,7 @@ import type * as React from "react";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
-import { flushMentionDebounce } from "./flushMentionDebounce";
+import { flushMentionDebounce, isPlainSpace } from "./flushMentionDebounce";
 import type { MentionCandidateWithUI } from "./flushMentionDebounce";
 
 export type MentionKeyDownResult = {
@@ -41,6 +41,8 @@ export function handleMentionKeyDownWith(
     setMentionQuery: (value: string | null) => void;
     setMentionSelectedIndex: (update: (current: number) => number) => void;
     suggestions: MentionSuggestion[];
+    /** Space inside code must stay literal, so it is never a mention resolve. */
+    isCodeContext?: () => boolean;
   },
 ): MentionKeyDownResult {
   const {
@@ -61,8 +63,14 @@ export function handleMentionKeyDownWith(
     setMentionQuery,
     setMentionSelectedIndex,
     suggestions,
+    isCodeContext,
   } = deps;
-  if (!isMentionOpen) {
+  // Space resolves an exactly typed mention even with the dropdown closed
+  // (#6862): the debounce may not have opened it yet, and the reader has
+  // already typed the whole name.
+  const exactMentionSpace =
+    isPlainSpace(event.nativeEvent) && !isCodeContext?.();
+  if (!isMentionOpen && !exactMentionSpace) {
     return { handled: false };
   }
 
@@ -83,6 +91,7 @@ export function handleMentionKeyDownWith(
   }
 
   if (
+    exactMentionSpace ||
     event.key === "Tab" ||
     (event.key === "Enter" &&
       !event.ctrlKey &&
@@ -90,9 +99,7 @@ export function handleMentionKeyDownWith(
       !event.altKey &&
       !event.shiftKey)
   ) {
-    event.preventDefault();
-
-    if (debounceTimerRef.current !== null) {
+    if (debounceTimerRef.current !== null || exactMentionSpace) {
       const flushed = flushMentionDebounce({
         debounceTimerRef,
         latestValueRef,
@@ -104,7 +111,13 @@ export function handleMentionKeyDownWith(
         currentPubkey,
         ownerProfiles,
         profiles,
+        requireExact: exactMentionSpace,
       });
+      // No exact match on Space: the editor keeps the space, nothing resolves.
+      if (exactMentionSpace && flushed?.type !== "match") {
+        return { handled: false };
+      }
+      event.preventDefault();
       if (flushed?.type === "match") {
         flushedMentionStartIndexRef.current = flushed.startIndex;
         setMentionQuery(null); // reset so dropdown closes
@@ -116,6 +129,7 @@ export function handleMentionKeyDownWith(
       }
     }
 
+    event.preventDefault();
     return { handled: true, suggestion: suggestions[mentionSelectedIndex] };
   }
 

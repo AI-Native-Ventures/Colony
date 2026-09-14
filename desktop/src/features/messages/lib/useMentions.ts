@@ -33,6 +33,7 @@ import type { ChannelMember, ChannelType } from "@/shared/api/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import { channelMemberPubkeySet } from "@/shared/lib/rosterDerivations";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { extractTypedActorPubkeys } from "./draftMentionRefs";
 import { handleMentionKeyDownWith } from "./handleMentionKeyDown";
@@ -240,9 +241,10 @@ export function useMentions(
     () => new Set(activePersonas.map((persona) => persona.id)),
     [activePersonas],
   );
+  // Identity-cached (shared with the timeline's roster derivations) — the
+  // Set is built once per distinct roster instead of per consumer.
   const memberPubkeys = React.useMemo(
-    () =>
-      new Set((members ?? []).map((member) => normalizePubkey(member.pubkey))),
+    () => (members ? channelMemberPubkeySet(members) : new Set<string>()),
     [members],
   );
   const agentIdentityPubkeys = React.useMemo(
@@ -346,7 +348,7 @@ export function useMentions(
         personaId:
           managedAgentPersonaIdsByPubkey.get(pubkey) ??
           (activePersonaById.has(pubkey) ? pubkey : undefined),
-        ownerPubkey: null,
+        ownerPubkey: agent.ownerPubkey,
         isAgent: true,
         roleId: personaRoleByPubkey.get(pubkey)?.roleId ?? null,
         roleTitle: personaRoleByPubkey.get(pubkey)?.roleTitle ?? null,
@@ -508,13 +510,14 @@ export function useMentions(
     searchableNamesLowerRef.current = searchableNamesLower;
   }, [searchableNamesLower]);
 
-  React.useEffect(() => {
-    return () => {
+  React.useEffect(
+    () => () => {
       if (debounceTimerRef.current !== null) {
         clearTimeout(debounceTimerRef.current);
       }
-    };
-  }, []);
+    },
+    [],
+  );
 
   const matchingSuggestions = React.useMemo<MentionSuggestion[]>(() => {
     if (mentionQuery === null) {
@@ -909,8 +912,14 @@ export function useMentions(
     });
 
   const handleMentionKeyDown = React.useCallback(
-    (event: React.KeyboardEvent) =>
+    (
+      event: React.KeyboardEvent,
+      // Consulted for Space only: inside code the typed text stays literal,
+      // so Space never resolves a mention there (#6862).
+      opts?: { isCodeContext?: () => boolean },
+    ) =>
       handleMentionKeyDownWith(event, {
+        isCodeContext: opts?.isCodeContext,
         activePersonaIds,
         cancelMentionAutocomplete,
         candidates: mentionCandidatesWithTeams,

@@ -16,7 +16,7 @@ import type { ReportingLine } from "@/features/agents/reportingLine";
 import { useAgentReportingLine } from "@/features/agents/reportingLine";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
-import { truncatePubkey } from "@/shared/lib/pubkey";
+import { canonicalNpub, truncateNpub } from "@/shared/lib/pubkey";
 import {
   HoverCopyIndicator,
   useCopyFeedback,
@@ -197,9 +197,12 @@ export function buildPublicFields({
   const fields: ProfileField[] = [];
 
   if (pubkey) {
+    const npub = canonicalNpub(pubkey);
     fields.push({
-      copyValue: pubkey,
-      displayValue: truncatePubkey(pubkey),
+      // Copy the full canonical npub; an identity that cannot be encoded is
+      // never copyable.
+      copyValue: npub ?? undefined,
+      displayValue: truncateNpub(pubkey),
       displayNode: (
         <PubKey
           interactive={false}
@@ -318,12 +321,18 @@ export function buildOwnerFields({
     : null;
 
   const ownerClickable = Boolean(onOpenProfile && ownerProfilePubkey);
+  // Non-clickable owner rows copy the owner's full npub (handle only when no
+  // key is known); an unencodable owner key copies nothing.
+  const ownerCopyKey = ownerProfilePubkey ?? ownerPubkey;
+  const ownerCopyValue = ownerClickable
+    ? undefined
+    : ownerCopyKey
+      ? (canonicalNpub(ownerCopyKey) ?? undefined)
+      : (ownerHandle ?? undefined);
 
   if (ownerDisplayName) {
     fields.push({
-      copyValue: ownerClickable
-        ? undefined
-        : (ownerProfilePubkey ?? ownerPubkey ?? ownerHandle ?? undefined),
+      copyValue: ownerCopyValue,
       displayValue: ownerDisplayName,
       displayNode: <span className="truncate">{ownerDisplayName}</span>,
       label: "Managed by",
@@ -365,7 +374,7 @@ export function buildOwnerFields({
     });
   } else if (ownerPubkey) {
     fields.push({
-      copyValue: ownerPubkey,
+      copyValue: canonicalNpub(ownerPubkey) ?? undefined,
       displayValue: "Declared owner verified",
       icon: UserRound,
       label: "Agent profile",

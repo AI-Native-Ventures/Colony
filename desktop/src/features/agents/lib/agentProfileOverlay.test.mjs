@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { truncateNpub } from "@/shared/lib/pubkey";
+
 import { resolveChannelDisplayLabel } from "../../sidebar/lib/channelLabels.ts";
 import { overlayAgentNamesOntoProfiles } from "./agentProfileOverlay.ts";
 
@@ -26,7 +28,9 @@ test("agent DM with no relay profile resolves the registry name", () => {
   // profile publish lagged or failed), so the users-batch lookup is empty.
   // Without the overlay the header and sidebar printed the truncated pubkey.
   const bare = resolveChannelDisplayLabel(AGENT_DM, ME, {});
-  assert.equal(bare, `${AGENT.slice(0, 8)}…${AGENT.slice(-4)}`);
+  // #7495 moved identity fallbacks onto the canonical truncated npub, so the
+  // unresolved label is the npub form rather than truncated hex.
+  assert.equal(bare, truncateNpub(AGENT));
 
   const overlaid = overlayAgentNamesOntoProfiles({}, [MANAGED_AGENT], [], ME);
   assert.equal(

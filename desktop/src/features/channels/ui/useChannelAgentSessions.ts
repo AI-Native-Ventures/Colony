@@ -8,7 +8,11 @@ import type {
   RelayAgent,
 } from "@/shared/api/types";
 import { usePanelReturnTarget } from "@/shared/hooks/usePanelReturnTarget";
-import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncateNpub } from "@/shared/lib/pubkey";
+import {
+  channelBotMemberPubkeySet,
+  channelMemberPubkeySet,
+} from "@/shared/lib/rosterDerivations";
 import {
   type AgentSessionReturnTarget,
   resolveAgentSessionReturnTarget,
@@ -96,7 +100,7 @@ export function buildChannelAgentSessionCandidates({
 
     byPubkey.set(key, {
       pubkey: member.pubkey,
-      name: member.displayName ?? truncatePubkey(member.pubkey),
+      name: member.displayName ?? truncateNpub(member.pubkey),
       status: "deployed",
       agentSource: "member-bot",
       canInterruptTurn: false,
@@ -121,15 +125,14 @@ export function getChannelAgentSessionAgents({
     return [];
   }
 
+  // Identity-cached: the memo recomputes whenever the active channel object
+  // churns (e.g. lastMessageAt updates), and these Sets walked the full
+  // roster each time.
   const memberPubkeys = channelMembers
-    ? new Set(channelMembers.map((member) => normalizePubkey(member.pubkey)))
+    ? channelMemberPubkeySet(channelMembers)
     : null;
   const botMemberPubkeys = channelMembers
-    ? new Set(
-        channelMembers
-          .filter((member) => member.role === "bot")
-          .map((member) => normalizePubkey(member.pubkey)),
-      )
+    ? channelBotMemberPubkeySet(channelMembers)
     : null;
 
   return agents.filter((agent) => {

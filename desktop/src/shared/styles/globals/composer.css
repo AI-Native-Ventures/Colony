@@ -115,6 +115,7 @@
   @apply text-message font-normal tracking-normal;
   outline: none;
   min-height: 1lh;
+  padding-block: 0.0625rem;
 }
 
 .rich-text-composer .tiptap p {
@@ -273,4 +274,44 @@
 
 /* Inline chips — timeline markdown + composer share `.message-markdown` scope.
    Body copy is text-sm; inline code labels sit one step down (text-xs).
-   All chip variants share one box height so mono labels stay balanced. */
+   All chip variants share one box height so mono labels stay balanced.
+
+   Plain-text mention decorations stay inline because inline-flex pulls the
+   caret into their decorated range and swallows the trailing space after an
+   @mention. Their generated icon participates in the first line's inline
+   flow: absolute positioning anchors it to the union of every wrapped line,
+   and icon-sized left padding is cloned onto every continuation fragment.
+   Composer Buzz links are atom nodes with their own leading-fragment wrapper.
+
+   This is what lets Colony's agent decoration join the inline treatment that
+   #6718 had to exclude it from: its bot glyph no longer needs a containing
+   block, because it flows inline here rather than being positioned against
+   one. */
+.rich-text-composer .tiptap .mention-chip {
+  display: inline;
+  min-height: 0;
+  line-height: calc(
+    1em +
+    var(--inline-chip-padding-block-start) +
+    var(--inline-chip-padding-block-end)
+  );
+}
+
+/* Colony's icon chip is `.agent-mention-highlight`, and its gap token is
+   `--agent-icon-gap`; upstream's `.inline-chip-with-icon` /
+   `--inline-chip-icon-gap` pair has no producer here. The human variant is
+   upstream-only too: Colony decorates agent mentions and nothing else. */
+.rich-text-composer .tiptap
+  .mention-chip.agent-mention-highlight:not(.wrapping-inline-chip) {
+  padding-left: var(--inline-chip-padding-inline);
+}
+
+.rich-text-composer
+  .tiptap
+  .mention-chip.agent-mention-highlight:not(.wrapping-inline-chip)::before {
+  position: static;
+  display: inline-block;
+  margin-right: var(--agent-icon-gap);
+  transform: none;
+  vertical-align: -0.125em;
+}

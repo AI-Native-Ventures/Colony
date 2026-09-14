@@ -10,6 +10,10 @@ import {
 const OWNER_PUBKEY =
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+// npubEncode(OWNER_PUBKEY), pinned so a fallback regression cannot pass by
+// re-deriving the expectation from the code under test.
+const OWNER_NPUB_COMPACT = "npub1hwa…04hu";
+
 const summary = (over = {}) => ({
   displayName: "Ada",
   avatarUrl: "https://x/a.png",
@@ -55,6 +59,19 @@ test("formatOwnerLabel resolves a known owner's display name", () => {
     }),
     "baxen",
   );
+  assert.equal(
+    formatOwnerLabel(OWNER_PUBKEY, "c".repeat(64), {
+      [OWNER_PUBKEY]: summary({
+        nip05Handle: "baxen@relay",
+        displayName: null,
+      }),
+    }),
+    "baxen@relay",
+  );
+  assert.equal(
+    formatOwnerLabel(OWNER_PUBKEY, "c".repeat(64), {}),
+    OWNER_NPUB_COMPACT,
+  );
 });
 
 test("formatOwnerLabel calls the viewer-owned agent's owner you", () => {
@@ -63,6 +80,31 @@ test("formatOwnerLabel calls the viewer-owned agent's owner you", () => {
 
 test("formatOwnerLabel returns null when verified ownership is absent", () => {
   assert.equal(formatOwnerLabel(null, OWNER_PUBKEY, {}), null);
+});
+
+test("resolveUserLabel falls back to the key’s compact npub, never raw hex", () => {
+  // No profile, no fallback name: the last resort is the npub compact.
+  assert.equal(
+    resolveUserLabel({ pubkey: OWNER_PUBKEY, profiles: {} }),
+    OWNER_NPUB_COMPACT,
+  );
+  // A provided fallback name still wins over the key form.
+  assert.equal(
+    resolveUserLabel({
+      pubkey: OWNER_PUBKEY,
+      profiles: {},
+      fallbackName: "legacy relay agent",
+    }),
+    "legacy relay agent",
+  );
+  // A resolved display name wins over everything.
+  assert.equal(
+    resolveUserLabel({
+      pubkey: OWNER_PUBKEY,
+      profiles: { [OWNER_PUBKEY]: summary({ displayName: "baxen" }) },
+    }),
+    "baxen",
+  );
 });
 
 test("profileLookupsEqual: same reference is equal", () => {

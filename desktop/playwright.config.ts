@@ -135,6 +135,7 @@ export default defineConfig({
         "**/composer-tooltip-dismiss.spec.ts",
         "**/mentions.spec.ts",
         "**/remote-owned-mentions.spec.ts",
+        "**/mention-spacing.spec.ts",
         "**/team-mentions.spec.ts",
         "**/discovery-mentions.spec.ts",
         "**/persistent-agent-audience.spec.ts",

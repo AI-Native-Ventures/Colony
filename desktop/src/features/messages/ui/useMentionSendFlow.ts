@@ -13,10 +13,8 @@ import {
 } from "@/features/agents/hooks";
 import { applyReusableAgentAccessPolicy } from "@/features/agents/channelAgents";
 import { createMentionedPersonaAgentsWith } from "./useMentionSendFlow.personaAgents";
-import {
-  useAddChannelMembersMutation,
-  useCanAddChannelMembers,
-} from "@/features/channels/hooks";
+import { useAddChannelMembersMutation } from "@/features/channels/hooks";
+import { useCanAddChannelMembers } from "@/features/channels/useCanAddChannelMembers";
 import { PRIVATE_CHANNEL_ADD_DENIED_MESSAGE } from "@/features/channels/lib/channelMemberAdmission";
 import { dmThreadAgentMentionError } from "@/features/messages/lib/dmThreadAgentMentionError";
 import { filterEffectiveExplicitAgentPubkeys } from "@/features/messages/lib/effectiveExplicitAgentPubkeys";
@@ -31,7 +29,7 @@ import {
 import { invokeTauri } from "@/shared/api/tauri";
 import { useComposerNewTask } from "./useComposerNewTask";
 import type { AcpRuntime, ManagedAgent } from "@/shared/api/types";
-import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncateNpub } from "@/shared/lib/pubkey";
 import {
   attachOutgoingWorkContext,
   buildTypedMentionRouting,
@@ -826,7 +824,7 @@ export function useMentionSendFlow({
 
     return pendingNonMemberSend.nonMemberPubkeys.map(
       (pubkey) =>
-        mentions.getMentionDisplayName(pubkey) ?? truncatePubkey(pubkey),
+        mentions.getMentionDisplayName(pubkey) ?? truncateNpub(pubkey),
     );
   }, [mentions.getMentionDisplayName, pendingNonMemberSend]);
 
