@@ -65,7 +65,18 @@ export function TeamsSection({
   // heading. Hidden while the list is still loading too, so the section does
   // not flash a row of skeletons on its way to not being there.
   if (!teamsSectionIsVisible(teams, error !== null)) {
-    return null;
+    // A fresh community still needs an entry point to install its first team.
+    return (
+      <Button
+        data-testid="install-website-manager-button"
+        onClick={onInstallWebsiteTeam}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
+        Install Website Manager
+      </Button>
+    );
   }
 
   // The coordination team is in the list so mentions, tasks and the deploy
