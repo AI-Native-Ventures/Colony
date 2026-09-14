@@ -1,8 +1,8 @@
 {
   "schema": "ai-native-office/provisioned-employee/v1",
   "handle": "chief-of-staff",
-  "version": 1,
-  "display_name": "Chief of Staff",
+  "version": 2,
+  "display_name": "Scout",
   "role_id": "chief-of-staff",
   "rank": "executive",
   "reports_to": null,
