@@ -34,6 +34,7 @@ pub mod price_feed;
 pub mod projects;
 pub mod provider_costs;
 pub mod reactions;
+mod repo_default_branch;
 pub mod repos;
 pub mod social;
 pub mod upload;
