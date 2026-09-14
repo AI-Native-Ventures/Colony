@@ -128,11 +128,15 @@ function MoreActionsMenu({
 }) {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
   const [isReportDialogOpen, setIsReportDialogOpen] = React.useState(false);
-  // Transfer focus ownership only after the menu has finished closing.
-  // During its exit animation Radix's pointer-leave handler can still focus
-  // the menu, stealing keystrokes from an already-open composer. Merely
-  // suppressing trigger restoration does not prevent that earlier race.
-  const pendingEditRef = React.useRef<(() => void) | null>(null);
+  // Set true the moment the user picks "Edit message". The
+  // `onCloseAutoFocus` handler on `DropdownMenuContent` reads it to
+  // suppress Radix's default focus-restoration (which would yank focus
+  // back to the trigger and steal it from the composer's editor — the
+  // composer schedules its own focus on RAF, but Radix's restoration
+  // runs in a setTimeout that fires after our RAF and wins the race).
+  // Reset to false inside the handler so Escape / non-Edit closes still
+  // get default trigger-restoration (a11y intact for keyboard users).
+  const editJustSelectedRef = React.useRef(false);
 
   const hasCopyActions =
     !message.pending && message.kind !== KIND_HUDDLE_STARTED;
@@ -174,19 +178,18 @@ function MoreActionsMenu({
           side="top"
           sideOffset={6}
           onCloseAutoFocus={(event) => {
-            const startEdit = pendingEditRef.current;
-            if (startEdit) {
+            if (editJustSelectedRef.current) {
               event.preventDefault();
-              pendingEditRef.current = null;
-              startEdit();
+              editJustSelectedRef.current = false;
             }
           }}
         >
           {onEdit ? (
             <DropdownMenuItem
               data-testid={`edit-message-${message.id}`}
-              onSelect={() => {
-                pendingEditRef.current = () => onEdit(message);
+              onClick={() => {
+                editJustSelectedRef.current = true;
+                onEdit(message);
               }}
             >
               <Pencil className="h-4 w-4" />
