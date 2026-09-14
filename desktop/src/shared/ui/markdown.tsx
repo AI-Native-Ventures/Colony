@@ -1560,6 +1560,8 @@ export function createMarkdownComponents(
       const mentionText = String(children ?? "");
       const mentionName = mentionText.replace(/^@/, "").trim().toLowerCase();
       const pubkey = mentionPubkeysByName?.[mentionName];
+      // Unbound literal competitors consume their full range, without a chip.
+      if (mentionPubkeysByName && !pubkey) return mentionText;
       return (
         <MarkdownMentionChip
           interactive={interactive}
