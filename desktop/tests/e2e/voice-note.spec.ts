@@ -870,7 +870,6 @@ test("records from the composer and renders an inline waveform card", async ({
 // The behaviour this case shares with Colony - emoji stay available beside a
 // queued voice note - is covered by the recorder cases above.
 
-
 test("starting a duplicate voice-note player pauses the other instance", async ({
   page,
 }) => {

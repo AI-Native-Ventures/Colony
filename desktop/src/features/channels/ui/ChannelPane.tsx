@@ -72,7 +72,10 @@ import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
-import { useMainColumnDropGate } from "./channelPaneDropGate";
+import {
+  isNonMemberChannelView,
+  useMainColumnDropGate,
+} from "./channelPaneDropGate";
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   agentPubkeys,
@@ -189,11 +192,7 @@ export const ChannelPane = React.memo(function ChannelPane({
     targetSearchMessageId,
     targetSearchQuery,
   );
-  const isNonMemberView =
-    activeChannel !== null &&
-    !activeChannel.isMember &&
-    activeChannel.visibility === "open" &&
-    !activeChannel.archivedAt;
+  const isNonMemberView = isNonMemberChannelView(activeChannel);
   const hasMainComposerOverlay = !isNonMemberView;
   const activeChannelId = activeChannel?.id ?? null;
   const activeChannelIdRef = React.useRef(activeChannelId);
@@ -347,8 +346,15 @@ export const ChannelPane = React.memo(function ChannelPane({
       onSendMessage,
     ],
   );
-  const { canDropInMainColumn, setAcceptsMainAttachments, setMainDeferredEditPending } =
-    useMainColumnDropGate({ hasMainComposerOverlay, isComposerDisabled, isSinglePanelView });
+  const {
+    canDropInMainColumn,
+    setAcceptsMainAttachments,
+    setMainDeferredEditPending,
+  } = useMainColumnDropGate({
+    hasMainComposerOverlay,
+    isComposerDisabled,
+    isSinglePanelView,
+  });
   const hasTypingActivity = typingPubkeys.length > 0;
   const composerWorkingBotPubkeys = useChannelWorkingAgentPubkeys(
     activeChannel?.id ?? null,

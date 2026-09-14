@@ -352,7 +352,6 @@ export const MessageComposerToolbar = React.memo(
               <ArrowUp aria-hidden />
             )}
           </Button>
-
         </div>
       </div>
     );

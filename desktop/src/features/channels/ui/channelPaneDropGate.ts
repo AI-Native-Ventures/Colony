@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import type { Channel } from "@/shared/api/types";
+
 /**
  * Whether the main column accepts a dropped file right now, and the setter the
  * composer reports its acceptance through.
@@ -33,4 +35,20 @@ export function useMainColumnDropGate({
     setAcceptsMainAttachments,
     setMainDeferredEditPending,
   };
+}
+
+/**
+ * Whether the pane is showing an open channel the viewer has not joined, the
+ * one state that replaces the composer with a join prompt.
+ *
+ * Split out of `ChannelPane` for the desktop size ratchet; the predicate is
+ * unchanged.
+ */
+export function isNonMemberChannelView(activeChannel: Channel | null) {
+  return (
+    activeChannel !== null &&
+    !activeChannel.isMember &&
+    activeChannel.visibility === "open" &&
+    !activeChannel.archivedAt
+  );
 }

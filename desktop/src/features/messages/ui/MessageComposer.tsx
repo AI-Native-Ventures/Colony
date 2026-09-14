@@ -666,6 +666,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     mentions.restoreDraftMentionRefs,
     mentions.revalidateMentionPubkeys,
     mentions.settlePendingMentionBindings,
+    setSpoileredAttachmentUrls,
     voiceNote.statusRef,
   ]);
   submitMessageRef.current = submitMessage;

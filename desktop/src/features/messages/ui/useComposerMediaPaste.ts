@@ -41,6 +41,7 @@ export function useComposerMediaPaste({
   bindPastedMentionIdentitiesRef.current = bindPastedMentionIdentities;
   const uploadFileRef = React.useRef(media.uploadFile);
   uploadFileRef.current = media.uploadFile;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: acceptsAttachmentRef.current is read inside handlePaste on purpose — the guard has to see the live value without rebinding the editor's paste handler on every recording state change
   React.useEffect(() => {
     if (!editor) return;
     editor.setOptions({

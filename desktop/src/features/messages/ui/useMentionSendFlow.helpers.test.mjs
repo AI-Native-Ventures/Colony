@@ -29,7 +29,6 @@ import test, { beforeEach, mock } from "node:test";
 
 import {
   formatMessageSendError,
-  getErrorMessage,
   mergeMentionRecipients,
 } from "./useMentionSendFlow.helpers.ts";
 
