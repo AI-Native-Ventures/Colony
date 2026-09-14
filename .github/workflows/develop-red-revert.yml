@@ -50,6 +50,7 @@ jobs:
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
       RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
     steps:
       - name: Check out develop with history
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -85,17 +86,37 @@ jobs:
             echo "revert=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          failed=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
-            --jq '[.jobs[] | select(.conclusion=="failure") | .name] | join(", ")')
+          jobs_json=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs)
+          failed=$(jq -r '[.jobs[] | select(.conclusion=="failure") | .name] | join(", ")' <<<"$jobs_json")
+          # Infra classification. A job that died in a setup step (Hermit
+          # download, apt, cache restore, Playwright install) or only in an
+          # aggregator proves nothing about the merge. Three develop-side
+          # jobs failed on 2026-09-14 to GitHub 504s fetching `just`; a
+          # revert for that would have thrown away a good merge. If every
+          # failed step is one of those, rerun the failed jobs once instead.
+          real=$(jq -r '[.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name
+            | select(test("^(Set up|Install|Prefetch|Activate|Retry Hermit|Restore|Save|Prepare|Download|Get |Run actions/|Run cashapp/|Start integration services|Wait for integration services|Summarize flaky tests|Check )") | not)] | join(", ")' <<<"$jobs_json")
+          if [[ -z "$real" ]]; then
+            if [[ "$RUN_ATTEMPT" -lt 2 ]]; then
+              echo "::warning::run $RUN_ID failed only in setup or aggregator steps ($failed); rerunning failed jobs once instead of reverting"
+              gh run rerun "$RUN_ID" --repo "$GITHUB_REPOSITORY" --failed
+            else
+              echo "::error::run $RUN_ID failed in setup steps twice ($failed); not reverting #$pr, a human has to look"
+            fi
+            echo "revert=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "revert=true" >> "$GITHUB_OUTPUT"
           echo "pr=$pr" >> "$GITHUB_OUTPUT"
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "real=$real" >> "$GITHUB_OUTPUT"
           echo "subject=$subject" >> "$GITHUB_OUTPUT"
       - name: Revert the merge and open the pull request
         if: steps.classify.outputs.revert == 'true'
         env:
           PR: ${{ steps.classify.outputs.pr }}
           FAILED: ${{ steps.classify.outputs.failed }}
+          REAL: ${{ steps.classify.outputs.real }}
           SUBJECT: ${{ steps.classify.outputs.subject }}
         run: |
           set -euo pipefail
@@ -116,6 +137,7 @@ jobs:
             echo "The develop push for its merge commit \`${HEAD_SHA::12}\` failed the post-merge proof: $RUN_URL"
             echo
             echo "Failed jobs: ${FAILED:-see the run}"
+            echo "Failed steps: ${REAL:-see the run}"
             echo
             echo "develop is an integration branch and canary and main only take a develop commit whose"
             echo "post-merge run is green, so the merge is reverted first and the fix lands as a new pull request."
