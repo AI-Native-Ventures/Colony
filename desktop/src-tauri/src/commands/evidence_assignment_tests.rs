@@ -36,9 +36,9 @@ fn task_for(scope: &VerifiedScope, status: TaskStatus) -> CompanyTask {
         initiative_id: None,
         title: "Build the website".to_owned(),
         status,
-        owning_team_id: "company-team:website".to_owned(),
+        owning_team_id: Some("company-team:website".to_owned()),
         assignee_persona_ids: vec!["website-builder".to_owned()],
-        qa_persona_id: "website-reviewer".to_owned(),
+        qa_persona_id: Some("website-reviewer".to_owned()),
         reviewer_team_id: None,
         cost_centre_id: "cc-web".to_owned(),
         commercial_purpose: CommercialPurpose::ClientDelivery,
@@ -75,10 +75,10 @@ fn signed_task_event(task: &CompanyTask, signer: &Keys) -> Event {
     EventBuilder::new(Kind::Custom(KIND_TASK as u16), content)
         .tags([
             tag("d", &task.id),
-            tag("team", &task.owning_team_id),
+            tag("team", task.owning_team_id.as_deref().expect("fixture team")),
             tag("cost-centre", &task.cost_centre_id),
             tag("w", &status),
-            tag("g", &task.owning_team_id),
+            tag("g", task.owning_team_id.as_deref().expect("fixture team")),
         ])
         .sign_with_keys(signer)
         .expect("task head signs")

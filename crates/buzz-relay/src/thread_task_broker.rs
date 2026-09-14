@@ -39,8 +39,8 @@ use buzz_core::tenant::TenantContext;
 
 use crate::{
     company_broker::{
-        build_head, build_receipt, emit_task_transition, load_company, load_head, load_team_refs, refuse,
-        CompanyBrokerOutcome,
+        build_head, build_receipt, emit_task_transition, load_company, load_head, load_team_refs,
+        refuse, CompanyBrokerOutcome,
     },
     handlers::event::dispatch_persistent_event,
     state::AppState,

@@ -517,7 +517,7 @@ fn validate_assignment_snapshot(
         .assignee_persona_ids
         .iter()
         .any(|persona| persona == &worker_persona_id)
-        && task.qa_persona_id != worker_persona_id
+        && task.qa_persona_id.as_deref() != Some(worker_persona_id.as_str())
     {
         return Err("the managed worker is not assigned to this CompanyTask".to_owned());
     }
