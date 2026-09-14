@@ -15,6 +15,8 @@ type ProfileAvatarProps = {
   avatarDataUrl?: string | null;
   label: string;
   identitySeed?: string;
+  /** Agents render as squircles, humans as circles (#7106, #7307). */
+  shape?: "circle" | "squircle";
   className?: string;
   iconClassName?: string;
   imageClassName?: string;
@@ -27,6 +29,7 @@ export function ProfileAvatar({
   avatarDataUrl,
   label,
   identitySeed,
+  shape = "circle",
   className,
   iconClassName,
   imageClassName,
@@ -74,11 +77,13 @@ export function ProfileAvatar({
     <Avatar
       className={cn(
         "shrink-0 text-primary shadow-xs",
+        shape === "squircle" && "rounded-squircle",
         // Animated avatars carry their own backdrop disc and transparent
         // surroundings — any container fill would flatten the pop-out.
         plain || animated ? "bg-transparent shadow-none" : "bg-primary/20",
         className,
       )}
+      data-avatar-shape={shape}
       data-testid={testId}
       onMouseEnter={animated ? () => setIsHovered(true) : undefined}
       onMouseLeave={animated ? () => setIsHovered(false) : undefined}

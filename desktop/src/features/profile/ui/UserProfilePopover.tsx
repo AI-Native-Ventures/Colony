@@ -339,6 +339,7 @@ export function UserProfilePopover({
         className="h-10 w-10"
         iconClassName="h-5 w-5"
         label={displayName}
+        shape={isBotProfile ? "squircle" : "circle"}
         size={40}
         status={presenceStatus ?? "offline"}
         statusTestId="user-profile-popover-presence-badge"

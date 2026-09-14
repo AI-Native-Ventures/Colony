@@ -182,7 +182,12 @@ export function MembersSidebarMemberCard({
           avatarUrl={profileAvatarUrl ?? null}
           className="h-8 w-8 text-xs shadow-none"
           iconClassName="h-4 w-4"
+          // An unnamed member's label is its compact npub, which
+          // `getInitials` abbreviates from the key tail rather than the
+          // "npub1" head every key shares.
+          identitySeed={memberAvatarLabel}
           label={memberAvatarLabel}
+          shape={memberIsBot ? "squircle" : "circle"}
         />
         {presenceStatus ? (
           <span

@@ -154,3 +154,12 @@
     transition: opacity 150ms ease;
   }
 }
+
+/* Agent avatars are squircles: one normalized clip path, so every size keeps
+   the same silhouette rather than a radius that drifts with the box (#7307).
+   Human avatars stay round. */
+.rounded-squircle {
+  border-radius: 0;
+  -webkit-clip-path: url("#rounded-squircle-clip");
+  clip-path: url("#rounded-squircle-clip");
+}

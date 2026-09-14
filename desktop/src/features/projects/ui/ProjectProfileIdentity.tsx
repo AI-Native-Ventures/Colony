@@ -42,6 +42,7 @@ export function ProfileIdentityButton({
     <>
       <UserAvatar
         accent={isAgent}
+        shape={isAgent ? "squircle" : "circle"}
         avatarUrl={avatarUrl}
         className={avatarClassName}
         displayName={label}

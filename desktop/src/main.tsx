@@ -28,6 +28,7 @@ import { initializeFontSizePreference } from "@/shared/lib/fontSizePreference";
 import { installTauriNativeBridge } from "@/shared/api/tauriNativeBridge";
 import { installElectronNativeBridge } from "@/shared/api/electronNativeBridge";
 import { registerAllTabKinds } from "@/features/workspace/kinds";
+import { AvatarClipPaths } from "@/shared/ui/AvatarClipPaths";
 
 // Install the default (Tauri) bridge before anything can call it. The e2e
 // mock replaces it in bootstrap via setNativeBridge when running under a
@@ -99,6 +100,7 @@ function renderApp() {
               <EmojiBurstProvider>
                 <PoofBurstProvider>
                   <UpdaterProvider>
+                    <AvatarClipPaths />
                     <App />
                     <NostrBindConsentDialog />
                   </UpdaterProvider>
