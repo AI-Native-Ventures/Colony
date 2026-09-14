@@ -219,8 +219,8 @@ pub fn build_app_state() -> AppState {
         #[cfg(not(feature = "onboarding-fixture"))]
         http_client: reqwest::Client::builder()
             .resolve("localhost", std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
-            .pool_idle_timeout(std::time::Duration::from_secs(10))
-            .pool_max_idle_per_host(1)
+            .pool_idle_timeout(std::time::Duration::from_secs(300))
+            .pool_max_idle_per_host(2)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new()),
         #[cfg(feature = "onboarding-fixture")]

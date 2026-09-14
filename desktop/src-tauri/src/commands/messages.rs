@@ -240,7 +240,7 @@ pub async fn search_messages(
     Ok(nostr_convert::search_response_from_events(&events))
 }
 
-/// Fetch the full reply subtree under a thread root, server-side.
+/// Fetch the full reply subtree and its auxiliary events under a thread root.
 ///
 /// Unlike the channel timeline (which the desktop assembles from its local
 /// cache by grouping on `e`-root tags), this walks `thread_metadata` on the
@@ -250,12 +250,12 @@ pub async fn search_messages(
 /// event itself is NOT returned (the relay query keys on `root_event_id`, and a
 /// root row has no `root_event_id`). Callers already hold the root — it is the
 /// open thread head — so this closes the descendant gap without re-fetching it.
+/// The relay returns the thread's auxiliary closure (edits, deletions,
+/// reactions) alongside the replies, so the renderer needs no aux backfill.
 ///
 /// Paging is forward keyset on `(created_at, event_id)`: pass the `next_cursor`
 /// from a previous page back as `cursor` to fetch the next batch. The event-id
-/// tiebreak is required because replies routinely share a `created_at` second;
-/// a timestamp-only cursor would skip every tied reply past the page limit.
-/// `next_cursor` is `Some` only when a full page was returned.
+/// tiebreak prevents same-second replies from being skipped.
 #[tauri::command]
 pub async fn get_thread_replies(
     root_event_id: String,
@@ -279,8 +279,12 @@ pub async fn get_thread_replies(
     // A full page implies there may be more; hand back the last event's
     // composite key as the next cursor (the DB returns replies strictly after
     // it, tiebroken by event_id so same-second replies are not skipped).
-    let next_cursor = if events.len() as u32 >= cap {
-        events.last().map(|ev| crate::models::ThreadCursor {
+    let reply_events: Vec<_> = events
+        .iter()
+        .filter(|event| TIMELINE_KINDS.contains(&(event.kind.as_u16() as u32)))
+        .collect();
+    let next_cursor = if reply_events.len() as u32 >= cap {
+        reply_events.last().map(|ev| crate::models::ThreadCursor {
             created_at: ev.created_at.as_secs() as i64,
             event_id: ev.id.to_hex(),
         })
@@ -299,21 +303,9 @@ pub async fn get_thread_replies(
     })
 }
 
-/// Build the relay `/query` filter for the server-side thread-subtree read.
-///
-/// The relay routes a filter to `get_thread_replies` purely off a single `#e`
-/// (root) tag plus `depth_limit` — kind is NOT part of that routing or the
-/// underlying DB query (it keys on `root_event_id`). Yet `kinds` is still
-/// required here: the bridge runs the p-gate (`p_gated_filters_authorized`) on
-/// every filter *before* routing, and a kindless filter "could match" a p-gated
-/// kind, so the gate demands a `#p` tag we don't send -> HTTP 403
-/// `restricted: p-gated kinds require #p tag`, before the thread query ever
-/// runs. Carrying non-p-gated [`TIMELINE_KINDS`] makes the filter provably
-/// un-p-gated so it clears the gate. `build_channel_messages_before_filter` is
-/// the sibling that already does this, which is why the dense-second channel
-/// pager was never gated and this reader was. Extracted so a unit test can pin
-/// that `kinds` is present (the e2e mock does not model p-gating, so only a
-/// unit test guards this contract).
+/// Build the relay `/query` filter for a thread-subtree read.
+/// `kinds` is required to prove the filter cannot match p-gated events; without
+/// it, relay authorization rejects this otherwise kindless query.
 fn build_thread_replies_filter(
     root_event_id: &str,
     channel_id: Option<&str>,
@@ -328,6 +320,7 @@ fn build_thread_replies_filter(
     // defaults it to a deep-but-bounded value so nested replies aren't dropped.
     filter.insert("depth_limit".to_string(), serde_json::json!(depth_limit));
     filter.insert("limit".to_string(), serde_json::json!(cap));
+    filter.insert("include_aux".to_string(), serde_json::json!(true));
     if let Some(cid) = channel_id {
         filter.insert("#h".to_string(), serde_json::json!([cid]));
     }
@@ -438,54 +431,8 @@ pub async fn get_event(event_id: String, state: State<'_, AppState>) -> Result<S
 
 // ── Writes ──────────────────────────────────────────────────────────────────
 
-/// Fetch a parent event and extract the thread root from its NIP-10 e-tags.
-async fn resolve_thread_ref(
-    parent_event_id: &str,
-    state: &AppState,
-) -> Result<events::ThreadRef, String> {
-    let parent_eid =
-        EventId::from_hex(parent_event_id).map_err(|e| format!("invalid parent event ID: {e}"))?;
-
-    let evs = query_relay(
-        state,
-        &[serde_json::json!({
-            "ids": [parent_event_id],
-            "kinds": [9, 40002, 45001, 45003, buzz_core_pkg::kind::KIND_HUDDLE_STARTED],
-            "limit": 1
-        })],
-    )
-    .await?;
-
-    let parent = evs
-        .first()
-        .ok_or_else(|| "parent event not found".to_string())?;
-
-    // Walk tags looking for NIP-10 root/reply markers.
-    let (mut root, mut reply) = (None, None);
-    for tag in parent.tags.iter() {
-        let s = tag.as_slice();
-        if s.len() >= 4 && s[0] == "e" {
-            match s[3].as_str() {
-                "root" => root = Some(s[1].clone()),
-                "reply" => reply = Some(s[1].clone()),
-                _ => {}
-            }
-        }
-    }
-    let root_hex = root.or(reply);
-
-    let root_eid = match root_hex {
-        Some(hex) if hex != parent_event_id => {
-            EventId::from_hex(&hex).map_err(|e| format!("invalid root event ID: {e}"))?
-        }
-        _ => parent_eid,
-    };
-
-    Ok(events::ThreadRef {
-        root_event_id: root_eid,
-        parent_event_id: parent_eid,
-    })
-}
+mod thread_ref;
+use thread_ref::{resolve_thread_ref, thread_ref};
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -493,6 +440,7 @@ pub async fn send_channel_message(
     channel_id: String,
     content: String,
     parent_event_id: Option<String>,
+    root_event_id: Option<String>,
     media_tags: Option<Vec<Vec<String>>>,
     emoji_tags: Option<Vec<Vec<String>>>,
     mention_tags: Option<Vec<Vec<String>>>,
@@ -531,6 +479,9 @@ pub async fn send_channel_message(
     if kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE && !work.is_empty() {
         return Err("work context tags are only supported on stream messages".into());
     }
+    if root_event_id.is_some() && parent_event_id.is_none() {
+        return Err("root_event_id requires parent_event_id".into());
+    }
 
     let mut resolved_root: Option<String> = None;
 
@@ -546,7 +497,7 @@ pub async fn send_channel_message(
             let parent_id = parent_event_id
                 .as_deref()
                 .ok_or("forum comment requires parent_event_id")?;
-            let thread_ref = resolve_thread_ref(parent_id, &state).await?;
+            let thread_ref = thread_ref(parent_id, root_event_id.as_deref(), &state).await?;
             resolved_root = Some(thread_ref.root_event_id.to_hex());
             events::build_forum_comment(
                 channel_uuid,
@@ -560,7 +511,7 @@ pub async fn send_channel_message(
         _ => {
             let thread_ref = match parent_event_id.as_deref() {
                 Some(pid) => {
-                    let tr = resolve_thread_ref(pid, &state).await?;
+                    let tr = thread_ref(pid, root_event_id.as_deref(), &state).await?;
                     resolved_root = Some(tr.root_event_id.to_hex());
                     Some(tr)
                 }

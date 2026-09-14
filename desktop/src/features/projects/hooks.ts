@@ -3,7 +3,6 @@ import * as React from "react";
 
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
-import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import {
@@ -60,11 +59,13 @@ import {
   type Project,
   type Repository,
 } from "./projectModels";
+export { fetchProjects } from "./projectFetch";
+import { fetchProjects } from "./projectFetch";
 import {
-  buildProjectsFromFetcher,
-  type FetchProjectEventsExhaustively,
-  fetchProjectEventsExhaustively,
-} from "./projectEnumeration";
+  markProjectCollectionAuthoritative,
+  persistProjectSnapshot,
+  PROJECT_QUERY_STRUCTURAL_SHARING,
+} from "./projectSnapshot";
 import { projectMatchesRouteId } from "./projectRoutes";
 
 export type {
@@ -76,8 +77,6 @@ export type {
 };
 
 export type ProjectPullRequestCommentDecision = "request-changes";
-
-const HIDDEN_PROJECT_CARDS_KEY = "buzz.projects.hidden-cards.v1";
 
 export type RepoState = {
   branches: Array<{ name: string; commit: string }>;
@@ -127,23 +126,6 @@ export type ProjectIssueListItem = {
   issue: ProjectIssue;
 };
 
-function readHiddenProjectCards(): string[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(
-      window.localStorage.getItem(HIDDEN_PROJECT_CARDS_KEY) ?? "[]",
-    );
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
-
 /**
  * Converts a kind:30617 repo announcement into a `Project`.
  *
@@ -161,24 +143,6 @@ export function eventToProject(
     throw new Error("Invalid repository announcement.");
   }
   return repository;
-}
-
-export async function fetchProjects(
-  fetchExhaustively?: FetchProjectEventsExhaustively,
-  signal?: AbortSignal,
-): Promise<Project[]> {
-  // Delegates to `buildProjectsFromFetcher` in `projectEnumeration.ts`, which
-  // is the pure, Tauri-free core of this operation. That helper's javadoc
-  // explains the fail-closed tombstone contract and the NIP-OA owner-deletion
-  // relay-side-suppression decision.
-  const fetcher: FetchProjectEventsExhaustively =
-    fetchExhaustively ??
-    ((kinds, extraFilter) =>
-      fetchProjectEventsExhaustively(kinds, extraFilter, undefined, signal));
-  return buildProjectsFromFetcher(fetcher, {
-    relayOrigin: getCachedRelayOrigin(),
-    hiddenAddresses: new Set(readHiddenProjectCards()),
-  });
 }
 
 function eventToRepoState(event: RelayEvent): RepoState {
@@ -646,24 +610,43 @@ export const PROJECT_ACTIVITY_STALE_TIME_MS = 2 * 60_000;
 export const PROJECT_LOCAL_REPOS_STALE_TIME_MS = 2 * 60_000;
 
 export function useProjectsQuery(options?: { enabled?: boolean }) {
+  const queryClient = useQueryClient();
   return useQuery({
     enabled: options?.enabled ?? true,
     queryKey: projectsQueryKey,
-    queryFn: ({ signal }) => fetchProjects(undefined, signal),
+    queryFn: async ({ signal }) => {
+      const projects = await fetchProjects(undefined, signal);
+      markProjectCollectionAuthoritative(queryClient);
+      persistProjectSnapshot(queryClient, projects);
+      return projects;
+    },
     staleTime: PROJECTS_STALE_TIME_MS,
     gcTime: PROJECTS_GC_TIME_MS,
+    structuralSharing: PROJECT_QUERY_STRUCTURAL_SHARING,
   });
 }
 
+// Upstream's per-channel project-home query is not ported: it reads through
+// `projectFetch.ts` and renders via `ProjectChannelHome` / `projectHomeChannel`,
+// all of which Colony has deleted. Colony resolves a channel's project from the
+// enumerated collection instead.
+
 export function useProjectQuery(projectId: string) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: projectsQueryKey,
-    queryFn: ({ signal }) => fetchProjects(undefined, signal),
+    queryFn: async ({ signal }) => {
+      const projects = await fetchProjects(undefined, signal);
+      markProjectCollectionAuthoritative(queryClient);
+      persistProjectSnapshot(queryClient, projects);
+      return projects;
+    },
     select: (projects) =>
       projects.find((project) => projectMatchesRouteId(project, projectId)) ??
       null,
     staleTime: PROJECTS_STALE_TIME_MS,
     gcTime: PROJECTS_GC_TIME_MS,
+    structuralSharing: PROJECT_QUERY_STRUCTURAL_SHARING,
   });
 }
 

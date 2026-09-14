@@ -5,6 +5,7 @@ import {
   KIND_PROJECT_ANNOUNCEMENT,
   KIND_REPO_ANNOUNCEMENT,
 } from "@/shared/constants/kinds";
+import { findProjectHomeByChannelId } from "./lib/projectHomeSelection";
 import { buildProjectReadModels, type Project } from "./projectModels";
 
 const PROJECT_ENUMERATION_PAGE_SIZE = 500;
@@ -16,6 +17,7 @@ const TOMBSTONE_COORDINATE_CHUNK_SIZE = 100;
 /** Additional server-side scoping merged into every enumeration page. */
 export type ProjectEventExtraFilter = {
   "#a"?: string[];
+  "#buzz-channel"?: string[];
 };
 
 type ProjectEventFilter = ProjectEventExtraFilter & {
@@ -207,4 +209,30 @@ export async function buildProjectsFromFetcher(
     relayOrigin: options.relayOrigin ?? null,
     hiddenAddresses: options.hiddenAddresses ?? new Set(),
   }).sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
+ * Resolves one channel's authoritative project home without waiting for the
+ * community-wide project enumeration used by the sidebar and Projects view.
+ */
+export async function buildProjectHomeFromFetcher(
+  fetchExhaustively: FetchProjectEventsExhaustively,
+  channelId: string,
+  options: {
+    relayOrigin?: string | null;
+    hiddenAddresses?: ReadonlySet<string>;
+    viewerPubkey?: string | null;
+  } = {},
+): Promise<Project | null> {
+  const projects = await buildProjectsFromFetcher(
+    (kinds, extraFilter) =>
+      fetchExhaustively(
+        kinds,
+        kinds.includes(KIND_DELETION)
+          ? extraFilter
+          : { ...extraFilter, "#buzz-channel": [channelId] },
+      ),
+    options,
+  );
+  return findProjectHomeByChannelId(channelId, projects);
 }
