@@ -453,6 +453,11 @@ jobs:
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           COLONY_REQUIRE_POSTER_PROOF: "1"
+      - name: Create Tauri sidecar placeholders
+        # The Tauri build script needs binaries/buzz-acp-<triple> to exist.
+        # `just desktop-tauri-clippy` used to create them as a side effect;
+        # on the PR gate that step is skipped, so create them here.
+        run: just _ensure-sidecar-stubs
       - name: Prove bundled offline dictation
         run: |
           node desktop/scripts/stage-dictation-model.mjs
