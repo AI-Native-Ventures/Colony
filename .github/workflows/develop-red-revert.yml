@@ -1,0 +1,129 @@
+# Tier B enforcement: when the CI run for a push to develop fails, revert the
+# merge that produced that push and open the revert as a pull request with
+# auto-merge armed.
+#
+# Why this exists: since 2026-09-14 an ordinary pull request runs the Tier A
+# gate only (lint, unit tests, Desktop Core, smoke), and the merged tree is
+# proven by the full matrix on the develop push. That is what took a pull
+# request from 45 minutes to about 10. The price is that an integration
+# regression can reach develop; this workflow is what keeps develop
+# promotable and canary honest without a human watching every push.
+#
+# Scope, deliberately narrow:
+# - Only `conclusion: failure` on a `push` run. A cancelled run is not red.
+# - Only a merge commit (two parents) whose subject names a pull request.
+#   A back-merge or a direct push is reported, not reverted.
+# - `git revert -m 1` of that one merge. If the revert does not apply
+#   cleanly the workflow fails with the conflict and a human decides.
+# - Never more than one open revert per develop commit.
+name: Develop red revert
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [develop]
+
+permissions: {}
+
+concurrency:
+  group: develop-red-revert-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  revert:
+    name: Revert the merge behind a red develop push
+    if: >
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    env:
+      # A pull request opened with the workflow token never triggers CI, so
+      # the revert would sit unproven. The maintainer token the back-merge
+      # workflow already uses opens a PR that runs the normal gate.
+      GH_TOKEN: ${{ secrets.BACKMERGE_MAINTAINER_TOKEN }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Check out develop with history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.BACKMERGE_MAINTAINER_TOKEN }}
+      - name: Classify the red commit
+        id: classify
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::BACKMERGE_MAINTAINER_TOKEN is not configured"
+            exit 1
+          fi
+          if ! git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
+            echo "::error::$HEAD_SHA is not reachable from develop"
+            exit 1
+          fi
+          parents=$(git rev-list --parents -n 1 "$HEAD_SHA" | wc -w)
+          subject=$(git log -1 --format=%s "$HEAD_SHA")
+          pr=$(sed -nE 's/^Merge pull request #([0-9]+) .*/\1/p' <<<"$subject")
+          if [[ "$parents" -ne 3 || -z "$pr" ]]; then
+            echo "::warning::$HEAD_SHA is not a pull request merge ($subject); nothing to revert"
+            echo "revert=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop \
+            --head "revert/develop-${HEAD_SHA::12}" --state all \
+            --json number --jq '.[0].number // empty')
+          if [[ -n "$existing" ]]; then
+            echo "revert PR #$existing already exists for $HEAD_SHA"
+            echo "revert=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          failed=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+            --jq '[.jobs[] | select(.conclusion=="failure") | .name] | join(", ")')
+          echo "revert=true" >> "$GITHUB_OUTPUT"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "subject=$subject" >> "$GITHUB_OUTPUT"
+      - name: Revert the merge and open the pull request
+        if: steps.classify.outputs.revert == 'true'
+        env:
+          PR: ${{ steps.classify.outputs.pr }}
+          FAILED: ${{ steps.classify.outputs.failed }}
+          SUBJECT: ${{ steps.classify.outputs.subject }}
+        run: |
+          set -euo pipefail
+          git config user.name "colony-develop-revert-bot"
+          git config user.email "colony-develop-revert-bot@users.noreply.github.com"
+          branch="revert/develop-${HEAD_SHA::12}"
+          git checkout -b "$branch" "$HEAD_SHA"
+          if ! git revert -m 1 --signoff --no-edit "$HEAD_SHA"; then
+            git revert --abort || true
+            echo "::error::git revert of $HEAD_SHA does not apply cleanly; a human has to revert #$PR"
+            exit 1
+          fi
+          git push -u origin "$branch"
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "Reverts #$PR (\`${SUBJECT}\`)."
+            echo
+            echo "The develop push for its merge commit \`${HEAD_SHA::12}\` failed the post-merge proof: $RUN_URL"
+            echo
+            echo "Failed jobs: ${FAILED:-see the run}"
+            echo
+            echo "develop is an integration branch and canary and main only take a develop commit whose"
+            echo "post-merge run is green, so the merge is reverted first and the fix lands as a new pull request."
+            echo "If the failure was not caused by #$PR, close this and rerun the failed jobs on develop."
+          } >"$body"
+          url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base develop --head "$branch" \
+            --title "revert: #$PR, develop post-merge proof failed" --body-file "$body")
+          number=${url##*/}
+          gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --merge --auto
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "The develop push for this merge failed the post-merge proof ($RUN_URL). Reverted by $url; land the fix as a new pull request."
+          echo "opened $url"
