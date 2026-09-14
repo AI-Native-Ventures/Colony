@@ -1,7 +1,5 @@
 import * as React from "react";
-import { isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-
+import { closeWindow, isTauri } from "@/shared/api/nativeBridge";
 import { isMacPlatform } from "@/shared/lib/platform";
 
 type CloseWindowChord = Pick<
@@ -52,7 +50,7 @@ export function useCloseWindowShortcut() {
     function handleKeyDown(event: KeyboardEvent) {
       if (!isCloseWindowShortcut(event, isMacPlatform())) return;
       event.preventDefault();
-      void getCurrentWindow().close();
+      void closeWindow();
     }
 
     window.addEventListener("keydown", handleKeyDown);
