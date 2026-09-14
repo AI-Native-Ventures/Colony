@@ -15,6 +15,7 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
   assert.ok(apiKey?.startsWith("sk-or-v1-"), "Dedicated proof key required");
   const token = randomBytes(32).toString("hex");
   const receipts = [];
+  const toolDiagnostics = new Set();
   const controllers = new Set();
   let calls = 0;
   let queue = Promise.resolve();
@@ -74,6 +75,23 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
       }
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       assert.ok(Array.isArray(body.messages), "Messages required");
+      // Classify only tool results, retaining fixed categories rather than text.
+      for (const message of body.messages) {
+        if (message.role !== "tool") continue;
+        const content = JSON.stringify(message.content ?? "");
+        for (const [category, pattern] of [
+          ["command-unavailable", /command not found|No such file or directory/i],
+          ["cli-arguments", /unexpected argument|required arguments|unrecognized subcommand/i],
+          ["authentication", /unauthorized|authentication failed|\b401\b/i],
+          ["permission", /permission denied|forbidden|\b403\b/i],
+          ["coordinator-authority", /coordinator.*(?:must|invalid|not|requires)|installed coordinator/i],
+          ["block-instance", /(?:review|card) instance.*(?:not found|must|not authored)/i],
+          ["task-reference", /missing reference|task.*not found|unknown task/i],
+          ["generation-conflict", /generation.*(?:mismatch|conflict)|stale generation/i],
+        ]) {
+          if (pattern.test(content)) toolDiagnostics.add(category);
+        }
+      }
       let upstream;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         assert.ok(calls < MAX_REQUESTS && Date.now() < expires && !closed);
@@ -144,7 +162,7 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
     token,
     receipts,
     diagnostics() {
-      return { calls, failed, upstreamStatus, completedCalls: receipts.length };
+      return { calls, failed, upstreamStatus, completedCalls: receipts.length, toolDiagnostics: [...toolDiagnostics].sort() };
     },
     assertHealthy() {
       assert.equal(failed, false, "Live provider run failed");
