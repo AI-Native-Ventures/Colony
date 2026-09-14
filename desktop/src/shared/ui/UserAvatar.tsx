@@ -29,6 +29,11 @@ type UserAvatarProps = {
    * hashing `displayName`, which still contains the key.
    */
   initialsLabel?: string;
+  /**
+   * Agent identities render as squircles, humans as circles, so the shape
+   * itself says which is which without reading a label (#7106, #7307).
+   */
+  shape?: "circle" | "squircle";
   size?: UserAvatarSize;
   accent?: boolean;
   identitySeed?: string;
@@ -41,6 +46,7 @@ export function UserAvatar({
   avatarUrl,
   displayName,
   initialsLabel,
+  shape = "circle",
   size = "md",
   accent = false,
   identitySeed,
@@ -63,7 +69,12 @@ export function UserAvatar({
     <Avatar
       // Animated avatars carry their own backdrop disc and transparent
       // surroundings — any container fill would flatten the pop-out.
-      className={cn(sizeClasses[size], !animated && "shadow-xs", className)}
+      className={cn(
+        sizeClasses[size],
+        shape === "squircle" ? "rounded-squircle" : "rounded-full",
+        !animated && "shadow-xs",
+        className,
+      )}
       data-testid={testId}
       onMouseEnter={animated ? () => setIsHovered(true) : undefined}
       onMouseLeave={animated ? () => setIsHovered(false) : undefined}

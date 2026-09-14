@@ -23,6 +23,8 @@ type ProfileAvatarWithStatusProps = {
   iconClassName?: string;
   label: string;
   identitySeed?: string;
+  /** Agents render as squircles, humans as circles (#7106, #7307). */
+  shape?: "circle" | "squircle";
   size: number;
   status?: PresenceStatus;
   statusTestId?: string;
@@ -58,6 +60,7 @@ export function ProfileAvatarWithStatus({
   iconClassName,
   label,
   identitySeed,
+  shape = "circle",
   size,
   status,
   statusTestId,
@@ -105,7 +108,12 @@ export function ProfileAvatarWithStatus({
     >
       <ProfileAvatar
         avatarUrl={avatarUrl}
-        className={cn("h-full w-full rounded-full", avatarClassName)}
+        className={cn(
+          "h-full w-full",
+          shape === "squircle" ? "rounded-squircle" : "rounded-full",
+          avatarClassName,
+        )}
+        shape={shape}
         iconClassName={iconClassName}
         label={label}
         identitySeed={identitySeed}
