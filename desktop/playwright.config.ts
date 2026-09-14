@@ -254,7 +254,6 @@ export default defineConfig({
         "**/sidebar-relay-card.spec.ts",
         "**/persona-env-vars.spec.ts",
         "**/persona-sync.spec.ts",
-        "**/team-snapshot.spec.ts",
         "**/blocks-live.spec.ts",
         "**/company-approval.spec.ts",
         "**/agents-everywhere.live.spec.ts",

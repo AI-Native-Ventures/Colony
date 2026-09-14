@@ -7,7 +7,7 @@ type FileImportZoneOptions = {
 
 /**
  * Shared drag-and-drop + file-picker infrastructure for import sections
- * (PersonasSection, TeamsSection). Returns state, handlers, and a ref for
+ * (PersonasSection). Returns state, handlers, and a ref for
  * the hidden `<input type="file">`.
  */
 export function useFileImportZone({ onImportFile }: FileImportZoneOptions) {
