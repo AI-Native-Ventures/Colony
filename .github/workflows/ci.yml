@@ -9,15 +9,26 @@ on:
   pull_request:
     branches: [main, develop, release, canary/upstream-port]
 
-# Ordinary PRs and pushes keep only the newest run for each ref. A promotion PR
-# targeting main must finish its in-flight matrix even when develop advances
-# underneath it.
+# Ordinary PRs keep only the newest run for each ref. A promotion PR targeting
+# main must finish its in-flight matrix even when develop advances underneath
+# it, and a push to develop is the post-merge proof of that exact commit, so
+# it is never cancelled by the next merge.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.base_ref != 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.base_ref != 'main' }}
 
 env:
   CARGO_TERM_COLOR: always
+  # Every Rust job compiles through sccache with the GitHub Actions cache as
+  # its backend. Swatinem/rust-cache cannot cache the root workspace here
+  # (Hermit keeps CARGO_HOME inside the repository, see the note on
+  # desktop-core), and measured on 2026-09-14 Desktop E2E Relay reported a
+  # cache hit and still compiled 939 crates. sccache keys on rustc inputs,
+  # not on where CARGO_HOME lives, and shares compiled crates across jobs,
+  # branches and profiles. Incremental compilation must stay off for it to
+  # cache anything (docs/Rust.md in mozilla/sccache).
+  SCCACHE_GHA_ENABLED: "true"
+  CARGO_INCREMENTAL: "0"
   BUZZ_TEST_POSTGRES_PASSWORD: buzz_dev
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
@@ -35,7 +46,9 @@ jobs:
     # satisfy a historical branch-protection context.  Release pushes retain
     # broad coverage.
     outputs:
-      core-enabled: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/release') && 'true' || 'false' }}
+      # A develop push runs the full post-merge proof of the merged tree; it
+      # is what canary deploys and promotion to main read.
+      core-enabled: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/release' || github.ref == 'refs/heads/develop') && 'true' || 'false' }}
       secondary-enabled: ${{ github.ref != 'refs/heads/main' && 'true' || 'false' }}
       release-push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || 'false' }}
       rust: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || steps.filter.outputs.rust }}
@@ -303,11 +316,15 @@ jobs:
     if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
+    env:
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - name: Install cargo-nextest
         uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
@@ -315,6 +332,9 @@ jobs:
           tool: cargo-nextest@0.9.136
       - name: Unit tests
         run: just test-unit
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   desktop-core:
     name: Desktop Core
@@ -324,6 +344,8 @@ jobs:
     if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
+    env:
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -334,7 +356,7 @@ jobs:
       # Restore only. A save here ran on every pull request and wrote a 21 MB
       # copy scoped to that pull request's own ref, which no other run can
       # read: the cache store held twenty-odd identical copies of the same
-      # hash. Tauri Cache Warm writes the one copy on develop that every
+      # hash. Desktop Core writes the one copy on a develop push that every
       # branch restores from. A miss still falls back to downloading the
       # archive, so this is a speed path, not a correctness one.
       - name: Restore sherpa-onnx native archive
@@ -344,20 +366,16 @@ jobs:
           key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
       - name: Prepare sherpa-onnx native archive
         run: ./scripts/ci-prepare-sherpa-onnx.sh
-      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Save sherpa-onnx native archive
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        continue-on-error: true
         with:
-          workspaces: desktop/src-tauri
-          # Shared namespace with the Tauri Cache Warm job, which is the only
-          # run that can ever write it: this job is gated on core-enabled,
-          # which ci.yml sets to false for every push, and a cache written on
-          # a refs/pull/N/merge ref is readable only by that one pull request.
-          # The effect was measurable -- the live cache store held rust caches
-          # for windows-rust, blocks-live-gate and desktop-e2e-relay, every
-          # job reachable on a develop push, and none for this one, so the
-          # Tauri crate compiled cold on every single pull request.
-          shared-key: colony-tauri
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+          path: .cache/sherpa-onnx
+          key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Install Tauri dependencies (Linux)
         run: |
           scripts/ci-apt-install.sh \
@@ -529,6 +547,8 @@ jobs:
     if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
+    env:
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -545,11 +565,8 @@ jobs:
       - name: Prepare sherpa-onnx native archive
         run: ./scripts/ci-prepare-sherpa-onnx.sh
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          workspaces: desktop/src-tauri
-          shared-key: colony-tauri
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Install Tauri dependencies (Linux)
         run: |
           scripts/ci-apt-install.sh \
@@ -628,6 +645,8 @@ jobs:
       needs.changes.outputs.raw-integration-services == 'true'
     permissions:
       contents: read
+    env:
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
@@ -639,8 +658,8 @@ jobs:
       # Exact-match on purpose; do NOT add restore-keys. These paths hold
       # BUILT BINARIES consumed by downstream jobs, and a near-miss restore
       # would silently test the wrong relay build. Near-miss reuse belongs to
-      # rust-cache below, where a stale entry only costs an incremental
-      # recompile. .github/workflows/ci.yml is hashed because the build
+      # sccache, which caches per compiled crate. .github/workflows/ci.yml is
+      # hashed because the build
       # recipe (flags, pinned nextest, archive layout) lives inline there;
       # that makes any CI edit invalidate the artifacts, which is accepted:
       # over-invalidating costs minutes, under-invalidating silently tests
@@ -652,23 +671,16 @@ jobs:
           path: |
             target/ci/buzz-relay
             target/ci/git-credential-nostr
+            target/ci/buzz
+            target/ci/buzz-acp
+            target/ci/ask_stub_agent
             target/ci/backend-integration-tests.tar.zst
           key: relay-artifacts-${{ runner.os }}-${{ hashFiles('crates/**', 'migrations/**', 'Dockerfile', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.github/workflows/ci.yml') }}
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
         if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
-      # Prefix restore is the action's DEFAULT: it looks up the full key
-      # (prefix + job + runner + rust-env hash + lockfile hash) and falls
-      # back to the newest entry sharing everything but the lockfile hash.
-      # So a one-line crates/** edit restores a warm target/ and cargo only
-      # recompiles incrementally. Do not add shared-key/restore-keys here;
-      # that would duplicate behaviour this pinned version already has.
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Set up sccache
         if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
-        with:
-          workspaces: |
-            .
-            desktop/src-tauri
-          save-if: ${{ github.event_name != 'pull_request' }}
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Install cargo-nextest
         if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
         uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
@@ -676,19 +688,31 @@ jobs:
           tool: cargo-nextest@0.9.136
       - name: Build relay artifacts
         if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
+        # One feature resolution on purpose. This used to be `cargo build`
+        # for the bins followed by `cargo nextest archive` for the tests; the
+        # two selected different package sets and only the second activated
+        # dev-dependencies, so features unified differently and the archive
+        # recompiled tokio, serde, ring and 400 other crates it had just
+        # built (measured 2026-09-14: 525 + 414 crates, 10.6 + 17.0 minutes).
+        #
+        # Now `cargo build` names the same packages and the same `--test`
+        # targets as the archive, so dev-dependencies are active in both and
+        # the archive step finds everything built. The real binaries need
+        # `cargo build --bin`: under `nextest archive` a `--bin` flag builds
+        # that binary's unit-test harness, not the binary (the first run of
+        # this job shipped an artifact with no git-credential-nostr in it).
+        # The extra bins feed Agent Ask E2E, which no longer compiles.
         run: |
-          cargo build --profile ci -p buzz-relay -p git-credential-nostr
-          cargo nextest archive \
-            --cargo-profile ci \
-            -p buzz-db \
-            -p buzz-relay \
-            -p buzz-test-client \
-            --lib \
-            --test e2e_event_reminder \
-            --test interrupt_gate \
-            --test interrupt_runtime \
-            --test provisioned_employees \
+          packages=(-p buzz-db -p buzz-relay -p buzz-test-client -p buzz-cli -p buzz-acp -p git-credential-nostr)
+          tests=(--test e2e_event_reminder --test e2e_agent_answers_ask --test interrupt_gate --test interrupt_runtime --test provisioned_employees)
+          cargo build --profile ci "${packages[@]}" --lib "${tests[@]}" \
+            --bin buzz-relay --bin git-credential-nostr --bin buzz --bin buzz-acp --bin ask_stub_agent
+          cargo nextest archive --cargo-profile ci "${packages[@]}" --lib "${tests[@]}" \
             --archive-file target/ci/backend-integration-tests.tar.zst
+          ls -l target/ci/buzz-relay target/ci/git-credential-nostr target/ci/buzz target/ci/buzz-acp target/ci/ask_stub_agent
+      - name: sccache stats
+        if: always() && steps.relay-artifacts-cache.outputs.cache-hit != 'true'
+        run: sccache --show-stats
       # develop only. On a pull request this wrote a 131 MB entry scoped to
       # refs/pull/N/merge that no other run could read; eight such copies were
       # live at once, and the eviction pressure they created is what made this
@@ -701,6 +725,9 @@ jobs:
           path: |
             target/ci/buzz-relay
             target/ci/git-credential-nostr
+            target/ci/buzz
+            target/ci/buzz-acp
+            target/ci/ask_stub_agent
             target/ci/backend-integration-tests.tar.zst
           key: relay-artifacts-${{ runner.os }}-${{ hashFiles('crates/**', 'migrations/**', 'Dockerfile', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.github/workflows/ci.yml') }}
       - name: Upload relay artifacts
@@ -710,6 +737,9 @@ jobs:
           path: |
             target/ci/buzz-relay
             target/ci/git-credential-nostr
+            target/ci/buzz
+            target/ci/buzz-acp
+            target/ci/ask_stub_agent
             target/ci/backend-integration-tests.tar.zst
           if-no-files-found: error
           retention-days: 1
@@ -957,6 +987,8 @@ jobs:
       (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-blocks == 'true')
     permissions:
       contents: read
+    env:
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -973,7 +1005,7 @@ jobs:
       # Restore only. A save here ran on every pull request and wrote a 21 MB
       # copy scoped to that pull request's own ref, which no other run can
       # read: the cache store held twenty-odd identical copies of the same
-      # hash. Tauri Cache Warm writes the one copy on develop that every
+      # hash. Desktop Core writes the one copy on a develop push that every
       # branch restores from. A miss still falls back to downloading the
       # archive, so this is a speed path, not a correctness one.
       - name: Restore sherpa-onnx native archive
@@ -984,12 +1016,8 @@ jobs:
       - name: Prepare sherpa-onnx native archive
         run: ./scripts/ci-prepare-sherpa-onnx.sh
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          workspaces: |
-            .
-            desktop/src-tauri
-          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Install Tauri and tmux dependencies (Linux)
         run: |
           scripts/ci-apt-install.sh \
@@ -1437,14 +1465,28 @@ jobs:
         run: |
           chmod +x ./target/ci/buzz-relay ./target/ci/git-credential-nostr
           ./scripts/start-relay-for-tests.sh --no-build
-      - name: Build ask E2E binaries
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
+        with:
+          tool: cargo-nextest@0.9.136
+      - name: Stage ask E2E binaries
+        # Desktop E2E Relay already built buzz, buzz-acp and ask_stub_agent
+        # in the ci profile. The test resolves them at
+        # <workspace>/target/debug (prepend_target_to_path in
+        # e2e_agent_answers_ask.rs), so stage the ci binaries there instead
+        # of compiling the dev profile from cold, which cost about 5 minutes.
         run: |
-          cargo build -p buzz-cli --bin buzz
-          cargo build -p buzz-test-client --bin ask_stub_agent
-          cargo build -p buzz-acp --bin buzz-acp
+          mkdir -p target/debug
+          cp target/ci/buzz target/ci/buzz-acp target/ci/ask_stub_agent target/debug/
+          chmod +x target/debug/buzz target/debug/buzz-acp target/debug/ask_stub_agent
           echo "${{ github.workspace }}/target/debug" >> "$GITHUB_PATH"
       - name: Agent ask E2E test
-        run: cargo test -p buzz-test-client --test e2e_agent_answers_ask -- --ignored --nocapture
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'binary(e2e_agent_answers_ask)' \
+            --run-ignored ignored-only \
+            --no-capture
         env:
           RELAY_URL: ws://localhost:3000
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
@@ -1589,7 +1631,10 @@ jobs:
       - name: Prime Flutter SDK
         run: flutter --version
       - name: Save Hermit package cache
-        if: always() && steps.hermit-cache.outputs.cache-hit != 'true'
+        # develop only. A cache saved on a refs/pull/N/merge ref is a
+        # separate 1.7 GB entry readable by that one PR, and on 2026-09-14
+        # two such copies were a third of the 10 GB store.
+        if: always() && steps.hermit-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/develop'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         continue-on-error: true
         with:
@@ -1761,144 +1806,6 @@ jobs:
             desktop/e2e-real-shell/results
           if-no-files-found: ignore
           retention-days: 7
-
-  rust-post-merge:
-    # Post-merge re-proof of the Rust core, which a develop push otherwise
-    # skips entirely: core-enabled is false for every push that is not on
-    # `release`, and this repository has no `release` branch, so Rust Lint and
-    # Unit Tests never run against the merged tree.
-    #
-    # This job used to also claim to warm a shared Rust cache. It cannot, and
-    # neither can anything else, for the ROOT workspace. Hermit sets
-    # CARGO_HOME to <repo>/.hermit/rust, so every dependency's manifest_path
-    # lives inside the repository. Swatinem/rust-cache decides what to keep
-    # with `getPackagesOutsideWorkspaceRoot`, which filters on
-    # `!manifest_path.startsWith(workspaceRoot)` (src/workspace.ts:41). For the
-    # root workspace that filter matches nothing, so `cleanTargetDir` and
-    # `cleanRegistry` are handed an empty keep-set and delete the entire target
-    # directory and registry before the save. Measured on this repository:
-    #
-    #   root workspace   1091 packages, 0 kept  -> cache saved 0 bytes
-    #   desktop/src-tauri 1284 packages, 1282 kept -> cache saved 1676 MB
-    #
-    # The tauri workspace escapes it only because its root is a subdirectory,
-    # so .hermit/rust is outside it. Same reason windows-rust caches 3 GB: that
-    # runner has no hermit, so CARGO_HOME is ~/.cargo. It also explains the two
-    # v0-rust-cross-* entries that have sat at 0 bytes since 2026-08-15.
-    #
-    # Caching the root target by hand instead is not worth it: the directory
-    # measures 8.6 GB against a 10 GB repository-wide cache limit, the registry
-    # download it would also cover takes 5.5 seconds, and the jobs it would
-    # speed up (Rust Lint 4.3 min, Unit Tests 6.5 min) are not on the critical
-    # path -- Desktop Core, Desktop Tauri Flags and the smoke shards are. Doing
-    # it would re-create exactly the eviction pressure that made Desktop E2E
-    # Relay take 20 minutes instead of 0 on 2026-08-17.
-    #
-    # The only real fix is to move CARGO_HOME out of the repository, which is a
-    # hermit-wide change affecting every developer, not a CI tweak.
-    name: Rust Post-Merge
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
-        with:
-          cache: "true"
-      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
-        with:
-          tool: cargo-nextest@0.9.136
-      - name: Clippy
-        run: just clippy
-      - name: Unit tests
-        run: just test-unit
-
-  tauri-cache-warm:
-    # This one genuinely works, for the reason spelled out on rust-post-merge
-    # above: the desktop/src-tauri workspace root is a subdirectory, so hermit's
-    # in-repo CARGO_HOME sits outside it and rust-cache keeps 1282 of 1284
-    # packages instead of none. First run saved 1676 MB.
-    #
-    # Desktop Core and Desktop Tauri Flags restore it through shared-key
-    # colony-tauri, and it is also the sole writer of the sherpa-onnx archive
-    # cache now that both consumers restore only.
-    name: Tauri Cache Warm
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
-        with:
-          cache: "true"
-      - name: Restore sherpa-onnx native archive
-        id: sherpa-cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: .cache/sherpa-onnx
-          key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
-      - name: Prepare sherpa-onnx native archive
-        run: ./scripts/ci-prepare-sherpa-onnx.sh
-      - name: Save sherpa-onnx native archive
-        if: steps.sherpa-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: .cache/sherpa-onnx
-          key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
-      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          workspaces: desktop/src-tauri
-          shared-key: colony-tauri
-          save-if: "true"
-      - name: Install Tauri dependencies (Linux)
-        run: |
-          scripts/ci-apt-install.sh \
-            build-essential \
-            curl \
-            file \
-            libasound2-dev \
-            libayatana-appindicator3-dev \
-            libgtk-3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            patchelf \
-            wget
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        run: ./scripts/ci-pnpm-store-path.sh
-      - name: Restore pnpm store cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: pnpm-${{ runner.os }}-
-      - name: Install desktop dependencies
-        run: just desktop-install-ci
-      # tauri-build validates frontendDist at compile time, so the Tauri crate
-      # will not build without desktop/dist on disk.
-      - name: Desktop build
-        run: just desktop-build
-      - name: Warm Tauri clippy artifacts
-        run: just desktop-tauri-clippy
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-      - name: Warm Tauri test artifacts
-        run: just desktop-tauri-test
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-      - name: Warm compiled-flag artifacts
-        run: just desktop-tauri-test-compiled-flags
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
   promotion-gate:
     # A false job-level condition still emits a skipped check run. Give
