@@ -101,7 +101,7 @@ test("saved HTML artifact renders and expands with a contained mobile preview", 
   const rootRow = page.getByTestId("message-row").filter({ has: preview });
   await rootRow.hover();
   await rootRow.getByRole("button", { name: "Reply", exact: true }).click();
-  await expect(page.frameLocator('iframe[title="Desktop HTML preview"]').getByRole("heading", { name: "Revised layout" })).toBeVisible();
+  await expect(page.frameLocator('section[aria-label="Website preview"]:has-text("Version 2") iframe').getByRole("heading", { name: "Revised layout" })).toBeVisible();
   await expect(page.getByText("Version 2", { exact: true })).toBeVisible();
   await waitForAnimations(page);
   await page.screenshot({ path: info.outputPath("thread-revision.png") });
