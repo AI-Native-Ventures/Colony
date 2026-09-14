@@ -406,6 +406,14 @@ test("timeline reserves mixed-media rows before fast scrollback", async ({
       }
       samples += 1;
     };
+    // The anchor row can be unrealized for a frame or two right after the
+    // scroll above, and a first sample taken then counts as missing and
+    // leaves the drift baseline unset. Wait for the row to exist before the
+    // first sample rather than lengthening the budget; the wait is bounded,
+    // so a genuinely absent row still fails the missing-sample assertion.
+    for (let frame = 0; frame < 30 && contentTop() === null; frame += 1) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    }
     sample();
     // Stop before the top-edge history loader takes over; this case is scoped
     // to rows realizing during fast mixed-media scrollback, not prepend anchoring.
