@@ -459,6 +459,7 @@ export const MessageRow = React.memo(
           identitySeed={
             profilePopoverRole === "bot" ? message.pubkey : undefined
           }
+          shape={profilePopoverRole === "bot" ? "squircle" : "circle"}
           testId="message-avatar"
         />
         {showRespondToIndicator &&

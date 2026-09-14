@@ -465,7 +465,11 @@ function ParticipantAvatar({
         // (#7495); Colony's prop for that is `identitySeed`.
         identitySeed={participant.initialsLabel}
         label={participant.displayName}
-        className="h-full w-full rounded-full border-2 border-black text-2xs"
+        shape={participant.isAgent ? "squircle" : "circle"}
+        className={cn(
+          "h-full w-full border-2 border-black text-2xs",
+          participant.isAgent ? "rounded-squircle" : "rounded-full",
+        )}
       />
     </span>
   );

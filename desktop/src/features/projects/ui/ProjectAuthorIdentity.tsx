@@ -35,6 +35,7 @@ export function ProjectAuthorIdentity({
             >
               <UserAvatar
                 accent={profile?.isAgent === true}
+                shape={profile?.isAgent === true ? "squircle" : "circle"}
                 avatarUrl={profile?.avatarUrl ?? null}
                 displayName={label}
                 fallbackDelayMs={0}

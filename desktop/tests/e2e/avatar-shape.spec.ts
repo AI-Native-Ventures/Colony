@@ -36,6 +36,25 @@ async function readShapes(page: import("@playwright/test").Page) {
   };
 }
 
+test("an agent's message row and a person's differ in shape", async ({
+  page,
+}) => {
+  await installMockBridge(page);
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const shapes = await page
+    .getByTestId("message-avatar")
+    .evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLElement).dataset.avatarShape),
+    );
+  // The seeded channel carries both, and the timeline is the surface a reader
+  // spends their day on, so both shapes have to appear there.
+  expect(shapes).toContain("squircle");
+  expect(shapes).toContain("circle");
+});
+
 for (const fontSize of ["default", "larger"] as const) {
   test(`an agent row and a human row differ in shape at the ${fontSize} font size`, async ({
     page,
