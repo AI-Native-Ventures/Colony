@@ -688,34 +688,28 @@ jobs:
           tool: cargo-nextest@0.9.136
       - name: Build relay artifacts
         if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
-        # One cargo invocation on purpose. This used to be `cargo build` for
-        # the bins followed by `cargo nextest archive` for the tests; the two
-        # selected different package sets, so features unified differently
-        # and the second command recompiled tokio, serde, ring and 400 other
-        # crates it had just built (measured 2026-09-14: 525 + 414 crates,
-        # 10.6 + 17.0 minutes). One invocation resolves features once. The
-        # extra bins feed Agent Ask E2E, which no longer compiles anything.
+        # One feature resolution on purpose. This used to be `cargo build`
+        # for the bins followed by `cargo nextest archive` for the tests; the
+        # two selected different package sets and only the second activated
+        # dev-dependencies, so features unified differently and the archive
+        # recompiled tokio, serde, ring and 400 other crates it had just
+        # built (measured 2026-09-14: 525 + 414 crates, 10.6 + 17.0 minutes).
+        #
+        # Now `cargo build` names the same packages and the same `--test`
+        # targets as the archive, so dev-dependencies are active in both and
+        # the archive step finds everything built. The real binaries need
+        # `cargo build --bin`: under `nextest archive` a `--bin` flag builds
+        # that binary's unit-test harness, not the binary (the first run of
+        # this job shipped an artifact with no git-credential-nostr in it).
+        # The extra bins feed Agent Ask E2E, which no longer compiles.
         run: |
-          cargo nextest archive \
-            --cargo-profile ci \
-            -p buzz-db \
-            -p buzz-relay \
-            -p buzz-test-client \
-            -p buzz-cli \
-            -p buzz-acp \
-            -p git-credential-nostr \
-            --lib \
-            --bin buzz-relay \
-            --bin git-credential-nostr \
-            --bin buzz \
-            --bin buzz-acp \
-            --bin ask_stub_agent \
-            --test e2e_event_reminder \
-            --test e2e_agent_answers_ask \
-            --test interrupt_gate \
-            --test interrupt_runtime \
-            --test provisioned_employees \
+          packages=(-p buzz-db -p buzz-relay -p buzz-test-client -p buzz-cli -p buzz-acp -p git-credential-nostr)
+          tests=(--test e2e_event_reminder --test e2e_agent_answers_ask --test interrupt_gate --test interrupt_runtime --test provisioned_employees)
+          cargo build --profile ci "${packages[@]}" --lib "${tests[@]}" \
+            --bin buzz-relay --bin git-credential-nostr --bin buzz --bin buzz-acp --bin ask_stub_agent
+          cargo nextest archive --cargo-profile ci "${packages[@]}" --lib "${tests[@]}" \
             --archive-file target/ci/backend-integration-tests.tar.zst
+          ls -l target/ci/buzz-relay target/ci/git-credential-nostr target/ci/buzz target/ci/buzz-acp target/ci/ask_stub_agent
       - name: sccache stats
         if: always() && steps.relay-artifacts-cache.outputs.cache-hit != 'true'
         run: sccache --show-stats
