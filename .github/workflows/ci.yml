@@ -7,6 +7,9 @@ on:
   push:
     branches: [main, develop, release, canary/upstream-port]
   pull_request:
+    # ready_for_review is not a default type. Drafts run lint only, so the
+    # conversion to ready must start the full pull request gate.
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main, develop, release, canary/upstream-port]
 
 # Ordinary PRs keep only the newest run for each ref. A promotion PR targeting
@@ -50,6 +53,16 @@ jobs:
       # is what canary deploys and promotion to main read.
       core-enabled: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/release' || github.ref == 'refs/heads/develop') && 'true' || 'false' }}
       secondary-enabled: ${{ github.ref != 'refs/heads/main' && 'true' || 'false' }}
+      # pr-gate: an ordinary pull request (not a promotion to main). It runs
+      # Tier A only: Rust lint and unit tests, Desktop Core without the
+      # Tauri lanes, and the smoke shards without screenshot specs. Every
+      # other proof runs on the develop push after merge and on promotion
+      # pull requests, where the full matrix is required.
+      pr-gate: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main') && 'true' || 'false' }}
+      # draft: lint only. Agents push to drafts every few minutes; each push
+      # used to cancel and restart a 45 minute matrix.
+      draft: ${{ github.event.pull_request.draft == true && 'true' || 'false' }}
+      smoke-shards: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main') && '[1, 2, 3, 4]' || '[1, 2, 3, 4, 5, 6]' }}
       release-push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || 'false' }}
       rust: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || steps.filter.outputs.rust }}
       desktop: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || steps.filter.outputs.desktop }}
@@ -313,7 +326,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.draft != 'true' && (needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
     env:
@@ -341,7 +354,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [changes]
-    if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    if: needs.changes.outputs.draft != 'true' && (needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'))
     permissions:
       contents: read
     env:
@@ -410,14 +423,17 @@ jobs:
       - name: Desktop build
         run: just desktop-build
       - name: Desktop Tauri clippy
+        if: needs.changes.outputs.pr-gate != 'true'
         run: just desktop-tauri-clippy
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Desktop Tauri check
+        if: needs.changes.outputs.pr-gate != 'true'
         run: just desktop-tauri-check
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Desktop Tauri tests
+        if: needs.changes.outputs.pr-gate != 'true'
         run: just desktop-tauri-test
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -456,7 +472,7 @@ jobs:
     # two shards that were making progress. Warm runs finish far below it.
     timeout-minutes: 45
     needs: [changes]
-    if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    if: needs.changes.outputs.draft != 'true' && (needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'))
     strategy:
       fail-fast: false
       matrix:
@@ -465,7 +481,7 @@ jobs:
         # itself was already even and reordering testMatch buys nothing. The
         # remaining spread is retry cost. Spreading 49.8 minutes of test time
         # over six shards puts every shard near 8 minutes instead of one at 15.
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: ${{ fromJSON(needs.changes.outputs.smoke-shards) }}
     permissions:
       contents: read
     steps:
@@ -510,7 +526,13 @@ jobs:
       - name: Desktop E2E build
         run: pnpm -C desktop build:e2e
       - name: Desktop smoke e2e
-        run: cd desktop && pnpm exec playwright test --project=smoke --shard=${{ matrix.shard }}/6
+        run: cd desktop && pnpm exec playwright test --project=smoke --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        env:
+          # On the PR gate the 100 specs that take screenshots are left to
+          # the develop push (they exist to produce PR images), and two
+          # Playwright workers share the 4 vCPU runner.
+          PLAYWRIGHT_SKIP_SCREENSHOT_SPECS: ${{ needs.changes.outputs.pr-gate == 'true' && '1' || '' }}
+          PLAYWRIGHT_WORKERS: ${{ needs.changes.outputs.pr-gate == 'true' && '2' || '1' }}
       - name: Summarize flaky tests
         if: ${{ !cancelled() }}
         run: node scripts/summarize-flaky-tests.mjs playwright-report.json "Desktop Smoke E2E (${{ matrix.shard }})"
@@ -544,7 +566,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [changes]
-    if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    if: needs.changes.outputs.pr-gate != 'true' && (needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'))
     permissions:
       contents: read
     env:
@@ -607,7 +629,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, desktop-core, desktop-smoke-e2e, desktop-tauri-flags]
-    if: always() && needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    if: always() && needs.changes.outputs.draft != 'true' && needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
     steps:
@@ -621,10 +643,13 @@ jobs:
             echo "Desktop Smoke E2E shards finished with: ${{ needs.desktop-smoke-e2e.result }}"
             exit 1
           fi
-          if [ "${{ needs.desktop-tauri-flags.result }}" != "success" ]; then
-            echo "Desktop Tauri Flags finished with: ${{ needs.desktop-tauri-flags.result }}"
-            exit 1
-          fi
+          case "${{ needs.desktop-tauri-flags.result }}" in
+            success|skipped) ;;
+            *)
+              echo "Desktop Tauri Flags finished with: ${{ needs.desktop-tauri-flags.result }}"
+              exit 1
+              ;;
+          esac
           echo "Desktop jobs passed"
 
   desktop-e2e-relay:
@@ -638,11 +663,12 @@ jobs:
     timeout-minutes: 45
     needs: [changes]
     if: >
+      needs.changes.outputs.pr-gate != 'true' && (
       (needs.changes.outputs.core-enabled == 'true' &&
         (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')) ||
       (needs.changes.outputs.secondary-enabled == 'true' &&
         (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')) ||
-      needs.changes.outputs.raw-integration-services == 'true'
+      needs.changes.outputs.raw-integration-services == 'true')
     permissions:
       contents: read
     env:
@@ -750,9 +776,10 @@ jobs:
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
     if: >
+      needs.changes.outputs.pr-gate != 'true' && (
       (needs.changes.outputs.secondary-enabled == 'true' &&
         (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')) ||
-      needs.changes.outputs.raw-integration-services == 'true'
+      needs.changes.outputs.raw-integration-services == 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -947,7 +974,7 @@ jobs:
     timeout-minutes: 5
     needs: [changes, desktop-e2e-integration-shard]
     if: >
-      always() &&
+      always() && needs.changes.outputs.pr-gate != 'true' &&
       ((needs.changes.outputs.secondary-enabled == 'true' &&
         (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-desktop-integration == 'true')) ||
        needs.changes.outputs.raw-integration-services == 'true')
@@ -983,8 +1010,9 @@ jobs:
     timeout-minutes: 90
     needs: [changes]
     if: >
+      needs.changes.outputs.pr-gate != 'true' && (
       needs.changes.outputs.secondary-enabled == 'true' &&
-      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-blocks == 'true')
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-blocks == 'true'))
     permissions:
       contents: read
     env:
@@ -1095,8 +1123,9 @@ jobs:
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
     if: >
+      needs.changes.outputs.pr-gate != 'true' && (
       (needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
-      needs.changes.outputs.raw-integration-services == 'true'
+      needs.changes.outputs.raw-integration-services == 'true')
     permissions:
       contents: read
     steps:
@@ -1349,8 +1378,9 @@ jobs:
     timeout-minutes: 20
     needs: [changes, desktop-e2e-relay]
     if: >
+      needs.changes.outputs.pr-gate != 'true' && (
       (needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
-      needs.changes.outputs.raw-integration-services == 'true'
+      needs.changes.outputs.raw-integration-services == 'true')
     permissions:
       contents: read
     steps:
@@ -1437,8 +1467,9 @@ jobs:
     timeout-minutes: 30
     needs: [changes, desktop-e2e-relay]
     if: >
+      needs.changes.outputs.pr-gate != 'true' && (
       (needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
-      needs.changes.outputs.raw-integration-services == 'true'
+      needs.changes.outputs.raw-integration-services == 'true')
     permissions:
       contents: read
     env:
@@ -1513,7 +1544,7 @@ jobs:
     # upstream jobs exactly, so a PR that touches no Rust skips this too and the
     # required check is satisfied by the skip.
     if: >
-      always() &&
+      always() && needs.changes.outputs.pr-gate != 'true' &&
       ((needs.changes.outputs.core-enabled == 'true' && needs.changes.outputs.rust == 'true') ||
        needs.changes.outputs.raw-integration-services == 'true')
     permissions:
@@ -1563,8 +1594,9 @@ jobs:
     timeout-minutes: 15
     needs: [changes]
     if: >
+      needs.changes.outputs.draft != 'true' && (
       needs.changes.outputs.secondary-enabled == 'true' &&
-      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-web == 'true')
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-web == 'true'))
     permissions:
       contents: read
     steps:
@@ -1605,8 +1637,9 @@ jobs:
     timeout-minutes: 30
     needs: [changes]
     if: >
+      needs.changes.outputs.draft != 'true' && (
       needs.changes.outputs.secondary-enabled == 'true' &&
-      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-mobile == 'true')
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-mobile == 'true'))
     permissions:
       contents: read
     steps:
@@ -1673,8 +1706,9 @@ jobs:
     timeout-minutes: 20
     needs: [changes]
     if: >
+      needs.changes.outputs.draft != 'true' && (
       needs.changes.outputs.secondary-enabled == 'true' &&
-      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-security == 'true')
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-security == 'true'))
     permissions:
       contents: read
     steps:
@@ -1694,8 +1728,9 @@ jobs:
     timeout-minutes: 30
     needs: [changes]
     if: >
+      needs.changes.outputs.pr-gate != 'true' && (
       needs.changes.outputs.secondary-enabled == 'true' &&
-      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-cross-compile == 'true')
+      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-cross-compile == 'true'))
     permissions:
       contents: read
     strategy:
