@@ -16,7 +16,7 @@ jobs:
       - run: just desktop-install-ci
       - name: Format only preview changes
         working-directory: desktop
-        run: pnpm exec biome check --write src/features/blocks/ui/ArtifactHtmlPreview.tsx src/features/blocks/ui/artifactPreviewDocument.ts src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/ui/BlockRenderer.tsx src/features/blocks/blockRepository.ts
+        run: pnpm exec biome check --write src/features/blocks/ui/ArtifactHtmlPreview.tsx src/features/blocks/ui/artifactPreviewDocument.ts src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/ui/BlockRenderer.tsx src/features/blocks/blockRepository.ts tests/e2e/thread-html-preview.spec.ts
       - name: Capture formatting patch
         if: always()
         run: git diff > /tmp/thread-preview-format.patch
@@ -31,3 +31,14 @@ jobs:
       - name: Typecheck
         working-directory: desktop
         run: pnpm exec tsc --noEmit
+      - name: Install browser for bounded rendering check
+        working-directory: desktop
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Render preview in existing channel UI
+        working-directory: desktop
+        run: pnpm build:e2e && pnpm exec playwright test thread-html-preview.spec.ts --project=smoke
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: thread-preview-rendering
+          path: desktop/test-results

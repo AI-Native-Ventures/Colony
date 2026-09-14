@@ -48,6 +48,7 @@ export default defineConfig({
         "**/rich-document-previews.spec.ts",
         "**/rich-media-previews.spec.ts",
         "**/approved-blocks-design.spec.ts",
+        "**/thread-html-preview.spec.ts",
         "**/approved-blocks-shared-states.spec.ts",
         "**/appearance-custom-gradient.spec.ts",
         "**/content-screenshots.spec.ts",
