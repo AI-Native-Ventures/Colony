@@ -41,6 +41,7 @@ import { useAgentMentionRevalidation } from "./agentMentionRevalidation";
 import { collectMentionIdentities } from "./collectMentionIdentities";
 import type { MentionIdentity } from "./mentionClipboard";
 import { useMentionIdentityBindings } from "./useMentionIdentityBindings";
+import { useMentionReset } from "./useMentionReset";
 import {
   buildPersonaNameByPubkey,
   buildPersonaRoleById,
@@ -882,29 +883,21 @@ export function useMentions(
     [activePersonaById],
   );
 
-  const cancelMentionAutocomplete = React.useCallback(() => {
-    autocompleteGenerationRef.current += 1;
-    if (debounceTimerRef.current !== null) {
-      clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
-    flushedMentionStartIndexRef.current = null;
-    setMentionQuery(null);
-    setMentionSelectedIndex(0);
-  }, []);
-  const clearMentions = React.useCallback(() => {
-    cancelMentionAutocomplete();
-    mentionMapRef.current.clear();
-    personaMentionMapRef.current.clear();
-    entityMentions.clear();
-    selectedAgentMentionNamesRef.current = [];
-    selectedAgentMentionPubkeysRef.current.clear();
-    setSelectedMentionNames([]);
-    setSelectedAgentMentionNames([]);
-    // Belt to the occurrence fence's braces: a paste still verifying when the
-    // composer is cleared holds a claim nothing can match afterwards.
-    pasteBinding.clearMentionIntents();
-  }, [cancelMentionAutocomplete, pasteBinding.clearMentionIntents]);
+  const { cancelMentionAutocomplete, clearMentions } = useMentionReset({
+    autocompleteGenerationRef,
+    clearEntityMentions: entityMentions.clear,
+    clearMentionIntents: pasteBinding.clearMentionIntents,
+    debounceTimerRef,
+    flushedMentionStartIndexRef,
+    mentionMapRef,
+    personaMentionMapRef,
+    selectedAgentMentionNamesRef,
+    selectedAgentMentionPubkeysRef,
+    setMentionQuery,
+    setMentionSelectedIndex,
+    setSelectedAgentMentionNames,
+    setSelectedMentionNames,
+  });
   const { getDraftMentionRefs, restoreDraftMentionRefs } =
     useDraftMentionRouting({
       mentionMapRef,
