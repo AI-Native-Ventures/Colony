@@ -11,7 +11,6 @@ import {
   SECOND_NAME,
   STARTER_NAMES,
   STARTER_PERSONA_IDS,
-  starterPersonaAnimation,
 } from "../helpers/starterTeam";
 
 function createCatalogEvent(input: {
