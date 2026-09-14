@@ -157,24 +157,42 @@ test.describe("terminal workspace tab", () => {
     await page.getByTestId("workspace-new-tab").click();
     await page.getByTestId("workspace-create-scratchpad").click();
     await page.getByRole("tab", { name: "Terminal" }).click();
-    await expect(page.getByTestId("workspace-terminal-body")).toBeVisible();
+    const remounted = page.getByTestId("workspace-terminal-body");
+    await expect(remounted).toBeVisible();
+    // Visible is not attached: the host element is in the DOM a frame before
+    // the xterm instance is built on it, and on a cold load the xterm chunk
+    // lands tens of milliseconds later still. Both the mount marker and the
+    // instance's own dimensions hook have to be there before its buffer can
+    // be read, or the text poll spends its whole budget against an element
+    // that has no terminal (this is the 1-in-2 cold-run failure here).
+    await expect(remounted).toHaveAttribute("data-terminal-font-size", /\d/);
     await expect
-      .poll(async () =>
-        terminalText(page.getByTestId("workspace-terminal-body")),
-      )
+      .poll(async () => (await terminalDims(page))?.cols ?? 0)
+      .toBeGreaterThan(0);
+    await expect
+      .poll(async () => terminalText(remounted))
       .toContain("mock-output:h");
-
+    // Cmd +/- scales the virtual typography rem and leaves the real root at
+    // 16px (#5644), so the terminal follows `--buzz-type-rem` and the root is
+    // asserted to hold still rather than to move.
+    const readTypeRem = () =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--buzz-type-rem")
+          .trim(),
+      );
     const rootBefore = await page.evaluate(
       () => getComputedStyle(document.documentElement).fontSize,
     );
+    const typeRemBefore = await readTypeRem();
+    const colsBefore = (await terminalDims(page))?.cols ?? 0;
     await dispatchPrimaryShortcut(page, "+", "Equal", true);
-    await expect
-      .poll(async () =>
-        page.evaluate(
-          () => getComputedStyle(document.documentElement).fontSize,
-        ),
-      )
-      .not.toBe(rootBefore);
+    await expect.poll(readTypeRem).not.toBe(typeRemBefore);
+    expect(
+      await page.evaluate(
+        () => getComputedStyle(document.documentElement).fontSize,
+      ),
+    ).toBe(rootBefore);
     await expect
       .poll(async () =>
         page
@@ -188,6 +206,24 @@ test.describe("terminal workspace tab", () => {
         .getAttribute("data-terminal-font-size"),
     );
     expect(terminalFontAfter).toBeGreaterThan(terminalFontBefore);
+    // Bigger type in the same pane means fewer columns, and the PTY is told:
+    // a font change that does not re-fit leaves the shell wrapping at the old
+    // width.
+    await expect
+      .poll(async () => (await terminalDims(page))?.cols ?? 0)
+      .toBeLessThan(colsBefore);
+    const zoomedDims = await terminalDims(page);
+    await expect
+      .poll(async () => {
+        const resizes = (await terminalCommands(page)).filter(
+          (entry) => entry.command === "workspace_terminal_resize",
+        );
+        const last = resizes.at(-1)?.payload as
+          | { cols?: number; rows?: number }
+          | undefined;
+        return last ? { cols: last.cols, rows: last.rows } : null;
+      })
+      .toEqual({ cols: zoomedDims?.cols, rows: zoomedDims?.rows });
     await dispatchPrimaryShortcut(page, "-", "Minus");
 
     await waitForAnimations(page);
