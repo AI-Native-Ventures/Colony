@@ -36,6 +36,14 @@ env:
   # branches and profiles. Incremental compilation must stay off for it to
   # cache anything (docs/Rust.md in mozilla/sccache).
   SCCACHE_GHA_ENABLED: "true"
+  # Only a push (develop, release) writes the cache. A pull request reads
+  # develop's objects and writes nothing: its own writes land in a scope only
+  # that pull request can read and die with it, and on 2026-09-14 those
+  # dead writes filled the 10 GB store within an hour and evicted the
+  # develop objects every job depends on (the second develop run compiled
+  # the relay from cold: 5 hits, 812 misses). Write errors in the stats are
+  # GitHub's cache rate limit; fewer writers means fewer of them.
+  SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'push' && 'READ_WRITE' || 'READ_ONLY' }}
   CARGO_INCREMENTAL: "0"
   BUZZ_TEST_POSTGRES_PASSWORD: buzz_dev
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
