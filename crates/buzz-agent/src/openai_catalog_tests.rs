@@ -141,10 +141,16 @@ async fn scoped_session_can_choose_another_served_model_and_reasoning() {
     )])
     .await;
     let cfg = cfg(base);
+    let permissions = Arc::new(crate::permission::PermissionBroker::new(
+        cfg.max_pending_permissions,
+        cfg.permission_timeout,
+    ));
     let app = Arc::new(crate::App {
         llm: Arc::new(crate::llm::Llm::new(&cfg).unwrap()),
         cfg,
         sessions: Mutex::new(std::collections::HashMap::new()),
+        negotiated_version: std::sync::atomic::AtomicU32::new(crate::PROTOCOL_VERSION),
+        permissions,
         models_cache: OnceCell::new(),
     });
     let (tx, mut rx) = mpsc::channel(8);

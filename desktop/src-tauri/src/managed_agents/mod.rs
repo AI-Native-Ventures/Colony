@@ -9,9 +9,11 @@ pub(crate) use agent_env::{
     baked_build_env, build_buzz_agent_provider_defaults, discovery_env_with_baked_floor,
 };
 mod backend;
+pub(crate) mod claude_config;
 pub(crate) mod config_bridge;
 mod coordination;
 pub(crate) mod custom_harnesses;
+mod definition_validation;
 mod discovery;
 pub(crate) mod effective_config;
 mod env_vars;
@@ -45,6 +47,7 @@ mod role_backfill;
 mod runtime;
 mod runtime_commands;
 mod runtime_types;
+mod session_policy;
 pub(crate) mod snapshot_avatar;
 pub(crate) mod spawn_snapshot;
 pub(crate) mod storage;
@@ -64,6 +67,9 @@ pub(crate) fn lock_path_mutex() -> std::sync::MutexGuard<'static, ()> {
 
 pub use backend::*;
 pub use coordination::*;
+pub(crate) use definition_validation::{
+    validate_agent_definition_text, validate_managed_agent_definition_text,
+};
 pub use discovery::*;
 pub use env_vars::*;
 #[cfg(windows)]
@@ -93,6 +99,10 @@ pub use restore::*;
 pub use runtime::*;
 pub use runtime_commands::*;
 pub use runtime_types::*;
+pub(crate) use session_policy::{
+    apply_acp_session_policy_env, effective_acp_session_policy, insert_acp_session_policy_env,
+    AcpSessionPolicy,
+};
 pub use storage::*;
 pub use teams::*;
 pub use types::*;

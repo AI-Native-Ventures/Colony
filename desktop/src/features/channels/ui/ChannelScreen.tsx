@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAppShell } from "@/app/AppShellContext";
 import { cacheSearchHitEvent } from "@/app/navigation/searchHitEventCache";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
@@ -46,13 +47,10 @@ import { buildMessageComposerEditTarget } from "@/features/messages/lib/draftMen
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
 import { DeleteMessageConfirmDialog } from "@/features/messages/ui/DeleteMessageConfirmDialog";
 import { getThreadReference } from "@/features/messages/lib/threading";
-import {
-  resolveTimelineLoadingLatch,
-  selectTimelineLoadingState,
-} from "@/features/messages/lib/timelineLoadingState";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useIndependentThreadPanel } from "@/features/messages/useIndependentThreadPanel";
 import { useThreadReplies } from "@/features/messages/useThreadReplies";
+import { useChannelTimelineLoading } from "@/features/channels/ui/useChannelTimelineLoading";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
@@ -96,6 +94,7 @@ export function ChannelScreen({
   targetMessageEvents,
   targetMessageId,
 }: ChannelScreenProps) {
+  const queryClient = useQueryClient();
   const { goHome } = useAppNavigation();
   const { activeCommunity } = useCommunities();
   const {
@@ -195,6 +194,7 @@ export function ChannelScreen({
   const threadRepliesQuery = useThreadReplies(
     activeChannel,
     effectiveOpenThreadHeadId,
+    threadScrollTargetId,
   );
   useChannelSubscription(activeChannel);
   const { fetchOlder, hasOlderMessages, historyExhausted, isFetchingOlder } =
@@ -613,28 +613,12 @@ export function ChannelScreen({
       setThreadReplyTargetId,
       setThreadScrollTargetId,
     });
-  const settledChannelIdRef = React.useRef<string | null>(null);
-  const hasSettledThisChannel =
-    activeChannelId !== null && settledChannelIdRef.current === activeChannelId;
-  const timelineLoadingNow =
-    activeChannel !== null &&
-    activeChannel.channelType !== "forum" &&
-    selectTimelineLoadingState(
-      {
-        isPending: messagesQuery.isPending,
-        isFetching: messagesQuery.isFetching,
-        isPlaceholderData: messagesQuery.isPlaceholderData,
-        dataLength: messagesQuery.data?.length ?? null,
-      },
-      hasSettledThisChannel,
-    );
-  const { settledChannelId, isLoading: isTimelineLoading } =
-    resolveTimelineLoadingLatch(
-      settledChannelIdRef.current,
-      activeChannelId,
-      timelineLoadingNow,
-    );
-  settledChannelIdRef.current = settledChannelId;
+  const isTimelineLoading = useChannelTimelineLoading({
+    activeChannel,
+    activeChannelId,
+    messagesQuery,
+    queryClient,
+  });
   const { welcomeKickoffStage, welcomeKickoffSettingUp } =
     useWelcomeKickoffStagePresence(
       activeChannel,
@@ -895,7 +879,9 @@ export function ChannelScreen({
                   isFollowingThread={isNotifiedForEffectiveThread}
                   isSending={sendMessageMutation.isPending}
                   isSinglePanelView={isSinglePanelView}
+                  isTimelineError={messagesQuery.isError}
                   isTimelineLoading={isTimelineLoading}
+                  onRetryTimeline={() => void messagesQuery.refetch()}
                   messages={timelineMessages}
                   threadSummaries={threadSummaries}
                   onCancelEdit={handleCancelEdit}

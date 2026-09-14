@@ -1,11 +1,13 @@
 import { relayClient } from "@/shared/api/relayClient";
 import type {
+  AcpSessionPolicy,
   AgentPersona,
   CatalogSourceCoordinate,
   RelayEvent,
   RespondToMode,
 } from "@/shared/api/types";
 import { KIND_PERSONA } from "@/shared/constants/kinds";
+import { verifyEvent } from "nostr-tools/pure";
 
 export type CatalogPersonaShareLevel = "not-shared" | "none";
 
@@ -21,6 +23,7 @@ type CatalogAgentProjection = {
   namePool: string[];
   respondTo: RespondToMode | null;
   parallelism: number | null;
+  sessionPolicy: AcpSessionPolicy;
 };
 
 export type PersonaCatalogPublication = {
@@ -41,6 +44,132 @@ export type CatalogPersona = AgentPersona & {
 };
 
 type JsonObject = Record<string, unknown>;
+
+const MAX_AGENT_DISPLAY_NAME_CHARACTERS = 128;
+const MAX_AGENT_SYSTEM_PROMPT_BYTES = 64 * 1_024;
+const EMOJI_VARIATION_SELECTOR = 0xfe0f;
+const ZERO_WIDTH_JOINER = 0x200d;
+const EXTENDED_PICTOGRAPHIC_RE = /^\p{Extended_Pictographic}$/u;
+
+function isProhibitedAgentTextCharacter(
+  characters: readonly string[],
+  index: number,
+  allowLayoutControls: boolean,
+): boolean {
+  const character = characters[index];
+  if (character === undefined) return false;
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined) return false;
+
+  const isControl =
+    codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+  const isAllowedLayoutControl =
+    allowLayoutControls && (codePoint === 0x09 || codePoint === 0x0a);
+  if (isControl && !isAllowedLayoutControl) return true;
+  if (isAllowedEmojiFormatCharacter(characters, index)) return false;
+
+  return (
+    codePoint === 0x00ad ||
+    codePoint === 0x034f ||
+    codePoint === 0x061c ||
+    (codePoint >= 0x115f && codePoint <= 0x1160) ||
+    (codePoint >= 0x17b4 && codePoint <= 0x17b5) ||
+    (codePoint >= 0x180b && codePoint <= 0x180f) ||
+    (codePoint >= 0x200b && codePoint <= 0x200f) ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
+    codePoint === 0x3164 ||
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+    codePoint === 0xfeff ||
+    codePoint === 0xffa0 ||
+    (codePoint >= 0xfff0 && codePoint <= 0xfff8) ||
+    (codePoint >= 0x1bca0 && codePoint <= 0x1bca3) ||
+    (codePoint >= 0x1d173 && codePoint <= 0x1d17a) ||
+    (codePoint >= 0xe0000 && codePoint <= 0xe0fff)
+  );
+}
+
+function isAllowedEmojiFormatCharacter(
+  characters: readonly string[],
+  index: number,
+): boolean {
+  const codePoint = characters[index]?.codePointAt(0);
+  if (codePoint === EMOJI_VARIATION_SELECTOR) {
+    const previous = characters[index - 1];
+    return previous !== undefined && isEmojiVariationBase(previous);
+  }
+  if (codePoint !== ZERO_WIDTH_JOINER) return false;
+
+  const next = characters[index + 1];
+  return (
+    hasPrecedingEmojiBase(characters, index) &&
+    next !== undefined &&
+    EXTENDED_PICTOGRAPHIC_RE.test(next)
+  );
+}
+
+function hasPrecedingEmojiBase(
+  characters: readonly string[],
+  index: number,
+): boolean {
+  for (let previous = index - 1; previous >= 0; previous -= 1) {
+    const character = characters[previous];
+    const codePoint = character?.codePointAt(0);
+    if (
+      codePoint === EMOJI_VARIATION_SELECTOR ||
+      (codePoint !== undefined && codePoint >= 0x1f3fb && codePoint <= 0x1f3ff)
+    ) {
+      continue;
+    }
+    return character !== undefined && EXTENDED_PICTOGRAPHIC_RE.test(character);
+  }
+  return false;
+}
+
+function isEmojiVariationBase(character: string): boolean {
+  return (
+    /^[#*0-9]$/u.test(character) || EXTENDED_PICTOGRAPHIC_RE.test(character)
+  );
+}
+
+function isSafeAgentDefinitionText(
+  displayName: string,
+  systemPrompt: string,
+): boolean {
+  const displayNameCharacters = [...displayName];
+  const systemPromptCharacters = [...systemPrompt];
+  return (
+    displayName.trim().length > 0 &&
+    displayNameCharacters.length <= MAX_AGENT_DISPLAY_NAME_CHARACTERS &&
+    new TextEncoder().encode(systemPrompt).length <=
+      MAX_AGENT_SYSTEM_PROMPT_BYTES &&
+    !displayNameCharacters.some((_character, index) =>
+      isProhibitedAgentTextCharacter(displayNameCharacters, index, false),
+    ) &&
+    !systemPromptCharacters.some((_character, index) =>
+      isProhibitedAgentTextCharacter(systemPromptCharacters, index, true),
+    )
+  );
+}
+
+function eventHasValidSignature(event: RelayEvent): boolean {
+  try {
+    // Verify a fresh wire-shaped value. nostr-tools memoizes successful checks
+    // on event objects; relay input must never inherit a stale verification
+    // marker from an object that was subsequently mutated.
+    return verifyEvent({
+      id: event.id,
+      pubkey: event.pubkey,
+      created_at: event.created_at,
+      kind: event.kind,
+      tags: event.tags,
+      content: event.content,
+      sig: event.sig,
+    });
+  } catch {
+    return false;
+  }
+}
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -135,10 +264,14 @@ function parsePersonaContent(event: RelayEvent): CatalogAgentProjection | null {
   } catch {
     return null;
   }
+  if (!isObject(parsed)) return null;
+
+  const displayName = parsed.display_name;
+  const systemPrompt =
+    typeof parsed.system_prompt === "string" ? parsed.system_prompt : "";
   if (
-    !isObject(parsed) ||
-    typeof parsed.display_name !== "string" ||
-    parsed.display_name.trim().length === 0
+    typeof displayName !== "string" ||
+    !isSafeAgentDefinitionText(displayName, systemPrompt)
   ) {
     return null;
   }
@@ -167,6 +300,10 @@ function parsePersonaContent(event: RelayEvent): CatalogAgentProjection | null {
     parsed.parallelism <= 32
       ? parsed.parallelism
       : null;
+  // Unknown or absent degrades to the channel default rather than dropping the
+  // whole catalog record, so forward-version data still projects.
+  const sessionPolicy: AcpSessionPolicy =
+    parsed.session_policy === "thread" ? "thread" : "channel";
   const roleId = optionalString(parsed.role_id);
   const roleTitle = optionalString(parsed.role_title);
   if (
@@ -177,18 +314,18 @@ function parsePersonaContent(event: RelayEvent): CatalogAgentProjection | null {
   }
 
   return {
-    displayName: parsed.display_name,
+    displayName,
     roleId,
     roleTitle,
     avatarUrl,
-    systemPrompt:
-      typeof parsed.system_prompt === "string" ? parsed.system_prompt : "",
+    systemPrompt,
     runtime: optionalString(parsed.runtime),
     model: optionalString(parsed.model),
     provider: optionalString(parsed.provider),
     namePool,
     respondTo,
     parallelism,
+    sessionPolicy,
   };
 }
 
@@ -202,6 +339,14 @@ function parsePersonaContent(event: RelayEvent): CatalogAgentProjection | null {
  * resurrect an older shared definition.
  */
 export function catalogPublicationsFromEvents(
+  events: readonly RelayEvent[],
+): PersonaCatalogPublication[] {
+  return catalogPublicationsFromVerifiedEvents(
+    events.filter(eventHasValidSignature),
+  );
+}
+
+function catalogPublicationsFromVerifiedEvents(
   events: readonly RelayEvent[],
 ): PersonaCatalogPublication[] {
   const sorted = [...events].sort(
@@ -280,6 +425,7 @@ export async function fetchPersonaCatalogPublications(): Promise<
     const sizeBefore = byId.size;
     let oldestCreatedAt = Number.POSITIVE_INFINITY;
     for (const event of events) {
+      if (!eventHasValidSignature(event)) continue;
       byId.set(event.id, event);
       oldestCreatedAt = Math.min(oldestCreatedAt, event.created_at);
     }
@@ -292,7 +438,7 @@ export async function fetchPersonaCatalogPublications(): Promise<
     until = oldestCreatedAt;
   }
 
-  return catalogPublicationsFromEvents([...byId.values()]);
+  return catalogPublicationsFromVerifiedEvents([...byId.values()]);
 }
 
 function publicationToPersona(
@@ -320,6 +466,7 @@ function publicationToPersona(
     respondTo: publication.agent.respondTo,
     respondToAllowlist: [],
     parallelism: publication.agent.parallelism,
+    sessionPolicy: publication.agent.sessionPolicy,
     createdAt: timestamp,
     updatedAt: timestamp,
   };

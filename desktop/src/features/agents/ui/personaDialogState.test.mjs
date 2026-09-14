@@ -250,6 +250,7 @@ test("edit and duplicate seed the behavior group from a quad-bearing persona", (
     respondTo: "allowlist",
     respondToAllowlist: ["a".repeat(64)],
     parallelism: 4,
+    sessionPolicy: "thread",
     createdAt: "2025-01-01T00:00:00Z",
     updatedAt: "2025-01-02T00:00:00Z",
   };
@@ -258,6 +259,7 @@ test("edit and duplicate seed the behavior group from a quad-bearing persona", (
     respondTo: "allowlist",
     respondToAllowlist: ["a".repeat(64)],
     parallelism: 4,
+    sessionPolicy: "thread",
   };
   assert.deepEqual(
     editPersonaDialogState(persona).initialValues.behavior,
@@ -267,6 +269,38 @@ test("edit and duplicate seed the behavior group from a quad-bearing persona", (
     duplicatePersonaDialogState(persona).initialValues.behavior,
     expected,
   );
+});
+
+test("a linked instance overrides stale definition access in the edit dialog", () => {
+  const persona = {
+    id: "persona-instance-access",
+    displayName: "Shared",
+    avatarUrl: null,
+    systemPrompt: "Shared.",
+    runtime: null,
+    model: null,
+    provider: null,
+    isBuiltIn: false,
+    isActive: true,
+    respondTo: "owner-only",
+    respondToAllowlist: [],
+    parallelism: 2,
+    sessionPolicy: "channel",
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: "2025-01-02T00:00:00Z",
+  };
+
+  const state = editPersonaDialogState(persona, {
+    respondTo: "allowlist",
+    respondToAllowlist: ["c".repeat(64)],
+  });
+
+  assert.deepEqual(state.initialValues.behavior, {
+    respondTo: "allowlist",
+    respondToAllowlist: ["c".repeat(64)],
+    parallelism: 2,
+    sessionPolicy: "channel",
+  });
 });
 
 test("a non-allowlist mode does not seed a stale allowlist into the dialog", () => {

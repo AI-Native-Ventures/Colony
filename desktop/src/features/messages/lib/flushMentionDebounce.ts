@@ -16,7 +16,7 @@ import {
   type MentionSuggestionCandidate,
 } from "./mentionSuggestionMapping";
 
-type MentionCandidateWithUI = MentionCandidateForRanking &
+export type MentionCandidateWithUI = MentionCandidateForRanking &
   MentionSuggestionCandidate;
 
 export type FlushMentionDebounceResult =

@@ -4,7 +4,7 @@ import { openUrl } from "@/shared/api/nativeBridge";
 import { ExternalLink, Plus, RefreshCw } from "lucide-react";
 
 import {
-  useAcpRuntimesQuery,
+  useAcpRuntimesQueryForced,
   useGitBashPrerequisiteQuery,
 } from "@/features/agents/hooks";
 import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
@@ -86,7 +86,7 @@ function GitBashCard({
  *   needs multi-step setup, plus the custom-harness form.
  */
 export function HarnessesSettingsPanel() {
-  const runtimesQuery = useAcpRuntimesQuery();
+  const runtimesQuery = useAcpRuntimesQueryForced();
   const gitBashQuery = useGitBashPrerequisiteQuery();
   const [catalogOpen, setCatalogOpen] = React.useState(false);
   // Incremented each time the user clicks "Check again" so HarnessRow
@@ -120,7 +120,7 @@ export function HarnessesSettingsPanel() {
           disabled={isRefreshing}
           onClick={() => {
             setResetEpoch((e) => e + 1);
-            void runtimesQuery.refetch();
+            void runtimesQuery.forceRefresh();
             void gitBashQuery.refetch();
           }}
           size="sm"

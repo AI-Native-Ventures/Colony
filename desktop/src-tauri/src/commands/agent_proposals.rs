@@ -144,6 +144,7 @@ fn normalized_behavior(
         return Err("parallelism must be between 1 and 32".to_string());
     }
     Ok(PersonaBehaviorRequest {
+        session_policy: Default::default(),
         respond_to: behavior.respond_to,
         respond_to_allowlist: behavior.respond_to_allowlist,
         parallelism: behavior.parallelism,
@@ -620,6 +621,7 @@ mod tests {
 
     fn definition(action: &AgentProposalSafeAction) -> AgentDefinition {
         AgentDefinition {
+            session_policy: Default::default(),
             id: action.request_id.clone(),
             role_id: None,
             role_title: None,

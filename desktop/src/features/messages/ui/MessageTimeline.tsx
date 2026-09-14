@@ -23,6 +23,7 @@ import { TooltipProvider } from "@/shared/ui/tooltip";
 import { useCommittedEmptyTimeline } from "./useCommittedEmptyTimeline";
 import { UnreadPill, unreadCountLabel } from "@/shared/ui/UnreadPill";
 import { ChannelIntroBlock, type ChannelIntro } from "./ChannelIntroBlock";
+import { MessageTimelineErrorCard } from "./MessageTimelineErrorCard";
 import { TimelineSkeleton, useTimelineSkeletonRows } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
 import type { TimelineVirtualizerApi } from "./TimelineMessageList";
@@ -57,7 +58,9 @@ type MessageTimelineProps = {
     displayName: string;
     participants: DirectMessageIntroParticipant[];
   } | null;
+  isError?: boolean;
   isLoading?: boolean;
+  onRetry?: () => void;
   entranceMessageId?: string | null;
   onEntranceMessageComplete?: (messageId: string) => void;
   emptyTitle?: string;
@@ -171,7 +174,9 @@ const MessageTimelineBase = React.forwardRef<
     messages,
     mainEntries,
     threadSummaries,
+    isError = false,
     isLoading = false,
+    onRetry,
     entranceMessageId = null,
     onEntranceMessageComplete,
     emptyTitle = "No messages yet",
@@ -313,6 +318,7 @@ const MessageTimelineBase = React.forwardRef<
   const requestedBodySurface = selectTimelineBodySurface({
     deferredCount: deferredMessages.length,
     preserveSettledEmptyIntro,
+    isError,
     isLoading: pinIntroOverSkeleton ? false : timelineIsLoading,
     liveCount: messages.length,
   });
@@ -321,6 +327,7 @@ const MessageTimelineBase = React.forwardRef<
       ? "empty"
       : requestedBodySurface;
   const showTimelineSkeleton = timelineBodySurface === "skeleton";
+  const showTimelineError = timelineBodySurface === "error";
   const [isSemanticallyAtBottom, setIsSemanticallyAtBottom] =
     React.useState(true);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset semantic tail state when the active channel changes
@@ -485,15 +492,17 @@ const MessageTimelineBase = React.forwardRef<
     semanticAtBottom: isSemanticallyAtBottom,
   });
 
-  const timelineIntroSurface = selectTimelineIntroSurface({
-    hasChannelIntro: channelIntro !== null && directMessageIntro === null,
-    hasDirectMessageIntro: directMessageIntro !== null,
-    hasReachedChannelStart:
-      !isRenderedTimelineBehindHistoryPrepend(deferredMessages, messages) &&
-      !isHoldingPrepend &&
-      (messages.length === 0 || (!hasOlderMessages && !isFetchingOlder)),
-    isSkeletonVisible: showTimelineSkeleton,
-  });
+  const timelineIntroSurface = showTimelineError
+    ? null
+    : selectTimelineIntroSurface({
+        hasChannelIntro: channelIntro !== null && directMessageIntro === null,
+        hasDirectMessageIntro: directMessageIntro !== null,
+        hasReachedChannelStart:
+          !isRenderedTimelineBehindHistoryPrepend(deferredMessages, messages) &&
+          !isHoldingPrepend &&
+          (messages.length === 0 || (!hasOlderMessages && !isFetchingOlder)),
+        isSkeletonVisible: showTimelineSkeleton,
+      });
   const showDirectMessageIntro =
     timelineIntroSurface === "direct-message-intro";
   const showChannelIntro = timelineIntroSurface === "channel-intro";
@@ -831,7 +840,10 @@ const MessageTimelineBase = React.forwardRef<
                 showChannelIntroOnly
                   ? "pt-[var(--channel-top-chrome-height,4.5rem)]"
                   : channelChrome.contentPadding,
-                (showIntro || showGenericEmpty || showMessageList) &&
+                (showIntro ||
+                  showTimelineError ||
+                  showGenericEmpty ||
+                  showMessageList) &&
                   "min-h-full",
               )}
               ref={contentRef}
@@ -850,7 +862,8 @@ const MessageTimelineBase = React.forwardRef<
                 className={cn(
                   "flex min-h-[18rem] min-w-0 flex-col gap-2",
                   useTimelineVirtualizer && "min-h-0 flex-1",
-                  (showIntro || showGenericEmpty) && "min-h-full",
+                  (showIntro || showTimelineError || showGenericEmpty) &&
+                    "min-h-full",
                   showMessageList &&
                     !showIntro &&
                     !useTimelineVirtualizer &&
@@ -859,6 +872,9 @@ const MessageTimelineBase = React.forwardRef<
               >
                 {showTimelineSkeleton ? (
                   <TimelineSkeleton rows={timelineSkeletonRows} />
+                ) : null}
+                {showTimelineError ? (
+                  <MessageTimelineErrorCard onRetry={onRetry} />
                 ) : null}
                 {activeDirectMessageIntro ? (
                   <div

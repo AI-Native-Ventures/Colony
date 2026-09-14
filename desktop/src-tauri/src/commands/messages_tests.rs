@@ -217,6 +217,7 @@ fn thread_replies_filter_carries_non_p_gated_kinds_to_clear_the_gate() {
     assert_eq!(filter["#e"], serde_json::json!(["root-hex"]));
     assert_eq!(filter["depth_limit"], serde_json::json!(64));
     assert_eq!(filter["#h"], serde_json::json!(["channel-1"]));
+    assert_eq!(filter["include_aux"], serde_json::json!(true));
 }
 
 #[test]
@@ -309,4 +310,15 @@ fn feed_item_from_event_carries_singular_mention_category() {
 
     assert_eq!(json["category"], "mention");
     assert_eq!(json["id"], event.id.to_hex());
+}
+
+#[test]
+fn provided_thread_ref_validates_and_preserves_root_and_parent() {
+    let root = "11".repeat(32);
+    let parent = "22".repeat(32);
+    let thread_ref = thread_ref::provided_thread_ref(&root, &parent)
+        .expect("valid 64-hex event ids should be accepted");
+    assert_eq!(thread_ref.root_event_id.to_hex(), root);
+    assert_eq!(thread_ref.parent_event_id.to_hex(), parent);
+    assert!(thread_ref::provided_thread_ref("not-hex", &parent).is_err());
 }

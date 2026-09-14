@@ -15,6 +15,7 @@ fn bare_agent_record(
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "agent".to_string(),
         name: "Agent".to_string(),
         role_id: None,
@@ -44,6 +45,7 @@ fn bare_agent_record(
         runtime_pid: None,
         backend: BackendKind::Local,
         backend_agent_id: None,
+        provider_policy_pending: false,
         provider_binary_path: None,
         team_id: None,
         persona_team_dir: None,
@@ -68,6 +70,7 @@ fn bare_agent_record(
         source_team_persona_slug: None,
         catalog_source: None,
         relay_mesh: None,
+        effort_level: None,
         auto_restart_on_config_change: false,
         definition_respond_to: None,
         definition_respond_to_allowlist: vec![],
@@ -77,6 +80,7 @@ fn bare_agent_record(
 fn persona_record(id: &str, model: Option<&str>, provider: Option<&str>) -> AgentDefinition {
     use std::collections::BTreeMap;
     AgentDefinition {
+        session_policy: Default::default(),
         id: id.to_string(),
         role_id: None,
         role_title: None,
@@ -532,6 +536,7 @@ fn deploy_payload_matches_the_shared_full_launch_fixture() {
         None,
         Some("gpt-5"),
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        Default::default(),
     );
     let agent = deploy_payload_json(
         &record,
@@ -752,6 +757,11 @@ fn provider_upgrade_reconciliation_targets_existing_deployments_only_in_marked_b
     assert_eq!(payload["respond_to"], "owner-only");
     assert_eq!(payload["respond_to_allowlist"], serde_json::json!([]));
     assert!(!provider_access::needs_reconciliation_with_policy(
+        &record, false
+    ));
+
+    record.provider_policy_pending = true;
+    assert!(provider_access::needs_reconciliation_with_policy(
         &record, false
     ));
 

@@ -65,7 +65,7 @@ pub(crate) async fn finish(agent: &mut crate::pool::OwnedAgent, process_exited: 
 }
 
 fn restore(state: &mut crate::pool::SessionState, saved: ScopedReplySession, process_exited: bool) {
-    state.invalidate_session(&saved.key.0, saved.key.1.as_deref());
+    state.invalidate_scope(&saved.key);
     if !process_exited && saved.preserve_original {
         if let Some(id) = saved.original_id {
             state.sessions.insert(saved.key.clone(), id);
@@ -183,8 +183,10 @@ mod tests {
             ])
             .sign_with_keys(owner)
             .unwrap();
+        let channel_id = uuid::Uuid::new_v4();
         FlushBatch {
-            channel_id: uuid::Uuid::new_v4(),
+            channel_id,
+            scope: crate::scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "mention".into(),
@@ -232,7 +234,10 @@ mod tests {
     }
     #[test]
     fn ordinary_session_delivery_and_counters_survive_scoped_reply() {
-        let key = (uuid::Uuid::new_v4(), Some("thread".into()));
+        let key = crate::pool::ConversationKey::Thread {
+            channel_id: uuid::Uuid::new_v4(),
+            root_event_id: "thread".into(),
+        };
         let mut state = crate::pool::SessionState::default();
         state
             .sessions
@@ -264,7 +269,9 @@ mod tests {
 
     #[test]
     fn adapters_without_close_have_a_bounded_temporary_session_budget() {
-        let key = (uuid::Uuid::new_v4(), None);
+        let key = crate::pool::ConversationKey::Conversation {
+            channel_id: uuid::Uuid::new_v4(),
+        };
         let mut state = crate::pool::SessionState::default();
         state
             .sessions
@@ -279,13 +286,16 @@ mod tests {
     }
     #[test]
     fn channel_invalidation_during_scoped_reply_does_not_restore_stale_context() {
-        let key = (uuid::Uuid::new_v4(), Some("thread".into()));
+        let key = crate::pool::ConversationKey::Thread {
+            channel_id: uuid::Uuid::new_v4(),
+            root_event_id: "thread".into(),
+        };
         let mut state = crate::pool::SessionState::default();
         state
             .sessions
             .insert(key.clone(), "stale-ordinary-session".into());
         begin(&mut state, key.clone()).unwrap();
-        state.invalidate_channel(&key.0);
+        state.invalidate_channel(&key.channel_id());
         let saved = state.scoped_reply_session.take().unwrap();
         restore(&mut state, saved, false);
         assert!(!state.sessions.contains_key(&key));

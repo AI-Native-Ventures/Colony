@@ -3,6 +3,7 @@ use crate::managed_agents::AgentDefinition;
 
 fn definition() -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: "11111111-1111-4111-8111-111111111111".into(),
         display_name: "Sarah".into(),
         role_id: Some("content-campaign-specialist".into()),

@@ -395,6 +395,7 @@ fn resolve_chat_agent_persona(
         false
     } else {
         personas.push(AgentDefinition {
+            session_policy: Default::default(),
             id: persona_id.clone(),
             role_id: agent.role_id.clone(),
             role_title: agent.role_title.clone(),

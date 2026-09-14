@@ -73,6 +73,7 @@ mod tests {
             creation_request_id: None,
             role_id: None,
             role_title: None,
+            session_policy: Default::default(),
             pubkey: String::new(),
             name: "r".to_string(),
             persona_id: None,
@@ -99,6 +100,7 @@ mod tests {
             runtime_pid: None,
             backend: Default::default(),
             backend_agent_id: None,
+            provider_policy_pending: false,
             provider_binary_path: None,
             team_id: None,
             persona_team_dir: None,
@@ -127,6 +129,7 @@ mod tests {
             definition_respond_to_allowlist: Vec::new(),
             definition_parallelism: None,
             relay_mesh: None,
+            effort_level: None,
         }
     }
 
@@ -138,6 +141,7 @@ mod tests {
         AgentDefinition {
             role_id: None,
             role_title: None,
+            session_policy: Default::default(),
             id: id.to_string(),
             display_name: String::new(),
             avatar_url: None,

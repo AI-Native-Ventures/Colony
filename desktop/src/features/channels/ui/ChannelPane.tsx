@@ -48,7 +48,10 @@ import {
   WelcomeComposerGuidanceLayer,
 } from "@/features/channels/ui/WelcomeComposerBanner";
 import { useWelcomeComposerBanner } from "@/features/channels/ui/useWelcomeComposerBanner";
-import { mentionsKnownAgent } from "@/features/channels/ui/ChannelPane.helpers";
+import {
+  mentionsKnownAgent,
+  selectThreadComposerBotTypingPubkeys,
+} from "@/features/channels/ui/ChannelPane.helpers";
 import { HUDDLE_TRANSCRIPT_ROOT_STYLE } from "@/features/channels/ui/ChannelPane.constants";
 import {
   ChannelFindBarSlot,
@@ -94,7 +97,9 @@ export const ChannelPane = React.memo(function ChannelPane({
   isJoining = false,
   isSinglePanelView = false,
   isSending,
+  isTimelineError = false,
   isTimelineLoading,
+  onRetryTimeline,
   entranceMessageId = null,
   onEntranceMessageComplete,
   welcomeKickoffStage = null,
@@ -358,18 +363,11 @@ export const ChannelPane = React.memo(function ChannelPane({
   const hasCardMintActivity = useCardMintJobs().length > 0;
   const hasComposerBottomActivity =
     hasComposerBotActivity || hasTypingActivity || hasCardMintActivity;
-  const threadComposerBotTypingPubkeys = React.useMemo(() => {
-    if (!openThreadHeadId) return [];
-    return botTypingEntries
-      .filter((entry) => entry.threadHeadId === openThreadHeadId)
-      .map((entry) => entry.pubkey)
-      .filter(
-        (pubkey, index, all) =>
-          all.findIndex(
-            (candidate) => candidate.toLowerCase() === pubkey.toLowerCase(),
-          ) === index,
-      );
-  }, [botTypingEntries, openThreadHeadId]);
+  const threadComposerBotTypingPubkeys = React.useMemo(
+    () =>
+      selectThreadComposerBotTypingPubkeys(botTypingEntries, openThreadHeadId),
+    [botTypingEntries, openThreadHeadId],
+  );
   const hasThreadComposerBotActivity =
     threadComposerBotTypingPubkeys.length > 0;
   const directMessageIntro = React.useMemo(
@@ -656,6 +654,8 @@ export const ChannelPane = React.memo(function ChannelPane({
                     ? undefined
                     : onSendVideoReviewComment
                 }
+                isError={isTimelineError}
+                onRetry={onRetryTimeline}
                 onTargetReached={onTargetReached}
                 onToggleReaction={onToggleReaction}
                 searchActiveMessageId={

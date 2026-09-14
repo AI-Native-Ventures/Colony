@@ -831,6 +831,18 @@ pub struct Config {
     /// Set via `BUZZ_AGENT_MAX_HANDOFFS`. Default 10.
     pub max_handoffs: usize,
     pub max_parallel_tools: usize,
+    /// Process-wide cap on simultaneously-outstanding `session/request_permission`
+    /// asks. Bounds the [`PermissionBroker`](crate::permission::PermissionBroker)
+    /// correlation map independently of the per-turn tool semaphore (which is
+    /// fresh per turn) and of `max_sessions` (unbounded by default). Default 32.
+    /// Set via `BUZZ_AGENT_MAX_PENDING_PERMISSIONS`; validated `>= 1`.
+    pub max_pending_permissions: usize,
+    /// Single absolute deadline for a permission ask — shared by broker
+    /// admission and the response wait, so a saturated call cannot live for two
+    /// full timeout windows. Default 330s, chosen to outlast the client's 300s
+    /// auto-deny so the answer (or auto-deny) lands first. Set via
+    /// `BUZZ_AGENT_PERMISSION_TIMEOUT_SECS`; validated `>= 1`.
+    pub permission_timeout: Duration,
     pub hook_timeout: Duration,
     /// Maximum `_Stop` rejections per prompt. Default 3. Set to 0 to
     /// disable `_Stop` hooks entirely (agent always honors end_turn).
@@ -1005,7 +1017,7 @@ impl Config {
             max_output_tokens: parse_env("BUZZ_AGENT_MAX_OUTPUT_TOKENS", 65_536)?,
             max_token_recoveries: parse_env("BUZZ_AGENT_MAX_TOKEN_RECOVERIES", 3u32)?,
             llm_timeout: Duration::from_secs(parse_env("BUZZ_AGENT_LLM_TIMEOUT_SECS", 240)?),
-            tool_timeout: Duration::from_secs(parse_env("BUZZ_AGENT_TOOL_TIMEOUT_SECS", 660)?),
+            tool_timeout: Duration::from_secs(parse_env("BUZZ_AGENT_TOOL_TIMEOUT_SECS", 1_260)?),
             mcp_init_timeout: Duration::from_secs(parse_env(
                 "BUZZ_AGENT_MCP_INIT_TIMEOUT_SECS",
                 30,
@@ -1023,6 +1035,11 @@ impl Config {
             max_context_tokens: parse_env("BUZZ_AGENT_MAX_CONTEXT_TOKENS", 200_000u64)?,
             max_handoffs: parse_env("BUZZ_AGENT_MAX_HANDOFFS", 10)?,
             max_parallel_tools: parse_env("BUZZ_AGENT_MAX_PARALLEL_TOOLS", 8usize)?,
+            max_pending_permissions: parse_env("BUZZ_AGENT_MAX_PENDING_PERMISSIONS", 32usize)?,
+            permission_timeout: Duration::from_secs(parse_env(
+                "BUZZ_AGENT_PERMISSION_TIMEOUT_SECS",
+                330u64,
+            )?),
             hook_timeout: Duration::from_millis(parse_env("BUZZ_AGENT_HOOK_TIMEOUT_MS", 2500u64)?),
             stop_max_rejections: parse_env("BUZZ_AGENT_STOP_MAX_REJECTIONS", 3u32)?,
             require_reply: parse_env("BUZZ_AGENT_REQUIRE_REPLY", 0u8)? != 0,
@@ -1074,6 +1091,8 @@ impl Config {
             max_context_tokens: 200_001,
             max_handoffs: 0,
             max_parallel_tools: 1,
+            max_pending_permissions: 32,
+            permission_timeout: Duration::from_secs(330),
             hook_timeout: Duration::from_secs(1),
             stop_max_rejections: 0,
             require_reply: false,
@@ -1137,6 +1156,12 @@ impl Config {
         }
         if self.max_parallel_tools < 1 {
             return Err("config: BUZZ_AGENT_MAX_PARALLEL_TOOLS must be >= 1".into());
+        }
+        if self.max_pending_permissions < 1 {
+            return Err("config: BUZZ_AGENT_MAX_PENDING_PERMISSIONS must be >= 1".into());
+        }
+        if self.permission_timeout < MIN_TIMEOUT {
+            return Err("config: BUZZ_AGENT_PERMISSION_TIMEOUT_SECS must be >= 1".into());
         }
         if self.mcp_max_restart_attempts < 1 {
             return Err("config: BUZZ_AGENT_MCP_RESTART_MAX_ATTEMPTS must be >= 1".into());
@@ -3317,5 +3342,25 @@ mod tests {
         );
         let err = resolve_provider(Some("deepseek"), None, None, None, None).unwrap_err();
         assert!(err.contains("DEEPSEEK_API_KEY required"), "{err}");
+    }
+
+    #[test]
+    fn default_tool_timeout_is_1260_seconds() {
+        // Lock the production default so accidental regressions are caught.
+        // This value must remain >= buzz-dev-mcp's MAX_TIMEOUT_MS (1_200s) to
+        // give every shell(timeout_ms=1_200_000) call time to complete before
+        // buzz-agent kills the MCP server. See PR #7185 for the full budget chain.
+        //
+        // 1_260s is the literal default passed to parse_env in Config::from_env().
+        // Update here if and only if you update that literal; the test name makes
+        // "grep for old value" reliable.
+        const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 1_260;
+        const {
+            // Shell cap (1_200_000 ms = 1_200s) must fit inside the agent timeout.
+            assert!(
+                1_200u64 <= DEFAULT_TOOL_TIMEOUT_SECS,
+                "agent tool timeout must be >= dev-mcp shell cap (1200s)"
+            );
+        }
     }
 }

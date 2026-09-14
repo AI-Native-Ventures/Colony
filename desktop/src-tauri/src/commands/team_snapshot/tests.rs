@@ -12,6 +12,7 @@ fn member(name: &str) -> AgentSnapshot {
         format: crate::managed_agents::agent_snapshot::FORMAT_DISCRIMINATOR.to_string(),
         version: crate::managed_agents::agent_snapshot::FORMAT_VERSION,
         definition: AgentSnapshotDefinition {
+            session_policy: Default::default(),
             name: name.to_string(),
             source_is_builtin: false,
             system_prompt: Some(format!("{name} prompt")),
@@ -55,6 +56,7 @@ fn snapshot(members: Vec<AgentSnapshot>) -> TeamSnapshot {
 fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
     let definitions = vec![
         AgentDefinition {
+            session_policy: Default::default(),
             id: "alice".to_string(),
             role_id: None,
             role_title: None,
@@ -79,6 +81,7 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
             updated_at: "now".to_string(),
         },
         AgentDefinition {
+            session_policy: Default::default(),
             id: "bob".to_string(),
             role_id: None,
             role_title: None,
@@ -146,6 +149,7 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
 #[test]
 fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
     let definitions = vec![AgentDefinition {
+        session_policy: Default::default(),
         id: "alice".to_string(),
         role_id: None,
         role_title: None,
@@ -170,9 +174,9 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
         updated_at: "now".to_string(),
     }];
     let team = TeamRecord {
+        description: None,
         id: "t1".to_string(),
         name: "Team".to_string(),
-        description: None,
         instructions: None,
         persona_ids: vec!["alice".to_string()],
         lead_persona_id: None,
@@ -194,6 +198,7 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "a".repeat(64),
         name: "Alice".to_string(),
         role_id: None,
@@ -226,6 +231,7 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
         runtime_pid: None,
         backend: crate::managed_agents::BackendKind::Local,
         backend_agent_id: None,
+        provider_policy_pending: false,
         provider_binary_path: None,
         team_id: Some("t1".to_string()),
         persona_team_dir: None,
@@ -249,6 +255,7 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
         definition_respond_to_allowlist: vec![],
         definition_parallelism: None,
         relay_mesh: None,
+        effort_level: None,
         runtime: None,
         name_pool: vec![],
     };
@@ -700,9 +707,9 @@ fn full_rollback_at_teams_boundary_absent_agents_store() {
     // atomic_write_json call that save_teams delegates to.
     let mut teams_to_save = teams;
     teams_to_save.push(crate::managed_agents::TeamRecord {
+        description: None,
         id: "team-1".to_string(),
         name: "Imported".to_string(),
-        description: None,
         instructions: None,
         persona_ids: vec![],
         lead_persona_id: None,

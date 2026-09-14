@@ -364,6 +364,7 @@ fn bare_record() -> ManagedAgentRecord {
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "agent".to_string(),
         name: "Agent".to_string(),
         role_id: None,
@@ -393,6 +394,7 @@ fn bare_record() -> ManagedAgentRecord {
         runtime_pid: None,
         backend: BackendKind::Local,
         backend_agent_id: None,
+        provider_policy_pending: false,
         provider_binary_path: None,
         team_id: None,
         persona_team_dir: None,
@@ -417,6 +419,7 @@ fn bare_record() -> ManagedAgentRecord {
         source_team_persona_slug: None,
         catalog_source: None,
         relay_mesh: None,
+        effort_level: None,
         auto_restart_on_config_change: false,
         definition_respond_to: None,
         definition_respond_to_allowlist: vec![],
@@ -426,6 +429,7 @@ fn bare_record() -> ManagedAgentRecord {
 
 fn persona(id: &str, model: Option<&str>, provider: Option<&str>) -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: id.to_string(),
         role_id: None,
         role_title: None,
@@ -691,6 +695,7 @@ fn record_runtime_wins_over_persona_runtime_for_command_resolution() {
     record.persona_id = Some("p1".to_string());
 
     let persona = AgentDefinition {
+        session_policy: Default::default(),
         id: "p1".to_string(),
         role_id: None,
         role_title: None,

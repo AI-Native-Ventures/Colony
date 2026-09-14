@@ -649,7 +649,7 @@ mod tests {
     use crate::managed_agents::discovery::known_acp_runtime_exact;
 
     /// Build a minimal `EffectiveAgentEnv` with the given env map and command.
-    fn make_env(command: &str, env: BTreeMap<String, String>) -> EffectiveAgentEnv {
+    pub(super) fn make_env(command: &str, env: BTreeMap<String, String>) -> EffectiveAgentEnv {
         let runtime = known_acp_runtime_exact(command);
         EffectiveAgentEnv {
             env,
@@ -658,7 +658,7 @@ mod tests {
         }
     }
 
-    fn env_with(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pub(super) fn env_with(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1451,10 +1451,11 @@ mod tests {
     }
 
     // ── resolve_effective_agent_env ─────────────────────────────────────────
-
     #[test]
     fn resolve_effective_agent_env_user_env_wins_over_structured_fields() {
         // Explicit provider/model env vars beat baked defaults and reach output.
+        // User env_vars must win over baked defaults; in OSS builds baked map is empty,
+        // so this validates the user-env layer is present in the output.
         let mut env_vars = BTreeMap::new();
         env_vars.insert("BUZZ_AGENT_PROVIDER".to_string(), "anthropic".to_string());
         env_vars.insert(
@@ -1463,6 +1464,7 @@ mod tests {
         );
         // Minimal record: only the fields resolve_effective_agent_env reads.
         let record = crate::managed_agents::types::ManagedAgentRecord {
+            session_policy: Default::default(),
             pubkey: "test-pubkey".to_string(),
             name: "test-agent".to_string(),
             role_id: None,
@@ -1493,6 +1495,7 @@ mod tests {
             runtime_pid: None,
             backend: Default::default(),
             backend_agent_id: None,
+            provider_policy_pending: false,
             provider_binary_path: None,
             team_id: None,
             persona_team_dir: None,
@@ -1535,8 +1538,6 @@ mod tests {
             Some("claude-opus-4-5")
         );
     }
-
-    // ── provider-specific model fallback tests ────────────────────────────
 
     #[test]
     fn buzz_agent_databricks_v2_with_databricks_model_but_no_buzz_agent_model_is_ready() {
@@ -1705,23 +1706,6 @@ mod tests {
             key: "OPENROUTER_API_KEY".to_string()
         }));
     }
-
-    #[test]
-    fn buzz_agent_openrouter_with_provider_model_fallback_is_ready() {
-        let env = make_env(
-            "buzz-agent",
-            env_with(&[
-                ("BUZZ_AGENT_PROVIDER", "openrouter"),
-                ("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
-                ("OPENROUTER_API_KEY", "sk-or-test-key"),
-            ]),
-        );
-        let result = agent_readiness(&env);
-        assert!(
-            result.is_ready(),
-            "OPENROUTER_MODEL fallback should satisfy model requirement"
-        );
-    }
 }
 
 // Goose file-config-aware requirement tests live in a sibling file so this
@@ -1735,3 +1719,8 @@ mod goose_file_config_tests;
 #[cfg(test)]
 #[path = "readiness_runtime_inherit_tests.rs"]
 mod runtime_inherit_tests;
+
+// OpenRouter provider/model readiness cases, same reason.
+#[cfg(test)]
+#[path = "readiness_openrouter_tests.rs"]
+mod openrouter_tests;

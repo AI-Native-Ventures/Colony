@@ -1,12 +1,35 @@
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
 import type { Cohort } from "@/features/company/contracts";
-import type { AgentPersona, AgentTeam, ChannelRole } from "@/shared/api/types";
+import type {
+  AgentPersona,
+  AgentTeam,
+  ChannelRole,
+  UserSearchResult,
+} from "@/shared/api/types";
 import { KIND_COHORT } from "@/shared/constants/kinds";
 import {
   DISCOVERY_MENTION_KINDS,
   type DiscoveryMentionKind,
 } from "./discoveryMentionRefs";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+
+export function formatSearchUserDisplayName(user: UserSearchResult) {
+  return user.displayName?.trim() || user.nip05Handle?.trim() || null;
+}
+
+export function formatSearchUserSecondaryLabel(user: UserSearchResult) {
+  const displayName = user.displayName?.trim();
+  const nip05Handle = user.nip05Handle?.trim();
+  return displayName && nip05Handle ? nip05Handle : null;
+}
+
+export function appendUniqueName(current: string[], name: string): string[] {
+  return current.some(
+    (candidate) => candidate.toLowerCase() === name.toLowerCase(),
+  )
+    ? current
+    : [...current, name];
+}
 
 export type TeamMentionMember = {
   displayName: string;

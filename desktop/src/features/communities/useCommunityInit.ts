@@ -118,7 +118,12 @@ function resetCommunityState({
 }
 
 type CommunityInitResult =
-  | { isReady: true; needsSetup: false; appliedKey: string }
+  | {
+      isReady: true;
+      needsSetup: false;
+      appliedKey: string;
+      identityPubkey: string | null;
+    }
   | {
       isReady: false;
       needsSetup: true;
@@ -327,9 +332,13 @@ export function useCommunityInit(
         // and bypass the localhost proxy.
         resetMediaCaches();
 
+        // Also the scope key for the persisted channel-head cache, handed to
+        // `CommunityQueryProvider` so it can seed heads while the app mounts.
+        let identityPubkey: string | null = null;
         try {
           const identity = await getIdentity();
           if (cancelled) return;
+          identityPubkey = identity.pubkey;
           initDraftStore(identity.pubkey, activeCommunity.relayUrl);
         } catch (err) {
           if (cancelled) return;
@@ -371,6 +380,7 @@ export function useCommunityInit(
           isReady: true,
           needsSetup: false,
           appliedKey: communityKey,
+          identityPubkey,
         });
       }
     }

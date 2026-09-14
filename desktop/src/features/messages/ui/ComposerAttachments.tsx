@@ -84,6 +84,9 @@ export function DropZoneOverlay({ className }: { className?: string }) {
 
 type ComposerAttachmentsProps = {
   attachments: ImetaMedia[];
+  /** Mirrors the composer's own disabled state onto the controls, so a send in
+   *  flight reads as disabled rather than merely ignoring clicks. */
+  disabled?: boolean;
   isUploading?: boolean;
   onCancelUpload?: (previewId: number) => void;
   /** Remove a local attachment that has not started uploading yet. */
@@ -226,6 +229,8 @@ function composerMediaStyle(): React.CSSProperties {
 }
 
 type MediaAttachmentItemProps = {
+  /** Composer disabled (a send in flight): the controls read as disabled. */
+  disabled?: boolean;
   attachment: BlobDescriptor;
   isSpoilered: boolean;
   onEditSave?: (url: string, bytes: Uint8Array) => Promise<void>;
@@ -252,6 +257,7 @@ const MediaAttachmentItem = React.forwardRef<
 >(function MediaAttachmentItem(
   {
     attachment,
+    disabled,
     isSpoilered,
     onEditSave,
     onRemove,
@@ -517,6 +523,7 @@ const MediaAttachmentItem = React.forwardRef<
             <button
               aria-label="Remove attachment"
               type="button"
+              disabled={disabled}
               onClick={() => onRemove(attachment.url)}
               className={COMPOSER_MEDIA_REMOVE_CLASS}
             >
@@ -572,6 +579,7 @@ const MediaAttachmentItem = React.forwardRef<
  */
 export const ComposerAttachments = React.memo(function ComposerAttachments({
   attachments,
+  disabled,
   isUploading = false,
   uploadingCount = 0,
   uploadingPreviews = [],
@@ -650,6 +658,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                       <button
                         aria-label="Remove attachment"
                         type="button"
+                        disabled={disabled}
                         onClick={() => onRemove(attachment.url)}
                         className={COMPOSER_MEDIA_REMOVE_CLASS}
                       >
@@ -666,6 +675,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
             return (
               <MediaAttachmentItem
                 attachment={attachment}
+                disabled={disabled}
                 isSpoilered={spoileredUrls?.has(attachment.url) ?? false}
                 // Annotated attachments keep their original URL as the key so
                 // the in-place edit/revert URL swap doesn't remount the item

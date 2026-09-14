@@ -1,4 +1,5 @@
 use super::{AgentDefinition, CatalogSource, ManagedAgentRecord};
+use crate::managed_agents::AcpSessionPolicy;
 use std::path::PathBuf;
 
 #[test]
@@ -494,6 +495,34 @@ fn managed_agent_record_without_key_deserializes_empty() {
     .expect("keyring-backed record without inline key should deserialize");
 
     assert_eq!(record.private_key_nsec, "");
+    assert!(
+        !record.provider_policy_pending,
+        "pre-pending stores must deserialize as acknowledged"
+    );
+}
+
+#[test]
+fn pending_provider_policy_round_trips() {
+    let mut record = sample_agent_record();
+    record.provider_policy_pending = true;
+
+    let json = serde_json::to_string(&record).expect("serialize pending policy");
+    let reloaded: ManagedAgentRecord = serde_json::from_str(&json).expect("reload pending policy");
+
+    assert!(reloaded.provider_policy_pending);
+}
+
+#[test]
+fn stored_record_unknown_or_null_session_policy_degrades_to_channel() {
+    for session_policy in [serde_json::json!("future"), serde_json::Value::Null] {
+        let mut value = serde_json::to_value(sample_agent_record()).expect("serialize fixture");
+        value["session_policy"] = session_policy;
+        let records: Vec<ManagedAgentRecord> = serde_json::from_value(serde_json::json!([value]))
+            .unwrap_or_else(|error| panic!("one policy must not drop the agent store: {error}"));
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].session_policy, AcpSessionPolicy::Channel);
+    }
 }
 
 fn sample_agent_record() -> ManagedAgentRecord {
@@ -524,6 +553,7 @@ fn sample_agent_record() -> ManagedAgentRecord {
 
 fn sample_persona() -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: "custom:helper".to_string(),
         role_id: Some("assistant".to_string()),
         role_title: Some("Assistant".to_string()),
@@ -762,6 +792,7 @@ fn summary_fixture(
         owner_identified: false,
         isolated: false,
         browser_generation: None,
+        session_policy: Default::default(),
         pubkey: "aa".repeat(32),
         name: "test".into(),
         persona_id: None,

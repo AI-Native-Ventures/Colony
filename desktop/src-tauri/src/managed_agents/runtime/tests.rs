@@ -4,6 +4,9 @@ use pair_placeholder::make_pair_runtime_placeholder;
 
 use crate::managed_agents::known_acp_runtime;
 
+#[path = "cli_tests.rs"]
+mod cli_tests;
+
 // ── desktop binary name tests ───────────────────────────────────────────
 
 #[test]
@@ -276,6 +279,7 @@ fn persona_with_provider(
     crate::managed_agents::AgentDefinition {
         role_id: None,
         role_title: None,
+        session_policy: Default::default(),
         id: id.to_string(),
         display_name: id.to_string(),
         avatar_url: None,
@@ -586,36 +590,6 @@ fn name_matches_interpreter_rejects_node_prefix() {
     assert!(!super::name_matches_interpreter("node_modules"));
     assert!(!super::name_matches_interpreter("nodejs"));
     assert!(!super::name_matches_interpreter("node-gyp"));
-}
-
-#[test]
-fn claude_spawn_uses_the_probed_cli_executable() {
-    let _guard = crate::managed_agents::lock_path_mutex();
-    let temp = tempfile::tempdir().expect("temp dir");
-    let cli = temp
-        .path()
-        .join(format!("claude{}", std::env::consts::EXE_SUFFIX));
-    std::fs::write(&cli, "").expect("write fake cli");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
-            .expect("make fake cli executable");
-    }
-    let original_path = std::env::var_os("PATH");
-    std::env::set_var("PATH", temp.path());
-
-    let mut command = std::process::Command::new("buzz-acp");
-    super::configure_runtime_cli(&mut command, super::known_acp_runtime("claude-agent-acp"));
-
-    if let Some(path) = original_path {
-        std::env::set_var("PATH", path);
-    } else {
-        std::env::remove_var("PATH");
-    }
-    assert!(command
-        .get_envs()
-        .any(|(key, value)| { key == "CLAUDE_CODE_EXECUTABLE" && value == Some(cli.as_os_str()) }));
 }
 
 #[test]

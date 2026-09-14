@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { AgentMentionAuthorizationError } from "../lib/agentMentionRevalidation.ts";
 import { submitMessageEdit } from "./submitMessageEdit.ts";
 
 const UNRESOLVED_USER = "b".repeat(64);
@@ -29,6 +30,7 @@ function baseOptions(
     queuedAttachments: [],
     restoreComposer: () => {},
     restoreMentionRefs: () => {},
+    revalidateMentionPubkeys: async (pubkeys) => [...pubkeys],
     setDeferredUploadPending: () => {},
     setUploadError: () => {},
     shouldRestoreComposer: () => true,
@@ -80,4 +82,70 @@ test("edit save uses edit-target refs that resolve after edit-open", async () =>
     mentionPubkeys: [],
     eventId: "event-id",
   });
+});
+
+test("edit save revalidates added mentions immediately before save", async () => {
+  const agent = "c".repeat(64);
+  const calls = [];
+  await submitMessageEdit({
+    ...baseOptions(async (_content, _tags, mentionPubkeys) => {
+      calls.push(["save", mentionPubkeys]);
+    }),
+    content: "hello @Agent",
+    originalContent: "hello",
+    extractMentionPubkeys: (content) =>
+      content.includes("@Agent") ? [agent] : [],
+    revalidateMentionPubkeys: async (pubkeys) => {
+      calls.push(["revalidate", pubkeys]);
+      throw new AgentMentionAuthorizationError();
+    },
+    restoreComposer: () => calls.push(["restore"]),
+    setUploadError: (error) => calls.push(["error", error]),
+  });
+
+  assert.deepEqual(calls, [
+    ["revalidate", [agent]],
+    ["restore"],
+    ["error", new AgentMentionAuthorizationError().message],
+  ]);
+});
+
+test("edit upload pause revalidates revoked mentions only after upload completes", async () => {
+  const agent = "d".repeat(64);
+  const calls = [];
+  let completeUpload;
+  await submitMessageEdit({
+    ...baseOptions(async (_content, _tags, mentionPubkeys) => {
+      calls.push(["save", mentionPubkeys]);
+    }),
+    content: "hello @Agent",
+    originalContent: "hello",
+    extractMentionPubkeys: (content) =>
+      content.includes("@Agent") ? [agent] : [],
+    queuedAttachments: [
+      {
+        file: new File(["image"], "image.png", { type: "image/png" }),
+        id: 1,
+        spoilered: false,
+      },
+    ],
+    enqueueUpload: ({ onComplete }) => {
+      completeUpload = () => onComplete([], new AbortController().signal);
+      return {};
+    },
+    revalidateMentionPubkeys: async (pubkeys) => {
+      calls.push(["revalidate", pubkeys]);
+      throw new AgentMentionAuthorizationError();
+    },
+    restoreComposer: () => calls.push(["restore"]),
+    setUploadError: (error) => calls.push(["error", error]),
+  });
+
+  assert.deepEqual(calls, []);
+  await completeUpload();
+  assert.deepEqual(calls, [
+    ["revalidate", [agent]],
+    ["restore"],
+    ["error", new AgentMentionAuthorizationError().message],
+  ]);
 });

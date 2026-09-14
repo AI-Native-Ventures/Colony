@@ -3,6 +3,8 @@ import type { RelayEvent } from "@/shared/api/types";
 /** Nostr filters understood by the in-memory relay fixture. */
 export type MockFilter = {
   "#a"?: string[];
+  /** Channel scope used by the per-channel project-home lookup. */
+  "#buzz-channel"?: string[];
   "#d"?: string[];
   "#e"?: string[];
   "#grant"?: string[];

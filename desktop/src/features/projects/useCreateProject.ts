@@ -11,6 +11,7 @@ import {
   isUnsupportedProjectKindError,
 } from "@/features/projects/projectCreation";
 import { buildProjectReadModels } from "@/features/projects/projectModels";
+import { markProjectDataAuthoritative } from "@/features/projects/projectSnapshot";
 import { relayClient } from "@/shared/api/relayClient";
 import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
 import { signRelayEvent } from "@/shared/api/tauri";
@@ -130,6 +131,7 @@ export function useCreateProjectMutation() {
     mutationFn: (input: CreateProjectInput) =>
       createProject(input, resumableProjectIdsRef.current),
     onSuccess: ({ project }) => {
+      markProjectDataAuthoritative(project, "local-write");
       queryClient.setQueryData<Project[]>(projectsQueryKey, (current = []) => [
         project,
         ...current.filter(

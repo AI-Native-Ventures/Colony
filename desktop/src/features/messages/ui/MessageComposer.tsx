@@ -28,7 +28,6 @@ import {
   hasMentionClipboardHtml,
   normalizeMentionClipboardHtml,
 } from "@/features/messages/lib/normalizeMentionClipboard";
-import { CUSTOM_EMOJI_NODE_NAME } from "@/features/messages/lib/customEmojiNode";
 import {
   type AutocompleteEdit,
   type LinkSelectionInfo,
@@ -61,6 +60,7 @@ import { useDraftPersistLifecycle } from "./useDraftPersistSnapshot";
 import { submitMessageEdit } from "./submitMessageEdit";
 import { useManagedComposerLinkPreviews } from "./useComposerLinkPreviews";
 import { useComposerAutoSubmit } from "./useComposerAutoSubmit";
+import { insertComposerEmoji } from "./insertComposerEmoji";
 import { useComposerReplyRecipients } from "./useComposerReplyRecipients";
 import type {
   ComposerPreEditSnapshot,
@@ -469,34 +469,10 @@ function MessageComposerImpl(props: MessageComposerProps) {
   // ── Emoji insertion ─────────────────────────────────────────────────
   const insertEmoji = React.useCallback(
     (emoji: string) => {
-      if (!richText.editor) return;
-      // A `:shortcode:` for a known custom emoji becomes a selectable atom
-      // node (same as the input rule / autocomplete), so it can be selected,
-      // copied, and deleted as one unit. Everything else (native unicode)
-      // inserts as plain content.
-      const match = /^:([^:\s]+):$/.exec(emoji);
-      const shortcode = match?.[1]?.toLowerCase();
-      const known =
-        shortcode &&
-        customEmoji.some((e) => e.shortcode.toLowerCase() === shortcode);
-      if (known && shortcode) {
-        richText.editor
-          .chain()
-          .focus()
-          .insertContent({
-            type: CUSTOM_EMOJI_NODE_NAME,
-            attrs: {
-              shortcode,
-              src:
-                customEmoji.find((e) => e.shortcode.toLowerCase() === shortcode)
-                  ?.url ?? "",
-            },
-          })
-          .insertContent(" ")
-          .run();
-      } else {
-        richText.editor.chain().focus().insertContent(emoji).run();
-      }
+      insertComposerEmoji(emoji, {
+        customEmoji,
+        editor: richText.editor,
+      });
       setIsEmojiPickerOpen(false);
       mentions.clearMentions();
     },
@@ -567,6 +543,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
           setSpoileredAttachmentUrls(draft.spoileredAttachmentUrls);
         },
         restoreMentionRefs: mentions.restoreDraftMentionRefs,
+        revalidateMentionPubkeys: mentions.revalidateMentionPubkeys,
         shouldRestoreComposer: () => canRestoreEditDraftRef.current,
         setDeferredUploadPending: setDeferredEditPending,
         setUploadError: (message) =>
@@ -659,6 +636,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     effectiveDraftKey,
     mentions.getDraftMentionRefs,
     mentions.restoreDraftMentionRefs,
+    mentions.revalidateMentionPubkeys,
   ]);
   submitMessageRef.current = submitMessage;
   useComposerAutoSubmit(

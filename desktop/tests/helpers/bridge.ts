@@ -80,6 +80,7 @@ type MockSearchProfileSeed = {
 type MockRelayAgentSeed = {
   pubkey: string;
   name: string;
+  ownerPubkey?: string | null;
   agentType?: string;
   capabilities?: string[];
   respondTo?: "owner-only" | "allowlist" | "anyone";
@@ -417,6 +418,18 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   managedAgentHeads?: MockManagedAgentHeadSeed[];
   /** Real fixture signatures for ownership-sensitive native adapter reads. */
   managedAgentHeadEvents?: RelayEvent[];
+  /** Reject successive relay-agent directory reads, then resume. */
+  relayAgentListErrors?: (string | null)[];
+  /** Pubkeys the targeted revalidation must refuse, leaving the directory read
+   *  itself healthy (#6224's send-time bound). */
+  relayAgentRevalidationRevokedPubkeys?: string[];
+  /** Marked-build switch: the directory rejects records with no verified
+   *  NIP-OA owner (#6338). */
+  ownerOnlyAccessBuild?: boolean;
+  /** Delay both managed and relay agent directory reads. */
+  /** Hold `sync_agents_to_active_huddle` open; release with
+   *  `__BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__()`. */
+  syncAgentsToActiveHuddleDelayMs?: number;
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];
@@ -474,6 +487,8 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   usersBatchDelayMs?: number;
   /** Delay (ms) for older-history fetches; see e2eBridge mock config. */
   channelWindowDelayMs?: number;
+  /** Delay (ms) for newest-page fetches; see e2eBridge mock config. */
+  channelHeadDelayMs?: number;
   profileReadDelayMs?: number;
   profileReadError?: string;
   profileUpdateError?: string;
@@ -584,6 +599,9 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
    * message — lets specs prove malformed/hash/size-mismatch error paths.
    */
   snapshotFetchError?: string;
+  /** Hold composer uploads until the spec releases them, so a send can be
+   *  interrupted between admission and publication. */
+  deferredComposerUploads?: boolean;
   uploadDescriptors?: {
     url: string;
     sha256: string;
