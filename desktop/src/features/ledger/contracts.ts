@@ -82,7 +82,7 @@ export interface PriceBook {
 
 export interface RuleAssignment {
   costCentreId: string;
-  owningTeamId: string;
+  owningTeamId: string | null;
   commercialPurpose: CommercialPurpose;
   clientOrganizationId: string | null;
   taskId: string | null;
@@ -344,7 +344,7 @@ function parseAssignment(value: unknown, label: string): RuleAssignment {
   }
   return {
     costCentreId: requireString(raw, "costCentreId", label),
-    owningTeamId: requireString(raw, "owningTeamId", label),
+    owningTeamId: optionalString(raw, "owningTeamId", label),
     commercialPurpose: purpose as CommercialPurpose,
     clientOrganizationId: optionalString(raw, "clientOrganizationId", label),
     taskId: optionalString(raw, "taskId", label),

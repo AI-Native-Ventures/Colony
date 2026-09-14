@@ -572,7 +572,7 @@ mod tests {
     ) -> RuleAssignment {
         RuleAssignment {
             cost_centre_id: centre.to_string(),
-            owning_team_id: "web-team".to_string(),
+            owning_team_id: Some("web-team".to_string()),
             commercial_purpose: purpose,
             client_organization_id: client.map(str::to_string),
             task_id: None,
@@ -583,7 +583,7 @@ mod tests {
         AgentWorkContext {
             task_id: "task-1".to_string(),
             initiative_id: None,
-            owning_team_id: "web-team".to_string(),
+            owning_team_id: Some("web-team".to_string()),
             cost_centre_id: match purpose {
                 CommercialPurpose::ClientDelivery => "web-delivery".to_string(),
                 _ => "internal-ops".to_string(),
@@ -1150,5 +1150,28 @@ mod tests {
             e,
             LedgerException::BadTimestamp { event_id, .. } if event_id == "aa"
         )));
+    }
+    #[test]
+    fn direct_work_preserves_workspace_totals_and_explicit_attribution() {
+        let (mut records, prices, rules, corrections) = fixture_set();
+        let previous = compute_ledger(records.clone(), &prices, &rules, &corrections, &[]);
+        for record in &mut records {
+            if let Some(context) = &mut record.payload.work_context {
+                context.owning_team_id = None;
+            }
+        }
+        let report = compute_ledger(records, &prices, &rules, &corrections, &[]);
+        assert_eq!(report.totals, previous.totals);
+        let direct = &report.entries[0];
+        assert_eq!(direct.attributed_by, AttributionMethod::Explicit);
+        assert_eq!(
+            direct
+                .effective_assignment
+                .as_ref()
+                .expect("assignment")
+                .owning_team_id,
+            None
+        );
+        assert_eq!(direct.cost_nanousd, Some(1_500_000));
     }
 }

@@ -102,10 +102,20 @@ export function TaskThreadContext({
   // A lookup miss is ordinary here: the teams list is scoped to the community
   // being looked at, and the task carries whatever id the relay recorded when
   // it was minted, which may predate this community's coordination record.
-  const ownerLabel = teamDisplayName(teamsQuery.data, task.owningTeamId);
+  const ownerLabel = task.owningTeamId
+    ? teamDisplayName(teamsQuery.data, task.owningTeamId)
+    : task.assigneePersonaIds
+        .map(
+          (id) =>
+            personasQuery.data?.find((persona) => persona.id === id)
+              ?.displayName ?? id,
+        )
+        .join(", ") || "Direct assignment";
   const qaLabel =
     personasQuery.data?.find((persona) => persona.id === task.qaPersonaId)
-      ?.displayName ?? task.qaPersonaId;
+      ?.displayName ??
+    task.qaPersonaId ??
+    "Owner review";
   // Null when the owning team reviews its own work, which is the common
   // case and says nothing "Accountable owner" has not already said.
   const reviewerTeamId = task.reviewerTeamId ?? null;

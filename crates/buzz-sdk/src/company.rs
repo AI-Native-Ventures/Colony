@@ -422,13 +422,13 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     require_kind(event, KIND_TASK)?;
     require_head_tag_names(
         event,
-        &["d", "team", "cost-centre"],
-        &["initiative", "client", "i", "s", "u", "w"],
+        &["d", "cost-centre"],
+        &["team", "initiative", "client", "i", "s", "u", "w"],
         &["g", "v"],
         "task head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
-    let team_tag = required_scalar_tag(event, "team")?;
+    let team_tag = optional_scalar_tag(event, "team")?;
     let initiative_tag = optional_scalar_tag(event, "initiative")?;
     let cost_centre_tag = required_scalar_tag(event, "cost-centre")?;
     let client_tag = optional_scalar_tag(event, "client")?;
@@ -439,7 +439,7 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     let task: CompanyTask = parse_canonical_content(&event.content, "task")?;
     validate_task_content(&task)?;
     ensure_matches(&task.id, coordinate, "task")?;
-    ensure_matches(&task.owning_team_id, team_tag, "task")?;
+    ensure_optional_matches(task.owning_team_id.as_deref(), team_tag, "task")?;
     ensure_optional_matches(task.initiative_id.as_deref(), initiative_tag, "task")?;
     ensure_matches(&task.cost_centre_id, cost_centre_tag, "task")?;
     ensure_optional_matches(task.client_organization_id.as_deref(), client_tag, "task")?;
@@ -464,7 +464,10 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
         .map(|tag| tag.as_slice()[1].as_str())
         .collect();
     let observed_team_mirrors: HashSet<&str> = team_mirrors.iter().copied().collect();
-    let expected_team_mirrors: HashSet<&str> = std::iter::once(task.owning_team_id.as_str())
+    let expected_team_mirrors: HashSet<&str> = task
+        .owning_team_id
+        .as_deref()
+        .into_iter()
         .chain(task.reviewer_team_id.as_deref())
         .collect();
     // Absent entirely is tolerated, the same posture the scalar mirrors
@@ -1034,8 +1037,12 @@ fn validate_task_content(task: &CompanyTask) -> Result<(), CompanySdkError> {
     validate_id(&task.id, "task")?;
     validate_optional_id(task.initiative_id.as_deref(), "task")?;
     validate_required_text(&task.title, MAX_NAME_LEN, "task")?;
-    validate_id(&task.owning_team_id, "task")?;
-    validate_id(&task.qa_persona_id, "task")?;
+    if let Some(team) = task.owning_team_id.as_deref() {
+        validate_id(team, "task")?;
+    }
+    if let Some(qa) = task.qa_persona_id.as_deref() {
+        validate_id(qa, "task")?;
+    }
     validate_optional_id(task.reviewer_team_id.as_deref(), "task")?;
     validate_id(&task.cost_centre_id, "task")?;
     validate_optional_id(task.client_organization_id.as_deref(), "task")?;
@@ -1270,9 +1277,9 @@ mod tests {
             initiative_id: Some("premium-site".to_owned()),
             title: "Build premium website".to_owned(),
             status: TaskStatus::Ready,
-            owning_team_id: "engineering-team".to_owned(),
+            owning_team_id: Some("engineering-team".to_owned()),
             assignee_persona_ids: vec!["frontend-engineer".to_owned()],
-            qa_persona_id: "cto".to_owned(),
+            qa_persona_id: Some("cto".to_owned()),
             reviewer_team_id: None,
             cost_centre_id: "web-delivery".to_owned(),
             commercial_purpose: CommercialPurpose::ClientDelivery,
@@ -1723,5 +1730,30 @@ mod tests {
         let receipt = parse_company_receipt(&conflict_without_head).expect("conflict receipt");
         assert_eq!(receipt.outcome, CompanyReceiptOutcome::Conflict);
         assert_eq!(receipt.head_event_id, None);
+    }
+
+    #[test]
+    fn direct_task_head_omits_team_and_rejects_forged_team_tags() {
+        let mut task = task_fixture();
+        task.owning_team_id = None;
+        task.qa_persona_id = None;
+        task.initiative_id = None;
+        task.client_organization_id = None;
+        let event = raw_event(
+            KIND_TASK,
+            canonical(&task),
+            &[&["d", &task.id], &["cost-centre", &task.cost_centre_id]],
+        );
+        assert_eq!(parse_task_event(&event).expect("direct task"), task);
+        let forged = raw_event(
+            KIND_TASK,
+            canonical(&task),
+            &[
+                &["d", &task.id],
+                &["cost-centre", &task.cost_centre_id],
+                &["team", "engineering-team"],
+            ],
+        );
+        assert!(parse_task_event(&forged).is_err());
     }
 }

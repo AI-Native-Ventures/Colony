@@ -153,6 +153,7 @@ const proof = {
       "onboarding-fixture/task-head.mjs",
       "onboarding-fixture/provider.mjs",
       "onboarding-fixture/scout-setup.mjs",
+      "onboarding-fixture/scout-publication.mjs",
       "onboarding-fixture/relay.mjs",
       "onboarding-fixture/proxy.mjs",
       "onboarding-fixture/certificates.mjs",

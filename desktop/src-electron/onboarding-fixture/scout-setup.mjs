@@ -5,6 +5,7 @@ import { verifyEvent } from "nostr-tools/pure";
 import { expect } from "@playwright/test";
 import { waitForSetupPublication } from "./team-recovery.mjs";
 import { FIRST_JOB_BRIEF, SCOUT_SETUP_REPLY } from "./provider.mjs";
+import { waitForScoutPublication } from "./scout-publication.mjs";
 import { waitForAnimations } from "../../tests/helpers/animations.ts";
 
 const SCOUT_ROOT_MARKER = "colony:scout-onboarding-root:v1";
@@ -442,6 +443,18 @@ export async function completeFixtureScoutSetup({
     beforeSetupCalls,
     "No setup model call occurs before owner confirmation",
   );
+  const starterAgents = await invoke(page, "list_managed_agents");
+  assert.equal(starterAgents.length, 1, "Setup starts with one Scout");
+  assert.equal(starterAgents[0].persona_id, "builtin:fizz");
+  assert.equal(starterAgents[0].relay_url, relayUrl);
+  // Initial agent sync is asynchronous. Include it before asserting that route
+  // choices and reloads publish no additional setup records.
+  await waitForScoutPublication({
+    relay,
+    host: communityHost,
+    ownerPubkey,
+    scoutPubkey: starterAgents[0].pubkey,
+  });
   const preApprovalSetupRecords = await readSetupRecords({
     page,
     invoke,
