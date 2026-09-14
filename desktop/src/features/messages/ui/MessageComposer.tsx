@@ -13,7 +13,6 @@ import {
   restoreImetaMediaDisplayLabels,
   stripImetaMediaLines,
 } from "@/features/messages/lib/imetaMediaMarkdown";
-import { useAttachmentEditing } from "@/features/messages/lib/useAttachmentEditing";
 import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import {
   cancelBackgroundMediaUploads,
@@ -21,6 +20,8 @@ import {
   takeQueuedAttachmentsForDraft,
   useBackgroundMediaUpload,
 } from "@/features/messages/lib/backgroundMediaUploadStore";
+import { useAttachmentEditing } from "@/features/messages/lib/useAttachmentEditing";
+import { isMentionCodeContext } from "@/features/messages/lib/mentionCodeContext";
 import { useMentions } from "@/features/messages/lib/useMentions";
 import { getPersistentAgentAudienceScope } from "@/features/messages/lib/persistentAgentAudience";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -174,34 +175,35 @@ function MessageComposerImpl(props: MessageComposerProps) {
     media.queuedAttachmentsRef.current.length === 0;
   const ownsDropZone = mediaController === undefined;
   const backgroundUpload = useBackgroundMediaUpload();
-  useDraftPersistLifecycle({
-    effectiveDraftKey,
-    channelId,
-    initialContent,
-    initialBlockReference,
-    loadDraft: drafts.loadDraft,
-    persistDraft: drafts.persistDraft,
-    getMentionRefs: mentions.getDraftMentionRefs,
-    restoreMentionRefs: mentions.restoreDraftMentionRefs,
-    livePendingImeta: media.pendingImeta,
-    setPendingImeta: media.setPendingImeta,
-    getQueuedAttachments: () => media.queuedAttachmentsRef.current,
-    saveQueuedAttachmentsForDraft,
-    clearQueuedAttachments: media.clearQueuedAttachments,
-    restoreQueuedAttachments: media.restoreQueuedAttachments,
-    takeQueuedAttachmentsForDraft,
-    setContent: (content) => {
-      setComposerContent(content);
-      richText.setContent(content);
-    },
-    clearContent: () => {
-      setComposerContent("");
-      richText.clearContent();
-    },
-    setSpoileredAttachmentUrls,
-    spoileredAttachmentUrlsRef,
-    syncComposerContentFromEditor,
-  });
+  const { trackAuthoredContent: trackDraftAuthoredContent } =
+    useDraftPersistLifecycle({
+      effectiveDraftKey,
+      channelId,
+      initialContent,
+      initialBlockReference,
+      loadDraft: drafts.loadDraft,
+      persistDraft: drafts.persistDraft,
+      getMentionRefs: mentions.getDraftMentionRefs,
+      restoreMentionRefs: mentions.restoreDraftMentionRefs,
+      livePendingImeta: media.pendingImeta,
+      setPendingImeta: media.setPendingImeta,
+      getQueuedAttachments: () => media.queuedAttachmentsRef.current,
+      saveQueuedAttachmentsForDraft,
+      clearQueuedAttachments: media.clearQueuedAttachments,
+      restoreQueuedAttachments: media.restoreQueuedAttachments,
+      takeQueuedAttachmentsForDraft,
+      setContent: (content) => {
+        setComposerContent(content);
+        richText.setContent(content);
+      },
+      clearContent: () => {
+        setComposerContent("");
+        richText.clearContent();
+      },
+      setSpoileredAttachmentUrls,
+      spoileredAttachmentUrlsRef,
+      syncComposerContentFromEditor,
+    });
   // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
   React.useEffect(() => {
     media.setUploadState({ status: "idle" });
@@ -277,6 +279,8 @@ function MessageComposerImpl(props: MessageComposerProps) {
     onLinkSelectionChange: (info) => onLinkSelectionChangeRef.current?.(info),
     onLinkShortcut: () => onLinkShortcutRef.current?.() ?? false,
     onUpdate: ({ cursor, linkPreviewContent, text }) => {
+      trackDraftAuthoredContent(text);
+      contentRef.current = text;
       setComposerContentFromText(text);
       trackPreviewContent(linkPreviewContent);
       updateLinkPreviewContent(linkPreviewContent);
@@ -672,7 +676,9 @@ function MessageComposerImpl(props: MessageComposerProps) {
         }
         return;
       }
-      const { handled, suggestion } = mentions.handleMentionKeyDown(event);
+      const { handled, suggestion } = mentions.handleMentionKeyDown(event, {
+        isCodeContext: () => isMentionCodeContext(richText.editor),
+      });
       if (handled) {
         if (suggestion) {
           applyMentionInsert(suggestion);
@@ -709,6 +715,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
       linkEditor.focusCardFirstControl,
       isDeferredEditPending,
       onCancelEdit,
+      richText.editor,
     ],
   );
   // ── Media paste + ⌘K link shortcut via Tiptap editorProps ──────────

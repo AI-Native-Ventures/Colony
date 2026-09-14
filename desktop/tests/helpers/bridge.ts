@@ -469,6 +469,8 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   threadCanvasSaveErrors?: string[];
   /** Delay (ms) for `apply_workspace`; see e2eBridge mock config. */
   applyCommunityDelayMs?: number;
+  /** Reject `clear_pending_navigation_deep_links` with this message. */
+  clearPendingNavigationDeepLinksError?: string;
   openDmDelayMs?: number;
   sendMessageDelayMs?: number;
   /** Close the first channel-window live REQ; its retry is accepted. */
@@ -653,6 +655,14 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
     relayUrl: string;
     code?: string | null;
     name?: string | null;
+  }>;
+  /** Pending channel/message links that arrived before AppShell mounted. */
+  pendingNavigationDeepLinks?: Array<{
+    id: string;
+    kind: "channel" | "message";
+    channelId: string;
+    messageId?: string | null;
+    threadRootId?: string | null;
   }>;
   /**
    * Global agent config returned by `get_global_agent_config`. Defaults to

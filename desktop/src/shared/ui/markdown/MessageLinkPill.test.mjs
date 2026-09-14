@@ -75,12 +75,15 @@ test("the accessible name says which channel the thread opens in", async () => {
   assert.equal(pill.getAttribute("aria-label"), "Open thread in general");
 });
 
-test("an unknown channel degrades to a generic accessible name", async () => {
+test("an unknown channel degrades to its truncated id, not a generic word", async () => {
+  // #5638 replaced the generic "channel" fallback with the channel id's first
+  // eight characters, so an unresolved link still says which channel it points
+  // at rather than reading the same for every one.
   const pill = await renderPill({
     link: { ...LINK, channelId: "missing-channel" },
     threadExcerpt: "Launch plan",
   });
-  assert.equal(pill.getAttribute("aria-label"), "Open thread in channel");
+  assert.equal(pill.getAttribute("aria-label"), "Open thread in missing-");
 });
 
 test("the title carries the full label, which the visible text may truncate", async () => {

@@ -17,6 +17,7 @@ import { resetLeadUpdateListeners } from "@/features/discovery/data/leadUpdates"
 import { resetDiscoveryMessageSource } from "@/features/messages/lib/discoveryMessageSource";
 import { resetLinkPreviewMetadataCache } from "@/shared/lib/useResolvedLinkPreviews";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
+import { resetNavigationDeepLinkDrain } from "@/shared/deep-link";
 import {
   clearAllDrafts,
   initDraftStore,
@@ -69,12 +70,13 @@ import type { Community } from "./types";
  * destroyed via effect cleanup and do not need entries here.
  * See AGENTS.md "Community Switching" for the full contract.
  */
-function resetCommunityState({
+async function resetCommunityState({
   resetAvatarState,
 }: {
   resetAvatarState: boolean;
 }): Promise<void> {
   relayClient.disconnect();
+  await resetNavigationDeepLinkDrain();
   resetRateLimitGate();
   clearAllDrafts();
   const terminalReset = resetTerminalSessions();

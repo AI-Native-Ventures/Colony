@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { npubEncode } from "nostr-tools/nip19";
 
 import { installMockBridge } from "../helpers/bridge";
 
@@ -24,7 +25,11 @@ async function openSelfProfile(page: import("@playwright/test").Page) {
   await author.click();
   const panel = page.getByTestId("user-profile-panel");
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText("deadbeef");
+  // Same rule as the Alice case below: the public key row renders through the
+  // shared <PubKey> widget, so assert the canonical npub prefix.
+  await expect(panel).toContainText(
+    npubEncode("deadbeef".repeat(8)).slice(0, 8),
+  );
 }
 
 async function openAliceProfile(page: import("@playwright/test").Page) {
@@ -37,7 +42,9 @@ async function openAliceProfile(page: import("@playwright/test").Page) {
   await aliceMessage.locator("button", { hasText: "alice" }).first().click();
   const panel = page.getByTestId("user-profile-panel");
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText(ALICE_PUBKEY.slice(0, 8));
+  // The panel's public key row renders through the shared <PubKey> widget,
+  // which displays the canonical npub form — assert the npub prefix.
+  await expect(panel).toContainText(npubEncode(ALICE_PUBKEY).slice(0, 8));
 }
 
 async function openProfileSettingsMenu(page: import("@playwright/test").Page) {

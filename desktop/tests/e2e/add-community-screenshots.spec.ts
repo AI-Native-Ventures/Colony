@@ -1,4 +1,4 @@
-import { test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
@@ -37,6 +37,12 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("community-rail-add").click();
 });
+
+// Upstream's four "identity:" cases from #7489 are not ported: they assert
+// its Builderlab account flow ("This Builderlab account uses a different
+// Buzz identity", a bound account key separate from the device key), which
+// Colony's colony_provisioning flow never shows - it provisions against the
+// signed-in device identity with the relay's advertised limits.
 
 test("capture: add-community choices", async ({ page }) => {
   const dialog = page.getByTestId("add-community-dialog");

@@ -458,6 +458,20 @@ test("coalesceAgentAutocompleteCandidates: keeps same-name agents with different
   assert.deepEqual(coalesce([first, second]), [first, second]);
 });
 
+test("coalesceAgentAutocompleteCandidates: keeps one owner's two same-name devices distinct", () => {
+  const managed = makeAgent({
+    pubkey: PUB_A,
+    ownerPubkey: OWNER_PUBKEY,
+    isManagedAgent: true,
+  });
+  const relay = makeAgent({ pubkey: PUB_B, ownerPubkey: OWNER_PUBKEY });
+
+  assert.deepEqual(
+    coalesce([managed, relay], { currentPubkey: OWNER_PUBKEY }),
+    [managed, relay],
+  );
+});
+
 test("coalesceAgentAutocompleteCandidates: keeps owner-less same-name agents distinct", () => {
   const first = makeAgent({ pubkey: PUB_A });
   const second = makeAgent({ pubkey: PUB_B });

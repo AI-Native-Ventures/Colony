@@ -19,6 +19,7 @@ type ActorMentionSuggestionCandidate = {
   avatarUrl?: string | null;
   displayName?: string | null;
   isAgent: boolean;
+  isManagedAgent?: boolean;
   isMember: boolean;
   role?: ChannelRole | null;
   roleId?: string | null;
@@ -108,6 +109,17 @@ export function mapMentionCandidateToSuggestion(opts: {
         : null) ??
       null,
     isAgent: candidate.isAgent,
+    agentProvenance:
+      candidate.kind === "identity" && candidate.isAgent
+        ? candidate.isManagedAgent
+          ? "managed-here"
+          : candidate.ownerPubkey &&
+              currentPubkey &&
+              normalizePubkey(candidate.ownerPubkey) ===
+                normalizePubkey(currentPubkey)
+            ? "managed-elsewhere"
+            : undefined
+        : undefined,
     notInChannel:
       candidate.kind !== "team" &&
       channelType !== "dm" &&

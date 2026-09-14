@@ -62,8 +62,9 @@ use colony_provisioning::*;
 pub use commands::print_agent_access_owner_only_probe_if_requested;
 use commands::*;
 use deep_link::{
-    acknowledge_pending_community_deep_link, handle_deep_link_url,
-    take_pending_community_deep_link, PendingCommunityDeepLinks,
+    acknowledge_pending_community_deep_link, acknowledge_pending_navigation_deep_link,
+    clear_pending_navigation_deep_links, handle_deep_link_url, take_pending_community_deep_link,
+    take_pending_navigation_deep_link, PendingCommunityDeepLinks, PendingNavigationDeepLinks,
 };
 use huddle::{
     add_agent_to_huddle,
@@ -241,6 +242,7 @@ pub fn run() {
         .manage(terminal_runtime::TerminalSessions::default())
         .manage(ClipboardState::new())
         .manage(PendingCommunityDeepLinks::default())
+        .manage(PendingNavigationDeepLinks::default())
         .manage(commands::pairing::PairingHandle::new())
         .manage(channel_head_cache::ChannelHeadCacheStore::default())
         .setup(move |app| {
