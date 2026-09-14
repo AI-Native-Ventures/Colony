@@ -295,6 +295,7 @@ export function ForumComposer({
       }
     },
     [
+      channelId,
       compact,
       media.pendingImetaRef,
       media.setPendingImeta,

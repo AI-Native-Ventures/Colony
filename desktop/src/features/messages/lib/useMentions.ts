@@ -436,6 +436,7 @@ export function useMentions(
     memberPubkeys,
     members,
     mentionableAgentPubkeys,
+    mentionChannelId,
     personaNameByPubkey,
     personaRoleById,
     personaRoleByPubkey,

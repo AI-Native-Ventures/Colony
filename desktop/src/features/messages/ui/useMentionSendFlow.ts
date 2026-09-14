@@ -812,6 +812,7 @@ export function useMentionSendFlow({
       getNonMemberMentionPubkeys,
       getDmThreadAgentMentionError,
       mentions.extractMentionPubkeys,
+      mentions.revalidateMentionPubkeys,
       mentions.isAgentPubkey,
       mentions.isManagedAgentPubkey,
       mentions.getDraftMentionRefs,

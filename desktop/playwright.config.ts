@@ -43,7 +43,6 @@ export default defineConfig({
       name: "smoke",
       testMatch: [
         "**/smoke.spec.ts",
-        "**/zz-probe.spec.ts",
         "**/inline-reply-model.spec.ts",
         "**/composer-dictation.spec.ts",
         "**/rich-document-previews.spec.ts",
