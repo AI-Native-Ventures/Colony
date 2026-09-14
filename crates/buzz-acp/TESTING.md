@@ -13,7 +13,7 @@ npm install -g --install-links=true 'git+https://github.com/salman1993/buzz-pi-a
 This test setup intentionally tracks `main`; the Desktop runtime catalog pins a
 reviewed adapter revision for users.
 
-Make sure `pi` and `buzz-pi-acp` are on PATH, then restart Buzz.
+Make sure `pi` and `buzz-pi-acp` are on PATH, then restart Colony.
 
 ## Tests
 

@@ -424,8 +424,8 @@ function RequirementRow({
             {configFile} is invalid:{" "}
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
               {requirement.diagnostic}
-            </code>{" "}
-            — fix the config and restart the agent
+            </code>
+            . Fix the config and restart the agent
           </span>
         </div>
       );
