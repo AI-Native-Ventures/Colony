@@ -184,6 +184,19 @@ jobs:
             SHOULD=true
           fi
 
+          # A pull request runs only the Tier A gate; the merged tree is
+          # proven by the CI run on the develop push. Canary ships only a
+          # commit whose post-merge run is green. `force` and `dry_run`
+          # bypass this on purpose and say so above.
+          if [ "$SHOULD" = "true" ] && [ "$FORCE" != "true" ] && [ "$DRY_RUN" != "true" ]; then
+            PROOF=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --event push \
+              --commit "$SHA" --json conclusion,status --jq '.[0] | "\(.status)/\(.conclusion)"' 2>/dev/null || true)
+            if [ "$PROOF" != "completed/success" ]; then
+              REASON="post-merge proof for ${SHA} is '${PROOF:-missing}', not completed/success"
+              SHOULD=false
+            fi
+          fi
+
           echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
           {
             echo "### Colony Canary"
