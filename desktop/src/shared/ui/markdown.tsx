@@ -13,7 +13,6 @@ import {
   resolveMessageLinkRenderTarget,
   type ParsedMessageLink,
 } from "@/features/messages/lib/messageLink";
-import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { invokeTauri } from "@/shared/api/tauri";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { cn } from "@/shared/lib/cn";
@@ -23,7 +22,7 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useRelayOrigin } from "@/shared/lib/useRelayOrigin";
 import { AttachmentGroup } from "@/shared/ui/attachment";
 import { ConfigNudgeCard } from "@/shared/ui/config-nudge-attachment";
-import { InlineChip } from "@/shared/ui/InlineChip";
+import { MarkdownMentionChip } from "./markdown/MarkdownMentionChip";
 import { LinkPreviewList } from "@/shared/ui/link-preview-list";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 import {
@@ -1561,50 +1560,16 @@ export function createMarkdownComponents(
       const mentionText = String(children ?? "");
       const mentionName = mentionText.replace(/^@/, "").trim().toLowerCase();
       const pubkey = mentionPubkeysByName?.[mentionName];
-      const isAgentMention =
-        pubkey !== undefined &&
-        agentMentionPubkeysByName?.[mentionName] === pubkey;
-      const mentionLabel = mentionText.replace(/^@/, "");
-      // Only chips that actually open a profile get the clickable affordance.
-      // A mention whose pubkey didn't resolve stays a plain chip — a pointer
-      // cursor there promises a click that does nothing.
-      const opensProfile = interactive && pubkey !== undefined;
-      const mentionNode = (
-        <InlineChip
-          data-mention=""
-          // The chip drops the `@` for display, so the identity it resolved is
-          // also published as inert `data-*` attributes: the timeline copy
-          // handler reads them to restore the sigil and to carry the exact
-          // pubkey into the clipboard's HTML flavor. They change neither the
-          // visuals nor the screen-reader output.
-          data-mention-kind={
-            pubkey === undefined
-              ? undefined
-              : isAgentMention
-                ? "agent"
-                : "human"
+      return (
+        <MarkdownMentionChip
+          interactive={interactive}
+          isAgentMention={
+            pubkey !== undefined &&
+            agentMentionPubkeysByName?.[mentionName] === pubkey
           }
-          data-mention-label={mentionLabel}
-          data-mention-pubkey={pubkey}
-          className={cn(isAgentMention && "agent-mention-highlight")}
-          icon={isAgentMention ? "agent" : "human"}
-          interactive={opensProfile}
-        >
-          {mentionLabel}
-        </InlineChip>
-      );
-
-      return opensProfile ? (
-        <UserProfilePopover
-          botIdenticonValue={mentionLabel}
+          mentionLabel={mentionText.replace(/^@/, "")}
           pubkey={pubkey}
-          role={isAgentMention ? "bot" : undefined}
-          triggerElement="span"
-        >
-          {mentionNode}
-        </UserProfilePopover>
-      ) : (
-        mentionNode
+        />
       );
     },
     emoji: ({ src, alt }: { src?: string; alt?: string }) => {
