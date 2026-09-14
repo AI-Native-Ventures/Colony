@@ -18,6 +18,9 @@ import {
 import { useLinkEditor } from "@/features/messages/lib/useLinkEditor";
 import { DropZoneOverlay } from "@/features/messages/ui/ComposerAttachments";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
+import { toast } from "sonner";
+
+import { AgentMentionAuthorizationError } from "@/features/messages/lib/agentMentionRevalidation";
 import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerToolbar";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/cn";
@@ -238,9 +241,7 @@ export function ForumComposer({
       channelLinks.clearChannels();
       setIsEmojiPickerOpen(false);
       try {
-        const pubkeys = await mentions.revalidateMentionPubkeys(
-          mentions.extractMentionPubkeys(trimmed),
-        );
+        const mentionPubkeys = mentions.extractMentionPubkeys(trimmed);
 
         // Reuse the shared send-path builder so forum/notes posts emit the same
         // body + imeta as chat: generic files become `[filename](url)` links with a
@@ -264,18 +265,30 @@ export function ForumComposer({
         setIsEmojiPickerOpen(false);
 
         try {
+          // Immediately before publication, not merely before composing: a
+          // mention revoked while the post was being assembled must fail the
+          // submit rather than ride it (#5681, #6224).
+          const pubkeys = await mentions.revalidateMentionPubkeys(
+            mentionPubkeys,
+            channelId,
+          );
           await submitter(finalContent, pubkeys, mediaTags);
           setSubmitMode("primary");
           if (compact) setIsCompactExpanded(false);
-        } catch {
+        } catch (error) {
           setContent(savedContent);
           contentRef.current = savedContent;
           richText.setContent(savedContent);
           media.setPendingImeta(savedImeta);
           if (compact) setIsCompactExpanded(true);
+          // An authorization failure says so; the submitter reports its own
+          // errors on its own surface.
+          if (error instanceof AgentMentionAuthorizationError) {
+            toast.error(error.message);
+          }
         }
       } catch {
-        // Keep the draft intact when authorization refresh fails.
+        // Keep the draft intact when mention extraction fails.
       } finally {
         isSubmissionPendingRef.current = false;
         setIsSubmissionPending(false);

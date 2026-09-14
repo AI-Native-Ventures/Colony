@@ -62,6 +62,7 @@ export function ForumComposerMediaStatus({
         <div className="mb-2 flex items-center gap-2">
           <ComposerAttachments
             attachments={media.pendingImeta}
+            disabled={disabled}
             isUploading={media.isUploading}
             onCancelUpload={guard(media.cancelUpload)}
             onEditSave={handleEditSave}
