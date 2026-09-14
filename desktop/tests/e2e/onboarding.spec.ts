@@ -2237,10 +2237,12 @@ test("first-run onboarding posts the live Chief of Staff kickoff", async ({
   await completeProfileOnboarding(page);
 
   await expectPrivateWelcomeLanding(page);
-  // Greeted by the name typed above — the @mention pill also files the opener
-  // into the new user's Inbox mentions feed.
+  // Greeted by the name typed above — the mention chip also files the opener
+  // into the new user's Inbox mentions feed. The rendered chip hides the `@`
+  // (#5638's `mention-prefix-hidden`), so the timeline text has no sigil even
+  // though the message body still carries one.
   await expect(page.getByTestId("message-timeline")).toContainText(
-    `Hi @Morty QA, I'm ${GUIDE_NAME}, your Chief of Staff.`,
+    `Hi Morty QA, I'm ${GUIDE_NAME}, your Chief of Staff.`,
   );
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Send me the company website.",
@@ -2264,7 +2266,7 @@ test("first-run onboarding lands before Welcome team bootstrap completes", async
   await expectPrivateWelcomeLanding(page);
   await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
   await expect(page.getByTestId("message-timeline")).toContainText(
-    `Hi @Morty QA, I'm ${GUIDE_NAME}, your Chief of Staff.`,
+    `Hi Morty QA, I'm ${GUIDE_NAME}, your Chief of Staff.`,
   );
   await page.waitForTimeout(1_500);
   expect(await commandCount(page, "create_managed_agent")).toBe(1);

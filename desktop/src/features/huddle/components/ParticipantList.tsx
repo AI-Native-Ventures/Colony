@@ -459,6 +459,11 @@ function ParticipantAvatar({
     >
       <ProfileAvatar
         avatarUrl={participant.avatarUrl}
+        // `displayName` is the visible "Participant npub1…" fallback, whose
+        // word initials collapse every unnamed participant onto "PN". The
+        // initials come from the authored name or the compact key instead
+        // (#7495); Colony's prop for that is `identitySeed`.
+        identitySeed={participant.initialsLabel}
         label={participant.displayName}
         className="h-full w-full rounded-full border-2 border-black text-2xs"
       />
