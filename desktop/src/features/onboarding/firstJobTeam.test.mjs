@@ -120,6 +120,37 @@ function fixture() {
   };
 }
 
+test("the provisioned Chief of Staff is the scout, and the built-in one is not", async () => {
+  const PROVISIONED = "e".repeat(64);
+  const f = fixture();
+  // The community has both: Colony's provisioned employee and the legacy
+  // desktop-builtin instance. Exactly the duplicate the roster was showing.
+  const chief = agent(PROVISIONED, null);
+  chief.provisioned = "chief-of-staff";
+  f.data.agents.push(chief);
+  f.data.members.push({ pubkey: PROVISIONED, isAgent: true, role: "bot" });
+
+  assert.deepEqual(await f.adapter.ensureFirstJobTeam(SCOPE), {
+    scoutPubkey: PROVISIONED,
+    workerPubkey: WORKER,
+  });
+});
+
+test("the built-in Chief of Staff is still the scout where Colony provisions none", async () => {
+  const f = fixture();
+  assert.deepEqual(await f.adapter.ensureFirstJobTeam(SCOPE), TEAM);
+});
+
+test("a provisioned employee that is not in the channel is not the scout", async () => {
+  const f = fixture();
+  const chief = agent("e".repeat(64), null);
+  chief.provisioned = "chief-of-staff";
+  // Deliberately NOT added to `members`: an employee nobody put in the
+  // channel cannot run the owner's first job there.
+  f.data.agents.push(chief);
+  assert.deepEqual(await f.adapter.ensureFirstJobTeam(SCOPE), TEAM);
+});
+
 test("selects a signed, existing pair deterministically without changing its reporting line", async () => {
   const f = fixture();
   const before = structuredClone(f.data);

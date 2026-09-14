@@ -14,7 +14,10 @@
 //! first started, which is most of the first-run surface.
 
 use crate::{
-    managed_agents::ManagedAgentRecord,
+    managed_agents::{
+        coordination_team_id_for_relay, is_coordination_team_id, ManagedAgentRecord,
+        WELCOME_TEAM_ID,
+    },
     relay::{agent_belongs_to_workspace, agent_boundary::canonical},
 };
 
@@ -89,22 +92,31 @@ pub(in crate::commands) fn definition_in_workspace(
 /// longer in your agents". They were not gone; they were scoped out by the
 /// rule above while the team itself was not.
 ///
-/// Teams now carry a pin, and it is checked FIRST, ahead of the built-in
-/// exemption. A team named after another community is not this community's
-/// to show whatever else is true of it, and per-relay coordination teams are
-/// both built in and pinned: exempting built-ins before reading the pin would
-/// put every community's coordination team on every community's list, which
-/// is the device-wide record this change exists to retire wearing a different
-/// id.
+/// A coordination team is scoped by the relay its own id names: this
+/// community's lists, every other community's does not. That is what the
+/// thirteen leaked "Company Coordination" records were, and the id is a more
+/// honest pin than the stored flag.
 ///
-/// An absent pin means unpinned, which belongs to every community, exactly as
-/// every team behaved before the pin existed.
+/// It stays in the list rather than being dropped here because this list is
+/// not only the Agents page: mentions, the new-task dialog, the task thread,
+/// the add-bot dialog and the launch dialog all resolve a Task's owning team
+/// through it, and the relay's `company_broker::load_team_refs` will not
+/// accept an `owningTeamId` it cannot resolve. Hiding it from the cards is
+/// the Agents page's own job.
+///
+/// Every other built-in is plumbing too, so built-ins list by exception: the
+/// Welcome Team and nothing else.
+///
+/// A user team is scoped by its pin. An absent pin means unpinned, which
+/// belongs to every community, exactly as every team behaved before the pin
+/// existed.
 ///
 /// After the pin, a team lists unless one of its members is a definition that
-/// exists but lives only in another community. Built-in teams always list. A
-/// member that exists nowhere is a real gap, so the team stays visible and
-/// the card's warning is for once telling the truth.
+/// exists but lives only in another community. A member that exists nowhere
+/// is a real gap, so the team stays visible and the card's warning is for
+/// once telling the truth.
 pub(in crate::commands) fn team_in_workspace(
+    team_id: &str,
     member_ids: &[String],
     is_builtin: bool,
     team_relay_pin: Option<&str>,
@@ -112,13 +124,18 @@ pub(in crate::commands) fn team_in_workspace(
     agents: &[AgentRow<'_>],
     workspace_relay: &str,
 ) -> bool {
+    // By id, not by the stored flag: the flag arrives from a file other
+    // clients have rewritten, and a coordination team is one whatever it says.
+    if is_coordination_team_id(team_id) {
+        return coordination_team_id_for_relay(workspace_relay).is_some_and(|here| here == team_id);
+    }
+    if is_builtin {
+        return team_id == WELCOME_TEAM_ID;
+    }
     if let Some(pin) = team_relay_pin {
         if canonical(pin) != canonical(workspace_relay) {
             return false;
         }
-    }
-    if is_builtin {
-        return true;
     }
     member_ids.iter().all(|member| {
         match definitions.iter().find(|(id, _)| *id == member.as_str()) {
@@ -131,6 +148,7 @@ pub(in crate::commands) fn team_in_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::managed_agents::coordination_team_id_for_relay;
 
     const HERE: &str = "wss://colony.colony.ainative.ventures";
     const ELSEWHERE: &str = "wss://horizon.colony.ainative.ventures";
@@ -212,6 +230,7 @@ mod tests {
         ];
         let defs = [("emelia", false), ("jake", false)];
         assert!(!team_in_workspace(
+            "team-1",
             &members(&["emelia", "jake"]),
             false,
             None,
@@ -231,6 +250,7 @@ mod tests {
         ];
         let defs = [("weaver", false), ("jake", false)];
         assert!(!team_in_workspace(
+            "team-1",
             &members(&["weaver", "jake"]),
             false,
             None,
@@ -245,6 +265,7 @@ mod tests {
         let rows = vec![definition_row("weaver"), agent("weaver", HERE)];
         let defs = [("weaver", false)];
         assert!(team_in_workspace(
+            "team-1",
             &members(&["weaver"]),
             false,
             None,
@@ -259,6 +280,7 @@ mod tests {
         let rows = vec![definition_row("weaver"), agent("weaver", HERE)];
         let defs = [("weaver", false)];
         assert!(team_in_workspace(
+            "team-1",
             &members(&["weaver", "gone"]),
             false,
             None,
@@ -273,6 +295,7 @@ mod tests {
         let rows = vec![definition_row("draft")];
         let defs = [("draft", false)];
         assert!(team_in_workspace(
+            "team-1",
             &members(&["draft"]),
             false,
             None,
@@ -282,33 +305,15 @@ mod tests {
         ));
     }
 
-    /// Built-in and unpinned: the Welcome team, which ships in code for every
-    /// community and names none of them.
+    /// A user team pinned to another community is not this one's to show.
     #[test]
-    fn an_unpinned_builtin_team_always_lists() {
-        let rows = vec![definition_row("jake"), agent("jake", ELSEWHERE)];
-        let defs = [("jake", false)];
-        assert!(team_in_workspace(
-            &members(&["jake"]),
-            true,
-            None,
-            &defs,
-            &rows,
-            HERE
-        ));
-    }
-
-    /// The per-relay coordination team is built in AND pinned, so the pin has
-    /// to be read before the built-in exemption. Otherwise every community's
-    /// coordination team lists on every community, which is the device-wide
-    /// record this change retires, only now once per community.
-    #[test]
-    fn a_builtin_team_pinned_elsewhere_is_hidden() {
+    fn a_user_team_pinned_elsewhere_is_hidden() {
         let rows = vec![definition_row("jake"), agent("jake", HERE)];
         let defs = [("jake", false)];
         assert!(!team_in_workspace(
+            "team-1",
             &members(&["jake"]),
-            true,
+            false,
             Some(ELSEWHERE),
             &defs,
             &rows,
@@ -323,9 +328,100 @@ mod tests {
         let rows = vec![definition_row("jake"), agent("jake", HERE)];
         let defs = [("jake", false)];
         assert!(team_in_workspace(
+            "team-1",
+            &members(&["jake"]),
+            false,
+            Some(&format!("{HERE}/")),
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    /// The Welcome Team ships in code for every community and names none of
+    /// them, and it is the one built-in a person is meant to see.
+    #[test]
+    fn the_welcome_team_lists() {
+        let rows = vec![definition_row("jake"), agent("jake", ELSEWHERE)];
+        let defs = [("jake", false)];
+        assert!(team_in_workspace(
+            WELCOME_TEAM_ID,
             &members(&["jake"]),
             true,
-            Some(&format!("{HERE}/")),
+            None,
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    /// Any other built-in is plumbing, so it lists nowhere even unpinned.
+    #[test]
+    fn another_builtin_team_does_not_list() {
+        let rows = vec![definition_row("jake"), agent("jake", HERE)];
+        let defs = [("jake", false)];
+        assert!(!team_in_workspace(
+            "builtin-team:fizz",
+            &members(&["jake"]),
+            true,
+            None,
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    /// The coordination team for THIS community lists. Mentions, the new-task
+    /// dialog, the task thread and both deploy dialogs resolve a Task's owning
+    /// team out of this list, so dropping it here breaks the first job a
+    /// community ever runs. The Agents page hides it on its own side.
+    #[test]
+    fn this_communitys_coordination_team_lists() {
+        let id = coordination_team_id_for_relay(HERE).expect("a non-blank relay mints an id");
+        let rows = vec![definition_row("builtin:fizz")];
+        let defs = [("builtin:fizz", true)];
+        assert!(team_in_workspace(
+            &id,
+            &members(&["builtin:fizz"]),
+            true,
+            Some(HERE),
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    /// And the same record with the built-in flag rewritten to false, which
+    /// is how thirteen of them reached one Agents page. The id is the pin, so
+    /// this one is still ours.
+    #[test]
+    fn a_coordination_record_stored_as_user_owned_still_lists() {
+        let id = coordination_team_id_for_relay(HERE).expect("a non-blank relay mints an id");
+        let rows = vec![definition_row("builtin:fizz")];
+        let defs = [("builtin:fizz", true)];
+        assert!(team_in_workspace(
+            &id,
+            &members(&["builtin:fizz"]),
+            false,
+            Some(HERE),
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    /// Another community's coordination record stays out, whatever its stored
+    /// flag or pin says. Twelve of the thirteen leaked cards were these.
+    #[test]
+    fn another_communitys_coordination_team_stays_hidden() {
+        let id = coordination_team_id_for_relay(ELSEWHERE).expect("a non-blank relay mints an id");
+        let rows = vec![definition_row("builtin:fizz")];
+        let defs = [("builtin:fizz", true)];
+        assert!(!team_in_workspace(
+            &id,
+            &members(&["builtin:fizz"]),
+            true,
+            Some(HERE),
             &defs,
             &rows,
             HERE
