@@ -109,6 +109,37 @@ pub(crate) fn is_coordination_team_id(id: &str) -> bool {
         .is_some_and(|before_slug| before_slug.ends_with(':'))
 }
 
+/// Restore `is_builtin` on every stored coordination record, whatever the
+/// stored flag says. Returns whether any record changed.
+///
+/// A coordination team is infrastructure, not a team a user assembled: the
+/// relay's `company_broker::load_team_refs` resolves a Task's `owningTeamId`
+/// against its published `KIND_TEAM` head, and `built_in_team_order` exempts
+/// the whole class from demotion precisely because these records are seeded
+/// per community rather than listed in `BUILT_IN_TEAMS`. The flag is what
+/// every other rule reads to tell the two apart.
+///
+/// The flag can still arrive false: another client sharing this data
+/// directory rewrote `teams.json` with its own team repair on 2026-09-13, and
+/// with the flag false `team_publishes_to_relay` took the user-team branch and
+/// published all thirteen of this device's coordination heads into whichever
+/// community happened to be open. Trusting the stored flag is therefore not
+/// safe; the id is the authority.
+///
+/// Runs on every load, so a rewritten store heals itself and persists on the
+/// next save rather than needing a one-shot migration.
+pub(crate) fn promote_coordination_teams(stored: &mut [TeamRecord], now: &str) -> bool {
+    let mut changed = false;
+    for team in stored.iter_mut() {
+        if !team.is_builtin && is_coordination_team_id(&team.id) {
+            team.is_builtin = true;
+            team.updated_at = now.to_string();
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Whether `team` is in scope for the community reachable at `relay_url`.
 ///
 /// An unpinned team belongs to every community, which is exactly how every
@@ -147,39 +178,46 @@ fn team_pinned_to_relay(team: &TeamRecord, canonical_relay: &str) -> bool {
 /// company: it is every company the device knows. Publishing all of it puts
 /// one community's teams on another community's relay.
 ///
-/// Two rules, and the second is the stricter one.
+/// Three rules, and the coordination one is decided first.
+///
+/// A coordination team publishes into exactly one community: the one its own
+/// id names. The id carries the relay discriminator, so it answers the
+/// question without consulting the pin or the stored built-in flag, neither of
+/// which is trustworthy. A client sharing this data directory rewrote both, and
+/// with `is_builtin` false the user-team branch below published all thirteen
+/// of this device's coordination heads into whichever relay was open. The
+/// discriminator cannot be rewritten without becoming a different team.
+///
+/// The pre-migration device-wide id carries no discriminator, so it matches no
+/// relay and publishes nowhere. Republishing it would rebuild the
+/// one-record-for-all-communities shape this change retires. Events already on
+/// the wire under it stay resolvable on each relay regardless, so Tasks minted
+/// against it keep validating.
+///
+/// Publishing this one team at all is the exception the relay depends on:
+/// `company_broker::load_team_refs` validates a Task's `owningTeamId` against
+/// the owner's published `KIND_TEAM` events, so leaving it unpublished lets
+/// `attach_thread_task` mint a Task the relay then refuses with "missing
+/// reference in task.owningTeamId".
+///
+/// Every other built-in ships in code, so devices carry it already and no
+/// relay ever has to resolve it.
 ///
 /// A user-owned team publishes wherever it applies: to its own community when
 /// pinned, and to every community when it carries no pin, which is exactly
 /// how every team behaved before the pin existed.
-///
-/// A built-in publishes only when it is a coordination team pinned to THIS
-/// relay. Every other built-in ships in code, so devices carry it already and
-/// no relay ever has to resolve it. The coordination team is the exception
-/// the relay itself depends on: `company_broker::load_team_refs` validates a
-/// Task's `owningTeamId` against the owner's published `KIND_TEAM` events, so
-/// leaving it unpublished lets `attach_thread_task` mint a Task the relay then
-/// refuses with "missing reference in task.owningTeamId".
-///
-/// That exception demands a real pin rather than mere compatibility. An
-/// unpinned coordination team is the pre-migration device-wide record, which
-/// survives a load whenever [`split_legacy_coordination_team`] found no relay
-/// pin to split it by. Publishing it here would put one record on every
-/// community's relay again, which is the shape this change exists to retire.
-/// Events already published under its id stay on each relay regardless, so
-/// Tasks minted against it keep resolving.
 pub(crate) fn team_publishes_to_relay(team: &TeamRecord, relay_url: &str) -> bool {
-    // Provisioned teams are ours to publish wherever they apply: the relay
-    // authorizes tasks against the owner's published team heads, so a
-    // provided team that stayed local could not own any work.
+    if is_coordination_team_id(&team.id) {
+        return coordination_team_id_for_relay(relay_url).is_some_and(|id| id == team.id);
+    }
+    // Provisioned teams must publish to their own relay so they can own tasks.
     if team.provisioned.is_some() {
         return team_applies_to_relay(team, relay_url);
     }
-    if !team.is_builtin {
-        return team_applies_to_relay(team, relay_url);
+    if team.is_builtin {
+        return false;
     }
-    is_coordination_team_id(&team.id)
-        && team_pinned_to_relay(team, &crate::relay::agent_boundary::canonical(relay_url))
+    team_applies_to_relay(team, relay_url)
 }
 
 /// Whether `team` satisfies what `owning_team_for_chat`'s fallback and

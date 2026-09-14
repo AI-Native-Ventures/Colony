@@ -123,6 +123,16 @@ pub(super) async fn update_persona_with<R: Send + 'static>(
             // Track what changed so we can propagate to linked agent records.
             let avatar_changed = persona.avatar_url != avatar_url;
             let name_changed = persona.display_name != display_name;
+            // Renaming INTO the Chief of Staff's name is refused; a definition
+            // that already carries it (the Rust-seeded built-in Chief of Staff)
+            // can still be saved, or every other edit to it would be blocked by
+            // its own name.
+            if name_changed {
+                crate::managed_agents::provisioned::refuse_reserved_chief_name(
+                    &display_name,
+                    false,
+                )?;
+            }
             let old_display_name = persona.display_name.clone();
 
             persona.display_name = display_name;

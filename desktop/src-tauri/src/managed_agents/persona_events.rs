@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 
-use buzz_core_pkg::kind::{event_is_shared, KIND_PERSONA};
+use buzz_core_pkg::kind::{event_is_shared, KIND_MANAGED_AGENT, KIND_PERSONA};
 use nostr::{EventBuilder, Kind, Tag};
 use serde::{Deserialize, Serialize};
 
@@ -299,6 +299,25 @@ pub async fn flush_active_pending_events(
     .await
 }
 
+/// Whether a pending kind `KIND_MANAGED_AGENT` row must be held back from a
+/// sweep publishing to `relay_url`.
+///
+/// True only when a local record with that agent pubkey exists, carries a
+/// non-blank pin, and that pin names a different community. A record the local
+/// store does not know about, and one with a blank pin, publish as before: the
+/// belt only stops a head whose own community is provably not this one.
+pub(crate) fn flush_row_pinned_elsewhere(
+    records: &[ManagedAgentRecord],
+    d_tag: &str,
+    relay_url: &str,
+) -> bool {
+    let Some(record) = records.iter().find(|record| record.pubkey == d_tag) else {
+        return false;
+    };
+    let pinned = record.relay_url.trim();
+    !pinned.is_empty() && !crate::managed_agents::reconcile::same_relay_community(pinned, relay_url)
+}
+
 async fn flush_pending_events_at(
     db_path: &std::path::Path,
     state: &AppState,
@@ -318,6 +337,18 @@ async fn flush_pending_events_at(
         let conn = open_retention_db(db_path)?;
         get_pending_sync(&conn)?
     }; // connection dropped before any .await
+
+    // Belt: for kind KIND_MANAGED_AGENT, skip any retained row whose local record is
+    // pinned to a different relay; the boot reconcile may have retained it
+    // before the scope fix, and the flush must not publish foreign heads
+    // into the active relay.
+    let store_path =
+        app.and_then(|a| crate::managed_agents::storage::managed_agents_store_path(a).ok());
+    let pinned_records: Option<Vec<ManagedAgentRecord>> = store_path.as_ref().and_then(|p| {
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|content| serde_json::from_str::<Vec<ManagedAgentRecord>>(&content).ok())
+    });
 
     let mut flushed = 0u32;
     let mut failed_tombstones: std::collections::HashSet<(String, String)> =
@@ -340,6 +371,25 @@ async fn flush_pending_events_at(
         };
         if current.created_at != row.created_at || current.content != row.content {
             continue; // superseded by a newer edit; that row publishes itself
+        }
+
+        // Belt: a kind KIND_MANAGED_AGENT row whose local record is pinned to a different
+        // relay must not be published into this sweep's relay.
+        if current.kind == KIND_MANAGED_AGENT {
+            if let Some(ref records) = pinned_records {
+                if flush_row_pinned_elsewhere(records, &current.d_tag, relay_url) {
+                    let pinned_relay = records
+                        .iter()
+                        .find(|record| record.pubkey == current.d_tag)
+                        .map(|record| record.relay_url.trim())
+                        .unwrap_or_default();
+                    eprintln!(
+                        "buzz-desktop: event-flush: skipped kind {KIND_MANAGED_AGENT} row pinned elsewhere: d_tag={} pinned_relay={pinned_relay}",
+                        current.d_tag
+                    );
+                    continue; // skip, do not delete, leave pending
+                }
+            }
         }
 
         let event = nostr::Event::from_json(&current.raw_event)

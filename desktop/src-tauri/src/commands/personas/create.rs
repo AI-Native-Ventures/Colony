@@ -47,6 +47,10 @@ pub(crate) async fn create_persona_with_preparation(
         let state = app.state::<AppState>();
         let _identity = preparation.as_ref().map(|p| p.lock(&state)).transpose()?;
         let display_name = trim_required(&input.display_name, "Display name")?;
+        // The built-in Chief of Staff definition is Rust-seeded, never created
+        // through this command, so nothing legitimate arrives here asking to
+        // be called Scout.
+        crate::managed_agents::provisioned::refuse_reserved_chief_name(&display_name, false)?;
         let (role_id, role_title) = normalize_persona_role(input.role_id, input.role_title)?;
         // System prompt optional: core memory is auto-injected. Empty is valid.
         let system_prompt = input.system_prompt.trim().to_string();

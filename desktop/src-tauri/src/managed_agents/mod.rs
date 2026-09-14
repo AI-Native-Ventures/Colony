@@ -48,6 +48,7 @@ mod runtime_types;
 pub(crate) mod snapshot_avatar;
 pub(crate) mod spawn_snapshot;
 pub(crate) mod storage;
+pub(crate) mod supersede;
 pub(crate) mod team_events;
 mod team_repair;
 mod teams;

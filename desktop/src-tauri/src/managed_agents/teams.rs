@@ -44,8 +44,15 @@ pub(super) struct BuiltInTeam {
 // alone. Their persona definitions are untouched, and an install that already
 // stored the three-member team keeps it, because merge_teams only seeds a
 // built-in team that is missing and never rewrites one that is already there.
+/// The one built-in team a person is meant to see.
+///
+/// Named rather than repeated as a literal because the Agents page now lists
+/// built-in teams by exception: this id and nothing else. Every other
+/// built-in, coordination teams included, is plumbing.
+pub(crate) const WELCOME_TEAM_ID: &str = "builtin-team:welcome";
+
 pub(super) const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
-    id: "builtin-team:welcome",
+    id: WELCOME_TEAM_ID,
     name: "Welcome Team",
     description: Some("Your Chief of Staff, ready to help you plan, create, and ship."),
     persona_ids: &["builtin:fizz"],
@@ -57,7 +64,8 @@ pub(super) const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
 // one, so callers keep reaching those names through `crate::managed_agents`
 // exactly as before the split.
 use crate::managed_agents::coordination::{
-    is_coordination_team_id, retire_per_relay_defaults, split_legacy_coordination_team,
+    is_coordination_team_id, promote_coordination_teams, retire_per_relay_defaults,
+    split_legacy_coordination_team,
 };
 
 // Built-in teams that have been retired. A stored copy that still exactly
@@ -129,6 +137,11 @@ pub(super) fn merge_teams(
 ) -> (Vec<TeamRecord>, bool) {
     let (mut records, mut changed) =
         merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now);
+    // Before anything reads `is_builtin`: a coordination record is built in by
+    // its id, and `retire_per_relay_defaults` below would otherwise read one
+    // whose flag was rewritten to false as a blueprint team that supersedes
+    // this community's own.
+    changed |= promote_coordination_teams(&mut records, now);
     // Split before retiring, and run both unconditionally rather than
     // short-circuiting: the split can be what makes a per-relay default
     // retirable in the same pass, and neither call is a no-op the other

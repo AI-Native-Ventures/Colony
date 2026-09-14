@@ -66,6 +66,7 @@ fn goose_runtime() -> &'static KnownAcpRuntime {
 
 fn agent_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        superseded_by: None,
         provisioned: None,
         provisioned_version: None,
         provisioned_requires_commands: Vec::new(),

@@ -158,7 +158,7 @@ fn record_belongs_to_active_relay(record: &ManagedAgentRecord, active_relay: &st
 /// schemes in practice, and treating them as different communities would drop
 /// an agent from its own roster. An unparseable side falls back to a trimmed,
 /// lowercased verbatim form, which fails closed against a parseable one.
-fn same_relay_community(a: &str, b: &str) -> bool {
+pub(crate) fn same_relay_community(a: &str, b: &str) -> bool {
     fn authority(url: &str) -> String {
         match buzz_core_pkg::relay::normalize_relay_url(url) {
             Ok(canonical) => canonical
@@ -261,7 +261,15 @@ pub(crate) fn retain_managed_agent_pending(
     record: &ManagedAgentRecord,
 ) {
     let result = (|| -> Result<(), String> {
-        let scope = crate::managed_agents::retention::active_retention_scope(app, state)?;
+        let Some(scope) =
+            crate::managed_agents::retention::retention_scope_for_record(app, state, record)?
+        else {
+            eprintln!(
+                "buzz-desktop: agent-retain: skipped unpinned record {}",
+                record.pubkey
+            );
+            return Ok(());
+        };
         let conn = open_retention_db(&scope.db_path)?;
         // Shared engine with the boot-time reconcile: projection content diff
         // (no republish for runtime-only churn) + monotonic created_at bump
