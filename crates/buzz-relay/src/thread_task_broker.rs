@@ -39,7 +39,7 @@ use buzz_core::tenant::TenantContext;
 
 use crate::{
     company_broker::{
-        build_head, build_receipt, emit_task_transition, load_company, load_head, refuse,
+        build_head, build_receipt, emit_task_transition, load_company, load_head, load_team_refs, refuse,
         CompanyBrokerOutcome,
     },
     handlers::event::dispatch_persistent_event,
@@ -762,7 +762,7 @@ pub(crate) async fn reconcile_website_task(
             replacement.assignee_persona_ids.push(persona.clone());
         }
     }
-    replacement.qa_persona_id = qa_persona.to_owned();
+    replacement.qa_persona_id = Some(qa_persona.to_owned());
     let reopening = reopen && replacement.status == TaskStatus::Completed;
     if reopen && replacement.status == TaskStatus::Cancelled {
         return Err(
