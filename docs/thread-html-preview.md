@@ -29,4 +29,13 @@ Only the verified core artifact manifest opts into this renderer. Older artifact
 
 The preview is static HTML/CSS. A blank iframe sandbox, restrictive child CSP and element/attribute allowlists disable scripts, forms, navigation, external assets and network calls. Desktop/mobile controls change the viewport; Expand opens the preview in a dialog. This is a layout review, not a functional form or JavaScript application test. Reopening renders saved data without asking an agent to rebuild it.
 
-GitHub checks cover sanitizer behavior and backwards compatibility. Browser rendering, persisted relay invocation, revision feedback and reopen verification remain required proof before calling this complete. Full commercial website creation is a separate hours-long pilot, never a recurring CI requirement.
+GitHub run [34859212549](https://github.com/AI-Native-Ventures/Colony/actions/runs/34859212549) passed sanitizer behavior, backwards compatibility, TypeScript, browser rendering, a second revision in the thread, and closing/reopening the thread with both versions visible. These browser checks use the mock native/relay bridge and signed fixture events; they do not prove relay persistence or agent execution. Real CLI invocation and desktop reopening against a real relay remain required before calling this complete. Full commercial website creation is a separate hours-long pilot, never a recurring CI requirement.
+
+
+## Next acceptance gate: real agent integration
+
+Use an existing authorized test community and thread with the updated core artifact manifest and desktop renderer. First inspect `buzz blocks describe --handle artifact`; if `preview_html` is absent, the relay has not adopted the manifest and this gate cannot run against that deployment yet.
+
+Have the existing agent publish a small static artifact through `buzz blocks invoke`, using its real uploaded source URL. Record the returned event ID and open that exact thread in the desktop. Request a heading change in the same thread, retain the first artifact and publish a second with its predecessor event ID. Close and reopen the thread, then restart the client and reopen it to distinguish in-memory rendering from relay persistence. Verify both versions and the changed heading. Record the actual app build and relay deployment alongside the two event IDs.
+
+No paid model call is part of CI. This gate is a separate supervised runtime exercise; it must not silently reuse the cancelled PR 691 paid proof workflow. Passing it still does not prove the full approved Website Manager workflow or a commercial website rebuild.

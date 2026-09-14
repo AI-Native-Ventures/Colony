@@ -133,15 +133,19 @@ test("saved HTML artifact renders and expands with a contained mobile preview", 
   const panel = page.getByTestId("message-thread-panel");
   await panel.getByRole("button", { name: "Close panel", exact: true }).click();
   await expect(panel).toHaveCount(0);
-  await summary.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await summary.evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
   await waitForAnimations(page);
   await summary.click();
   await expect(panel).toBeVisible();
   await expect(panel.getByText("Version 1", { exact: true })).toBeVisible();
   await expect(panel.getByText("Version 2", { exact: true })).toBeVisible();
   await expect(
-    panel.locator('section[aria-label="Website preview"]').filter({ hasText: "Version 2" })
-      .frameLocator("iframe").getByRole("heading", { name: "Revised layout" }),
+    panel
+      .locator('section[aria-label="Website preview"]')
+      .filter({ hasText: "Version 2" })
+      .frameLocator("iframe")
+      .getByRole("heading", { name: "Revised layout" }),
   ).toBeVisible();
-
 });
