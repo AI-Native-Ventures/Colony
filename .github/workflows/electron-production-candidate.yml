@@ -1,9 +1,16 @@
 name: Electron production candidate
 
+# Tier C proof: two macOS-15 jobs of about half an hour each. They ran on
+# every pull request that touched the Electron shell and were never a
+# required check; since 2026-09-14 they run nightly against develop, on
+# demand, and on a promotion pull request to main, where the full matrix
+# runs anyway. Merges to develop are proven by ci.yml on the develop push.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
   pull_request:
-    branches: [develop, main]
+    branches: [main]
     paths:
       - desktop/src-electron/**
       - desktop/public/electron-migration*

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## v0.17.8
+
+- feat(desktop): Colony's provisioned Chief of Staff is the only Scout in a community. Where one exists, the built-in Scout that shipped inside the app retires: it leaves the roster and the org chart, stops starting on its own, and its record is withdrawn from the community. "Scout" is a reserved name.
+- fix(desktop): an agent's record stays in the community it belongs to. Opening another community no longer republishes every agent into it, which is how one workspace ended up with five Scouts and three Sales agents.
+- fix(desktop): the coordination record each community needs for tasks is plumbing, not a team you made. It no longer appears as a "Company Coordination" card, and a community lists only its own teams.
+- feat(desktop): the Agent teams section is gone from the Agents page, along with its create, edit, share and import dialogs. The org chart already says who works with whom. A team file shared in a channel is an ordinary attachment now.
+- feat(desktop): mentioning an agent by name gives it the task directly. It no longer needs a team behind it or a mandatory reviewer, and the task detail says who owns the work.
+
+## relay-v0.11.16
+
+- feat(relay): a task can be owned by the agent it was addressed to instead of a team. The relay validates, runs and bills such work under that agent, and hiring or starting an agent no longer enrols it in a coordination team. Team-owned tasks keep every membership, ownership and review check they had.
+
+## v0.17.7
+
+- feat(desktop): a role Colony holds does not lend its rank to anybody else's agent. An agent claiming `chief-of-staff` while Colony's provisioned Chief of Staff holds that office no longer inherits executive from it, so the org chart shows one executive rather than two. An agent an owner ranked explicitly keeps the rank they gave it: not holding an office is not a demotion.
+
+
 - feat(desktop): simplify Appearance to Default and Custom, with two saved gradient colors while preserving the default palette and workspace background choices.
 
 - feat(onboarding): show four clear setup steps, require a successful agent reply before entry, and let owners review memories from selected local AI history.

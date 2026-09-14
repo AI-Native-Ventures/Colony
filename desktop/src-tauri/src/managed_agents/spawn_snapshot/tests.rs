@@ -20,6 +20,7 @@ fn snap(record: &ManagedAgentRecord) -> serde_json::Value {
 
 fn record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        superseded_by: None,
         provisioned: None,
         provisioned_version: None,
         provisioned_requires_commands: Vec::new(),

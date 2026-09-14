@@ -86,6 +86,7 @@ pub async fn update_managed_agent(
         if let Some(name_update) = input.name {
             let trimmed = name_update.trim().to_string();
             if !trimmed.is_empty() && trimmed != record.name {
+                crate::managed_agents::provisioned::refuse_reserved_chief_name(&trimmed, false)?;
                 record.name = trimmed;
                 name_changed = true;
             }

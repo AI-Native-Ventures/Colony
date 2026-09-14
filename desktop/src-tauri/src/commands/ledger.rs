@@ -583,7 +583,7 @@ pub struct CorrectionRequest {
     /// Cost centre charged.
     pub cost_centre_id: String,
     /// Team accountable.
-    pub owning_team_id: String,
+    pub owning_team_id: Option<String>,
     /// Commercial reason for the work.
     pub commercial_purpose: String,
     /// Client receiving the work, when this is client delivery.
@@ -630,7 +630,12 @@ pub async fn ledger_correct(
     if blank(&request.reason) {
         return Err("a correction needs a reason: it is the audit trail".to_string());
     }
-    if blank(&request.cost_centre_id) || blank(&request.owning_team_id) {
+    if blank(&request.cost_centre_id)
+        || request
+            .owning_team_id
+            .as_ref()
+            .is_some_and(|team| blank(team))
+    {
         return Err("a correction needs a cost centre and an owning team".to_string());
     }
     if request.usage_record_event_id.len() != 64

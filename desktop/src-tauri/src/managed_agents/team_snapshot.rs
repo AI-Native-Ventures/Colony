@@ -254,6 +254,7 @@ mod tests {
     /// Build a minimal `ManagedAgentRecord` for use as a team member.
     fn agent_record(name: &str) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            superseded_by: None,
             provisioned: None,
             provisioned_version: None,
             provisioned_requires_commands: Vec::new(),

@@ -151,6 +151,7 @@ pub async fn list_teams(app: AppHandle) -> Result<Vec<TeamRecord>, String> {
         let workspace_relay = crate::relay::relay_ws_url_with_override(&state);
         teams.retain(|team| {
             scope::team_in_workspace(
+                &team.id,
                 &team.persona_ids,
                 team.is_builtin,
                 team.relay_url.as_deref(),

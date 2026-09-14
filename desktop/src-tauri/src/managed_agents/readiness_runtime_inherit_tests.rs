@@ -20,6 +20,7 @@ mod tests {
     /// Minimal unpinned record: no runtime, no persona link, no override.
     fn bare_record() -> ManagedAgentRecord {
         crate::managed_agents::types::ManagedAgentRecord {
+            superseded_by: None,
             session_policy: Default::default(),
             provider_policy_pending: false,
             provisioned: None,

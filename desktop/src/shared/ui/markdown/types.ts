@@ -60,7 +60,7 @@ export type MarkdownRuntime = {
   onImportSnapshotFromUrl?: (
     fileBytes: number[],
     fileName: string,
-    snapshotKind: "agent" | "team",
+    snapshotKind: "agent",
   ) => void;
 };
 

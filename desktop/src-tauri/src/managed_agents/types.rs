@@ -103,6 +103,7 @@ impl AgentDefinition {
     /// event coordinate (`d_tag = slug`) across the fold.
     pub fn into_agent_record(self) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            superseded_by: None,
             // An agent created here is the workspace's own, never provisioned.
             provisioned: None,
             provisioned_version: None,
@@ -286,6 +287,23 @@ pub struct ManagedAgentRecord {
     /// binary lost a command it was briefed to use starts and improvises.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provisioned_requires_commands: Vec<String>,
+    /// The pubkey of the provisioned employee that took over this record's
+    /// office, or `None` for a record that still holds its own.
+    ///
+    /// Set only by the retirement pass in
+    /// [`crate::managed_agents::supersede`]: a community that has Colony's
+    /// provisioned `chief-of-staff` record has exactly one Chief of Staff, and
+    /// the desktop-builtin `builtin:fizz` instance beside it is legacy. The
+    /// record and its key are kept because channel history references them;
+    /// what changes is that it stops being an employee here.
+    ///
+    /// An explicit mark rather than re-deriving "a built-in fizz in a
+    /// community that also has a provisioned chief" at every read site. It is
+    /// local bookkeeping: it is deliberately absent from the published head
+    /// projection (`agent_events::agent_event_content`), which describes the
+    /// agent to the relay rather than this device's view of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
     pub pubkey: String,
     pub name: String,
     #[serde(default)]

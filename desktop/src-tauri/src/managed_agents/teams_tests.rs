@@ -241,6 +241,7 @@ fn persona_reference_check_includes_defensive_lead_only_records() {
 
 pub(crate) fn managed_agent(name: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        superseded_by: None,
         session_policy: Default::default(),
         provisioned: None,
         provisioned_version: None,

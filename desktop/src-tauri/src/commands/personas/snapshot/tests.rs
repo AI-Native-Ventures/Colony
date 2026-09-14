@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 /// Build the minimal keyless definition record stored in the definitions file.
 fn make_definition(slug: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        superseded_by: None,
         provisioned: None,
         provisioned_version: None,
         provisioned_requires_commands: Vec::new(),
