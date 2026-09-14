@@ -79,6 +79,15 @@ export async function createLiveProofProvider({ apiKey, fetchImpl = fetch }) {
       for (const message of body.messages) {
         if (message.role !== "tool") continue;
         const content = JSON.stringify(message.content ?? "");
+        if (/unexpected argument|required arguments|unrecognized subcommand/i.test(content)) {
+          // Only fixed vocabulary leaves this bridge, never captured values.
+          for (const command of ["website create", "blocks invoke", "blocks describe", "tasks list", "messages send"]) {
+            if (content.includes(command)) toolDiagnostics.add(`cli-command:${command}`);
+          }
+          for (const flag of ["--channel", "--task", "--thread", "--instance", "--manifest", "--coordinator", "--source-url", "--data", "--processor", "--reply-to", "--format", "--company", "--handle"]) {
+            if (content.includes(flag)) toolDiagnostics.add(`cli-flag:${flag}`);
+          }
+        }
         for (const [category, pattern] of [
           [
             "command-unavailable",

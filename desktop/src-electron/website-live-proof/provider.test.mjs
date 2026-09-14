@@ -121,3 +121,27 @@ test("temporary rate limit retries within the same model and total call budget",
     await provider.close();
   }
 });
+
+
+test("tool diagnostics retain only fixed categories and ignore user text", async () => {
+  const provider = await createLiveProofProvider({
+    apiKey: key,
+    fetchImpl: async () => completion(),
+  });
+  try {
+    await post(provider, {
+      messages: [
+        { role: "user", content: "unexpected argument --company tasks list" },
+        { role: "tool", content: `unexpected argument --format in website create; secret=${key}` },
+      ],
+    });
+    assert.deepEqual(provider.diagnostics().toolDiagnostics, [
+      "cli-arguments",
+      "cli-command:website create",
+      "cli-flag:--format",
+    ]);
+    assert.equal(JSON.stringify(provider.diagnostics()).includes(key), false);
+  } finally {
+    await provider.close();
+  }
+});
