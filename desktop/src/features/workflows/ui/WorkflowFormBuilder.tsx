@@ -35,6 +35,7 @@ import { useWorkflowTriggerPresentation } from "./useWorkflowTriggerPresentation
 import { compactWorkflowTriggerDescription } from "./workflowTriggerDescription";
 import { workflowStepDescription } from "./workflowStepDescription";
 import { WorkflowScheduleFields } from "./WorkflowScheduleFields";
+import { WorkflowInspectorPane } from "./WorkflowInspectorPane";
 import { WorkflowStepCard } from "./WorkflowStepCard";
 import {
   parseConditionExpressions,
@@ -151,18 +152,6 @@ function nodePosition(
   const index = steps.findIndex((step) => step.id === node.stepId);
   return index < 0 ? 0 : index + 1;
 }
-
-const inspectorContentVariants = {
-  enter: (direction: number) => ({
-    opacity: 0,
-    y: direction < 0 ? 12 : -12,
-  }),
-  center: { opacity: 1, y: 0 },
-  exit: (direction: number) => ({
-    opacity: 0,
-    y: direction < 0 ? -12 : 12,
-  }),
-};
 
 function InspectorTypeMenu<T extends string>({
   ariaLabel,
@@ -900,65 +889,53 @@ export const WorkflowFormBuilder = React.forwardRef<
                         </div>
 
                         <div className="relative z-10 min-h-0 w-96 min-w-96 flex-1 overflow-y-auto px-5 pb-5 pt-2 [@container(max-width:26rem)]:w-full [@container(max-width:26rem)]:min-w-0">
-                          <AnimatePresence
-                            custom={selectionDirection}
-                            initial={false}
-                            mode="wait"
+                          <WorkflowInspectorPane
+                            direction={selectionDirection}
+                            paneKey={
+                              selectedNode.type === "trigger"
+                                ? "trigger"
+                                : `step-${selectedNode.stepId}`
+                            }
+                            reduceMotion={shouldReduceMotion}
                           >
-                            <motion.div
-                              animate="center"
-                              className="h-full min-h-0"
-                              custom={selectionDirection}
-                              exit="exit"
-                              initial="enter"
-                              key={
-                                selectedNode.type === "trigger"
-                                  ? "trigger"
-                                  : `step-${selectedNode.stepId}`
-                              }
-                              transition={
-                                shouldReduceMotion
-                                  ? { duration: 0 }
-                                  : { duration: 0.15, ease: "easeOut" }
-                              }
-                              variants={inspectorContentVariants}
-                            >
-                              {selectedNode.type === "trigger" ? (
-                                <div className="h-full min-h-0">
-                                  <TriggerConfigFields
-                                    conditionDrafts={triggerConditionDrafts}
-                                    disabled={disabled}
-                                    onConditionDraftsChange={
-                                      setTriggerConditionDrafts
-                                    }
-                                    onUpdate={(trigger) =>
-                                      updateFormState({ ...formState, trigger })
-                                    }
-                                    trigger={formState.trigger}
-                                    workflowChannelId={workflowChannelId}
-                                  />
-                                </div>
-                              ) : selectedStep ? (
-                                <WorkflowStepCard
-                                  bare
+                            {selectedNode.type === "trigger" ? (
+                              <div className="h-full min-h-0">
+                                <TriggerConfigFields
+                                  conditionDrafts={triggerConditionDrafts}
                                   disabled={disabled}
-                                  index={selectedStepIndex}
-                                  onRemove={() => removeStep(selectedStepIndex)}
-                                  onUpdate={(updated) =>
-                                    updateStep(selectedStepIndex, updated)
+                                  onConditionDraftsChange={
+                                    setTriggerConditionDrafts
                                   }
-                                  previousSteps={formState.steps.slice(
-                                    0,
-                                    selectedStepIndex,
-                                  )}
-                                  showHeader={false}
-                                  step={selectedStep}
-                                  triggerType={formState.trigger.on}
+                                  onUpdate={(trigger) =>
+                                    updateFormState({
+                                      ...formState,
+                                      trigger,
+                                    })
+                                  }
+                                  trigger={formState.trigger}
                                   workflowChannelId={workflowChannelId}
                                 />
-                              ) : null}
-                            </motion.div>
-                          </AnimatePresence>
+                              </div>
+                            ) : selectedStep ? (
+                              <WorkflowStepCard
+                                bare
+                                disabled={disabled}
+                                index={selectedStepIndex}
+                                onRemove={() => removeStep(selectedStepIndex)}
+                                onUpdate={(updated) =>
+                                  updateStep(selectedStepIndex, updated)
+                                }
+                                previousSteps={formState.steps.slice(
+                                  0,
+                                  selectedStepIndex,
+                                )}
+                                showHeader={false}
+                                step={selectedStep}
+                                triggerType={formState.trigger.on}
+                                workflowChannelId={workflowChannelId}
+                              />
+                            ) : null}
+                          </WorkflowInspectorPane>
                         </div>
                       </div>
                     </motion.aside>
