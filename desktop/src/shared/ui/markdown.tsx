@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import type { Components } from "react-markdown";
 import { ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { toast } from "sonner";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { requestOpenSnapshotImport } from "@/features/agents/openSnapshotImportFromUrlEvent";
@@ -13,7 +12,8 @@ import {
   resolveMessageLinkRenderTarget,
   type ParsedMessageLink,
 } from "@/features/messages/lib/messageLink";
-import { invokeTauri } from "@/shared/api/tauri";
+import { isVoiceNoteAttachment } from "@/features/messages/lib/audioAttachment";
+import { renderAudioMessageAttachment } from "@/features/messages/ui/AudioMessageAttachment";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { cn } from "@/shared/lib/cn";
 import { parseEntityLink } from "@/shared/lib/entityLink";
@@ -64,7 +64,12 @@ import {
   type MediaContextMenuPosition,
   useDismissMediaContextMenu,
 } from "./markdown/MediaContextMenu";
-import { isAudioMedia, isVideoMedia } from "./markdown/mediaEntry";
+import { copyImageToClipboard, downloadImage } from "./markdown/imageActions";
+import {
+  isAudioMedia,
+  isRelayDownloadable,
+  isVideoMedia,
+} from "./markdown/mediaEntry";
 import {
   MarkdownMediaParagraph,
   MarkdownAudioPlayer,
@@ -147,26 +152,6 @@ type ImageBlockProps = {
 type WebKitGestureLikeEvent = Event & {
   scale?: number;
 };
-
-function copyImageToClipboard(src: string | undefined) {
-  if (!src) return;
-  invokeTauri("copy_image_to_clipboard", { url: src })
-    .then(() => {
-      toast.success("Copied to clipboard");
-    })
-    .catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : "Copy failed";
-      toast.error(msg);
-    });
-}
-
-function downloadImage(src: string | undefined) {
-  if (!src) return;
-  invokeTauri("download_image", { url: src }).catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : "Download failed";
-    toast.error(msg);
-  });
-}
 
 function ImageZoomOverlay({
   alt,
@@ -1265,6 +1250,24 @@ export function createMarkdownComponents(
 
     const label = getReactNodeText(children);
 
+    // Audio splits by kind, not by which path the link took: a voice-note
+    // descriptor gets upstream's attachment surface (waveform, load and
+    // playback retry, resume-after-load, one player at a time), and every
+    // other audio link keeps Colony's `MarkdownAudioPlayer` below.
+    const linkEntry = href ? imetaByUrl?.get(href) : undefined;
+    if (isVoiceNoteAttachment(linkEntry)) {
+      const voiceNote = renderAudioMessageAttachment(
+        linkEntry,
+        href,
+        label,
+        href && isRelayDownloadable(href, relayOrigin ?? undefined)
+          ? href
+          : undefined,
+      );
+      if (voiceNote) return voiceNote;
+    }
+
+    // Classify verified agent/team snapshots before generic files.
     // Snapshot attachment (agent or team): classify before generic FileCard.
     // resolveSnapshotCard checks the filename suffix + SHA-256 field.
     const snapshotCard = resolveSnapshotCard(
@@ -1452,7 +1455,7 @@ export function createMarkdownComponents(
     ),
     hr: () => <hr className="border-border/80" />,
     img: function MarkdownImage({ alt, src }) {
-      const { imetaByUrl } = useMarkdownRuntime();
+      const { imetaByUrl, relayOrigin } = useMarkdownRuntime();
       const entry = src ? imetaByUrl?.get(src) : undefined;
       const isVideo = src ? isVideoMedia(src, entry?.m) : false;
       if (!interactive) {
@@ -1461,6 +1464,23 @@ export function createMarkdownComponents(
       }
 
       const resolvedSrc = src ? rewriteRelayUrl(src) : src;
+      // Same split as the link path above: voice notes render as the
+      // attachment surface wherever they appear in a message.
+      if (src && isVoiceNoteAttachment(entry)) {
+        const voiceNote = renderAudioMessageAttachment(
+          entry,
+          src,
+          alt ?? "",
+          isRelayDownloadable(src, relayOrigin ?? undefined) ? src : undefined,
+        );
+        if (voiceNote) {
+          return (
+            <span data-block-media="" className="block w-full">
+              {voiceNote}
+            </span>
+          );
+        }
+      }
       if (src && resolvedSrc && isAudioMedia(src, entry?.m)) {
         return (
           <span data-block-media="" className="block w-full">

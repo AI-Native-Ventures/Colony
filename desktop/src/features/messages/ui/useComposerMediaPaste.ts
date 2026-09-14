@@ -3,7 +3,10 @@ import * as React from "react";
 import type { Editor } from "@tiptap/react";
 import type { MediaUploadController } from "@/features/messages/lib/useMediaUpload";
 import type { BindPastedMentionIdentities } from "@/features/messages/lib/mentionPasteBinding";
-import { handleAgentSnapshotPaste } from "@/features/messages/lib/agentSnapshotClipboard";
+import {
+  handleAgentSnapshotPaste,
+  parseSnapshotClipboardHtml,
+} from "@/features/messages/lib/agentSnapshotClipboard";
 import { getBuzzCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
 import { handleMentionClipboardPaste } from "@/features/messages/lib/mentionClipboardPaste";
 
@@ -17,11 +20,16 @@ import { handleMentionClipboardPaste } from "@/features/messages/lib/mentionClip
  * which is what makes a pasted mention send as a mention.
  */
 export function useComposerMediaPaste({
+  acceptsAttachmentRef,
   bindPastedMentionIdentities,
   editor,
   media,
   scrollComposerToBottom,
 }: {
+  /** False while a voice note is recording or queued: the composer holds one
+   *  attachment at a time, so a pasted file or snapshot is refused rather than
+   *  silently replacing the recording (#6978). */
+  acceptsAttachmentRef: React.RefObject<boolean>;
   bindPastedMentionIdentities: BindPastedMentionIdentities;
   editor: Editor | null;
   media: Pick<MediaUploadController, "setPendingImeta" | "uploadFile">;
@@ -46,6 +54,7 @@ export function useComposerMediaPaste({
           const items = Array.from(event.clipboardData?.items ?? []);
           const mediaItem = items.find((item) => item.kind === "file");
           if (mediaItem) {
+            if (!acceptsAttachmentRef.current) return true;
             const file = mediaItem.getAsFile();
             if (file) {
               void uploadFileRef.current(file);
@@ -78,7 +87,17 @@ export function useComposerMediaPaste({
             scrollComposerToBottom();
             return true;
           }
-          // Restore Buzz snapshots before normal styled-HTML normalization.
+          // Restore Buzz snapshots before normal styled-HTML normalization,
+          // and refuse them while a voice note owns the attachment slot.
+          if (
+            !acceptsAttachmentRef.current &&
+            parseSnapshotClipboardHtml(
+              event.clipboardData?.getData("text/html") ?? "",
+            )
+          ) {
+            event.preventDefault();
+            return true;
+          }
           if (handleAgentSnapshotPaste(event, media.setPendingImeta))
             return true;
           // Strip mention/channel wrappers that Tiptap would misread as bold.

@@ -19,7 +19,6 @@ import {
   takeQueuedAttachmentsForDraft,
   useBackgroundMediaUpload,
 } from "@/features/messages/lib/backgroundMediaUploadStore";
-import { useAttachmentEditing } from "@/features/messages/lib/useAttachmentEditing";
 import { isMentionCodeContext } from "@/features/messages/lib/mentionCodeContext";
 import { useMentions } from "@/features/messages/lib/useMentions";
 import { getPersistentAgentAudienceScope } from "@/features/messages/lib/persistentAgentAudience";
@@ -48,6 +47,8 @@ import { ComposerUploadProgressPill } from "./ComposerUploadProgressPill";
 import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
 import { ReplyModelControls } from "@/features/agents/ui/ReplyModelControls";
 import { useReplyModelSelection } from "@/features/agents/ui/useReplyModelSelection";
+import { useComposerAttachmentSpoilers } from "./useComposerAttachmentSpoilers";
+import { useComposerVoiceNote } from "./useComposerVoiceNote";
 import { useMentionSendFlow } from "./useMentionSendFlow";
 import { usePersistentAgentMentionHydration } from "./usePersistentAgentMentionHydration";
 import { useComposerContentState } from "./useComposerContentState";
@@ -80,6 +81,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     isSending = false,
     onDeferredEditPendingChange,
     onCancelEdit,
+    onAttachmentAcceptanceChange,
     onCancelReply,
     onCaptureSendContext,
     onEditLastOwnMessage,
@@ -115,11 +117,6 @@ function MessageComposerImpl(props: MessageComposerProps) {
   } = useManagedComposerLinkPreviews(editTarget == null);
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
   const [isFormattingOpen, setIsFormattingOpen] = React.useState(false);
-  const [spoileredAttachmentUrls, setSpoileredAttachmentUrls] = React.useState<
-    Set<string>
-  >(() => new Set());
-  const spoileredAttachmentUrlsRef = React.useRef(spoileredAttachmentUrls);
-  spoileredAttachmentUrlsRef.current = spoileredAttachmentUrls;
   const handleFormattingToggle = React.useCallback((pressed: boolean) => {
     if (pressed) setIsEmojiPickerOpen(false);
     setIsFormattingOpen(pressed);
@@ -159,6 +156,27 @@ function MessageComposerImpl(props: MessageComposerProps) {
   );
   const internalMedia = useMediaUpload({ deferUploadsUntilSend: true });
   const media = mediaController ?? internalMedia;
+  const {
+    handleAttachmentEditSave,
+    handleAttachmentRevert,
+    handleRemoveAttachment,
+    handleToggleAttachmentSpoiler,
+    setSpoileredAttachmentUrls,
+    spoileredAttachmentUrls,
+    spoileredAttachmentUrlsRef,
+  } = useComposerAttachmentSpoilers({
+    removeAttachment: media.removeAttachment,
+    revertAttachment: media.revertAttachment,
+    uploadEditedAttachment: media.uploadEditedAttachment,
+  });
+  const voiceNote = useComposerVoiceNote({
+    onAttachmentAcceptanceChange,
+    draftKey: effectiveDraftKey,
+    editTargetId: editTarget?.id ?? null,
+    media,
+    setFormattingOpen: setIsFormattingOpen,
+    setEmojiPickerOpen: setIsEmojiPickerOpen,
+  });
   const [isDeferredEditPending, setDeferredEditPending] = React.useState(false);
   const composerDisabled = disabled || isDeferredEditPending;
   const isEditSubmissionLocked =
@@ -513,6 +531,12 @@ function MessageComposerImpl(props: MessageComposerProps) {
       // An edit extracts from the same mention map a pasted identity binds
       // into, so wait on any check still deciding. Bounded internally.
       await mentions.settlePendingMentionBindings();
+      // A live recording must be finished or discarded explicitly; never let an
+      // edit save snapshot text while a voice note is mid-capture (the editor's
+      // Enter shortcut bypasses the toolbar's Finish/Discard controls).
+      if (isEditSubmissionLocked || voiceNote.statusRef.current !== "idle") {
+        return;
+      }
       // Empty edits delete the message through handleEditSave.
       await submitMessageEdit({
         content: trimmed,
@@ -562,6 +586,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     if (
       (!trimmed && !hasMedia) ||
       disabledRef.current ||
+      voiceNote.statusRef.current !== "idle" ||
       isSendingRef.current ||
       isSubmitLockedRef.current ||
       isUploadingRef.current ||
@@ -641,6 +666,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     mentions.restoreDraftMentionRefs,
     mentions.revalidateMentionPubkeys,
     mentions.settlePendingMentionBindings,
+    voiceNote.statusRef,
   ]);
   submitMessageRef.current = submitMessage;
   useComposerAutoSubmit(
@@ -720,6 +746,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
   );
   // Media paste and the ⌘K link shortcut, including #7228's paste binding.
   useComposerMediaPaste({
+    acceptsAttachmentRef: voiceNote.acceptsAttachmentRef,
     bindPastedMentionIdentities: mentions.bindPastedMentionIdentities,
     editor: richText.editor,
     media,
@@ -737,41 +764,10 @@ function MessageComposerImpl(props: MessageComposerProps) {
   const handleCaptureSelection = React.useCallback(() => {}, []);
 
   const handlePaperclipClick = React.useCallback(() => {
-    void media.handlePaperclip();
-  }, [media.handlePaperclip]);
+    if (!voiceNote.hasAttachmentRef.current) void media.handlePaperclip();
+  }, [media.handlePaperclip, voiceNote.hasAttachmentRef]);
 
-  const handleRemoveAttachment = React.useCallback(
-    (url: string) => {
-      setSpoileredAttachmentUrls((current) => {
-        if (!current.has(url)) return current;
-        const next = new Set(current);
-        next.delete(url);
-        return next;
-      });
-      media.removeAttachment(url);
-    },
-    [media.removeAttachment],
-  );
-
-  const { handleAttachmentEditSave, handleAttachmentRevert } =
-    useAttachmentEditing({
-      revertAttachment: media.revertAttachment,
-      setSpoileredAttachmentUrls,
-      uploadEditedAttachment: media.uploadEditedAttachment,
-    });
-
-  const handleToggleAttachmentSpoiler = React.useCallback((url: string) => {
-    setSpoileredAttachmentUrls((current) => {
-      const next = new Set(current);
-      if (next.has(url)) {
-        next.delete(url);
-      } else {
-        next.add(url);
-      }
-      return next;
-    });
-  }, []);
-
+  const acceptsDrop = ownsDropZone && voiceNote.acceptsAttachment;
   return (
     <>
       <footer
@@ -809,11 +805,11 @@ function MessageComposerImpl(props: MessageComposerProps) {
                 "backdrop-blur-md dark:backdrop-blur-xl",
             )}
             data-testid="message-composer"
-            onDragEnter={ownsDropZone ? media.handleDragEnter : undefined}
-            onDragLeave={ownsDropZone ? media.handleDragLeave : undefined}
-            onDragOver={ownsDropZone ? media.handleDragOver : undefined}
+            onDragEnter={acceptsDrop ? media.handleDragEnter : undefined}
+            onDragLeave={acceptsDrop ? media.handleDragLeave : undefined}
+            onDragOver={acceptsDrop ? media.handleDragOver : undefined}
             onDrop={
-              ownsDropZone
+              acceptsDrop
                 ? (e) => {
                     if (isDeferredEditPending) {
                       e.preventDefault();
@@ -912,6 +908,10 @@ function MessageComposerImpl(props: MessageComposerProps) {
               isFormattingOpen={isFormattingOpen}
               isSending={isSending}
               isUploading={media.isUploading}
+              isVoiceNoteProcessing={voiceNote.status !== "recording"}
+              isVoiceNoteRecording={voiceNote.status !== "idle"}
+              hasVoiceNoteAttachment={voiceNote.hasAttachment}
+              voiceNoteRecorder={voiceNote.recorderElement}
               onCaptureSelection={handleCaptureSelection}
               onEmojiPickerOpenChange={setIsEmojiPickerOpen}
               onEmojiSelect={insertEmoji}
@@ -919,6 +919,8 @@ function MessageComposerImpl(props: MessageComposerProps) {
               onLinkButton={linkEditor.openFromToolbar}
               onOpenMentionPicker={openMentionPicker}
               onPaperclip={handlePaperclipClick}
+              onFinishVoiceNote={() => void voiceNote.finish()}
+              onVoiceNote={voiceNote.toggle}
               sendDisabled={sendDisabled}
             />
           </form>

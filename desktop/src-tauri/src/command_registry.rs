@@ -24,6 +24,8 @@ macro_rules! app_invoke_handler {
             electron_host::migration::electron_read_frontend_migration,
             electron_host::migration::electron_finish_frontend_migration,
             electron_host::migration::electron_frontend_migration_fixture,
+            cancel_media_fetch,
+            release_media_fetch,
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
             take_pending_navigation_deep_link,
