@@ -5,7 +5,6 @@ import {
   subscribeSnapshotImport,
 } from "@/features/agents/openSnapshotImportFromUrlEvent";
 import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
-import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { AgentDefaultsDialog } from "./AgentDefaultsDialog";
 import { AgentDialog } from "./AgentDialog";
 import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
@@ -13,18 +12,11 @@ import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
 import { PersonaShareDialog } from "./PersonaShareDialog";
 import { AgentSnapshotExportDialog } from "./AgentSnapshotExportDialog";
 import { AgentSnapshotImportDialog } from "./AgentSnapshotImportDialog";
-import { TeamSnapshotExportDialog } from "./TeamSnapshotExportDialog";
-import { TeamSnapshotImportDialog } from "./TeamSnapshotImportDialog";
-import { TeamShareDialog } from "./TeamShareDialog";
-import { TeamDeleteDialog } from "./TeamDeleteDialog";
-import { TeamDialog } from "./TeamDialog";
-import { TeamsSection } from "./TeamsSection";
 import { PeopleSection } from "./PeopleSection";
 import { UnassignedAgentsBanner } from "./UnassignedAgentsBanner";
 import { UnifiedAgentsSection } from "./UnifiedAgentsSection";
 import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
-import { useTeamActions } from "./useTeamActions";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { useBakedBuildEnvQuery } from "@/features/agents/hooks";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
@@ -46,7 +38,6 @@ export function AgentsView() {
   const inheritedDefaults = getInheritedAgentDefaults(globalConfig, bakedEnv);
   const agents = useManagedAgentActions();
   const personas = usePersonaActions();
-  const teamImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const aiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const fullAiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const compactActionsTriggerRef = React.useRef<HTMLButtonElement>(null);
@@ -71,23 +62,7 @@ export function AgentsView() {
     setIsAiDefaultsOpen(open);
   }
 
-  const teamActions = useTeamActions(
-    {
-      setActionNoticeMessage: agents.setActionNoticeMessage,
-      setActionErrorMessage: agents.setActionErrorMessage,
-    },
-    {
-      refetchManagedAgents: agents.refetchManagedAgents,
-      refetchRelayAgents: agents.refetchRelayAgents,
-    },
-  );
-
-  const isActionPending =
-    agents.isPending ||
-    personas.isPending ||
-    teamActions.createTeamMutation.isPending ||
-    teamActions.updateTeamMutation.isPending ||
-    teamActions.deleteTeamMutation.isPending;
+  const isActionPending = agents.isPending || personas.isPending;
   const runningAgentCount = agents.managedAgents.filter((agent) =>
     isManagedAgentActive(agent),
   ).length;
@@ -99,31 +74,20 @@ export function AgentsView() {
         (value) => value.trim().length > 0,
       ),
   );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; personas.handleImportSnapshotFile and teamActions.handleImportTeamSnapshotFile are stable
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; personas.handleImportSnapshotFile is stable
   React.useEffect(() => {
     // Consume a snapshot import that was enqueued before navigation (e.g. from
     // a timeline AgentSnapshotCard click that navigated here).
     const pending = consumePendingSnapshotImport();
     if (pending) {
-      if (pending.snapshotKind === "team") {
-        void teamActions.handleImportTeamSnapshotFile(
-          pending.fileBytes,
-          pending.fileName,
-        );
-      } else {
-        void personas.handleImportSnapshotFile(
-          pending.fileBytes,
-          pending.fileName,
-        );
-      }
+      void personas.handleImportSnapshotFile(
+        pending.fileBytes,
+        pending.fileName,
+      );
     }
 
-    return subscribeSnapshotImport(({ fileBytes, fileName, snapshotKind }) => {
-      if (snapshotKind === "team") {
-        void teamActions.handleImportTeamSnapshotFile(fileBytes, fileName);
-      } else {
-        void personas.handleImportSnapshotFile(fileBytes, fileName);
-      }
+    return subscribeSnapshotImport(({ fileBytes, fileName }) => {
+      void personas.handleImportSnapshotFile(fileBytes, fileName);
     });
   }, []);
 
@@ -267,31 +231,6 @@ export function AgentsView() {
                 void personas.handleSetActive(persona, false, "library");
               }}
               onDeletePersona={personas.openDelete}
-            />
-
-            <TeamsSection
-              error={
-                teamActions.teamsQuery.error instanceof Error
-                  ? teamActions.teamsQuery.error
-                  : null
-              }
-              isLoading={teamActions.teamsQuery.isLoading}
-              isPending={
-                teamActions.createTeamMutation.isPending ||
-                teamActions.updateTeamMutation.isPending ||
-                teamActions.deleteTeamMutation.isPending
-              }
-              onCreate={teamActions.openCreateDialog}
-              onDelete={teamActions.setTeamToDelete}
-              onDuplicate={teamActions.openDuplicateDialog}
-              onEdit={teamActions.openEditDialog}
-              onAddToChannel={teamActions.setTeamToAddToChannel}
-              onShare={teamActions.openShare}
-              onImport={() => {
-                teamImportInputRef.current?.click();
-              }}
-              personas={personas.libraryPersonas}
-              teams={teamActions.teams}
             />
 
             <PeopleSection />
@@ -532,143 +471,6 @@ export function AgentsView() {
           personas={personas.catalogPersonas}
         />
       ) : null}
-      {teamActions.teamDialogState ? (
-        <TeamDialog
-          description={teamActions.teamDialogState.description}
-          error={
-            teamActions.updateTeamMutation.error instanceof Error
-              ? teamActions.updateTeamMutation.error
-              : teamActions.createTeamMutation.error instanceof Error
-                ? teamActions.createTeamMutation.error
-                : null
-          }
-          initialValues={teamActions.teamDialogState.initialValues}
-          isPending={
-            teamActions.createTeamMutation.isPending ||
-            teamActions.updateTeamMutation.isPending
-          }
-          onOpenChange={(open) => {
-            if (!open) {
-              teamActions.setTeamDialogState(null);
-            }
-          }}
-          onDeleteRemovedPersonas={teamActions.handleDeleteRemovedPersonas}
-          onSubmit={teamActions.handleTeamSubmit}
-          open={teamActions.teamDialogState !== null}
-          personas={personas.libraryPersonas}
-          submitLabel={teamActions.teamDialogState.submitLabel}
-          title={teamActions.teamDialogState.title}
-        />
-      ) : null}
-      {teamActions.teamToDelete ? (
-        <TeamDeleteDialog
-          onConfirm={(team) => {
-            void teamActions.handleDeleteTeam(team);
-          }}
-          onOpenChange={(open) => {
-            if (!open) {
-              teamActions.setTeamToDelete(null);
-            }
-          }}
-          open={teamActions.teamToDelete !== null}
-          team={teamActions.teamToDelete}
-        />
-      ) : null}
-      {teamActions.teamToAddToChannel ? (
-        <AddTeamToChannelDialog
-          onDeployed={teamActions.handleTeamDeployed}
-          onOpenChange={(open) => {
-            if (!open) {
-              teamActions.setTeamToAddToChannel(null);
-            }
-          }}
-          open={teamActions.teamToAddToChannel !== null}
-          personas={personas.libraryPersonas}
-          team={teamActions.teamToAddToChannel}
-        />
-      ) : null}
-      {teamActions.teamToShare ? (
-        <TeamShareDialog
-          isPending={
-            teamActions.createTeamMutation.isPending ||
-            teamActions.updateTeamMutation.isPending ||
-            teamActions.deleteTeamMutation.isPending
-          }
-          onExport={() => {
-            if (teamActions.teamToShare) {
-              const team = teamActions.teamToShare;
-              teamActions.setTeamToShare(null);
-              teamActions.openExportSnapshot(team);
-            }
-          }}
-          onOpenChange={(open) => {
-            if (!open) {
-              teamActions.setTeamToShare(null);
-            }
-          }}
-          open={teamActions.teamToShare !== null}
-          team={teamActions.teamToShare}
-        />
-      ) : null}
-      {teamActions.teamToExport ? (
-        <TeamSnapshotExportDialog
-          isSavePending={teamActions.exportTeamSnapshotMutation.isPending}
-          open={teamActions.teamToExport !== null}
-          team={teamActions.teamToExport}
-          onSaveFile={(memoryLevel, format) => {
-            if (teamActions.teamToExport) {
-              teamActions.handleExportTeamSnapshot(
-                teamActions.teamToExport,
-                memoryLevel,
-                format,
-              );
-            }
-          }}
-          onOpenChange={(open) => {
-            if (!open) {
-              teamActions.setTeamToExport(null);
-            }
-          }}
-        />
-      ) : null}
-      {teamActions.teamSnapshotImportState ? (
-        <TeamSnapshotImportDialog
-          open={teamActions.teamSnapshotImportState !== null}
-          preview={teamActions.teamSnapshotImportState.preview}
-          isConfirming={teamActions.isTeamSnapshotImportConfirming}
-          result={teamActions.teamSnapshotImportResult}
-          confirmError={teamActions.teamSnapshotImportConfirmError}
-          onConfirm={(keepAllowlist) => {
-            void teamActions.handleConfirmTeamSnapshotImport(keepAllowlist);
-          }}
-          onOpenChange={(open) => {
-            if (!open) {
-              teamActions.closeTeamSnapshotImportDialog();
-            }
-          }}
-        />
-      ) : null}
-      {/* Hidden file input for team snapshot import via file picker */}
-      <input
-        accept=".team.json,.team.png"
-        className="hidden"
-        data-testid="team-snapshot-import-input"
-        ref={teamImportInputRef}
-        type="file"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          const reader = new FileReader();
-          reader.onload = () => {
-            const buffer = reader.result as ArrayBuffer;
-            const fileBytes = Array.from(new Uint8Array(buffer));
-            void teamActions.handleImportTeamSnapshotFile(fileBytes, file.name);
-          };
-          reader.readAsArrayBuffer(file);
-          // Reset so the same file can be picked again.
-          e.target.value = "";
-        }}
-      />
     </>
   );
 }
