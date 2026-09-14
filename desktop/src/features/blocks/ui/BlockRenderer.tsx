@@ -42,7 +42,9 @@ function BlockTree({
         }}
         node={manifest.tree as BlockPrimitiveNode}
       />
-      {trust === "core" && manifest.handle === "artifact" ? <ArtifactHtmlPreview data={data} /> : null}
+      {trust === "core" && manifest.handle === "artifact" ? (
+        <ArtifactHtmlPreview data={data} />
+      ) : null}
       {actionError ? (
         <p className="mt-2 text-xs text-destructive" role="alert">
           {actionError}

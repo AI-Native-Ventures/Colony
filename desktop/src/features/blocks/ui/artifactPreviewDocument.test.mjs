@@ -5,8 +5,8 @@ import { artifactPreviewDocument, readArtifactHtml } from "./artifactPreviewDocu
 
 test("static previews retain layout but remove executable and navigating content", () => {
   const dom = new JSDOM("");
-  const previous = globalThis.DOMParser;
-  globalThis.DOMParser = dom.window.DOMParser;
+  const previous = globalThis.document;
+  globalThis.document = dom.window.document;
   try {
     const html = artifactPreviewDocument(`<style>h1{color:blue}</style><h1 onclick="steal()">Version 1</h1><script>steal()</script><iframe src="https://example.com"></iframe><meta http-equiv="refresh" content="0;url=https://example.com"><base href="https://example.com"><a href="https://example.com">Link</a><form action="https://example.com"><input></form><img src="https://example.com/pixel">`);
     const parsed = new dom.window.DOMParser().parseFromString(html, "text/html");
@@ -19,7 +19,7 @@ test("static previews retain layout but remove executable and navigating content
     assert.throws(() => artifactPreviewDocument(" "), /empty/);
     assert.throws(() => artifactPreviewDocument("x".repeat(20_001)), /exceeds/);
   } finally {
-    globalThis.DOMParser = previous;
+    globalThis.document = previous;
     dom.window.close();
   }
 });

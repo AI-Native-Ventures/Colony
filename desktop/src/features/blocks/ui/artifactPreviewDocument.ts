@@ -11,8 +11,10 @@ export function artifactPreviewDocument(html: string): string {
   if (!html.trim() || html.length > MAX_HTML_LENGTH) {
     throw new Error("The HTML preview is empty or exceeds 20,000 characters.");
   }
-  const document = new DOMParser().parseFromString(html, "text/html");
-  for (const element of document.querySelectorAll("*")) {
+  const previewDocument = document.implementation.createHTMLDocument("");
+  const template = previewDocument.createElement("template");
+  template.innerHTML = html;
+  for (const element of template.content.querySelectorAll("*")) {
     if (!ALLOWED_ELEMENTS.has(element.localName)) {
       element.remove();
       continue;
@@ -23,15 +25,16 @@ export function artifactPreviewDocument(html: string): string {
       }
     }
   }
-  const policy = document.createElement("meta");
+  previewDocument.body.append(template.content);
+  const policy = previewDocument.createElement("meta");
   policy.httpEquiv = "Content-Security-Policy";
   policy.content = "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'";
-  document.head.prepend(policy);
-  const viewport = document.createElement("meta");
+  previewDocument.head.prepend(policy);
+  const viewport = previewDocument.createElement("meta");
   viewport.name = "viewport";
   viewport.content = "width=device-width, initial-scale=1";
-  document.head.append(viewport);
-  return `<!doctype html>${document.documentElement.outerHTML}`;
+  previewDocument.head.append(viewport);
+  return `<!doctype html>${previewDocument.documentElement.outerHTML}`;
 }
 
 /** Optional preview fields do not change older artifact rendering. */
