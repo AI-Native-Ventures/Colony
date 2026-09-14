@@ -380,6 +380,82 @@ test("live forum mention survives a stale durable feed refetch", async ({
 });
 
 test.describe("inbox stable-conversation regressions", () => {
+  // The same guarantee at a different type scale. Row heights come from the
+  // conversation tokens (#5644), so a preference that changes them is exactly
+  // where a restore measuring against stale geometry drifts.
+  test("scroll preserved through a live sibling at the larger font size", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem("buzz.appearance.fontSize", "larger");
+    });
+    await installMockBridge(page);
+    await page.goto("/");
+    await expect(getListPane(page)).toBeVisible();
+    await waitForBridgeReady(page);
+
+    const { root, anchor } = await seedNestedAnchor(page);
+    await page.getByTestId(`home-inbox-item-${anchor.id}`).click();
+    const detail = getDetailPane(page);
+    await expect(detail).toContainText("Nested anchor");
+
+    // Same filler the sibling case uses: the pane only scrolls once the thread
+    // is longer than the viewport.
+    await page.evaluate(
+      ({ senderPubkey, rootId }) => {
+        const emit = (window as MockWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+        if (!emit) return;
+        for (let i = 0; i < 30; i++) {
+          emit({
+            channelName: "general",
+            content: `Filler reply ${i} to make the list long enough to scroll.`,
+            parentEventId: rootId,
+            pubkey: senderPubkey,
+          });
+        }
+      },
+      { senderPubkey: TEST_IDENTITIES.alice.pubkey, rootId: root.id },
+    );
+    await expect(
+      detail.getByTestId("home-inbox-context-message").filter({
+        hasText: /Filler reply \d+ to make the list long enough to scroll\./,
+      }),
+    ).toHaveCount(30);
+    await page.evaluate(() => {
+      const pane = document.querySelector(
+        '[data-testid="home-inbox-detail"] [aria-busy]',
+      ) as HTMLElement | null;
+      if (!pane) return;
+      const maxScrollTop = pane.scrollHeight - pane.clientHeight;
+      pane.scrollTop = Math.max(1, Math.floor(maxScrollTop / 2));
+    });
+    await page.waitForFunction(() => {
+      const pane = document.querySelector(
+        '[data-testid="home-inbox-detail-scroll"]',
+      ) as HTMLElement | null;
+      return (
+        pane !== null &&
+        pane.scrollTop > 0 &&
+        pane.scrollHeight - pane.clientHeight - pane.scrollTop > 32
+      );
+    });
+    // The preference has to be the one in force, or this proves nothing.
+    expect(
+      await page.evaluate(() =>
+        document.documentElement.getAttribute("data-font-size"),
+      ),
+    ).toBe("larger");
+    const scrollTopBefore = await getScrollTop(page);
+
+    await injectNewerSibling(page, root.id, anchor.id);
+    await expect(
+      page.getByTestId(`home-inbox-item-${"c2".repeat(32)}`),
+    ).toBeVisible();
+
+    const scrollTopAfter = await getScrollTop(page);
+    expect(Math.abs(scrollTopAfter - scrollTopBefore)).toBeLessThanOrEqual(2);
+  });
+
   test("scroll and focused draft preserved; new representative row selected when live sibling displaces anchor", async ({
     page,
   }) => {
