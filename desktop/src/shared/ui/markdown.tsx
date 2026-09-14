@@ -12,8 +12,6 @@ import {
   resolveMessageLinkRenderTarget,
   type ParsedMessageLink,
 } from "@/features/messages/lib/messageLink";
-import { isVoiceNoteAttachment } from "@/features/messages/lib/audioAttachment";
-import { renderAudioMessageAttachment } from "@/features/messages/ui/AudioMessageAttachment";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { cn } from "@/shared/lib/cn";
 import { parseEntityLink } from "@/shared/lib/entityLink";
@@ -65,11 +63,8 @@ import {
   useDismissMediaContextMenu,
 } from "./markdown/MediaContextMenu";
 import { copyImageToClipboard, downloadImage } from "./markdown/imageActions";
-import {
-  isAudioMedia,
-  isRelayDownloadable,
-  isVideoMedia,
-} from "./markdown/mediaEntry";
+import { isAudioMedia, isVideoMedia } from "./markdown/mediaEntry";
+import { renderVoiceNoteAttachment } from "./markdown/voiceNoteRender";
 import {
   MarkdownMediaParagraph,
   MarkdownAudioPlayer,
@@ -1250,22 +1245,13 @@ export function createMarkdownComponents(
 
     const label = getReactNodeText(children);
 
-    // Audio splits by kind, not by which path the link took: a voice-note
-    // descriptor gets upstream's attachment surface (waveform, load and
-    // playback retry, resume-after-load, one player at a time), and every
-    // other audio link keeps Colony's `MarkdownAudioPlayer` below.
-    const linkEntry = href ? imetaByUrl?.get(href) : undefined;
-    if (isVoiceNoteAttachment(linkEntry)) {
-      const voiceNote = renderAudioMessageAttachment(
-        linkEntry,
-        href,
-        label,
-        href && isRelayDownloadable(href, relayOrigin ?? undefined)
-          ? href
-          : undefined,
-      );
-      if (voiceNote) return voiceNote;
-    }
+    const voiceNoteLink = renderVoiceNoteAttachment({
+      entry: href ? imetaByUrl?.get(href) : undefined,
+      label,
+      relayOrigin,
+      url: href,
+    });
+    if (voiceNoteLink) return voiceNoteLink;
 
     // Classify verified agent/team snapshots before generic files.
     // Snapshot attachment (agent or team): classify before generic FileCard.
@@ -1464,23 +1450,14 @@ export function createMarkdownComponents(
       }
 
       const resolvedSrc = src ? rewriteRelayUrl(src) : src;
-      // Same split as the link path above: voice notes render as the
-      // attachment surface wherever they appear in a message.
-      if (src && isVoiceNoteAttachment(entry)) {
-        const voiceNote = renderAudioMessageAttachment(
-          entry,
-          src,
-          alt ?? "",
-          isRelayDownloadable(src, relayOrigin ?? undefined) ? src : undefined,
-        );
-        if (voiceNote) {
-          return (
-            <span data-block-media="" className="block w-full">
-              {voiceNote}
-            </span>
-          );
-        }
-      }
+      const voiceNoteBlock = renderVoiceNoteAttachment({
+        block: true,
+        entry,
+        label: alt ?? "",
+        relayOrigin,
+        url: src,
+      });
+      if (voiceNoteBlock) return voiceNoteBlock;
       if (src && resolvedSrc && isAudioMedia(src, entry?.m)) {
         return (
           <span data-block-media="" className="block w-full">
