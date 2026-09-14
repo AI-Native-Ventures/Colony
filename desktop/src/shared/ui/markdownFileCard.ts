@@ -23,8 +23,8 @@ export type ResolvedFileCard = {
  * A snapshot candidate resolved from an imeta entry.  The card shows both
  * an **Import** and a **Download** action.
  *
- * `snapshotKind` is discriminated so `.agent.*` and `.team.*` attachments
- * can share the same routing path without mixing agent-only assumptions.
+ * `snapshotKind` is kept as a discriminant so the routing path stays explicit
+ * about what it is importing, even though `.agent.*` is the only kind today.
  */
 export type ResolvedSnapshotCard = {
   /** Sender-provided display label, with a filename-derived fallback. */
@@ -35,7 +35,7 @@ export type ResolvedSnapshotCard = {
   /** SHA-256 hex from the imeta `x` field — required for verified fetch. */
   sha256: string;
   /** Discriminant for the snapshot kind. */
-  snapshotKind: "agent" | "team";
+  snapshotKind: "agent";
   /**
    * Optional thumbnail URL for the card icon. PNG snapshots use the
    * attachment URL because the PNG body is the avatar card image. JSON
@@ -90,21 +90,15 @@ export function resolveSnapshotCard(
   const lower = filename.toLowerCase();
   const isJson = lower.endsWith(".agent.json");
   const isPng = lower.endsWith(".agent.png");
-  const isTeamJson = lower.endsWith(".team.json");
-  const isTeamPng = lower.endsWith(".team.png");
 
-  if (!isJson && !isPng && !isTeamJson && !isTeamPng) return null;
-
-  const isAnyPng = isPng || isTeamPng;
+  if (!isJson && !isPng) return null;
 
   // For PNG: MIME must be image/png when present; other MIMEs are inconsistent.
-  if (isAnyPng && entry.m && entry.m !== "image/png") return null;
+  if (isPng && entry.m && entry.m !== "image/png") return null;
 
   // SHA-256 is required for the bounded verified fetch.
   const sha256 = entry.x?.trim();
   if (sha256?.length !== 64) return null;
-
-  const snapshotKind: "agent" | "team" = isJson || isPng ? "agent" : "team";
 
   return {
     displayName: snapshotDisplayName(filename, childText),
@@ -112,9 +106,9 @@ export function resolveSnapshotCard(
     filename,
     size: entry.size,
     sha256,
-    snapshotKind,
-    // Agent PNG snapshots carry the avatar card image. Team PNG snapshots use
-    // a transport placeholder, so render the team icon instead of that image.
+    snapshotKind: "agent",
+    // Agent PNG snapshots carry the avatar card image, so it doubles as the
+    // card thumbnail. JSON snapshots have none and fall back to the icon.
     thumb: isPng ? rewriteRelayUrl(href) : undefined,
   };
 }
