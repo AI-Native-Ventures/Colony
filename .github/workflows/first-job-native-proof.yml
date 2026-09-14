@@ -89,7 +89,20 @@ jobs:
           export COLONY_SMOKE_ADMIN_BINARY="$GITHUB_WORKSPACE/target/release/buzz-admin"
           export COLONY_SMOKE_PROOF_DIR="$RUNNER_TEMP/colony-first-job-proof"
           node desktop/src-electron/onboarding-smoke.mjs --with-work
-          jq -e '.completed == true and .accountCompleted == true and .workerCompletion.status == "completed" and .workerCompletion.teamRecovery.status == "recovered-before-task" and .cleanup == "complete" and .backingServices.cleanup.complete == true' "$COLONY_SMOKE_PROOF_DIR/account-proof.json"
+          jq -e '
+            .completed == true and
+            .accountCompleted == true and
+            .workerCompletion.status == "completed" and
+            (.workerCompletion.taskId | type == "string" and length > 0) and
+            (.workerCompletion.directTaskWithoutTeam | has("owningTeamId")) and
+            .workerCompletion.directTaskWithoutTeam.owningTeamId == null and
+            .workerCompletion.directTaskWithoutTeam.initialOwnerTeamHeads == 0 and
+            .workerCompletion.directTaskWithoutTeam.finalOwnerTeamHeads == 0 and
+            .workerCompletion.directTaskWithoutTeam.status == "completed" and
+            .workerCompletion.directTaskWithoutTeam.taskId == .workerCompletion.taskId and
+            .cleanup == "complete" and
+            .backingServices.cleanup.complete == true
+          ' "$COLONY_SMOKE_PROOF_DIR/account-proof.json"
       - name: Preserve synthetic provider real native proof
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
