@@ -96,6 +96,7 @@ pub fn apply_agent_command_update(
     agent_command: &str,
     harness_override: bool,
 ) {
+    let previous_command = crate::managed_agents::record_agent_command(record, personas);
     record.agent_command_override = update_time_agent_command_override(
         record.persona_id.as_deref(),
         personas,
@@ -104,6 +105,16 @@ pub fn apply_agent_command_update(
     );
     if agent_command.trim().is_empty() && record.persona_id.is_some() {
         record.runtime = None;
+    }
+    // A persisted effort is a pin against ONE adapter's advertised
+    // `thought_level` options (see `effortPickerState`, which reads them from
+    // the live config surface rather than a static table). Carrying it across a
+    // harness change would assert a value the new adapter never offered, which
+    // is the stale state this clear exists to prevent; the picker re-offers
+    // whatever the new harness advertises, and until the user picks, the
+    // adapter's own default stands.
+    if crate::managed_agents::record_agent_command(record, personas) != previous_command {
+        record.effort_level = None;
     }
 }
 

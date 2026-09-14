@@ -26,6 +26,9 @@ pub(crate) struct PresetHarness {
     /// model discovery.
     pub(crate) provider_env_var: Option<&'static str>,
     pub(crate) underlying_cli: Option<&'static str>,
+    /// State-specific setup guidance for the wrapped vendor CLI, shown when the
+    /// adapter is present but its CLI is not.
+    pub(crate) underlying_cli_install_hint: Option<&'static str>,
 }
 
 /// Build one preset catalog entry through an injectable command resolver.
@@ -56,6 +59,17 @@ pub(crate) fn preset_catalog_entry(
         .and_then(resolve)
         .map(|path| path.display().to_string());
 
+    // An adapter preset needs two installs. When neither is present, name both,
+    // so a user reading the card is not sent back for the second component
+    // after following the first. #7335 carries the vendor half.
+    let install_hint = match (&availability, def.underlying_cli_install_hint) {
+        (AcpAvailabilityStatus::NotInstalled, Some(cli_hint)) => {
+            // Vendor first: the adapter is useless without the CLI it wraps.
+            format!("{} {}", cli_hint, def.install_hint)
+        }
+        _ => def.install_hint.to_string(),
+    };
+
     AcpRuntimeCatalogEntry {
         id: def.id.to_string(),
         label: def.label.to_string(),
@@ -79,7 +93,7 @@ pub(crate) fn preset_catalog_entry(
         max_tokens_env_var: None,
         context_limit_env_var: None,
         max_rounds_env_var: None,
-        install_hint: def.install_hint.to_string(),
+        install_hint,
         install_instructions_url: def.install_instructions_url.to_string(),
         can_auto_install: false,
         // Presets carry one flat install hint, so builtin external-CLI copy
@@ -100,6 +114,21 @@ pub(crate) fn preset_catalog_entry(
 
 pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
     PresetHarness {
+        id: "pi",
+        label: "Pi",
+        command: "buzz-pi-acp",
+        args: &[],
+        install_instructions_url: "https://github.com/salman1993/buzz-pi-acp",
+        install_hint: "Requires Node.js 22 or newer. Install the Pi ACP adapter with `npm install -g --install-links=true 'git+https://github.com/salman1993/buzz-pi-acp.git#86b201e'`. Make sure `buzz-pi-acp` is on PATH, then restart Buzz.",
+        underlying_cli: Some("pi"),
+        underlying_cli_install_hint: Some(
+            "Install Pi with `npm install -g @earendil-works/pi-coding-agent`, then run `pi` to configure its model provider.",
+        ),
+        // Pi carries no provider env key: the adapter reads its own config.
+        provider_env_var: None,
+    },
+    PresetHarness {
+        underlying_cli_install_hint: None,
         id: "devin",
         label: "Devin",
         command: "devin",
@@ -110,6 +139,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "cursor",
         label: "Cursor",
         command: "cursor-agent",
@@ -120,6 +150,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "omp",
         label: "Oh My Pi",
         command: "omp",
@@ -130,6 +161,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "grok",
         label: "Grok Build",
         command: "grok",
@@ -143,6 +175,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
     // (first-class runtime with provider/model metadata) — it must not
     // reappear here, the id would be shadowed by the builtin.
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "kimi",
         label: "Kimi Code",
         command: "kimi",
@@ -153,6 +186,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "amp",
         label: "Amp",
         command: "amp-acp",
@@ -163,6 +197,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: Some("amp"),
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "hermes",
         label: "Hermes Agent",
         command: "hermes-acp",
@@ -173,6 +208,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "openclaw",
         label: "OpenClaw",
         command: "openclaw",
@@ -191,6 +227,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
     },
 
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "prime-agent",
         label: "Prime Agent",
         command: "prime-agent",
@@ -308,6 +345,7 @@ mod tests {
 
     /// Amp-shaped preset: an ACP adapter wrapping a separately installed CLI.
     const ADAPTER_PRESET: PresetHarness = PresetHarness {
+        underlying_cli_install_hint: None,
         id: "amp-test",
         label: "Amp Test",
         command: "amp-acp",
@@ -368,6 +406,70 @@ mod tests {
         assert_eq!(entry.default_args, vec!["acp"]);
         assert_eq!(entry.install_instructions_url, "https://docs.devin.ai/cli");
         assert_eq!(entry.source, HarnessSource::Preset);
+    }
+
+    #[test]
+    fn pi_preset_uses_zero_arg_adapter_and_reports_missing_component() {
+        let preset = PRESET_HARNESSES
+            .iter()
+            .find(|preset| preset.id == "pi")
+            .expect("Pi preset should be present");
+
+        assert_eq!(preset.label, "Pi");
+        assert_eq!(preset.command, "buzz-pi-acp");
+        assert!(preset.args.is_empty());
+        assert_eq!(preset.underlying_cli, Some("pi"));
+
+        let available = preset_catalog_entry(preset, |command| match command {
+            "buzz-pi-acp" => Some(PathBuf::from("/usr/local/bin/buzz-pi-acp")),
+            "pi" => Some(PathBuf::from("/usr/local/bin/pi")),
+            _ => None,
+        });
+        assert_eq!(available.availability, AcpAvailabilityStatus::Available);
+        assert_eq!(available.command.as_deref(), Some("buzz-pi-acp"));
+        assert!(available.default_args.is_empty());
+        assert_eq!(
+            available.underlying_cli_path.as_deref(),
+            Some("/usr/local/bin/pi")
+        );
+
+        let adapter_missing = preset_catalog_entry(preset, |command| {
+            (command == "pi").then(|| PathBuf::from("/usr/local/bin/pi"))
+        });
+        assert_eq!(
+            adapter_missing.availability,
+            AcpAvailabilityStatus::AdapterMissing
+        );
+        assert!(adapter_missing.command.is_none());
+        assert!(adapter_missing.default_args.is_empty());
+        assert_eq!(
+            adapter_missing.install_hint,
+            "Requires Node.js 22 or newer. Install the Pi ACP adapter with `npm install -g --install-links=true 'git+https://github.com/salman1993/buzz-pi-acp.git#86b201e'`. Make sure `buzz-pi-acp` is on PATH, then restart Buzz."
+        );
+        assert_eq!(
+            adapter_missing.install_instructions_url,
+            "https://github.com/salman1993/buzz-pi-acp"
+        );
+
+        // Adapter present, vendor CLI absent stays Available and selectable
+        // here: routing presets through the full classify_runtime would flip
+        // this to CliMissing, which preset_entry_stays_available_when_adapter_
+        // present_but_cli_absent exists to prevent.
+        let adapter_only = preset_catalog_entry(preset, |command| {
+            (command == "buzz-pi-acp").then(|| PathBuf::from("/usr/local/bin/buzz-pi-acp"))
+        });
+        assert_eq!(adapter_only.availability, AcpAvailabilityStatus::Available);
+        assert_eq!(adapter_only.command.as_deref(), Some("buzz-pi-acp"));
+
+        let not_installed = preset_catalog_entry(preset, |_| None);
+        assert_eq!(
+            not_installed.availability,
+            AcpAvailabilityStatus::NotInstalled
+        );
+        assert_eq!(
+            not_installed.install_hint,
+            "Install Pi with `npm install -g @earendil-works/pi-coding-agent`, then run `pi` to configure its model provider. Requires Node.js 22 or newer. Install the Pi ACP adapter with `npm install -g --install-links=true 'git+https://github.com/salman1993/buzz-pi-acp.git#86b201e'`. Make sure `buzz-pi-acp` is on PATH, then restart Buzz."
+        );
     }
 
     #[test]

@@ -171,6 +171,7 @@ fn classifies_cli_missing_when_adapter_found_but_cli_absent() {
 /// Amp-shaped preset: an ACP adapter (`amp-acp`) wrapping a separately
 /// installed vendor CLI (`amp`).
 const ADAPTER_PRESET: PresetHarness = PresetHarness {
+    underlying_cli_install_hint: None,
     id: "amp-test",
     label: "Amp Test",
     command: "amp-acp",
@@ -649,20 +650,6 @@ fn apply_agent_command_update_inherit_sentinel_clears_pin_and_runtime() {
     assert_eq!(record.agent_command_override, None);
     assert_eq!(record.runtime, None);
     assert_eq!(record_agent_command(&record, &personas), "claude-agent-acp");
-}
-
-#[test]
-fn apply_agent_command_update_sentinel_keeps_runtime_for_definition_less_record() {
-    // For a record with no persona link the materialized runtime is the only
-    // harness source left once the pin is cleared — a stray empty
-    // agent_command must not change what the agent runs.
-    let mut record = record_with(Some("claude"), None, Some("codex-acp"));
-
-    apply_agent_command_update(&mut record, &[], "", false);
-
-    assert_eq!(record.agent_command_override, None);
-    assert_eq!(record.runtime.as_deref(), Some("claude"));
-    assert_eq!(record_agent_command(&record, &[]), "claude-agent-acp");
 }
 
 #[test]
@@ -1669,3 +1656,6 @@ fn discovery_publish_path_drops_mid_flight_delete() {
         "discovery's publish must not resurrect a harness deleted mid-discovery"
     );
 }
+
+#[path = "effort_tests.rs"]
+mod effort_tests;

@@ -2834,13 +2834,13 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
-    let base_prompt_content = config.base_prompt_content.take();
     // Completion-check continuations grant a turn a fresh budget from inside
     // the prompt task, which does not own the queue. Unbounded and never
     // awaited by the sender for the same reason the steer-ack channel is: a
     // send that blocked here would stall the turn it is trying to protect.
     let (deadline_extend_tx, mut deadline_extend_rx) = mpsc::unbounded_channel::<Uuid>();
 
+    let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         completion_check: config.completion_check,
         deadline_extend_tx: Some(deadline_extend_tx.clone()),
@@ -6026,6 +6026,10 @@ mod agent_draft_prompt_tests {
     #[test]
     fn shared_base_prompt_teaches_portable_agent_drafts() {
         let prompt = include_str!("base_prompt.md");
+        // Colony's opening is its own (PR #760): an agent employee at a real
+        // company, addressed to the ordinary employees it works with.
+        assert!(prompt
+            .starts_with("You are an agent employee at a real company, working inside Colony,"));
         assert!(prompt.contains("buzz agents draft-create"));
         assert!(prompt.contains("ask for at most two things"));
         assert!(prompt.contains("what it should do day-to-day"));

@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 548,
+    "rust_total": 549,
     "tauri_coupled": 215,
-    "portable": 333,
+    "portable": 334,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -411,6 +411,7 @@
       "src-tauri/src/managed_agents/discovery/bounded_command.rs",
       "src-tauri/src/managed_agents/discovery/codex_probe.rs",
       "src-tauri/src/managed_agents/discovery/command_paths.rs",
+      "src-tauri/src/managed_agents/discovery/effort_tests.rs",
       "src-tauri/src/managed_agents/discovery/login_shell.rs",
       "src-tauri/src/managed_agents/discovery/login_shell_spawn_probe.rs",
       "src-tauri/src/managed_agents/discovery/npm_prefix.rs",
