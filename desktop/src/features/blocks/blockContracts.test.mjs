@@ -937,3 +937,44 @@ test("relay-signed active catalog grants Installed trust only to its exact targe
   assert.equal(stale.ok, true);
   if (stale.ok) assert.equal(stale.value.trust, "untrusted");
 });
+
+test("artifact accepts hash-pinned website bundles and preserves old payloads", async () => {
+  const manifest = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../../crates/buzz-relay/src/core_blocks/composites/artifact.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const parsed = validateBlockManifest(manifest);
+  assert.equal(parsed.ok, true);
+  const data = {
+    title: "Website revision",
+    description: "Saved website for review",
+    url: "https://example.com/preview.png",
+    alt: "Website preview",
+    status: "ready-for-review",
+  };
+  assert.equal(validateBlockData(parsed.value, data).ok, true);
+  const bundle = {
+    url: "https://example.com/manifest.json",
+    sha256: "a".repeat(64),
+  };
+  assert.equal(
+    validateBlockData(parsed.value, { ...data, website_bundle: bundle }).ok,
+    true,
+  );
+  for (const invalid of [
+    { url: bundle.url },
+    { ...bundle, sha256: "invalid" },
+    { ...bundle, url: "http://example.com/manifest.json" },
+    { ...bundle, extra: true },
+  ]) {
+    assert.equal(
+      validateBlockData(parsed.value, { ...data, website_bundle: invalid }).ok,
+      false,
+    );
+  }
+});
