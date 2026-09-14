@@ -45,8 +45,8 @@ function filter(name) {
 
 requireContract(!/^  merge_group:\s*$/m.test(ci), "CI must not restore the disabled develop merge queue trigger");
 requireContract(
-  /^\s+cancel-in-progress: \$\{\{ github\.base_ref != 'main' \}\}$/m.test(ci),
-  "CI must keep in-flight main promotion runs alive while retaining cancellation elsewhere",
+  /^\s+cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' && github\.base_ref != 'main' \}\}$/m.test(ci),
+  "CI must keep in-flight main promotion runs and develop post-merge proofs alive while cancelling superseded pull request runs",
 );
 
 const changes = job("changes");
