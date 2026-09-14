@@ -1,9 +1,13 @@
 const MAX_HTML_LENGTH = 20_000;
 const ALLOWED_ELEMENTS = new Set(
-  "html head body title style main header footer nav section article aside div span p h1 h2 h3 h4 h5 h6 ul ol li dl dt dd strong em b i small br hr blockquote pre code table thead tbody tfoot tr th td caption figure figcaption img a".split(" "),
+  "html head body title style main header footer nav section article aside div span p h1 h2 h3 h4 h5 h6 ul ol li dl dt dd strong em b i small br hr blockquote pre code table thead tbody tfoot tr th td caption figure figcaption img a".split(
+    " ",
+  ),
 );
 const ALLOWED_ATTRIBUTES = new Set(
-  "class id style title alt width height colspan rowspan lang dir role".split(" "),
+  "class id style title alt width height colspan rowspan lang dir role".split(
+    " ",
+  ),
 );
 
 /** A static artifact gets no scripts, navigation, forms, or network access. */
@@ -28,7 +32,8 @@ export function artifactPreviewDocument(html: string): string {
   previewDocument.body.append(template.content);
   const policy = previewDocument.createElement("meta");
   policy.httpEquiv = "Content-Security-Policy";
-  policy.content = "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'";
+  policy.content =
+    "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'";
   previewDocument.head.prepend(policy);
   const viewport = previewDocument.createElement("meta");
   viewport.name = "viewport";
