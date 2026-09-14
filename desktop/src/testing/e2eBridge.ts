@@ -571,6 +571,10 @@ type E2eConfig = {
     /** Stall the first AUTH signing command forever; later attempts complete. */
     stallFirstAuthSigning?: boolean;
     stallWebsocketSends?: boolean;
+    /** Delay (ms) for `sync_agents_to_active_huddle` so a spec can hold the
+     *  publish open across an injected revocation. Releasable early via
+     *  `__BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__()`. */
+    syncAgentsToActiveHuddleDelayMs?: number;
     userSearchDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
     // semantics. These three drive the archive-button gate matrix in
@@ -1635,6 +1639,9 @@ declare global {
       removeMemberPubkey?: string;
     }>;
     /** Hold the next channel read until released. */
+    /** Release every `sync_agents_to_active_huddle` currently held behind
+     *  `syncAgentsToActiveHuddleDelayMs`. Returns how many were released. */
+    __BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__?: () => number;
     __BUZZ_E2E_DEFER_NEXT_CHANNELS_READ__?: () => void;
     /** Disarm the latch and release the held channel read, if any. */
     __BUZZ_E2E_RELEASE_CHANNELS_READ__?: () => number;
@@ -1777,6 +1784,11 @@ type DeferredGetEvent = {
 };
 let deferredGetEventQueue: DeferredGetEvent[] = [];
 let deferredThreadRepliesQueue: Array<() => void> = [];
+// Huddle agent syncs currently held behind `syncAgentsToActiveHuddleDelayMs`,
+// releasable early via `__BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__()`. The hold
+// must outlast the mid-send mutation a spec injects, then settle on demand
+// rather than on a timer, so the publish never races the injection.
+let heldHuddleAgentSyncReleases: Array<() => void> = [];
 let deferNextChannelsRead = false;
 let deferredChannelsReadResolve: (() => void) | null = null;
 
@@ -11990,6 +12002,12 @@ export function maybeInstallE2eTauriMocks() {
   deferNextChannelsRead = false;
   deferredChannelsReadResolve = null;
   window.__BUZZ_E2E_CHANNELS_READ_PENDING__ = 0;
+  heldHuddleAgentSyncReleases = [];
+  window.__BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__ = () => {
+    const held = heldHuddleAgentSyncReleases.splice(0);
+    for (const release of held) release();
+    return held.length;
+  };
   window.__BUZZ_E2E_DEFER_NEXT_CHANNELS_READ__ = () => {
     if (deferredChannelsReadResolve) {
       throw new Error("a channel read is already deferred");
@@ -12428,6 +12446,24 @@ export function maybeInstallE2eTauriMocks() {
           channelId?: string;
           agentPubkeys?: string[];
         };
+        const syncDelayMs =
+          activeConfig?.mock?.syncAgentsToActiveHuddleDelayMs ?? 0;
+        if (syncDelayMs > 0) {
+          await new Promise<void>((resolve) => {
+            let settled = false;
+            const release = () => {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timer);
+              heldHuddleAgentSyncReleases = heldHuddleAgentSyncReleases.filter(
+                (held) => held !== release,
+              );
+              resolve();
+            };
+            const timer = window.setTimeout(release, syncDelayMs);
+            heldHuddleAgentSyncReleases.push(release);
+          });
+        }
         if (
           !mockHuddle ||
           !request.channelId ||

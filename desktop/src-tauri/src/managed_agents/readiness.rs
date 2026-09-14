@@ -1706,7 +1706,6 @@ mod tests {
             key: "OPENROUTER_API_KEY".to_string()
         }));
     }
-
 }
 
 // Goose file-config-aware requirement tests live in a sibling file so this

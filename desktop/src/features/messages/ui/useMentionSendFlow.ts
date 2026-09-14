@@ -312,13 +312,23 @@ export function useMentionSendFlow({
       };
       let uploadStarted = false;
       try {
-        const admittedMentionPubkeys = uniqueNormalizedPubkeys(
-          await mentions.revalidateMentionPubkeys(
-            mentionPubkeys,
-            draft.capturedChannelId,
-            mentionRevalidationOptions(draft, "prepare"),
-          ),
-        );
+        let admittedMentionPubkeys: string[];
+        try {
+          admittedMentionPubkeys = uniqueNormalizedPubkeys(
+            await mentions.revalidateMentionPubkeys(
+              mentionPubkeys,
+              draft.capturedChannelId,
+              mentionRevalidationOptions(draft, "prepare"),
+            ),
+          );
+        } catch (error) {
+          // A mention revoked between selection and send fails the send and
+          // says so, rather than rejecting into the click handler unseen. The
+          // composer is still untouched here, so the draft stays put.
+          persistCanceledDraftIfUnchanged(draft, drafts);
+          toast.error(getErrorMessage(error, "The message could not be sent."));
+          return;
+        }
         if (!isMountedRef.current) return persistPreflightDraft();
         const admittedMentionPubkeySet = new Set(admittedMentionPubkeys);
         const readyAgentPubkeys = new Set(
@@ -764,6 +774,24 @@ export function useMentionSendFlow({
         };
 
         if (promptNonMemberPubkeys.length > 0) {
+          // Authorization precedes every relay side effect, the invite
+          // included: a mention revoked between selection and send must fail
+          // the send rather than open a prompt that would add the agent to the
+          // channel first (#6224, #7124).
+          try {
+            await mentions.revalidateMentionPubkeys(
+              pubkeys,
+              effectiveChannelId,
+              mentionRevalidationOptions(pendingDraft, "prepare"),
+            );
+          } catch (error) {
+            // The composer has not been cleared yet on this path, so the draft
+            // simply stays where the user left it.
+            toast.error(
+              getErrorMessage(error, "The message could not be sent."),
+            );
+            return;
+          }
           setNonMemberPromptError(null);
           setPendingNonMemberSend(pendingDraft);
           return;

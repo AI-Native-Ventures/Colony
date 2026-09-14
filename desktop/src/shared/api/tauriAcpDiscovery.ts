@@ -1,9 +1,12 @@
 import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
+import { invokeTauri } from "@/shared/api/invokeTauri";
+// Straight from the module that owns it, not through the `tauri` barrel: a
+// test that mocks the barrel (welcomeGuidePowerRace does) would otherwise lose
+// this export and fail to load anything downstream of it.
 import {
   fromRawAcpRuntimeCatalogEntry,
-  invokeTauri,
   type RawAcpRuntimeCatalogEntry,
-} from "@/shared/api/tauri";
+} from "@/shared/api/runtimeCatalog";
 
 /**
  * Discover the ACP runtime catalog.

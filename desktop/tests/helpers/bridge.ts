@@ -427,6 +427,9 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
    *  NIP-OA owner (#6338). */
   ownerOnlyAccessBuild?: boolean;
   /** Delay both managed and relay agent directory reads. */
+  /** Hold `sync_agents_to_active_huddle` open; release with
+   *  `__BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__()`. */
+  syncAgentsToActiveHuddleDelayMs?: number;
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];
@@ -594,6 +597,9 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
    * message — lets specs prove malformed/hash/size-mismatch error paths.
    */
   snapshotFetchError?: string;
+  /** Hold composer uploads until the spec releases them, so a send can be
+   *  interrupted between admission and publication. */
+  deferredComposerUploads?: boolean;
   uploadDescriptors?: {
     url: string;
     sha256: string;

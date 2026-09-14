@@ -487,11 +487,22 @@ export function AgentDefinitionDialog({
   const modelFieldVisible =
     runtime.trim().length > 0 || blankRuntimeModelProviderEditable;
   const isExplicitModelRequired = aiConfigurationMode === "custom";
-  const customAiPairSatisfied = agentAiConfigurationModeSatisfied(
-    aiConfigurationMode,
-    { provider, model },
-    runtimeCanChooseLlmProvider,
-  );
+  // A definition that pins only a runtime opens in Customize with an empty
+  // provider/model pair, so the pair gate would block every unrelated edit —
+  // an access change, a prompt tweak — on an agent whose model is inherited.
+  // The gate exists to stop a user SAVING an incomplete custom pair, so it
+  // only applies once that pair has actually been touched.
+  const loadedProvider = (initialValues?.provider ?? "").trim();
+  const loadedModel = (initialValues?.model ?? "").trim();
+  const aiPairUntouched =
+    provider.trim() === loadedProvider && model.trim() === loadedModel;
+  const customAiPairSatisfied =
+    agentAiConfigurationModeSatisfied(
+      aiConfigurationMode,
+      { provider, model },
+      runtimeCanChooseLlmProvider,
+    ) ||
+    (!isCreateMode && aiPairUntouched);
   const selectedRuntimeIsAvailable =
     runtime.trim().length === 0 ||
     selectedRuntime?.availability === "available";

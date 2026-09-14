@@ -59,6 +59,14 @@ mock.module("@/shared/api/tauri", {
     },
   },
 });
+// #6330 split runtime discovery into its own module, and `hooks.ts` imports it
+// directly, so stubbing only the `tauri` barrel would leave the real native
+// call in this graph.
+mock.module("@/shared/api/tauriAcpDiscovery", {
+  namedExports: {
+    discoverAcpRuntimes: async () => runtimes,
+  },
+});
 mock.module("@/shared/api/tauriGlobalAgentConfig", {
   namedExports: {
     getGlobalAgentConfig: async () => ({ ...globalConfig }),

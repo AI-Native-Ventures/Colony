@@ -838,7 +838,15 @@ mod integration_tests {
             nostr::Keys::generate(),
             media_storage,
         );
-        Arc::new(state)
+        let state = Arc::new(state);
+        // Production wires the sink once at startup (main.rs), not in
+        // AppState::new, and set_action_sink panics on a second call. Wiring it
+        // here gives every executed run a sink while keeping it to one call per
+        // state, however many workflows a test runs.
+        state
+            .workflow_engine
+            .set_action_sink(Arc::new(RelayActionSink::new(&state)));
+        state
     }
 
     async fn execute_send_message_workflow(
@@ -850,13 +858,6 @@ mod integration_tests {
         authored_text: &str,
         trigger_text: &str,
     ) -> String {
-        // Colony's engine takes its action sink at startup (main.rs), not in
-        // the test state builder, so a run executed here needs the same wiring
-        // the sibling owner-routing test gets by driving RelayActionSink
-        // directly.
-        state
-            .workflow_engine
-            .set_action_sink(Arc::new(RelayActionSink::new(state)));
         let definition = serde_json::json!({
             "name": name,
             "trigger": {"on": "message_posted"},
