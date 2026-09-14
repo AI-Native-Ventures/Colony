@@ -1,9 +1,9 @@
 import * as React from "react";
 import type { VListHandle } from "virtua";
 
-import { formatDayHeading } from "@/features/messages/lib/dateFormatters";
 import type { VirtualizedTimelineItem } from "@/features/messages/lib/virtualizedTimelineItems";
 import { cn } from "@/shared/lib/cn";
+import { formatDayGroupLabel } from "@/shared/lib/datetime";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { DayDivider } from "./DayDivider";
 import { activeDayDividerIndex } from "./stickyDayDivider";
@@ -54,7 +54,7 @@ export function useStickyDayDivider({
       if (pinnedPillHeight === 0) return;
 
       const renderedDividerPillTop = (divider: { item: DayDividerItem }) => {
-        const label = formatDayHeading(divider.item.headingTimestamp);
+        const label = formatDayGroupLabel(divider.item.headingTimestamp);
         const source = [
           ...scroller.querySelectorAll<HTMLElement>(
             '[data-testid="message-timeline-day-divider"]',
@@ -112,11 +112,11 @@ export function useStickyDayDivider({
         pinnedLabel.style.transform = `translateY(${nextTranslateY}px)`;
       }
       const nextLabel = activeDivider
-        ? formatDayHeading(activeDivider.item.headingTimestamp)
+        ? formatDayGroupLabel(activeDivider.item.headingTimestamp)
         : null;
       const incomingLabel =
         nextDivider && nextTranslateY < 0
-          ? formatDayHeading(nextDivider.item.headingTimestamp)
+          ? formatDayGroupLabel(nextDivider.item.headingTimestamp)
           : null;
       const activeSourcePill = sourcePills.find(
         (pill) => pill.parentElement?.dataset.dayLabel === nextLabel,

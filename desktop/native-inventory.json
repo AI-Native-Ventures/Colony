@@ -1465,7 +1465,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/settings/ui/VoiceSettingsCard.tsx:158"
+        "src/features/settings/ui/VoiceSettingsCard.tsx:162"
       ]
     },
     "delete_project_remote_branch": {
@@ -2535,7 +2535,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/settings/ui/VoiceSettingsCard.tsx:57"
+        "src/features/settings/ui/VoiceSettingsCard.tsx:61"
       ]
     },
     "get_user_notes": {
@@ -2651,7 +2651,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/settings/ui/VoiceSettingsCard.tsx:136"
+        "src/features/settings/ui/VoiceSettingsCard.tsx:140"
       ]
     },
     "index_observer_channel_id": {
@@ -2916,7 +2916,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/huddle/components/ParticipantList.tsx:183",
-        "src/features/settings/ui/VoiceSettingsCard.tsx:58"
+        "src/features/settings/ui/VoiceSettingsCard.tsx:62"
       ]
     },
     "load_agent_card": {
@@ -3244,7 +3244,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/settings/ui/VoiceSettingsCard.tsx:284"
+        "src/features/settings/ui/VoiceSettingsCard.tsx:288"
       ]
     },
     "preview_team_snapshot_import": {
@@ -3915,7 +3915,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/settings/ui/VoiceSettingsCard.tsx:116"
+        "src/features/settings/ui/VoiceSettingsCard.tsx:120"
       ]
     },
     "set_prevent_sleep_active": {
@@ -3945,7 +3945,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/huddle/components/HuddleBar.tsx:678",
-        "src/features/settings/ui/VoiceSettingsCard.tsx:84",
+        "src/features/settings/ui/VoiceSettingsCard.tsx:88",
         "src/parity/session/script.ts:700"
       ]
     },
