@@ -122,7 +122,6 @@ test("temporary rate limit retries within the same model and total call budget",
   }
 });
 
-
 test("tool diagnostics retain only fixed categories and ignore user text", async () => {
   const provider = await createLiveProofProvider({
     apiKey: key,
@@ -132,7 +131,10 @@ test("tool diagnostics retain only fixed categories and ignore user text", async
     await post(provider, {
       messages: [
         { role: "user", content: "unexpected argument --company tasks list" },
-        { role: "tool", content: `unexpected argument --format in website create; secret=${key}` },
+        {
+          role: "tool",
+          content: `unexpected argument --format in website create; secret=${key}`,
+        },
       ],
     });
     assert.deepEqual(provider.diagnostics().toolDiagnostics, [
