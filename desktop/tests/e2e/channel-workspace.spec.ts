@@ -251,9 +251,9 @@ test.describe("channel workspace", () => {
     });
   });
 
-  test("preserves the live thread when focus mode enters the workspace", async ({
-    page,
-  }) => {
+  async function assertFocusModePreservesTheLiveThread(
+    page: import("@playwright/test").Page,
+  ) {
     const workspaceUrl = "https://docs.example.com/focus-preservation";
     const draft = "Unsent thread draft survives focus mode";
     await emitThreadReplies(
@@ -574,6 +574,26 @@ test.describe("channel workspace", () => {
     expect(
       Math.abs((await readPreservedThreadState()).offsetDelta),
     ).toBeLessThanOrEqual(2);
+  }
+
+  test("preserves the live thread when focus mode enters the workspace", async ({
+    page,
+  }) => {
+    await assertFocusModePreservesTheLiveThread(page);
+  });
+
+  // The reading anchor is restored from the geometry of the presentation
+  // being returned to, so the larger type preference - which changes every
+  // row height - must hold the same 2px tolerance as the default.
+  test("preserves the live thread at the larger font size preference", async ({
+    page,
+  }) => {
+    await page.evaluate(() => {
+      window.localStorage.setItem("buzz.appearance.fontSize", "larger");
+    });
+    await page.reload();
+    await page.getByTestId("channel-general").click();
+    await assertFocusModePreservesTheLiveThread(page);
   });
 
   test("starts a link-created browser once and retries in workspace focus", async ({
