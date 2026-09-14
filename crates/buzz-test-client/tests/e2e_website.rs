@@ -315,15 +315,9 @@ async fn publish_managed_agent(
     .sign_with_keys(owner)
     .expect("managed agent signs");
     let ok = send_past_transport_stall(client, event, "managed agent head").await;
-    // Every test in this file re-seeds the same four agents, and a
-    // parameterized-replaceable head published inside the same second as the
-    // previous test's is refused as superseded. The precondition this seeding
-    // exists for is that a head is there for personas to resolve through, and
-    // a newer one already being stored satisfies it.
-    let already_current = ok.message.contains("superseded");
     assert!(
-        ok.accepted || already_current,
-        "the relay must accept the managed-agent head personas resolve through: {}",
+        ok.accepted,
+        "the relay must accept the unique managed-agent head: {}",
         ok.message
     );
 }
@@ -452,6 +446,8 @@ struct Fixture {
     instance_event_id: String,
     manifest_event_id: String,
     coordinator: Keys,
+    builder: Keys,
+    reviewer: Keys,
     personas: TeamPersonas,
 }
 
@@ -470,10 +466,10 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
     seed_member(owner, "owner", None).await;
     let relay = relay_self().await;
     let suffix = Uuid::new_v4().simple().to_string();
-    let coordinator = agent_keys(0x51);
-    let research = agent_keys(0x52);
-    let builder = agent_keys(0x53);
-    let reviewer = agent_keys(0x54);
+    let coordinator = Keys::generate();
+    let research = Keys::generate();
+    let builder = Keys::generate();
+    let reviewer = Keys::generate();
     for agent in [&coordinator, &research, &builder, &reviewer] {
         seed_member(agent, "member", Some(owner)).await;
     }
@@ -625,6 +621,8 @@ async fn setup(client: &mut BuzzTestClient, owner: &Keys) -> Fixture {
         instance_event_id,
         manifest_event_id,
         coordinator,
+        builder,
+        reviewer,
         personas,
     }
 }
@@ -1260,8 +1258,8 @@ async fn public_artifact_lifecycle_reaches_handover_and_rejects_replays() {
         .await
         .expect("connect as owner");
     let fixture = setup(&mut owner_client, &owner).await;
-    let builder = agent_keys(0x53);
-    let reviewer = agent_keys(0x54);
+    let builder = fixture.builder.clone();
+    let reviewer = fixture.reviewer.clone();
     let mut builder_client = BuzzTestClient::connect(&relay_url(), &builder)
         .await
         .expect("connect as builder");
@@ -1708,8 +1706,8 @@ async fn duplicate_coordinator_request_changes_preserves_current_task_report() {
         .await
         .expect("connect as owner");
     let fixture = setup(&mut owner_client, &owner).await;
-    let builder = agent_keys(0x53);
-    let reviewer = agent_keys(0x54);
+    let builder = fixture.builder.clone();
+    let reviewer = fixture.reviewer.clone();
     let mut builder_client = BuzzTestClient::connect(&relay_url(), &builder)
         .await
         .expect("connect as builder");
