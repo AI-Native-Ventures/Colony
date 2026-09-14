@@ -127,26 +127,13 @@ test("only complete, owned teams with mentionable members are suggested", () => 
   );
 });
 
-test("teams with duplicate identity display names remain selectable with their exact keys", () => {
-  const personas = [
-    persona("builder-one", "First"),
-    persona("builder-two", "Second"),
-  ];
-  const candidates = [
-    identity("builder-one", "Builder", { pubkey: "1".repeat(64) }),
-    identity("builder-two", "Builder", { pubkey: "2".repeat(64) }),
-  ];
-
-  const suggestions = buildTeamMentionCandidates(
-    [team("duplicate-identities", ["builder-one", "builder-two"])],
-    personas,
-    candidates,
-  );
-  assert.deepEqual(
-    suggestions[0].teamMembers.map((member) => member.pubkey),
-    ["1".repeat(64), "2".repeat(64)],
-  );
-});
+// Upstream's #7133 case ("teams with duplicate identity display names remain
+// selectable with their exact keys") is not ported: it asserts its new
+// binding model, where a team whose members share a display name still
+// expands because each member binds by exact key. Colony binds through
+// text-keyed draft maps, so `buildTeamMentionCandidates` withholds such a
+// team rather than shipping an ambiguous mention - the guard predates this
+// port (72417d2ab) and stands while that model stays Colony's.
 
 test("teams with identity and persona display-name collisions are not suggested", () => {
   const personas = [
