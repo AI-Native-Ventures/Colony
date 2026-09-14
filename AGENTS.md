@@ -659,10 +659,12 @@ just dev           # full Tauri app with native shell
 
 ### Text sizing & zoom (use rem, never px)
 
-The desktop app implements Cmd +/- zoom by scaling the root `<html>`
-font-size (`desktop/src/app/useWebviewZoomShortcuts.ts`) and pinning the native
-webview zoom. **Only rem-based text scales with zoom — hardcoded px text sizes
-are frozen.**
+The root `<html>` stays at 16px. Cmd +/- zoom
+(`desktop/src/app/useWebviewZoomShortcuts.ts`) and the Font size preference
+(`desktop/src/shared/lib/fontSizePreference.ts`) both compose on one virtual
+typography rem, `--buzz-type-rem`, so text scales while rem-based widths, gaps,
+radii and controls hold still. **Only sizes that derive from that variable
+scale — hardcoded px, and plain `rem` in a stylesheet, are frozen.**
 
 So for any readable text, reach for rem-based Tailwind tokens, never arbitrary
 px:
@@ -687,7 +689,12 @@ px:
 - ❌ `text-[15px]`, `text-[13px]`, CSS `font-size: 15px` — px froze against zoom
   and caused the message-timeline regression (PR #891).
 - ❌ Arbitrary rem literals too: `text-[0.6875rem]`, `text-[0.9rem]`, etc. They
-  zoom fine but re-fragment the scale we consolidated. Use a named token.
+  re-fragment the scale we consolidated. Use a named token.
+- ❌ `font-size: 0.8125rem` in a stylesheet. Real `rem` reads the fixed 16px
+  root, so it ignores both zoom and the preference — and a rule under
+  `:root[data-buzz-sidebar]` outranks the utilities it overrides. Write
+  `calc(var(--buzz-type-rem) * 0.8125)` instead;
+  `desktop/tests/e2e/conversation-type-scale.spec.ts` pins the chat surfaces.
 
 Prefer stock tokens — they're rem and zoom-safe. Only if a design genuinely
 needs a size the stock/`2xs`/`3xs` scale can't express should you **add a
