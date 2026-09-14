@@ -1174,7 +1174,10 @@ test("generic audio attachments render outside paragraph markup", () => {
     ),
   );
 
-  assert.match(html, /data-testid="audio-message-attachment"/);
+  // Split by kind, not a competition: a voice note renders through
+  // AudioMessageAttachment ("audio-message-attachment"), and any other audio
+  // keeps Colony's own preview card, which already carries a download action.
+  assert.match(html, /data-testid="media-audio-preview"/);
   assert.match(html, /aria-label="Download meeting.mp3"/);
   assert.doesNotMatch(html, /<p[^>]*>\s*<div/);
 });

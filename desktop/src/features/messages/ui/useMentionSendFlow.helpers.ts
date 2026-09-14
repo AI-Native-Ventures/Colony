@@ -184,10 +184,6 @@ export function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-export function formatMessageSendError(error: unknown) {
-  return `Message failed to send: ${getErrorMessage(error, "Unknown error")}`;
-}
-
 /**
  * finishSend attaches work context (a Task charge on the relay) before
  * sending. That attach step can fail for reasons the user needs to read and
