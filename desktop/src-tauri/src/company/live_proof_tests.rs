@@ -246,6 +246,7 @@ async fn the_app_creates_a_company_against_a_running_relay() {
 /// The built-in Chief of Staff, as it exists before any company does.
 fn existing_chief_of_staff() -> Vec<crate::managed_agents::AgentDefinition> {
     vec![crate::managed_agents::AgentDefinition {
+        session_policy: Default::default(),
         id: "builtin:fizz".to_string(),
         role_id: Some("chief-of-staff".to_string()),
         role_title: Some("Chief of Staff".to_string()),

@@ -168,6 +168,8 @@ type MockManagedAgentRuntimeSeed = {
 type MockRelayAgentSeed = {
   pubkey: string;
   name: string;
+  /** Verified NIP-OA owner; the owner rule and the marked build both read it. */
+  ownerPubkey?: string | null;
   agentType?: string;
   capabilities?: string[];
   respondTo?: RawRelayAgent["respond_to"];
@@ -222,6 +224,7 @@ type MockPersonaSeed = {
   namePool?: string[];
   respondTo?: "owner-only" | "allowlist" | "anyone";
   respondToAllowlist?: string[];
+  sessionPolicy?: "channel" | "thread";
 };
 
 type MockTeamSeed = {
@@ -445,6 +448,10 @@ type E2eConfig = {
     managedAgentHeads?: MockManagedAgentHeadSeed[];
     /** Real fixture signatures for ownership-sensitive native adapter reads. */
     managedAgentHeadEvents?: RelayEvent[];
+    /** Reject successive relay-agent directory reads, then resume. */
+    relayAgentListErrors?: (string | null)[];
+    /** Pubkeys omitted only from targeted send-time authorization checks. */
+    relayAgentRevalidationRevokedPubkeys?: string[];
     /** Native-like huddle state seeded from authoritative role-bearing membership. */
     huddle?: MockHuddleSeed;
     agentListDelayMs?: number;
@@ -566,6 +573,10 @@ type E2eConfig = {
     /** Stall the first AUTH signing command forever; later attempts complete. */
     stallFirstAuthSigning?: boolean;
     stallWebsocketSends?: boolean;
+    /** Delay (ms) for `sync_agents_to_active_huddle` so a spec can hold the
+     *  publish open across an injected revocation. Releasable early via
+     *  `__BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__()`. */
+    syncAgentsToActiveHuddleDelayMs?: number;
     userSearchDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
     // semantics. These three drive the archive-button gate matrix in
@@ -1051,6 +1062,7 @@ type RawSendChannelMessageResponse = {
 
 type RawRelayAgent = {
   pubkey: string;
+  owner_pubkey?: string | null;
   name: string;
   agent_type: string;
   channels: string[];
@@ -1161,6 +1173,7 @@ type RawPersona = {
   respond_to?: string | null;
   respond_to_allowlist?: string[];
   parallelism?: number | null;
+  session_policy?: "channel" | "thread";
   created_at: string;
   updated_at: string;
 };
@@ -1630,6 +1643,9 @@ declare global {
       removeMemberPubkey?: string;
     }>;
     /** Hold the next channel read until released. */
+    /** Release every `sync_agents_to_active_huddle` currently held behind
+     *  `syncAgentsToActiveHuddleDelayMs`. Returns how many were released. */
+    __BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__?: () => number;
     __BUZZ_E2E_DEFER_NEXT_CHANNELS_READ__?: () => void;
     /** Disarm the latch and release the held channel read, if any. */
     __BUZZ_E2E_RELEASE_CHANNELS_READ__?: () => number;
@@ -1772,6 +1788,11 @@ type DeferredGetEvent = {
 };
 let deferredGetEventQueue: DeferredGetEvent[] = [];
 let deferredThreadRepliesQueue: Array<() => void> = [];
+// Huddle agent syncs currently held behind `syncAgentsToActiveHuddleDelayMs`,
+// releasable early via `__BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__()`. The hold
+// must outlast the mid-send mutation a spec injects, then settle on demand
+// rather than on a timer, so the publish never races the injection.
+let heldHuddleAgentSyncReleases: Array<() => void> = [];
 let deferNextChannelsRead = false;
 let deferredChannelsReadResolve: (() => void) | null = null;
 
@@ -2565,6 +2586,7 @@ function resetMockRelayAgents(config?: E2eConfig) {
     });
     mockRelayAgents.push({
       pubkey: seed.pubkey,
+      owner_pubkey: seed.ownerPubkey ?? null,
       name: seed.name,
       agent_type: seed.agentType ?? "omp",
       channels: channels.map((channel) => channel.name),
@@ -2762,6 +2784,7 @@ function resetMockPersonas(config?: E2eConfig) {
     model: null,
     provider: null,
     name_pool: [],
+    session_policy: "channel",
     is_builtin: true,
     is_active: activePersonaIds.has(persona.id),
     shared: false,
@@ -2790,6 +2813,7 @@ function resetMockPersonas(config?: E2eConfig) {
         persona.respondTo === "allowlist"
           ? [...(persona.respondToAllowlist ?? [])]
           : [],
+      session_policy: persona.sessionPolicy ?? "channel",
       is_builtin: false,
       is_active: persona.isActive ?? true,
       shared: persona.shared ?? false,
@@ -4838,6 +4862,14 @@ function syncMockRelayAgentsFromManagedAgents() {
     },
   );
 
+  // Owned discovery includes nonmembers, but membership must come from the
+  // actual roster, including additions and newly created DMs.
+  for (const agent of baseAgents) {
+    if (agent.owner_pubkey !== MOCK_IDENTITY_PUBKEY) continue;
+    const membership = getManagedAgentRelayMembership(agent.pubkey);
+    agent.channel_ids = membership.channelIds;
+    agent.channels = membership.channels;
+  }
   mockRelayAgents = [...baseAgents, ...managedAgentsAsRelay];
 }
 
@@ -8614,6 +8646,8 @@ async function handleListRelayAgents(
   config: E2eConfig | undefined,
 ): Promise<RawRelayAgent[]> {
   await delayAgentList(config);
+  const error = config?.mock?.relayAgentListErrors?.shift();
+  if (error) throw new Error(error);
   syncMockRelayAgentsFromManagedAgents();
   return mockRelayAgents.map(cloneRelayAgent);
 }
@@ -9051,6 +9085,7 @@ type PersonaBehaviorInput = {
   respondTo?: "owner-only" | "allowlist" | "anyone";
   respondToAllowlist?: string[];
   parallelism?: number;
+  sessionPolicy?: "channel" | "thread";
 };
 
 /** Mirrors `apply_persona_behavior`: replace all four as a unit. */
@@ -9067,6 +9102,7 @@ function applyMockPersonaBehavior(
       ? [...(behavior.respondToAllowlist ?? [])]
       : [];
   persona.parallelism = behavior.parallelism ?? null;
+  persona.session_policy = behavior.sessionPolicy ?? "channel";
 }
 
 function normalizeMockPersonaRole(
@@ -9149,6 +9185,7 @@ async function handleCreatePersona(args: {
         }
       : null,
     env_vars: { ...(args.input.envVars ?? {}) },
+    session_policy: "channel",
     created_at: now,
     updated_at: now,
   };
@@ -9306,10 +9343,11 @@ function upsertMockPersonaRelayEvent(event: RelayEvent): void {
   mockPersonaEvents.push(event);
 }
 
-function upsertMockPersonaEvent(persona: RawPersona): void {
-  const event: RelayEvent = {
-    id: mockEventId(),
-    pubkey: MOCK_IDENTITY_PUBKEY,
+function upsertMockPersonaEvent(
+  persona: RawPersona,
+  identity?: TestIdentity,
+): void {
+  const template = {
     created_at: Math.floor(Date.now() / 1_000),
     kind: KIND_PERSONA,
     tags: [["d", persona.id], ...(persona.shared ? [["shared", "true"]] : [])],
@@ -9325,8 +9363,15 @@ function upsertMockPersonaEvent(persona: RawPersona): void {
       respond_to_allowlist: persona.respond_to_allowlist ?? [],
       parallelism: persona.parallelism ?? null,
     }),
-    sig: "0".repeat(128),
   };
+  const event: RelayEvent = identity
+    ? finalizeEvent(template, hexToBytes(identity.privateKey))
+    : {
+        ...template,
+        id: mockEventId(),
+        pubkey: MOCK_IDENTITY_PUBKEY,
+        sig: "0".repeat(128),
+      };
   upsertMockPersonaRelayEvent(event);
   emitMockGlobalEvent(event);
 }
@@ -9351,7 +9396,7 @@ function publishMockPersonaHead(
       personaSharePublicationCallCount++
     ] ?? "published";
   if (publicationStatus === "published") {
-    upsertMockPersonaEvent(persona);
+    upsertMockPersonaEvent(persona, getActiveIdentity(config));
   }
   return {
     persona: { ...persona },
@@ -11979,6 +12024,12 @@ export function maybeInstallE2eTauriMocks() {
   deferNextChannelsRead = false;
   deferredChannelsReadResolve = null;
   window.__BUZZ_E2E_CHANNELS_READ_PENDING__ = 0;
+  heldHuddleAgentSyncReleases = [];
+  window.__BUZZ_E2E_RELEASE_HUDDLE_AGENT_SYNCS__ = () => {
+    const held = heldHuddleAgentSyncReleases.splice(0);
+    for (const release of held) release();
+    return held.length;
+  };
   window.__BUZZ_E2E_DEFER_NEXT_CHANNELS_READ__ = () => {
     if (deferredChannelsReadResolve) {
       throw new Error("a channel read is already deferred");
@@ -12417,6 +12468,24 @@ export function maybeInstallE2eTauriMocks() {
           channelId?: string;
           agentPubkeys?: string[];
         };
+        const syncDelayMs =
+          activeConfig?.mock?.syncAgentsToActiveHuddleDelayMs ?? 0;
+        if (syncDelayMs > 0) {
+          await new Promise<void>((resolve) => {
+            let settled = false;
+            const release = () => {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timer);
+              heldHuddleAgentSyncReleases = heldHuddleAgentSyncReleases.filter(
+                (held) => held !== release,
+              );
+              resolve();
+            };
+            const timer = window.setTimeout(release, syncDelayMs);
+            heldHuddleAgentSyncReleases.push(release);
+          });
+        }
         if (
           !mockHuddle ||
           !request.channelId ||
@@ -13818,6 +13887,29 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "list_relay_agents":
         return handleListRelayAgents(activeConfig);
+      case "revalidate_relay_agents": {
+        const agents = await handleListRelayAgents(activeConfig);
+        const { pubkeys, channelId } = payload as {
+          pubkeys: string[];
+          channelId?: string;
+        };
+        const requested = new Set(
+          pubkeys.map((pubkey) => pubkey.toLowerCase()),
+        );
+        const revoked = new Set(
+          (activeConfig?.mock?.relayAgentRevalidationRevokedPubkeys ?? []).map(
+            (pubkey) => pubkey.toLowerCase(),
+          ),
+        );
+        return agents.filter(
+          (agent) =>
+            requested.has(agent.pubkey.toLowerCase()) &&
+            !revoked.has(agent.pubkey.toLowerCase()) &&
+            (!channelId ||
+              agent.channel_ids.includes(channelId) ||
+              agent.owner_pubkey === MOCK_IDENTITY_PUBKEY),
+        );
+      }
       case "record_org_placement":
         // The desktop mirrors a published placement onto the local record so
         // a later head rebuild does not drop it. Nothing in the mock rebuilds,

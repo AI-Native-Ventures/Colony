@@ -37,6 +37,7 @@ buzz messages send --channel <uuid> --content - < message.md   # read body from 
 buzz messages send --channel <uuid> --content "Here they are." --discovery campaign_leads:<campaign-id>
 buzz messages get --channel <uuid> --limit 20
 buzz messages thread --channel <uuid> --event <event-id>
+buzz messages thread --link 'buzz://message?channel=<uuid>&id=<event-id>&thread=<root-id>'
 buzz messages search --query "architecture"
 buzz messages search --author <pubkey|npub|name> --since <unix-ts>
 buzz messages edit --event <event-id> --content "Updated text"
@@ -108,6 +109,12 @@ constraint omitted from the command is removed. `protect list` reports malformed
 stored rules in `validation_error` so an owner can remove and repair them.
 
 ## Commands
+
+`buzz --help` prints this whole surface as an indented tree — every group with
+its subcommands and their descriptions — so there is no need to run `--help`
+once per group to find a command. `buzz -h` keeps the short group-level
+summary, and `buzz <group> <subcommand> --help` has the flags and examples.
+The table below mirrors that tree for readers who are not at a terminal.
 
 | Group | Subcommand | Description |
 |-------|-----------|-------------|

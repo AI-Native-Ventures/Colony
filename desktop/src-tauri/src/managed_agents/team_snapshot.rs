@@ -260,6 +260,7 @@ mod tests {
             working_dir: None,
             tier: None,
             manager: None,
+            session_policy: Default::default(),
             pubkey: format!("{name}-pubkey"),
             name: name.to_string(),
             role_id: None,
@@ -295,6 +296,7 @@ mod tests {
             runtime_pid: None,
             backend: BackendKind::Local,
             backend_agent_id: None,
+            provider_policy_pending: false,
             provider_binary_path: None,
             team_id: None,
             persona_team_dir: None,
@@ -321,6 +323,7 @@ mod tests {
             definition_respond_to_allowlist: vec![],
             definition_parallelism: None,
             relay_mesh: None,
+            effort_level: None,
         }
     }
 

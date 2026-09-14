@@ -24,6 +24,8 @@ fn chat_team_id() -> String {
 
 pub(super) fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
+        session_policy: Default::default(),
+        provider_policy_pending: false,
         provisioned: None,
         provisioned_version: None,
         provisioned_requires_commands: Vec::new(),
@@ -87,6 +89,7 @@ pub(super) fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
         definition_respond_to_allowlist: Vec::new(),
         definition_parallelism: None,
         relay_mesh: None,
+        effort_level: None,
     }
 }
 

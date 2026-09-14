@@ -52,6 +52,7 @@ export type RawManagedAgent = {
   // Pre-feature fixtures may omit these; mapped to "owner-only"/[] in fromRawManagedAgent.
   respond_to?: ManagedAgent["respondTo"];
   respond_to_allowlist?: string[];
+  session_policy?: ManagedAgent["sessionPolicy"];
 };
 
 export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
@@ -99,5 +100,8 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     backendAgentId: agent.backend_agent_id,
     respondTo: agent.respond_to ?? "owner-only",
     respondToAllowlist: agent.respond_to_allowlist ?? [],
+    // Unknown or absent degrades to the channel default rather than dropping
+    // the whole record, so forward-version data still renders.
+    sessionPolicy: agent.session_policy ?? "channel",
   };
 }

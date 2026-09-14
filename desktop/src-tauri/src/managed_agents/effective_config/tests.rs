@@ -8,6 +8,7 @@ fn definition(
     prompt: &str,
 ) -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: id.to_string(),
         role_id: None,
         role_title: None,
@@ -47,6 +48,7 @@ fn record(
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "agent-pk".to_string(),
         name: "Agent".to_string(),
         role_id: None,
@@ -76,6 +78,7 @@ fn record(
         runtime_pid: None,
         backend: BackendKind::Local,
         backend_agent_id: None,
+        provider_policy_pending: false,
         provider_binary_path: None,
         team_id: None,
         persona_team_dir: None,
@@ -100,6 +103,7 @@ fn record(
         source_team_persona_slug: None,
         catalog_source: None,
         relay_mesh: None,
+        effort_level: None,
         auto_restart_on_config_change: false,
         definition_respond_to: None,
         definition_respond_to_allowlist: vec![],

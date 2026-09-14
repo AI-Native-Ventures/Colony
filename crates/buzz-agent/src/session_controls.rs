@@ -90,10 +90,16 @@ mod tests {
             Config::for_discovery(Provider::OpenAi, "test".into(), "http://localhost".into());
         cfg.model = "gpt-5.5".into();
         cfg.hints_enabled = false;
+        let permissions = Arc::new(crate::permission::PermissionBroker::new(
+            cfg.max_pending_permissions,
+            cfg.permission_timeout,
+        ));
         Arc::new(App {
             llm: Arc::new(Llm::new(&cfg).unwrap()),
             cfg,
             sessions: Mutex::new(HashMap::new()),
+            negotiated_version: std::sync::atomic::AtomicU32::new(crate::PROTOCOL_VERSION),
+            permissions,
             models_cache: OnceCell::new(),
         })
     }

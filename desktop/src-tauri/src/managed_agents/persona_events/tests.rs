@@ -11,6 +11,7 @@ pub(super) fn sample_record() -> ManagedAgentRecord {
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "p".repeat(64),
         name: "agent".into(),
         role_id: None,
@@ -41,6 +42,7 @@ pub(super) fn sample_record() -> ManagedAgentRecord {
         runtime_pid: None,
         backend: BackendKind::Local,
         backend_agent_id: None,
+        provider_policy_pending: false,
         provider_binary_path: None,
         team_id: None,
         persona_team_dir: None,
@@ -68,6 +70,7 @@ pub(super) fn sample_record() -> ManagedAgentRecord {
         definition_respond_to_allowlist: Vec::new(),
         definition_parallelism: None,
         relay_mesh: None,
+        effort_level: None,
     }
 }
 
@@ -151,6 +154,7 @@ fn preview_passes_through_unchanged_when_persona_missing() {
 
 pub(super) fn sample_persona() -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: "test-persona".to_string(),
         role_id: None,
         role_title: None,
@@ -327,6 +331,7 @@ fn content_matches_nip_ap_vector() {
     const VECTOR: &str = r#"{"display_name":"Test Agent","system_prompt":"You are a test assistant.","avatar_url":"https://example.com/avatar.png","runtime":"goose","model":"claude-opus-4","provider":"anthropic","name_pool":["Alpha","Beta"]}"#;
 
     let content = PersonaEventContent {
+        session_policy: Default::default(),
         display_name: "Test Agent".to_string(),
         role_id: None,
         role_title: None,
@@ -382,6 +387,7 @@ fn content_matches_nip_ap_vector() {
     // signed content, so a second implementer following the spec computes
     // the same NIP-01 id.
     let record = AgentDefinition {
+        session_policy: Default::default(),
         id: "test-agent".to_string(),
         role_id: None,
         role_title: None,
@@ -415,6 +421,7 @@ fn content_matches_nip_ap_vector() {
 #[test]
 fn round_trip_minimal_persona() {
     let record = AgentDefinition {
+        session_policy: Default::default(),
         id: "minimal".to_string(),
         role_id: None,
         role_title: None,
@@ -514,6 +521,7 @@ fn behavioral_defaults_survive_record_round_trip() {
 #[test]
 fn quad_absent_definition_hash_stable_across_activation() {
     let record = AgentDefinition {
+        session_policy: Default::default(),
         id: "quad-absent".to_string(),
         role_id: None,
         role_title: None,
@@ -540,6 +548,7 @@ fn quad_absent_definition_hash_stable_across_activation() {
     let live = persona_event_content(&record);
     // The reserved-era projection: identical fields, quad hardcoded off.
     let reserved_era = PersonaEventContent {
+        session_policy: Default::default(),
         respond_to: None,
         respond_to_allowlist: Vec::new(),
         parallelism: None,
@@ -560,6 +569,7 @@ fn quad_absent_definition_hash_stable_across_activation() {
 /// way `persona_from_event` maps fields, without needing a signed event.
 fn persona_from_event_content_for_test(content: PersonaEventContent) -> AgentDefinition {
     AgentDefinition {
+        session_policy: content.session_policy,
         id: "staged".to_string(),
         role_id: content.role_id,
         role_title: content.role_title,
@@ -588,6 +598,7 @@ fn persona_from_event_content_for_test(content: PersonaEventContent) -> AgentDef
 #[test]
 fn persona_content_hash_is_deterministic() {
     let content = PersonaEventContent {
+        session_policy: Default::default(),
         display_name: "Test".to_string(),
         role_id: None,
         role_title: None,
@@ -610,6 +621,7 @@ fn persona_content_hash_is_deterministic() {
 #[test]
 fn persona_content_hash_changes_on_edit() {
     let content1 = PersonaEventContent {
+        session_policy: Default::default(),
         display_name: "Test".to_string(),
         role_id: None,
         role_title: None,
@@ -629,6 +641,55 @@ fn persona_content_hash_changes_on_edit() {
         persona_content_hash(&content1),
         persona_content_hash(&content2)
     );
+}
+
+#[test]
+fn session_policy_change_changes_hash_and_snapshot() {
+    let mut persona = sample_persona();
+    let channel_hash = persona_content_hash(&persona_event_content(&persona));
+    persona.session_policy = crate::managed_agents::AcpSessionPolicy::Thread;
+
+    let thread_content = persona_event_content(&persona);
+    assert_ne!(channel_hash, persona_content_hash(&thread_content));
+    assert_eq!(
+        thread_content.session_policy,
+        crate::managed_agents::AcpSessionPolicy::Thread
+    );
+
+    let mut record = sample_record();
+    apply_persona_snapshot(&mut record, &persona);
+    assert_eq!(
+        record.session_policy,
+        crate::managed_agents::AcpSessionPolicy::Thread
+    );
+}
+
+#[test]
+fn channel_policy_stays_wire_compatible_when_absent() {
+    let content = persona_event_content(&sample_persona());
+    let value = serde_json::to_value(content).unwrap_or_default();
+    assert!(value.get("session_policy").is_none());
+
+    let parsed: PersonaEventContent = serde_json::from_value(serde_json::json!({
+        "display_name": "Legacy"
+    }))
+    .unwrap_or_else(|error| panic!("legacy persona content should parse: {error}"));
+    assert_eq!(
+        parsed.session_policy,
+        crate::managed_agents::AcpSessionPolicy::Channel
+    );
+
+    for value in [serde_json::json!("conversation"), serde_json::Value::Null] {
+        let parsed: PersonaEventContent = serde_json::from_value(serde_json::json!({
+            "display_name": "Forward-compatible",
+            "session_policy": value,
+        }))
+        .unwrap_or_else(|error| panic!("unknown policy should not drop a persona: {error}"));
+        assert_eq!(
+            parsed.session_policy,
+            crate::managed_agents::AcpSessionPolicy::Channel
+        );
+    }
 }
 
 // ── PersonaSnapshot.runtime ───────────────────────────────────────────────
@@ -662,6 +723,7 @@ fn snapshot_runtime_verbatim_from_persona() {
 /// Helper: a persona with no model/provider configured.
 fn blank_model_persona() -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         model: None,
         provider: None,
         ..sample_persona()

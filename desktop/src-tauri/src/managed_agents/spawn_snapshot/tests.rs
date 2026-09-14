@@ -2,9 +2,6 @@ use super::*;
 use crate::managed_agents::types::RespondTo;
 use std::collections::BTreeMap;
 
-/// Canonical projection of a prospective snapshot — the exact value the drift
-/// comparison reads, so these tests assert on drift itself rather than on a
-/// proxy for it.
 fn snapshot(
     record: &ManagedAgentRecord,
     personas: &[AgentDefinition],
@@ -15,6 +12,12 @@ fn snapshot(
     prospective_spawn_config_snapshot(record, personas, teams, workspace_relay, global).canonical()
 }
 
+/// `snapshot` with the fixed no-persona/no-team/default-global shape the effort
+/// tests share, so their call sites read as `snap(&record)` instead of wrapping.
+fn snap(record: &ManagedAgentRecord) -> serde_json::Value {
+    snapshot(record, &[], &[], "wss://ws.example", &Default::default())
+}
+
 fn record() -> ManagedAgentRecord {
     ManagedAgentRecord {
         provisioned: None,
@@ -23,6 +26,7 @@ fn record() -> ManagedAgentRecord {
         working_dir: None,
         tier: None,
         manager: None,
+        session_policy: Default::default(),
         pubkey: "p".repeat(64),
         name: "agent".into(),
         role_id: None,
@@ -53,6 +57,7 @@ fn record() -> ManagedAgentRecord {
         runtime_pid: None,
         backend: Default::default(),
         backend_agent_id: None,
+        provider_policy_pending: false,
         provider_binary_path: None,
         team_id: None,
         persona_team_dir: None,
@@ -80,11 +85,13 @@ fn record() -> ManagedAgentRecord {
         definition_respond_to_allowlist: Vec::new(),
         definition_parallelism: None,
         relay_mesh: None,
+        effort_level: None,
     }
 }
 
 fn persona(id: &str, runtime: Option<&str>, prompt: &str) -> AgentDefinition {
     AgentDefinition {
+        session_policy: Default::default(),
         id: id.into(),
         role_id: None,
         role_title: None,
@@ -848,3 +855,7 @@ fn openclaw_cap_crossing_parallelism_snapshots_differ() {
         "parallelism 8 (clamps to 5) and 3 (runs as 3) must produce different snapshots"
     );
 }
+
+#[cfg(test)]
+#[path = "tests_ext.rs"]
+mod ext;

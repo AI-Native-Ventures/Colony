@@ -254,15 +254,16 @@ export function MembersSidebarMemberCard({
                     : "Stopped"}
               </Badge>
             ) : null}
+            {managedAgent ? (
+              <Badge
+                className="normal-case tracking-normal"
+                data-testid={`sidebar-managed-agent-respond-to-${member.pubkey}`}
+                variant="outline"
+              >
+                {formatRespondToLabel(managedAgent)}
+              </Badge>
+            ) : null}
           </div>
-        ) : null}
-        {managedAgent ? (
-          <span
-            className="sr-only"
-            data-testid={`sidebar-managed-agent-respond-to-${member.pubkey}`}
-          >
-            {formatRespondToLabel(managedAgent)}
-          </span>
         ) : null}
       </div>
     </div>

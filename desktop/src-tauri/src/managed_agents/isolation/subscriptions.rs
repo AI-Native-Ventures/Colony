@@ -13,16 +13,24 @@ pub(crate) fn direct(runtime: &str) -> bool {
 }
 
 /// Resolve direct vendor CLIs in Electron and legacy ACP adapters elsewhere.
-pub(crate) fn catalog_adapter(
+/// Resolve the adapter command for a catalog entry.
+///
+/// `resolve` is the caller's command resolver, so discovery's cheap path can
+/// pass the cache-only one and stay free of login-shell spawns (#6330), while a
+/// forced discovery passes the live resolver. Colony keeps this indirection
+/// because a `direct` runtime resolves by runtime id rather than by adapter
+/// command, which upstream's inline lookup has no concept of.
+pub(crate) fn catalog_adapter_with(
     runtime: &'static crate::managed_agents::KnownAcpRuntime,
+    resolve: fn(&str) -> Option<std::path::PathBuf>,
 ) -> Option<(&'static str, std::path::PathBuf)> {
     if direct(runtime.id) {
-        return Some((*runtime.commands.first()?, find_command(runtime.id)?));
+        return Some((*runtime.commands.first()?, resolve(runtime.id)?));
     }
     runtime
         .commands
         .iter()
-        .find_map(|command| find_command(command).map(|path| (*command, path)))
+        .find_map(|command| resolve(command).map(|path| (*command, path)))
 }
 
 /// Validate the native profile before writing a log or entering the legacy setup listener.

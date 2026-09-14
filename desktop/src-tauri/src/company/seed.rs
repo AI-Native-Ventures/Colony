@@ -96,6 +96,7 @@ pub fn seed_personas(
         // `AgentDefinition` later should fail to compile here and force a
         // decision, rather than silently taking a default.
         outcome.created_personas.push(AgentDefinition {
+            session_policy: Default::default(),
             id,
             role_id: Some(role_slug(entry.role_id)),
             role_title: Some(role.title.to_string()),

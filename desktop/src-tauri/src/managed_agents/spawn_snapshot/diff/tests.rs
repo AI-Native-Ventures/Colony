@@ -9,6 +9,7 @@ const RELAY_WITH_TOKEN: &str = "wss://relay.example/ws?token=SENTINEL";
 /// coverage guard below sees the full serialized key set.
 fn base() -> SpawnConfigSnapshot {
     SpawnConfigSnapshot {
+        session_policy: "channel".to_string(),
         acp_command: "buzz-acp".into(),
         command: "goose".into(),
         args: vec!["--mode".into(), "acp".into()],
@@ -30,6 +31,7 @@ fn base() -> SpawnConfigSnapshot {
         idle_timeout_seconds: Some(600),
         max_turn_duration_seconds: Some(7200),
         parallelism: 1,
+        effort_level: Some("high".into()),
     }
 }
 
@@ -67,6 +69,9 @@ fn mutations() -> Vec<Mutation> {
             s.credential_mode = CredentialMode::ColonyCredits
         }),
         ("session_title", |s| s.session_title = None),
+        ("session_policy", |s| {
+            s.session_policy = "thread".to_string()
+        }),
         ("auth_tag", |s| s.auth_tag = None),
         ("respond_to", |s| s.respond_to = "anyone".into()),
         ("respond_to_allowlist", |s| s.respond_to_allowlist = None),
@@ -75,6 +80,7 @@ fn mutations() -> Vec<Mutation> {
             s.max_turn_duration_seconds = None
         }),
         ("parallelism", |s| s.parallelism = 8),
+        ("effort_level", |s| s.effort_level = None),
     ]
 }
 
@@ -576,4 +582,38 @@ fn unstamped_agent_yields_no_badge_and_no_entries() {
             "unstamped agent (orphaned={orphaned}) must not light the badge"
         );
     }
+}
+
+// ── B5 effort lifecycle: restart-diff and re-stamp ───────────────────────
+
+#[test]
+fn tracked_running_old_effort_edited_to_new_yields_effort_level_diff() {
+    // A process was stamped at effort `high`; the record's canonical effort is
+    // later edited to `low`. Until a restart re-stamps, the tracked pair must
+    // light the badge and name exactly `effort_level`.
+    let stamped = base(); // effort_level = high
+    let mut current = base();
+    current.effort_level = Some("low".into());
+    let (needs_restart, entries) = eligible(false, &stamped, &current, None, None);
+    assert!(needs_restart);
+    assert_eq!(fields(&entries), vec!["effort_level"]);
+    assert_eq!(
+        change_at(&entries, "effort_level"),
+        &RestartChange::Value {
+            before: Value::String("high".into()),
+            after: Value::String("low".into()),
+        }
+    );
+}
+
+#[test]
+fn restart_restamps_effort_and_clears_the_badge() {
+    // After the edit above, a restart stamps the new effort, so stamped and
+    // current agree again: the badge clears and no entry remains.
+    let mut restamped = base();
+    restamped.effort_level = Some("low".into());
+    let current = restamped.clone();
+    let (needs_restart, entries) = eligible(false, &restamped, &current, None, None);
+    assert!(!needs_restart);
+    assert!(entries.is_empty());
 }

@@ -257,6 +257,9 @@ mod tests {
         );
         let record = ManagedAgentRecord {
             pubkey: "b".repeat(64),
+            // A publishable head needs a reviewable display name (#4220); this
+            // fixture is about head identity, not about an unnamed agent.
+            name: "Scout".into(),
             persona_id: Some("builtin:fizz".into()),
             role_id: Some("chief-of-staff".into()),
             tier: approved.tier,

@@ -1,4 +1,4 @@
-import type { RespondToMode } from "@/shared/api/types";
+import type { AcpSessionPolicy, RespondToMode } from "@/shared/api/types";
 
 export type AgentPersona = {
   id: string;
@@ -30,6 +30,8 @@ export type AgentPersona = {
   respondTo: RespondToMode | null;
   respondToAllowlist: string[];
   parallelism: number | null;
+  /** Whether ACP context is shared by the channel or isolated per thread. */
+  sessionPolicy?: AcpSessionPolicy;
   createdAt: string;
   updatedAt: string;
 };
@@ -45,6 +47,7 @@ export type PersonaBehaviorInput = {
   respondTo?: RespondToMode;
   respondToAllowlist?: string[];
   parallelism?: number;
+  sessionPolicy?: AcpSessionPolicy;
 };
 
 export type CreatePersonaInput = {

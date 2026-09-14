@@ -4,6 +4,7 @@ mod client;
 mod commands;
 pub mod company_scan;
 mod error;
+mod help_tree;
 pub mod identity;
 mod links;
 pub mod llm;
@@ -12,7 +13,7 @@ pub mod seat;
 mod validate;
 pub mod worker;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use uuid::Uuid;
 
 pub use client::BuzzClient;
@@ -53,7 +54,7 @@ where
     // double-install returns Err and is harmless.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let cli = match Cli::try_parse_from(args) {
+    let cli = match parse_args(args) {
         Ok(cli) => cli,
         Err(e) => {
             if e.use_stderr() {
@@ -73,6 +74,41 @@ where
             error::exit_code(&e)
         }
     }
+}
+
+/// Root help layout. Identical to clap's default except that `{subcommands}`
+/// is dropped and the command tree arrives through `{after-help}` instead, so
+/// the group list is not printed twice. `{options}` and `{subcommands}` emit no
+/// heading of their own — clap writes those from `write_all_args`, which this
+/// template bypasses — so the headings are spelled out here.
+const ROOT_HELP_TEMPLATE: &str = "\
+{before-help}{about-with-newline}
+{usage-heading} {usage}{after-help}
+
+Options:
+{options}";
+
+/// The root command with the agent-friendly command tree installed.
+///
+/// clap picks `after_long_help` for `--help` and falls back to `after_help`
+/// for `-h`, which is what gives the two depths: `-h` keeps the group-level
+/// summary, `--help` shows every subcommand under every group.
+fn build_command() -> clap::Command {
+    let cmd = Cli::command();
+    let groups = help_tree::render(&cmd, 1);
+    let full = help_tree::render(&cmd, usize::MAX);
+    cmd.help_template(ROOT_HELP_TEMPLATE)
+        .after_help(format!("Commands:\n{groups}"))
+        .after_long_help(format!("Commands:\n{full}"))
+}
+
+fn parse_args<I, S>(args: I) -> Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString> + Clone,
+{
+    let matches = build_command().try_get_matches_from(args)?;
+    Cli::from_arg_matches(&matches)
 }
 
 #[derive(Parser)]
@@ -1678,14 +1714,20 @@ pub enum MessagesCmd {
         #[arg(long)]
         kinds: Option<String>,
     },
-    /// Get a message thread (replies to a root message)
+    /// Get the containing thread for a message or Buzz message link
+    #[command(
+        after_help = "Examples:\n  buzz messages thread --channel <UUID> --event <EVENT_ID>\n  buzz messages thread --link 'buzz://message?channel=<UUID>&id=<EVENT_ID>&thread=<ROOT_ID>'"
+    )]
     Thread {
-        /// Channel UUID
-        #[arg(long)]
-        channel: String,
-        /// Root message event ID (64-char hex)
-        #[arg(long)]
-        event: String,
+        /// Channel UUID; required unless --link is supplied
+        #[arg(long, required_unless_present = "link", conflicts_with = "link")]
+        channel: Option<String>,
+        /// Message event ID (64-char hex); required unless --link is supplied
+        #[arg(long, required_unless_present = "link", conflicts_with = "link")]
+        event: Option<String>,
+        /// Canonical buzz://message deep link; uses the configured relay and identity
+        #[arg(long, conflicts_with_all = ["channel", "event"])]
+        link: Option<String>,
         /// Maximum number of results to return
         #[arg(long)]
         limit: Option<u32>,
@@ -4279,6 +4321,47 @@ mod tests {
             &event_id,
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn messages_thread_accepts_link_or_explicit_identifiers() {
+        let channel = "123e4567-e89b-12d3-a456-426614174000";
+        let event = "a".repeat(64);
+        let link = format!("buzz://message?channel={channel}&id={event}");
+
+        assert!(
+            Cli::try_parse_from(["buzz", "messages", "thread", "--link", link.as_str(),]).is_ok()
+        );
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "messages",
+            "thread",
+            "--channel",
+            channel,
+            "--event",
+            event.as_str(),
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn messages_thread_rejects_partial_or_mixed_targets() {
+        let channel = "123e4567-e89b-12d3-a456-426614174000";
+        let event = "a".repeat(64);
+        let link = format!("buzz://message?channel={channel}&id={event}");
+
+        assert!(Cli::try_parse_from(["buzz", "messages", "thread"]).is_err());
+        assert!(Cli::try_parse_from(["buzz", "messages", "thread", "--channel", channel]).is_err());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "messages",
+            "thread",
+            "--link",
+            link.as_str(),
+            "--event",
+            event.as_str(),
+        ])
+        .is_err());
     }
 
     #[test]

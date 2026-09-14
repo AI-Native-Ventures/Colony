@@ -584,6 +584,7 @@ pub async fn confirm_agent_snapshot_import(
             respond_to: respond_to_wire.clone(),
             respond_to_allowlist: minted.respond_to_allowlist.clone(),
             parallelism: minted_parallelism,
+            session_policy: snapshot.definition.session_policy,
             created_at: now.clone(),
             updated_at: now.clone(),
         };
@@ -631,6 +632,7 @@ pub async fn confirm_agent_snapshot_import(
             max_turn_duration_seconds: snapshot.definition.max_turn_duration_seconds,
             parallelism: minted_parallelism
                 .unwrap_or(crate::managed_agents::DEFAULT_AGENT_PARALLELISM),
+            session_policy: snapshot.definition.session_policy,
             system_prompt: snapshot.definition.system_prompt.clone(),
             model: snapshot.definition.model.clone(),
             provider: snapshot.definition.provider.clone(),
@@ -641,6 +643,7 @@ pub async fn confirm_agent_snapshot_import(
             runtime_pid: None,
             backend: crate::managed_agents::BackendKind::Local,
             backend_agent_id: None,
+            provider_policy_pending: false,
             provider_binary_path: None,
             team_id: None,
             persona_team_dir: None,
@@ -667,6 +670,7 @@ pub async fn confirm_agent_snapshot_import(
             definition_respond_to_allowlist: minted.respond_to_allowlist.clone(),
             definition_parallelism: minted_parallelism,
             relay_mesh: None,
+            effort_level: None,
             runtime: snapshot.definition.runtime.clone(),
             name_pool: snapshot.definition.name_pool.clone(),
         };

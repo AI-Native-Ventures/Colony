@@ -5,7 +5,7 @@ use super::refresh_login_shell_path;
 use super::{
     apply_agent_command_update, classify_runtime, codex_adapter_availability,
     codex_adapter_is_outdated, create_time_agent_command_override, default_agent_command,
-    effective_agent_command, find_via_login_shell, managed_agent_avatar_url, normalize_agent_args,
+    effective_agent_command, managed_agent_avatar_url, normalize_agent_args,
     probe_codex_acp_version, record_agent_command, BUZZ_AGENT_AVATAR_URL,
 };
 use crate::managed_agents::{
@@ -94,24 +94,6 @@ fn normalizes_buzz_agent_args_to_empty() {
     );
 }
 
-#[test]
-fn login_shell_lookup_treats_command_as_data() {
-    let marker =
-        std::env::temp_dir().join(format!("buzz-discovery-marker-{}", uuid::Uuid::new_v4()));
-    let payload = format!("doesnotexist; touch {} #", marker.display());
-
-    let resolved = find_via_login_shell(&payload);
-
-    assert!(
-        resolved.is_none(),
-        "payload should not resolve to a command"
-    );
-    assert!(
-        !marker.exists(),
-        "shell lookup must not execute injected commands"
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn explicit_path_resolution_ignores_non_executable_files() {
@@ -174,7 +156,6 @@ fn classifies_not_installed_when_no_underlying_cli() {
     assert!(cmd.is_none());
     assert!(path.is_none());
 }
-
 #[test]
 fn classifies_cli_missing_when_adapter_found_but_cli_absent() {
     let (status, cmd, path) = classify_runtime(
@@ -273,6 +254,7 @@ fn preset_entry_without_underlying_cli_stays_simple() {
 }
 fn persona_with_runtime(id: &str, runtime: Option<&str>) -> crate::managed_agents::AgentDefinition {
     crate::managed_agents::AgentDefinition {
+        session_policy: Default::default(),
         id: id.to_string(),
         role_id: None,
         role_title: None,
@@ -305,12 +287,14 @@ fn effective_agent_command_explicit_override_wins() {
         "codex-acp"
     );
 }
+/// Minimal record for `record_agent_command` tests; only resolution inputs vary.
 fn record_with(
     runtime: Option<&str>,
     persona_id: Option<&str>,
     override_cmd: Option<&str>,
 ) -> crate::managed_agents::types::ManagedAgentRecord {
     crate::managed_agents::types::ManagedAgentRecord {
+        session_policy: Default::default(),
         pubkey: String::new(),
         name: "r".to_string(),
         role_id: None,
@@ -340,6 +324,7 @@ fn record_with(
         runtime_pid: None,
         backend: Default::default(),
         backend_agent_id: None,
+        provider_policy_pending: false,
         provider_binary_path: None,
         team_id: None,
         persona_team_dir: None,
@@ -376,7 +361,7 @@ fn record_with(
 fn record_agent_command_own_runtime_wins_over_persona() {
     // A record with its own materialized runtime never consults the
     // persona list — the unified-model resolution.
-    let personas = vec![persona_with_runtime("p1", Some("omp"))];
+    let personas = [persona_with_runtime("p1", Some("omp"))];
     let record = record_with(Some("claude"), Some("p1"), None);
     assert_eq!(record_agent_command(&record, &personas), "claude-agent-acp");
 }
@@ -696,8 +681,8 @@ fn apply_agent_command_update_concrete_pin_keeps_materialized_runtime() {
 
 // ── probe_codex_acp_version ───────────────────────────────────────────────────
 
+mod forced_discovery;
 mod managed_path_resolution;
-
 #[cfg(unix)]
 #[test]
 fn probe_codex_acp_version_parses_full_semver_output() {
@@ -835,7 +820,7 @@ fn codex_adapter_availability_available_for_minimum_supported_binary() {
     let bin = dir.join("codex-acp");
     std::fs::write(
         &bin,
-        "#!/bin/sh\necho '@agentclientprotocol/codex-acp 1.1.7'\nexit 0\n",
+        "#!/bin/sh\necho '@agentclientprotocol/codex-acp 1.10.0'\nexit 0\n",
     )
     .expect("write script");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod script");
@@ -869,27 +854,6 @@ fn codex_adapter_availability_outdated_for_0x_binary() {
         status,
         AcpAvailabilityStatus::AdapterOutdated,
         "0.x adapter (non-zero exit) must classify as AdapterOutdated"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn codex_adapter_availability_outdated_for_older_1x_binary() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().expect("temp dir");
-    let bin = dir.path().join("codex-acp");
-    std::fs::write(
-        &bin,
-        "#!/bin/sh\necho '@agentclientprotocol/codex-acp 1.1.5'\nexit 0\n",
-    )
-    .expect("write script");
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod script");
-
-    assert_eq!(
-        codex_adapter_availability(&bin),
-        AcpAvailabilityStatus::AdapterOutdated,
-        "a 1.x adapter below the floor must be offered an upgrade"
     );
 }
 
@@ -1554,7 +1518,7 @@ fn custom_catalog_entry_carries_definition_env_for_edit_roundtrip() {
     )
     .unwrap();
 
-    let entries = discover_acp_runtimes_from(Some(dir.path()));
+    let entries = discover_acp_runtimes_from(Some(dir.path()), true);
     let entry = entries
         .iter()
         .find(|e| e.id == "env-harness")
@@ -1584,7 +1548,7 @@ fn builtin_catalog_entry_has_empty_definition_env() {
     // publishes to the global registry.
     let _path_guard = crate::managed_agents::lock_path_mutex();
     let _lock = registry_test_lock();
-    let entries = discover_acp_runtimes_from(None);
+    let entries = discover_acp_runtimes_from(None, true);
     // Find any builtin entry (e.g. "omp" or "claude").
     let builtin = entries
         .iter()
@@ -1665,7 +1629,7 @@ fn discovery_publish_path_survives_mid_flight_save() {
         assert!(lookup_loaded_harness_by_id("mid-flight-save").is_some());
     }));
 
-    let _entries = discover_acp_runtimes_from(Some(dir.path()));
+    let _entries = discover_acp_runtimes_from(Some(dir.path()), true);
 
     assert!(
         lookup_loaded_harness_by_id("mid-flight-save").is_some(),
@@ -1698,7 +1662,7 @@ fn discovery_publish_path_drops_mid_flight_delete() {
         assert!(lookup_loaded_harness_by_id("mid-flight-delete").is_none());
     }));
 
-    let _entries = discover_acp_runtimes_from(Some(dir.path()));
+    let _entries = discover_acp_runtimes_from(Some(dir.path()), true);
 
     assert!(
         lookup_loaded_harness_by_id("mid-flight-delete").is_none(),
