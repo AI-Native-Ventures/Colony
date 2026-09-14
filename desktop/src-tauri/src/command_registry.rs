@@ -151,6 +151,7 @@ macro_rules! app_invoke_handler {
             add_reaction,
             remove_reaction,
             get_event,
+            get_events,
             get_task_artifact_event,
             show_native_notification,
             upload_media,

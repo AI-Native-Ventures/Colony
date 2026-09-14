@@ -37,6 +37,10 @@ import {
   type RawAcpRuntimeCatalogEntry,
 } from "./runtimeCatalog";
 
+// Colony keeps event reads in their own module; the workflow list reads a
+// trigger's source messages through this barrel.
+export { getEventById, getEventsByIds } from "@/shared/api/tauriEvents";
+
 export { fromRawAcpRuntimeCatalogEntry } from "./runtimeCatalog";
 export type { RawAcpRuntimeCatalogEntry } from "./runtimeCatalog";
 
@@ -339,11 +343,6 @@ export async function searchMessages(
     hits: response.hits.map(fromRawSearchHit),
     found: response.found,
   };
-}
-
-export async function getEventById(eventId: string): Promise<RelayEvent> {
-  const eventJson = await invokeTauri<string>("get_event", { eventId });
-  return JSON.parse(eventJson) as RelayEvent;
 }
 
 type RawThreadCursor = {
