@@ -9,12 +9,16 @@ use crate::app_state::AppState;
 use crate::relay::{parse_json_response, relay_api_base_url_with_override, relay_error_message};
 
 use super::media_audio::{audio_input_format, canonical_audio_filename, prepare_audio_bytes};
+use super::media_filename::sanitize_filename;
 use super::media_transcode::{
     has_heic_extension, is_heic_file, is_video_file, transcode_and_extract_poster,
     transcode_and_extract_poster_with_cancellation, transcode_heic_path_to_jpeg_bytes,
     transcode_heic_path_to_jpeg_bytes_with_cancellation,
 };
 use super::media_upload_progress::{emit_media_upload_phase, send_upload_attempt, UploadAttempt};
+use super::media_voice_note::{
+    is_voice_note_filename, prepare_voice_note_for_upload, voice_note_mp4_filename,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobDescriptor {
@@ -134,24 +138,6 @@ const BLOCKED_MIME: &[&str] = &[
     "application/vnd.android.package-archive",
     "application/x-apple-diskimage",
 ];
-
-/// Sanitize a filename for use as a display label in the imeta `filename` field.
-///
-/// Strips any directory components (keeps only the final path segment), removes
-/// control characters, and bounds length to 255. Mirrors the relay's filename
-/// validation so a sanitized name always passes ingest. Returns a fallback when
-/// the result would be empty.
-pub(crate) fn sanitize_filename(name: &str) -> String {
-    // Keep only the final path segment — defend against `../` and absolute paths
-    // regardless of separator style.
-    let base = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
-    let cleaned: String = base.chars().filter(|c| !c.is_control()).take(255).collect();
-    if cleaned.is_empty() {
-        "file".to_string()
-    } else {
-        cleaned
-    }
-}
 
 /// Return true when a PNG/WebP payload declares animation.
 ///
@@ -778,9 +764,13 @@ pub(super) async fn upload_media_bytes_inner(
     let heic_by_extension = filename
         .as_deref()
         .is_some_and(|name| has_heic_extension(std::path::Path::new(name)));
+    let is_voice_note = is_voice_note_filename(filename.as_deref());
 
     let audio_format = audio_input_format(&data, filename.as_deref());
-    let (body, poster_bytes) = if let Some(format) = audio_format {
+    let (body, poster_bytes) = if is_voice_note {
+        emit_media_upload_phase(&app, progress_id.as_deref(), "processing-audio");
+        prepare_voice_note_for_upload(data, cancellation).await?
+    } else if let Some(format) = audio_format {
         let cancellation = cancellation.cloned();
         let wav = tokio::task::spawn_blocking(move || {
             prepare_audio_bytes(data, format, cancellation.as_ref())
@@ -853,7 +843,11 @@ pub(super) async fn upload_media_bytes_inner(
         }
     }
 
-    descriptor.filename = if audio_format.is_some() {
+    descriptor.filename = if is_voice_note {
+        filename
+            .as_deref()
+            .map(|name| sanitize_filename(&voice_note_mp4_filename(name)))
+    } else if audio_format.is_some() {
         Some(canonical_audio_filename(filename.as_deref()))
     } else {
         filename.as_deref().map(sanitize_filename)

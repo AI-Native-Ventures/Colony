@@ -51,6 +51,20 @@ beforeEach(() => {
   toasts.length = 0;
 });
 
+test("getErrorMessage preserves Tauri string errors", () => {
+  assert.equal(
+    getErrorMessage(
+      "relay returned 415 Unsupported Media Type",
+      "Unknown error",
+    ),
+    "relay returned 415 Unsupported Media Type",
+  );
+  assert.equal(
+    getErrorMessage({ message: "upload rejected" }, "Unknown error"),
+    "upload rejected",
+  );
+  assert.equal(getErrorMessage({}, "Unknown error"), "Unknown error");
+});
 test("getErrorMessage_surfaces_the_thrown_work_context_message", () => {
   const error = new Error(
     "This community has no coordination team to own ambiguous work. The message has not been sent.",
@@ -69,12 +83,12 @@ test("getErrorMessage_surfaces_the_no_receipt_message", () => {
   );
 });
 
-test("getErrorMessage_falls_back_for_a_non_error_throw", () => {
-  assert.equal(
-    getErrorMessage("boom", "The message could not be sent."),
-    "The message could not be sent.",
-  );
-});
+// Upstream's #6978 also asserted that a bare string throw falls back to the
+// generic sentence. Colony's getErrorMessage deliberately preserves it: a
+// Tauri command rejects with a plain string, so the fallback would replace
+// every native cause ("relay returned 415 Unsupported Media Type") with
+// "The message could not be sent." The case above pins that behaviour, so
+// upstream's opposite case is not ported.
 
 test("getErrorMessage_falls_back_for_an_error_with_an_empty_message", () => {
   assert.equal(

@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 561,
-    "tauri_coupled": 216,
-    "portable": 345,
+    "rust_total": 564,
+    "tauri_coupled": 217,
+    "portable": 347,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -71,6 +71,7 @@
       "src-tauri/src/commands/link_preview.rs",
       "src-tauri/src/commands/media.rs",
       "src-tauri/src/commands/media_download.rs",
+      "src-tauri/src/commands/media_fetch_cancellation.rs",
       "src-tauri/src/commands/media_raw.rs",
       "src-tauri/src/commands/media_upload_progress.rs",
       "src-tauri/src/commands/mesh_llm.rs",
@@ -285,10 +286,12 @@
       "src-tauri/src/commands/media_animated.rs",
       "src-tauri/src/commands/media_audio.rs",
       "src-tauri/src/commands/media_audio_tests.rs",
+      "src-tauri/src/commands/media_filename.rs",
       "src-tauri/src/commands/media_gif.rs",
       "src-tauri/src/commands/media_snapshot_png.rs",
       "src-tauri/src/commands/media_tests.rs",
       "src-tauri/src/commands/media_transcode.rs",
+      "src-tauri/src/commands/media_voice_note.rs",
       "src-tauri/src/commands/mesh_llm_tests.rs",
       "src-tauri/src/commands/mesh_readiness.rs",
       "src-tauri/src/commands/messages/feed.rs",
@@ -573,10 +576,10 @@
     ]
   },
   "commands": {
-    "registered": 392,
-    "defined": 392,
+    "registered": 394,
+    "defined": 394,
     "by_reach": {
-      "frontend": 378,
+      "frontend": 380,
       "NO CALLER FOUND": 10,
       "frontend-plugin-prefixed": 2,
       "rust-internal": 2
@@ -698,7 +701,6 @@
     "src-tauri/src/commands/identity_archive.rs": 6,
     "src-tauri/src/commands/personas/card.rs": 6,
     "src-tauri/src/commands/onboarding_recovery.rs": 6,
-    "src-tauri/src/commands/media_download.rs": 6,
     "src-tauri/src/commands/agent_discovery.rs": 6,
     "src-tauri/src/commands/agent_config.rs": 6,
     "src-tauri/src/managed_agents/runtime_commands.rs": 6,
@@ -706,6 +708,7 @@
     "src-tauri/src/commands/terminal.rs": 6,
     "src-tauri/src/deep_link.rs": 5,
     "src-tauri/src/commands/project_git_workflow.rs": 5,
+    "src-tauri/src/commands/media_download.rs": 5,
     "src-tauri/src/commands/channel_templates.rs": 5,
     "src-tauri/src/huddle/commands.rs": 4,
     "src-tauri/src/commands/initiative.rs": 4,
@@ -720,6 +723,7 @@
     "src-tauri/src/commands/teams.rs": 4,
     "src-tauri/src/electron_host/migration.rs": 4,
     "src-tauri/src/commands/canvas.rs": 4,
+    "src-tauri/src/commands/media_fetch_cancellation.rs": 3,
     "src-tauri/src/channel_head_cache.rs": 3,
     "src-tauri/src/commands/subscription_power.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
@@ -904,7 +908,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:298",
+        "src/features/communities/useCommunityInit.ts:300",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -995,13 +999,22 @@
         "src/shared/api/tauriObserver.ts:16"
       ]
     },
+    "cancel_media_fetch": {
+      "defining_file": "src-tauri/src/commands/media_fetch_cancellation.rs",
+      "module": "media_fetch_cancellation",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriMedia.ts:100"
+      ]
+    },
     "cancel_media_upload": {
       "defining_file": "src-tauri/src/commands/media_raw.rs",
       "module": "media_raw",
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriMedia.ts:39"
+        "src/shared/api/tauriMedia.ts:57"
       ]
     },
     "cancel_pairing": {
@@ -1286,7 +1299,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1087",
         "src/parity/session/script.ts:1088",
-        "src/shared/ui/markdown.tsx:153"
+        "src/shared/ui/markdown/imageActions.ts:7"
       ]
     },
     "copy_text_to_clipboard": {
@@ -1296,7 +1309,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1074",
-        "src/shared/api/tauriMedia.ts:91"
+        "src/shared/api/tauriMedia.ts:143"
       ]
     },
     "create_auth_event": {
@@ -1658,9 +1671,9 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/messages/ui/AudioMessageAttachment.tsx:544",
         "src/parity/session/script.ts:1077",
-        "src/parity/session/script.ts:1078",
-        "src/shared/ui/file-preview/filePreviewLoad.ts:159"
+        "src/parity/session/script.ts:1078"
       ]
     },
     "download_image": {
@@ -1900,14 +1913,14 @@
       ]
     },
     "fetch_media_bytes": {
-      "defining_file": "src-tauri/src/commands/media_download.rs",
-      "module": "media_download",
+      "defining_file": "src-tauri/src/commands/media_fetch_cancellation.rs",
+      "module": "media_fetch_cancellation",
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1063",
         "src/parity/types.ts:148",
-        "src/shared/api/tauriMedia.ts:65"
+        "src/shared/api/tauriMedia.ts:89"
       ]
     },
     "fetch_snapshot_bytes": {
@@ -1917,7 +1930,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1066",
-        "src/shared/api/tauriMedia.ts:111"
+        "src/shared/api/tauriMedia.ts:163"
       ]
     },
     "fetch_workspace_icon": {
@@ -2682,7 +2695,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:284",
+        "src/features/communities/useCommunityInit.ts:286",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:88"
       ]
@@ -3229,7 +3242,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriMedia.ts:49"
+        "src/shared/api/tauriMedia.ts:67"
       ]
     },
     "pick_and_upload_media": {
@@ -3407,7 +3420,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriMedia.ts:76"
+        "src/shared/api/tauriMedia.ts:128"
       ]
     },
     "read_onboarding_history": {
@@ -3518,6 +3531,15 @@
         "src/parity/session/script.ts:671",
         "src/parity/session/script.ts:672",
         "src/shared/api/relayMembers.ts:133"
+      ]
+    },
+    "release_media_fetch": {
+      "defining_file": "src-tauri/src/commands/media_fetch_cancellation.rs",
+      "module": "media_fetch_cancellation",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriMedia.ts:115"
       ]
     },
     "remove_agent_from_huddle": {
@@ -4488,7 +4510,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriMedia.ts:32"
+        "src/shared/api/tauriMedia.ts:33"
       ]
     },
     "upload_png_verbatim": {

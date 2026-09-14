@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { Editor } from "@tiptap/react";
-import { AnimatePresence, motion } from "motion/react";
-import { ALargeSmall, ArrowUp, AtSign, Paperclip, X } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { ALargeSmall, ArrowUp, AtSign, Mic, Paperclip, X } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
@@ -15,6 +15,13 @@ const presenceSpring = {
   stiffness: 400,
   damping: 28,
 } as const;
+const ingressControlVariants = {
+  exit: {
+    opacity: 0,
+    x: -12,
+    transition: presenceSpring,
+  },
+} as const;
 
 export const MessageComposerToolbar = React.memo(
   function MessageComposerToolbar({
@@ -27,6 +34,10 @@ export const MessageComposerToolbar = React.memo(
     isFormattingOpen,
     isSending,
     isUploading,
+    isVoiceNoteProcessing = false,
+    isVoiceNoteRecording = false,
+    hasVoiceNoteAttachment = false,
+    voiceNoteRecorder,
     onCaptureSelection,
     onEmojiPickerOpenChange,
     onEmojiSelect,
@@ -34,6 +45,8 @@ export const MessageComposerToolbar = React.memo(
     onLinkButton,
     onOpenMentionPicker,
     onPaperclip,
+    onFinishVoiceNote,
+    onVoiceNote,
     sendDisabled,
   }: {
     composerDisabled: boolean;
@@ -45,6 +58,10 @@ export const MessageComposerToolbar = React.memo(
     isFormattingOpen: boolean;
     isSending: boolean;
     isUploading: boolean;
+    isVoiceNoteProcessing?: boolean;
+    isVoiceNoteRecording?: boolean;
+    hasVoiceNoteAttachment?: boolean;
+    voiceNoteRecorder?: React.ReactNode;
     onCaptureSelection: () => void;
     onEmojiPickerOpenChange: (open: boolean) => void;
     onEmojiSelect: (emoji: string) => void;
@@ -52,10 +69,17 @@ export const MessageComposerToolbar = React.memo(
     onLinkButton: () => void;
     onOpenMentionPicker: () => void;
     onPaperclip: () => void;
+    onFinishVoiceNote?: () => void;
+    onVoiceNote?: () => void;
     sendDisabled: boolean;
   }) {
+    const shouldReduceMotion = useReducedMotion();
+
     return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+      <div
+        className="mt-2 flex flex-wrap items-center justify-between gap-3"
+        data-testid="message-composer-toolbar"
+      >
         <SelectionFormattingTray
           disabled={formattingDisabled}
           editor={editor}
@@ -68,11 +92,26 @@ export const MessageComposerToolbar = React.memo(
            * can animate in simultaneously. No sequencing.
            *
            * The Aa toggle is duplicated inside both groups so
-           * AnimatePresence handles the crossfade. No layoutId,
-           * no order hacks, no overflow clipping needed.
+           * AnimatePresence handles the crossfade.
            */}
           <AnimatePresence mode="popLayout" initial={false}>
-            {isFormattingOpen ? (
+            {voiceNoteRecorder ? (
+              <motion.div
+                key="voice-note-controls"
+                className="flex min-w-0 flex-1 items-center"
+                data-testid="voice-note-controls"
+                initial={shouldReduceMotion ? false : { opacity: 0, x: 12 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={
+                  shouldReduceMotion ? { opacity: 0 } : { opacity: 0, x: 12 }
+                }
+                transition={
+                  shouldReduceMotion ? { duration: 0 } : presenceSpring
+                }
+              >
+                {voiceNoteRecorder}
+              </motion.div>
+            ) : isFormattingOpen ? (
               /*
                * ── Expanded: [Aa] [✕] | [formatting buttons] ──
                */
@@ -162,9 +201,11 @@ export const MessageComposerToolbar = React.memo(
               <motion.div
                 key="ingress-controls"
                 className="flex items-center gap-1"
+                data-testid="composer-ingress-controls"
                 initial={{ opacity: 0, x: -12 }}
                 animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -12 }}
+                exit="exit"
+                variants={ingressControlVariants}
                 transition={presenceSpring}
               >
                 {/* disableHoverableContent keeps tooltips from lingering over the editor. */}
@@ -189,7 +230,12 @@ export const MessageComposerToolbar = React.memo(
                   <TooltipTrigger asChild>
                     <Button
                       aria-label="Attach file"
-                      disabled={composerDisabled || isUploading}
+                      disabled={
+                        composerDisabled ||
+                        isUploading ||
+                        isVoiceNoteRecording ||
+                        hasVoiceNoteAttachment
+                      }
                       onClick={onPaperclip}
                       onMouseDown={onCaptureSelection}
                       size="icon"
@@ -201,8 +247,28 @@ export const MessageComposerToolbar = React.memo(
                   </TooltipTrigger>
                   <TooltipContent>Attach file</TooltipContent>
                 </Tooltip>
+                {onVoiceNote ? (
+                  <Tooltip disableHoverableContent>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="Record voice note"
+                        disabled={composerDisabled || isUploading}
+                        onClick={onVoiceNote}
+                        onMouseDown={onCaptureSelection}
+                        size="icon"
+                        type="button"
+                        variant="ghost"
+                      >
+                        <span className="inline-flex">
+                          <Mic />
+                        </span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Record voice note</TooltipContent>
+                  </Tooltip>
+                ) : null}
                 <ComposerEmojiPicker
-                  disabled={composerDisabled}
+                  disabled={composerDisabled || isVoiceNoteRecording}
                   onClose={() => editor?.commands.focus()}
                   onEmojiSelect={onEmojiSelect}
                   onOpenChange={onEmojiPickerOpenChange}
@@ -249,10 +315,31 @@ export const MessageComposerToolbar = React.memo(
           {extraActions}
           {dictationAction}
           <Button
-            aria-label={isSending ? "Sending" : "Send message"}
+            aria-label={
+              isVoiceNoteRecording
+                ? "Finish voice note"
+                : isSending
+                  ? "Sending"
+                  : "Send message"
+            }
             className="rounded-full"
             data-testid="send-message"
-            disabled={sendDisabled || isSending}
+            disabled={
+              isVoiceNoteRecording
+                ? isVoiceNoteProcessing
+                : sendDisabled || isSending
+            }
+            onClick={
+              isVoiceNoteRecording
+                ? (event) => {
+                    // A recording finishes on this button before it can send;
+                    // upstream splits that into ComposerSendButton, which is a
+                    // later commit. Colony keeps one button and branches here.
+                    event.preventDefault();
+                    onFinishVoiceNote?.();
+                  }
+                : undefined
+            }
             size="icon"
             type="submit"
           >

@@ -30,6 +30,7 @@ import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
 import { resetTaskArtifactOpeningState } from "@/features/workspace/lib/openTaskArtifact";
 import { resetTerminalSessions } from "@/features/workspace/lib/terminalSessions";
 import { resetWebSessions } from "@/features/workspace/lib/webSessions";
+import { resetAudioMediaLoadScheduler } from "@/features/messages/lib/audioMediaLoadScheduler";
 import {
   resetActiveAgentTurnsStore,
   saveActiveAgentTurnsForCommunity,
@@ -112,6 +113,7 @@ async function resetCommunityState({
   resetLeadUpdateListeners();
   resetDiscoveryMessageSource();
   resetVideoPlayerState();
+  resetAudioMediaLoadScheduler();
   resetRenderScopedReactionHydration();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();

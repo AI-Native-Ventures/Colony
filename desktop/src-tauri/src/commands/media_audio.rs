@@ -8,7 +8,7 @@ use buzz_core_pkg::media_audio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::media::sanitize_filename;
+use super::media_filename::sanitize_filename;
 use super::media_transcode::{ffmpeg_command, find_ffmpeg, run_ffmpeg_with_cancellation};
 
 const CONVERSION_LIMIT: &str =

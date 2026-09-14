@@ -1,5 +1,5 @@
 use crate::commands::export_util::save_bytes_with_dialog;
-use crate::commands::media::sanitize_filename;
+use crate::commands::media_filename::sanitize_filename;
 
 /// Largest export accepted, in bytes.
 ///

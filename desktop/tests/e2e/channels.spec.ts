@@ -1051,6 +1051,10 @@ test("drops an expanded DM after the first message fails", async ({ page }) => {
   await page.keyboard.type(" for a hand");
   await page.getByTestId("send-message").click();
 
+  // Colony reports a failed first DM on the new-message screen's own banner
+  // and marks the error reported, so no toast follows it (see
+  // markSendFailureReported). Upstream's #6978 rewrote these two assertions
+  // around a "Message failed to send:" toast Colony does not raise.
   await expect(page.getByText(sendError)).toBeVisible();
   await expect(input).toContainText(GUIDE_NAME);
 

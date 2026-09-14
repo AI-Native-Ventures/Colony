@@ -7,10 +7,8 @@ use tauri::{
 use crate::app_state::AppState;
 
 use super::{
-    media::{
-        detect_and_validate_mime, do_upload, sanitize_filename, upload_media_bytes_inner,
-        BlobDescriptor,
-    },
+    media::{detect_and_validate_mime, do_upload, upload_media_bytes_inner, BlobDescriptor},
+    media_filename::sanitize_filename,
     media_upload_progress::{
         begin_media_upload, cancel_media_upload as cancel_registered_media_upload,
         finish_media_upload,
