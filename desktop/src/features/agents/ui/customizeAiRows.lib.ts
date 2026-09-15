@@ -82,10 +82,19 @@ export function customizeAiHasOverrides(values: CustomizeAiValues): boolean {
 /**
  * The Provider row's key status. The API key is a note here rather than a full
  * input between Provider and Model, and only opens into an input when the user
- * asks for a different one.
+ * asks for a different one -- or straight away when the provider needs a key
+ * that no layer supplies, because that one is not a preference, it is what
+ * stops the agent from running.
  */
-export function providerKeyNote(keyIsInherited: boolean): string {
-  return keyIsInherited ? "Key: from defaults" : "Key: set for this agent";
+export function providerKeyNote({
+  isInherited,
+  isRequired,
+}: {
+  isInherited: boolean;
+  isRequired: boolean;
+}): string {
+  if (isRequired) return "Key: needed";
+  return isInherited ? "Key: from defaults" : "Key: set for this agent";
 }
 
 /** Display text for a row: the draft, else what it inherits, else a dash. */

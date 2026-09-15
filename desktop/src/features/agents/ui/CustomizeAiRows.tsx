@@ -222,7 +222,11 @@ export function CustomizeAiRows({
   reasoning,
   values,
 }: CustomizeAiRowsProps) {
-  const [openRow, setOpenRow] = React.useState<CustomizeAiRowId | null>(null);
+  // Rows open independently: a flow that touches the provider, its key and the
+  // model should not keep closing the part the user just filled in.
+  const [openRows, setOpenRows] = React.useState<readonly CustomizeAiRowId[]>(
+    [],
+  );
   const [useDifferentKey, setUseDifferentKey] = React.useState(false);
 
   if (loading) {
@@ -231,8 +235,17 @@ export function CustomizeAiRows({
 
   const custom = customizeAiRowCustomFlags(values);
   function toggle(rowId: CustomizeAiRowId) {
-    setOpenRow((current) => (current === rowId ? null : rowId));
+    setOpenRows((current) =>
+      current.includes(rowId)
+        ? current.filter((open) => open !== rowId)
+        : [...current, rowId],
+    );
   }
+  const isOpen = (rowId: CustomizeAiRowId) => openRows.includes(rowId);
+  // A key nothing supplies is what stops the agent from running, so it opens
+  // as a field rather than hiding behind the link.
+  const keyFieldOpen =
+    useDifferentKey || (provider.apiKey?.isRequired ?? false);
   const effortConfig = getProviderEffortConfig(
     values.provider.current || values.provider.inherited,
     values.model.current || values.model.inherited,
@@ -244,7 +257,7 @@ export function CustomizeAiRows({
         custom={custom.harness}
         detail={harness.field.warning}
         disabled={disabled}
-        expanded={openRow === "harness"}
+        expanded={isOpen("harness")}
         onChangeClick={() => toggle("harness")}
         onReset={harness.onReset}
         rowId="harness"
@@ -257,8 +270,11 @@ export function CustomizeAiRows({
         <Row
           custom={custom.provider}
           disabled={disabled}
-          expanded={openRow === "provider"}
-          note={providerKeyNote(provider.apiKey?.isInherited ?? true)}
+          expanded={isOpen("provider") || keyFieldOpen}
+          note={providerKeyNote({
+            isInherited: provider.apiKey?.isInherited ?? true,
+            isRequired: provider.apiKey?.isRequired ?? false,
+          })}
           onChangeClick={() => toggle("provider")}
           onReset={provider.onReset}
           rowId="provider"
@@ -298,7 +314,7 @@ export function CustomizeAiRows({
               </div>
             ) : null}
             {provider.apiKey ? (
-              useDifferentKey ? (
+              keyFieldOpen ? (
                 <PersonaProviderApiKeyField
                   disabled={disabled}
                   envVarName={provider.apiKey.envVarName}
@@ -327,7 +343,7 @@ export function CustomizeAiRows({
         <Row
           custom={custom.model}
           disabled={disabled}
-          expanded={openRow === "model"}
+          expanded={isOpen("model")}
           onChangeClick={() => toggle("model")}
           onReset={model.onReset}
           rowId="model"
@@ -362,7 +378,7 @@ export function CustomizeAiRows({
             ) : null
           }
           disabled={disabled}
-          expanded={openRow === "fallbacks"}
+          expanded={isOpen("fallbacks")}
           onChangeClick={() => toggle("fallbacks")}
           onReset={fallbacks.onReset}
           rowId="fallbacks"
@@ -377,7 +393,7 @@ export function CustomizeAiRows({
       <Row
         custom={custom.reasoning}
         disabled={disabled}
-        expanded={openRow === "reasoning"}
+        expanded={isOpen("reasoning")}
         onChangeClick={() => toggle("reasoning")}
         onReset={reasoning.onReset}
         rowId="reasoning"
