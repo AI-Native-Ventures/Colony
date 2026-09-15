@@ -126,6 +126,12 @@ pub enum Placement {
     Ranked,
     /// Placed by an operator pin, with its note.
     Pinned(String),
+    /// Placed for availability rather than by score: the chain had room left
+    /// after ranking and pinning, and this candidate can call tools even though
+    /// its coding index or its `tau2` measurement is missing. A short chain is
+    /// the worse failure, so an unmeasured tool-caller in a tail position beats
+    /// an empty position.
+    Filled,
 }
 
 /// One entry in the resolved chain.
@@ -222,6 +228,9 @@ pub fn build_chain(
 ) -> RankedChain {
     let mut rejected = Vec::new();
     let mut scored: Vec<(String, f64)> = Vec::new();
+    // Tool-capable candidates that failed only a measurement gate. They are
+    // rejected first and promoted later if the chain comes up short.
+    let mut fillable: Vec<(String, Option<f64>, u32)> = Vec::new();
 
     let active_pins: Vec<&ModelPin> = pins.iter().filter(|p| pin_is_active(p, now)).collect();
     let pinned_ids: BTreeSet<&str> = active_pins.iter().map(|p| p.model_id.as_str()).collect();
@@ -255,6 +264,7 @@ pub fn build_chain(
                 model_id: c.id.clone(),
                 reason: Rejection::NoCodingScore,
             });
+            fillable.push((c.id.clone(), None, c.context_length));
             continue;
         };
         if score.and_then(|s| s.tau2).is_none() {
@@ -262,6 +272,7 @@ pub fn build_chain(
                 model_id: c.id.clone(),
                 reason: Rejection::NoToolUseScore,
             });
+            fillable.push((c.id.clone(), Some(coding), c.context_length));
             continue;
         }
         scored.push((c.id.clone(), coding));
@@ -316,6 +327,41 @@ pub fn build_chain(
         };
         let at = pin.position.min(entries.len());
         entries.insert(at, entry);
+    }
+
+    // A chain of one or two entries is one outage away from no chain at all,
+    // and on 2026-09-15 only 2 of the 18 free tool-calling models cleared both
+    // measurement gates. So once the measured models and the pins are placed,
+    // any room left over goes to tool-capable candidates whose only failing is
+    // that nobody has benchmarked them. They land behind everything ranked or
+    // pinned and never displace it, so the measured order is untouched: this
+    // lengthens the tail rather than changing the head.
+    if entries.len() < MAX_CHAIN_LEN {
+        // Best coding index first where one exists (a NoToolUseScore rejection
+        // still has one), then the widest context window, then id for a stable
+        // order across runs.
+        fillable.sort_by(|a, b| {
+            b.1.unwrap_or(f64::MIN)
+                .partial_cmp(&a.1.unwrap_or(f64::MIN))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let placed: BTreeSet<String> = entries.iter().map(|e| e.model_id.clone()).collect();
+        for (id, coding, _) in fillable {
+            if entries.len() >= MAX_CHAIN_LEN {
+                break;
+            }
+            if placed.contains(&id) {
+                continue;
+            }
+            rejected.retain(|r| r.model_id != id);
+            entries.push(ChainEntry {
+                model_id: id,
+                coding_index: coding,
+                placement: Placement::Filled,
+            });
+        }
     }
 
     for cut in entries.iter().skip(MAX_CHAIN_LEN) {
@@ -617,6 +663,125 @@ mod tests {
             "the displaced entry must be reported: {:?}",
             with_pin.rejected
         );
+    }
+
+    /// A model with a context window, used by the fill tests where the window
+    /// is the tiebreak that decides the order.
+    fn model_with_context(id: &str, tools: bool, context_length: u32) -> CandidateModel {
+        CandidateModel {
+            id: id.to_string(),
+            is_free: id.ends_with(":free"),
+            supports_tools: tools,
+            context_length,
+        }
+    }
+
+    /// Two scored models is the live Colony position, and a two-entry chain is
+    /// one outage away from none. The unmeasured tool-callers fill the rest,
+    /// behind the measured pair and widest window first.
+    #[test]
+    fn short_chain_is_filled_with_unscored_tool_capable_models() {
+        let mut c = vec![
+            model("z-ai/glm-5.2:free", true),
+            model("minimax/minimax-m3:free", true),
+        ];
+        for (id, ctx) in [
+            ("vendor/f1:free", 1_000_000u32),
+            ("vendor/f2:free", 512_000),
+            ("vendor/f3:free", 256_000),
+            ("vendor/f4:free", 128_000),
+            ("vendor/f5:free", 64_000),
+            ("vendor/f6:free", 32_000),
+        ] {
+            c.push(model_with_context(id, true, ctx));
+        }
+        let chain = build_chain(&c, &score_of, &[], None, true, 1_000);
+        assert_eq!(chain.entries.len(), MAX_CHAIN_LEN);
+        assert_eq!(
+            chain.model_ids(),
+            vec![
+                "z-ai/glm-5.2:free",
+                "minimax/minimax-m3:free",
+                "vendor/f1:free",
+                "vendor/f2:free",
+                "vendor/f3:free",
+            ]
+        );
+        assert_eq!(chain.entries[0].placement, Placement::Ranked);
+        assert_eq!(chain.entries[1].placement, Placement::Ranked);
+        for e in &chain.entries[2..] {
+            assert_eq!(
+                e.placement,
+                Placement::Filled,
+                "{} was not filled",
+                e.model_id
+            );
+            assert!(
+                !chain.rejected.iter().any(|r| r.model_id == e.model_id),
+                "a filled model must not also be reported as rejected: {}",
+                e.model_id
+            );
+        }
+    }
+
+    /// Filling is a floor, not a reorder: a chain that already reaches the cap
+    /// on measured models is untouched, so the unmeasured tail can never push
+    /// out a model someone actually benchmarked.
+    #[test]
+    fn a_full_ranked_chain_is_not_filled() {
+        let mut c = candidates();
+        c.push(model("vendor/unscored:free", true));
+        let chain = build_chain(&c, &score_of, &[], None, true, 1_000);
+        assert_eq!(
+            chain.model_ids(),
+            vec![
+                "z-ai/glm-5.2:free",
+                "minimax/minimax-m3:free",
+                "minimax/minimax-m2.7:free",
+                "inclusionai/ling-3.0-flash-fin:free",
+                "google/gemma-4-31b-it:free",
+            ]
+        );
+        assert!(chain
+            .entries
+            .iter()
+            .all(|e| e.placement == Placement::Ranked));
+    }
+
+    /// Filling obeys `free_only` for the same reason ranking does: a paid model
+    /// anywhere in a free chain bills the moment the free quota is spent, and a
+    /// tail entry is exactly where nobody is looking.
+    #[test]
+    fn fill_respects_free_only() {
+        let c = vec![
+            model("z-ai/glm-5.2:free", true),
+            model("minimax/minimax-m3:free", true),
+            model_with_context("vendor/paid-unscored", true, 1_000_000),
+        ];
+        let chain = build_chain(&c, &score_of, &[], None, true, 1_000);
+        assert!(
+            !chain.model_ids().iter().any(|m| !m.ends_with(":free")),
+            "fill leaked a paid model: {:?}",
+            chain.model_ids()
+        );
+        assert_eq!(chain.entries.len(), 2);
+    }
+
+    /// Tool calling stays a hard requirement. Fill relaxes the measurement
+    /// gates, never the capability gate: an agent cannot use a model that
+    /// cannot call tools, however empty the chain is.
+    #[test]
+    fn fill_never_places_a_model_without_tool_support() {
+        let c = vec![
+            model("z-ai/glm-5.2:free", true),
+            model("vendor/no-tools:free", false),
+        ];
+        let chain = build_chain(&c, &score_of, &[], None, true, 1_000);
+        assert_eq!(chain.model_ids(), vec!["z-ai/glm-5.2:free"]);
+        assert!(chain.rejected.contains(&RejectedModel {
+            model_id: "vendor/no-tools:free".into(),
+            reason: Rejection::NoToolSupport,
+        }));
     }
 
     /// Equal scores resolve by id, so two runs over the same data emit the same
