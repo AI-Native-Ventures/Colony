@@ -33,7 +33,7 @@ try {
   await app.whenReady();
   stage = "create window";
   console.log(stage);
-  window = new BrowserWindow({ width: 1000, height: 800, show: false });
+  window = new BrowserWindow({ width: 1000, height: 800, show: true });
   host = createWebsitePreviewHost({ WebContentsView, View, session, clipStrategy: "clip", loadPreview: async () => site });
   stage = "open preview";
   console.log(stage);
