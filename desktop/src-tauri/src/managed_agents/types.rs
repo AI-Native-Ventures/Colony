@@ -987,4 +987,7 @@ mod requests;
 pub use requests::*;
 
 #[cfg(test)]
+mod test_defaults;
+
+#[cfg(test)]
 mod tests;
