@@ -18,6 +18,8 @@ export type AgentFallbackChainDraft = {
   value: string[] | null;
   /** Props for `ModelChainField`, spread straight into it. */
   fieldProps: ModelChainFieldProps;
+  /** What an inheriting agent runs with, for the defaults summary row. */
+  inherited: { entries: readonly string[]; source: "global" | "relay" };
   /** Back to inheriting, for the "Use agent defaults" switch and dialog close. */
   reset: () => void;
 };
@@ -58,6 +60,7 @@ export function useAgentFallbackChain({
   }, [initialFallbackModels, open]);
 
   const reset = React.useCallback(() => setValue(null), []);
+  const inheritsGlobal = globalChain.length > 0;
 
   return {
     fieldProps: {
@@ -67,8 +70,12 @@ export function useAgentFallbackChain({
       optionsLoading,
       primaryModel,
       providerSupportsChain,
-      recommended: globalChain.length > 0 ? [...globalChain] : relayChain,
+      recommended: inheritsGlobal ? [...globalChain] : relayChain,
       value,
+    },
+    inherited: {
+      entries: inheritsGlobal ? globalChain : relayChain,
+      source: inheritsGlobal ? "global" : "relay",
     },
     reset,
     value,

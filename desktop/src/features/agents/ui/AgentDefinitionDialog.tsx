@@ -891,6 +891,7 @@ export function AgentDefinitionDialog({
           {aiConfigurationMode === "defaults" ? (
             <AgentCreateAiDefaultsSummary
               canChooseProvider={runtimeCanChooseLlmProvider}
+              fallbacks={fallbackChain.inherited}
               harness={runtimeSummaryLabel}
               inheritedModel={inheritedModelDefault}
               inheritedProvider={inheritedProviderDefault}
