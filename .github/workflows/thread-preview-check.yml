@@ -38,6 +38,9 @@ jobs:
       - name: Install browser for bounded rendering check
         working-directory: desktop
         run: pnpm exec playwright install --with-deps chromium
+      - name: Render assets in real isolated Electron host
+        working-directory: desktop
+        run: xvfb-run -a pnpm exec electron --no-sandbox src-electron/website-preview/electron-proof.mjs
       - name: Render preview in existing channel UI
         working-directory: desktop
         run: pnpm build:e2e && pnpm exec playwright test thread-html-preview.spec.ts --project=smoke
