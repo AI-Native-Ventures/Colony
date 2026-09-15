@@ -67,7 +67,14 @@ try {
   await writeFile("test-results/native-website-preview/proof.json", JSON.stringify({ evidence, scope: "real Electron host, fixture loader, not packaged app" }, null, 2));
   stage = "capture preview";
   console.log(stage);
-  const screenshot = await entry.webContents.capturePage();
+  await frame.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  const screenshot = await window.capturePage();
+  const pixels = screenshot.toBitmap();
+  let cyan = 0;
+  for (let index = 0; index + 3 < pixels.length; index += 4) {
+    if (pixels[index] > 220 && pixels[index + 1] > 220 && pixels[index + 2] < 30) cyan += 1;
+  }
+  assert.ok(cyan > 100, "composited capture must contain the fixture image");
   await writeFile("test-results/native-website-preview/preview.png", screenshot.toPNG());
   await host.closeAll();
   window.destroy();
