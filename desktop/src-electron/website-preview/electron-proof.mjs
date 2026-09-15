@@ -69,9 +69,9 @@ try {
   stage = "capture preview";
   console.log(stage);
   await frame.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-  const sources = await desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 1000, height: 800 } });
-  const source = sources.find((item) => item.name === window.getTitle());
-  assert.ok(source, "proof window must be available for composed capture");
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1280, height: 1024 } });
+  const source = sources.length === 1 ? sources[0] : undefined;
+  assert.ok(source, "single isolated CI display must be available for composed capture");
   const screenshot = source.thumbnail;
   const pixels = screenshot.toBitmap();
   let cyan = 0;
