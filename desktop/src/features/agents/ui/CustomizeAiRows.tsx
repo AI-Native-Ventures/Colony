@@ -14,6 +14,7 @@ import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
+import { AiSourcePill } from "./aiSettingRow";
 import { AgentHarnessField } from "./AgentHarnessField";
 import {
   type PersonaDropdownOption,
@@ -82,22 +83,6 @@ export type CustomizeAiRowsProps = {
   };
 };
 
-function SourcePill({ custom, rowId }: { custom: boolean; rowId: string }) {
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold",
-        custom
-          ? "bg-primary/10 text-primary"
-          : "bg-muted text-muted-foreground",
-      )}
-      data-testid={`customize-ai-pill-${rowId}`}
-    >
-      {custom ? "custom" : "inherited"}
-    </span>
-  );
-}
-
 function RowAction({
   children,
   disabled,
@@ -161,7 +146,7 @@ function Row({
         </span>
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm text-foreground">{value}</span>
-          <SourcePill custom={custom} rowId={rowId} />
+          <AiSourcePill custom={custom} testId={`customize-ai-pill-${rowId}`} />
         </span>
         <span className="flex items-center gap-3">
           <RowAction
