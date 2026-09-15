@@ -158,8 +158,14 @@ function ChainRow({
     optionsLoading,
     slotOptions,
   );
+  // An id is only "custom" once the provider's list is actually known. While
+  // discovery is in flight every id looks unknown, and flipping the row into
+  // custom entry there would hand the user a text box over a model they picked
+  // from the list a moment ago.
+  const optionsKnown = options !== null && !optionsLoading;
   const known = slotOptions.some((option) => option.id === entry);
-  const showCustomInput = customEditing || (entry.length > 0 && !known);
+  const showCustomInput =
+    customEditing || (entry.length > 0 && optionsKnown && !known);
 
   return (
     <div

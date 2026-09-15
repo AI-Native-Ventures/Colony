@@ -697,6 +697,8 @@ type E2eConfig = {
       provider: string | null;
       model: string | null;
       preferred_runtime?: string | null;
+      /** Empty (the default) means "use Colony's recommended chain". */
+      fallback_models?: string[];
     };
     /** Explicit owner-only agent-access capability; independent of baked defaults. */
     ownerOnlyAccessBuild?: boolean;
@@ -772,6 +774,12 @@ type E2eConfig = {
      * spec can interleave edits and exercise the mid-save race handling.
      */
     globalConfigSaveDelayMs?: number;
+    /**
+     * Colony's recommended fallback chain, as `get_recommended_model_chain`
+     * would answer it for the active relay. Defaults to an empty list, which
+     * is what a cold cache returns.
+     */
+    recommendedModelChain?: string[];
     /**
      * Override the `discover_agent_models` mock response. When set, returns
      * this catalog instead of the default per-harness model list.
@@ -1130,6 +1138,8 @@ type RawPersona = {
   runtime?: string | null;
   model?: string | null;
   provider?: string | null;
+  /** Null inherits the global chain; [] means no fallbacks for this agent. */
+  fallback_models?: string[] | null;
   name_pool?: string[];
   is_builtin: boolean;
   is_active: boolean;
@@ -8756,6 +8766,7 @@ let mockGlobalAgentConfig: {
   provider: string | null;
   model: string | null;
   preferred_runtime?: string | null;
+  fallback_models?: string[];
 } | null = null;
 let mockColonyCreditsAccountError: string | null = null;
 let mockColonyCreditsAccount: {
@@ -9069,6 +9080,8 @@ type MockUpdatePersonaInput = {
   runtime?: string;
   model?: string;
   provider?: string;
+  /** Absent clears the override back to inheriting, exactly like model. */
+  fallbackModels?: string[] | null;
   envVars?: Record<string, string>;
   behavior?: PersonaBehaviorInput;
 };
@@ -9110,6 +9123,7 @@ async function applyMockPersonaUpdate(
   persona.runtime = input.runtime?.trim() || null;
   persona.model = input.model?.trim() || null;
   persona.provider = input.provider?.trim() || null;
+  persona.fallback_models = input.fallbackModels ?? null;
   if (input.envVars !== undefined) {
     // Absent = preserve; present = replace entirely (matches Rust handler).
     persona.env_vars = { ...input.envVars };
@@ -11538,6 +11552,7 @@ export function maybeInstallE2eTauriMocks() {
         ...config.mock.globalAgentConfig,
         credential_mode:
           config.mock.globalAgentConfig.credential_mode ?? "byok",
+        fallback_models: config.mock.globalAgentConfig.fallback_models ?? [],
       }
     : null;
   mockColonyCreditsAccountError = null;
@@ -14142,6 +14157,8 @@ export function maybeInstallE2eTauriMocks() {
           selectedModel: null,
           supportsSwitching: false,
         };
+      case "get_recommended_model_chain":
+        return activeConfig?.mock?.recommendedModelChain ?? [];
       case "discover_agent_models": {
         const discoverError = activeConfig?.mock?.discoverAgentModelsError;
         if (discoverError) {
