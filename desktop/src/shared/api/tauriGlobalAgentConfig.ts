@@ -13,6 +13,21 @@ export async function getGlobalAgentConfig(): Promise<GlobalAgentConfig> {
   return invokeTauri<GlobalAgentConfig>("get_global_agent_config");
 }
 
+/**
+ * Colony's recommended fallback chain for a community relay.
+ *
+ * The relay ranks free tool-calling OpenRouter models hourly; the desktop
+ * caches that per relay and injects it at spawn for every agent without an
+ * authored chain. Reading never blocks on the network, so an empty array means
+ * "not known yet" rather than "this community has no chain": the call also
+ * schedules a refresh, and a second call a few seconds later usually has one.
+ */
+export async function getRecommendedModelChain(
+  relayUrl: string,
+): Promise<string[]> {
+  return invokeTauri<string[]>("get_recommended_model_chain", { relayUrl });
+}
+
 /** Native account and business captured before an onboarding save begins. */
 export type GlobalAgentConfigScope = {
   ownerPubkey: string;

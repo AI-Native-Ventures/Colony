@@ -66,6 +66,7 @@ import { getGlobalAgentCredentialState } from "./globalAgentCredentialState";
 export const EMPTY_GLOBAL_CONFIG: GlobalAgentConfig = {
   credential_mode: "byok",
   env_vars: {},
+  fallback_models: [],
   provider: null,
   model: null,
   preferred_runtime: null,

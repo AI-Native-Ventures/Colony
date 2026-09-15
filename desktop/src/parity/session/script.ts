@@ -1378,6 +1378,7 @@ export const SESSION_STEPS: SessionStep[] = [
   step("agent-global-config-set", "set_global_agent_config", () =>
     setGlobalAgentConfig({
       env_vars: {},
+      fallback_models: [],
       provider: null,
       model: null,
       preferred_runtime: null,
