@@ -20,12 +20,21 @@ const site = {
     return file ? { ...file, bytes: Buffer.from(bodies.get(path)[1]) } : null;
   },
 };
+let stage = "app readiness";
+const watchdog = setTimeout(() => {
+  console.error(`Native preview proof timed out at: ${stage}`);
+  app.exit(1);
+}, 60_000);
 let host;
 let window;
 try {
   await app.whenReady();
+  stage = "create window";
+  console.log(stage);
   window = new BrowserWindow({ width: 1000, height: 800, show: false });
   host = createWebsitePreviewHost({ WebContentsView, View, session, clipStrategy: "clip", loadPreview: async () => site });
+  stage = "open preview";
+  console.log(stage);
   const state = await host.open({
     window, communityId: "fixture", artifactId: "b".repeat(64), threadRoot: "c".repeat(64),
     revision: 1, manifest: { url: "https://example.com/manifest.json", sha256: sha },
@@ -34,6 +43,8 @@ try {
   const entry = host.byHandle.get(state.handle);
   const frame = entry.webContents.mainFrame.frames.find((item) => item.url.includes(entry.token));
   assert.ok(frame, "artifact child frame must exist");
+  stage = "inspect artifact frame";
+  console.log(stage);
   const evidence = await frame.executeJavaScript(`({
     title: document.querySelector('h1').textContent,
     color: getComputedStyle(document.querySelector('h1')).color,
@@ -52,10 +63,13 @@ try {
   assert.ok(Math.abs(evidence.width - 1440) < 2);
   await mkdir("test-results/native-website-preview", { recursive: true });
   await writeFile("test-results/native-website-preview/proof.json", JSON.stringify({ evidence, scope: "real Electron host, fixture loader, not packaged app" }, null, 2));
+  stage = "capture preview";
+  console.log(stage);
   const screenshot = await entry.webContents.capturePage();
   await writeFile("test-results/native-website-preview/preview.png", screenshot.toPNG());
   await host.closeAll();
   window.destroy();
+  clearTimeout(watchdog);
   app.exit(0);
 } catch (error) {
   console.error(error);

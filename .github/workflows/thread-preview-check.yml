@@ -39,6 +39,7 @@ jobs:
         working-directory: desktop
         run: pnpm exec playwright install --with-deps chromium
       - name: Render assets in real isolated Electron host
+        timeout-minutes: 2
         working-directory: desktop
         run: xvfb-run -a pnpm exec electron --no-sandbox src-electron/website-preview/electron-proof.mjs
       - name: Render preview in existing channel UI
