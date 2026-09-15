@@ -36,3 +36,19 @@ test("an in-flight open cannot survive a renderer reset", async () => {
   await assert.rejects(pending, /context changed/);
   assert.deepEqual(calls, ["reset", "stale"]);
 });
+
+test("two cards for the same artifact receive separate native mounts", async () => {
+  const mounts = [];
+  const { controller } = setup(async (request) => {
+    mounts.push(request.mountId);
+    return { handle: request.mountId };
+  });
+  const payload = { communityId: "community", artifactId: "a".repeat(64) };
+  const channel = await controller.request("open", payload);
+  const thread = await controller.request("open", payload);
+  assert.notEqual(mounts[0], mounts[1]);
+  await controller.request("close", { ...payload, handle: channel.handle });
+  await assert.rejects(controller.request("bounds", { ...payload, handle: channel.handle }), /no longer active/);
+  const remaining = await controller.request("bounds", { ...payload, handle: thread.handle });
+  assert.equal(remaining.handle, thread.handle);
+});

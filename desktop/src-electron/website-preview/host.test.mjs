@@ -879,3 +879,15 @@ test("late events after close never resurrect the view", async () => {
   assert.equal(view.webContents.closed, true);
   assert.equal(host.activeCount, 0);
 });
+
+test("separate mounts preserve independent views of the same saved artifact", async () => {
+  const { host, world } = createHost();
+  const window = createWindow();
+  const channel = await host.open(requestFor(window, { mountId: "channel" }));
+  const thread = await host.open(requestFor(window, { mountId: "thread" }));
+  assert.notEqual(channel.handle, thread.handle);
+  assert.equal(world.partitions.length, 2);
+  await host.close({ window, handle: channel.handle });
+  assert.equal(host.activeCount, 1);
+  await host.close({ window, handle: thread.handle });
+});

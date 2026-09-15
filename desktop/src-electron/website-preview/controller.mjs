@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 /** Own preview handles for one trusted app renderer and selected community. */
 export class PreviewController {
   generation = 0;
@@ -26,6 +28,7 @@ export class PreviewController {
     if (action === "open") {
       const state = await this.host.open({
         window: this.window,
+        mountId: randomUUID(),
         communityId: community.id,
         artifactId: payload.artifactId,
         threadRoot: payload.threadRoot,
