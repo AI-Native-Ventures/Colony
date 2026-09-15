@@ -1,4 +1,8 @@
-import type { ObserverEvent, PromptSection } from "./agentSessionTypes";
+import type {
+  ObserverEvent,
+  PromptSection,
+  TranscriptItem,
+} from "./agentSessionTypes";
 import {
   findBuzzToolName,
   isGenericToolTitle,
@@ -460,4 +464,43 @@ export function describeRawEvent(event: ObserverEvent): string {
     return asString(update.sessionUpdate) ?? method;
   }
   return method ?? event.kind;
+}
+
+/**
+ * The reply a turn's usage report belongs to: the last assistant message of
+ * that turn. Usage arrives at the end of a turn, after the reply it describes.
+ */
+export function findAssistantReplyForTurn(
+  items: readonly TranscriptItem[],
+  turnId: string | null,
+): Extract<TranscriptItem, { type: "message" }> | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (
+      item?.type === "message" &&
+      item.role === "assistant" &&
+      (item.turnId ?? null) === turnId
+    ) {
+      return item;
+    }
+  }
+  return null;
+}
+
+/**
+ * The Usage lifecycle line for a `usage_update` payload, or null when the
+ * harness sent no token counts (buzz-agent tracks no context window).
+ */
+export function formatUsageUpdateText(
+  update: Record<string, unknown>,
+): string | null {
+  const used = typeof update.used === "number" ? update.used : null;
+  const size = typeof update.size === "number" ? update.size : null;
+  if (used === null || size === null) return null;
+  const cost = asRecord(update.cost);
+  const amount = typeof cost.amount === "number" ? cost.amount : null;
+  const currency = asString(cost.currency);
+  const costStr =
+    amount !== null && currency ? ` ($${amount.toFixed(4)} ${currency})` : "";
+  return `Tokens: ${used}/${size}${costStr}`;
 }

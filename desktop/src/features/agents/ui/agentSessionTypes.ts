@@ -80,6 +80,8 @@ export type TranscriptItem =
       messageId?: string | null;
       acpSource?: TranscriptAcpSource;
       authorPubkey?: string | null;
+      /** Model the harness reported as having served this turn, if any. */
+      servedModel?: string | null;
     } & TranscriptItemIdentity)
   | ({
       id: string;
