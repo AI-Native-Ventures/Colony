@@ -15,6 +15,13 @@ export type AgentPersona = {
   model: string | null;
   /** LLM inference provider injected as the runtime's provider env var. */
   provider: string | null;
+  /**
+   * OpenRouter models tried, in order, when this persona's model refuses.
+   *
+   * `null` inherits the global chain, which itself falls back to Colony's
+   * recommended chain. An empty array means "no fallbacks for this agent".
+   */
+  fallbackModels: string[] | null;
   namePool: string[];
   isBuiltIn: boolean;
   isActive: boolean;
@@ -56,6 +63,8 @@ export type CreatePersonaInput = {
   runtime?: string;
   model?: string;
   provider?: string;
+  /** Omit or send null to inherit the global chain; [] means no fallbacks. */
+  fallbackModels?: string[] | null;
   namePool?: string[];
   envVars?: Record<string, string>;
   behavior?: PersonaBehaviorInput;
@@ -74,6 +83,8 @@ export type UpdatePersonaInput = {
   runtime?: string;
   model?: string;
   provider?: string;
+  /** Omit or send null to clear the override back to inheriting the global chain. */
+  fallbackModels?: string[] | null;
   namePool?: string[];
   envVars?: Record<string, string>;
   behavior?: PersonaBehaviorInput;
