@@ -76,6 +76,7 @@ export function duplicatePersonaDialogState(
       runtime: persona.runtime ?? undefined,
       model: persona.model ?? undefined,
       provider: persona.provider ?? undefined,
+      fallbackModels: persona.fallbackModels,
       // Carry envVars and namePool into the duplicate. Without this, a
       // duplicated persona that relies on an API key in env_vars would
       // silently fail at spawn until the user re-entered every credential.
@@ -129,6 +130,10 @@ export function editPersonaDialogState(
       runtime: persona.runtime ?? undefined,
       model: persona.model ?? undefined,
       provider: persona.provider ?? undefined,
+      // Null here means this agent inherits the global chain, which is a
+      // different thing from an empty list ("no fallbacks for this agent"),
+      // so it round-trips as null rather than collapsing to undefined.
+      fallbackModels: persona.fallbackModels,
       // Seed both namePool and envVars from the loaded persona so editing
       // unrelated fields doesn't submit an empty value that wipes them.
       // (Persona update treats Some(empty) as "clear all" intentionally;

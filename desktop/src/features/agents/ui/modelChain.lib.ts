@@ -16,6 +16,14 @@ import type { PersonaModelOption } from "@/features/agents/ui/agentConfigOptions
  */
 export const MAX_FALLBACK_MODELS = 5;
 
+/** Only OpenRouter routes a `models[]` array, so only it can have a chain. */
+const CHAIN_PROVIDER_ID = "openrouter";
+
+/** Whether this provider can carry a fallback chain at all. */
+export function providerSupportsFallbackChain(provider: string): boolean {
+  return provider.trim().toLowerCase() === CHAIN_PROVIDER_ID;
+}
+
 /**
  * True for an OpenRouter id served on the free tier.
  *

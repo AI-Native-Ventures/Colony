@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import type {
   AcpRuntimeCatalogEntry,
   GlobalAgentConfig,
@@ -22,6 +24,26 @@ export { getDefaultPersonaRuntime } from "../lib/resolvePersonaRuntime";
 export const BLOCK_BUILD_HIDDEN_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "databricks",
 ]);
+
+/**
+ * Provider ids to hide from the pickers on this build.
+ *
+ * On internal Block builds, BUZZ_AGENT_PROVIDER is baked in and a boot
+ * migration rewrites any persisted Databricks v1 values to v2, so offering v1
+ * for a new selection would create a regression path. OSS builds have no baked
+ * provider and hide nothing.
+ */
+export function useHiddenProviderIds(
+  bakedEnvKeys: string[] | undefined,
+): ReadonlySet<string> {
+  return React.useMemo(
+    () =>
+      (bakedEnvKeys ?? []).includes("BUZZ_AGENT_PROVIDER")
+        ? BLOCK_BUILD_HIDDEN_PROVIDER_IDS
+        : new Set<string>(),
+    [bakedEnvKeys],
+  );
+}
 
 export const PERSONA_FIELD_SHELL_CLASS =
   "rounded-xl border border-input bg-muted/40 transition-colors duration-150 ease-out hover:border-muted-foreground/40 focus-within:border-muted-foreground/50";
