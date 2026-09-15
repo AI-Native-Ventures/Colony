@@ -282,9 +282,13 @@ fn meter_route(
         "anthropic" => Some(("ANTHROPIC_BASE_URL", "https://api.anthropic.com")),
         "openai" | "openai-compat" => Some(("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1")),
         "deepseek" => Some(("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")),
+        "google" => Some((
+            "OPENAI_COMPAT_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+        )),
         "openrouter" => Some(("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")),
         "" if provider_optional => None,
-        _ => return Err("Isolated teammates require a configured Anthropic, OpenAI, DeepSeek or OpenRouter provider".into()),
+        _ => return Err("Isolated teammates require a configured Anthropic, OpenAI, DeepSeek, Google or OpenRouter provider".into()),
     };
     let Some((key, default)) = provider_url else {
         return Ok(None);
@@ -332,9 +336,9 @@ fn meter_route(
 ///
 /// Only the OpenAI-compatible providers leave the vendor open: that is where
 /// Colony Credits points the checkpoint at the relay gateway, and where an
-/// operator names the compatible endpoint. `openrouter`, `deepseek` and
-/// `anthropic` each have exactly one upstream, so a configured value there can
-/// only send their traffic somewhere that does not serve their models.
+/// operator names the compatible endpoint. `openrouter`, `deepseek`, `google`
+/// and `anthropic` each have exactly one upstream, so a configured value there
+/// can only send their traffic somewhere that does not serve their models.
 fn meter_upstream_is_provider_chosen(provider: &str) -> bool {
     matches!(provider, "openai" | "openai-compat")
 }
@@ -347,7 +351,7 @@ fn permitted_env(key: &str, provider: &str) -> bool {
             "NOSTR_PRIVATE_KEY" | "GIT_TERMINAL_PROMPT" | "RUST_LOG" | "MCP_HOOK_SERVERS"
         )
         || (provider == "anthropic" && key.starts_with("ANTHROPIC_"))
-        || (matches!(provider, "openai" | "openai-compat" | "deepseek")
+        || (matches!(provider, "openai" | "openai-compat" | "deepseek" | "google")
             && key.starts_with("OPENAI_COMPAT_"))
         || (provider == "deepseek" && key == "DEEPSEEK_API_KEY")
         || (provider == "openrouter" && key.starts_with("OPENROUTER_"))
@@ -388,7 +392,7 @@ mod tests {
         // The Chief of Staff records carried this value from an earlier xAI
         // setup. Honouring it sent every OpenRouter call to api.x.ai, which
         // answered "Model not found" for models OpenRouter serves.
-        for provider in ["openrouter", "deepseek"] {
+        for provider in ["openrouter", "deepseek", "google"] {
             let resolved = route(
                 provider,
                 &[("BUZZ_METER_OPENAI_UPSTREAM", "https://api.x.ai")],
@@ -408,6 +412,41 @@ mod tests {
             .upstream,
             "https://openrouter.ai/api/v1"
         );
+    }
+
+    #[test]
+    fn google_routes_the_checkpoint_at_the_gemini_openai_endpoint() {
+        // Google serves Gemini and Gemma over an OpenAI-compatible endpoint, so
+        // the worker talks the OpenAI dialect against Google's own base URL.
+        let resolved = route("google", &[]);
+        assert_eq!(resolved.key, "BUZZ_METER_OPENAI_BASE_URL");
+        assert_eq!(
+            resolved.upstream,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+
+        // An operator-configured base URL still wins over the preset default.
+        let overridden = route(
+            "google",
+            &[(
+                "OPENAI_COMPAT_BASE_URL",
+                "https://proxy.example/v1beta/openai",
+            )],
+        );
+        assert_eq!(overridden.upstream, "https://proxy.example/v1beta/openai");
+    }
+
+    #[test]
+    fn google_keeps_its_openai_compatible_credential_env() {
+        assert!(permitted_env("OPENAI_COMPAT_API_KEY", "google"));
+        assert!(permitted_env("OPENAI_COMPAT_BASE_URL", "google"));
+        for key in [
+            "ANTHROPIC_API_KEY",
+            "OPENROUTER_API_KEY",
+            "DEEPSEEK_API_KEY",
+        ] {
+            assert!(!permitted_env(key, "google"), "{key}");
+        }
     }
 
     #[test]

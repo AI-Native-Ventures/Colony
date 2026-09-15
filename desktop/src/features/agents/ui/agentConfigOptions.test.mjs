@@ -5,6 +5,7 @@ import {
   getDefaultPersonaRuntime,
   getPersonaModelOptions,
   getPersonaProviderOptions,
+  getProviderApiKeyEnvVar,
   getProviderApiKeyLabel,
   resetConfigForHarnessChange,
   runtimeSupportsLlmProviderSelection,
@@ -278,6 +279,13 @@ test("getProviderApiKeyLabel_openai_compat_returns_distinct_label", () => {
 test("getProviderApiKeyLabel_openrouter_returns_openrouter_label", () => {
   // Key fix: OpenRouter was mislabeled "OpenAI API Key" before this change.
   assert.equal(getProviderApiKeyLabel("openrouter"), "OpenRouter API Key");
+});
+
+test("getProviderApiKeyLabel_google_returns_ai_studio_label", () => {
+  // Google's Gemini / Gemma models ride OPENAI_COMPAT_API_KEY, but the key is
+  // minted in AI Studio, so the field must say so rather than "OpenAI".
+  assert.equal(getProviderApiKeyLabel("google"), "Google AI Studio API Key");
+  assert.equal(getProviderApiKeyEnvVar("google"), "OPENAI_COMPAT_API_KEY");
 });
 
 test("getProviderApiKeyLabel_databricks_returns_null", () => {
