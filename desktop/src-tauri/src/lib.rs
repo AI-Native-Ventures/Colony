@@ -287,6 +287,16 @@ pub fn run() {
                 migration::run_boot_migrations(&app_handle);
             }
 
+            // Point the model-chain cache at the agents dir. It is read on the
+            // synchronous spawn path, which has no handle to resolve a path
+            // from, so the path is handed over here where the dir is first
+            // known. Without it the cache works, but only in memory.
+            if let Ok(agents_dir) = crate::managed_agents::managed_agents_base_dir(&app_handle) {
+                crate::managed_agents::model_chain::set_cache_path(
+                    agents_dir.join("model-chain-cache.json"),
+                );
+            }
+
             // Resolve persisted identity key (env var → file → generate+save).
             // This is fatal — the app should not start with an ephemeral identity
             // that will be lost on restart, as that silently breaks channel
