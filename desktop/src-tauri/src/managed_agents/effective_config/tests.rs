@@ -17,6 +17,7 @@ fn definition(
         runtime: None,
         model: model.map(str::to_string),
         provider: provider.map(str::to_string),
+        fallback_models: None,
         name_pool: vec![],
         is_builtin: false,
         is_active: true,

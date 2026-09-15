@@ -95,6 +95,7 @@ fn persona(id: &str, runtime: Option<&str>, prompt: &str) -> AgentDefinition {
         runtime: runtime.map(str::to_string),
         model: None,
         provider: None,
+        fallback_models: None,
         name_pool: vec![],
         is_builtin: false,
         is_active: true,

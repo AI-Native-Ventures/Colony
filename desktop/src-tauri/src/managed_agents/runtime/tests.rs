@@ -283,6 +283,7 @@ fn persona_with_provider(
         runtime: None,
         model: model.map(str::to_string),
         provider: provider.map(str::to_string),
+        fallback_models: None,
         name_pool: Vec::new(),
         is_builtin: false,
         is_active: true,
