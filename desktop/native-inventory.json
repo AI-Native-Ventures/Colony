@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 521,
-    "tauri_coupled": 208,
-    "portable": 313,
+    "rust_total": 525,
+    "tauri_coupled": 209,
+    "portable": 316,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -71,6 +71,7 @@
       "src-tauri/src/commands/messages.rs",
       "src-tauri/src/commands/messages/forum.rs",
       "src-tauri/src/commands/messages/markers.rs",
+      "src-tauri/src/commands/model_chain.rs",
       "src-tauri/src/commands/notifications.rs",
       "src-tauri/src/commands/observer_archive.rs",
       "src-tauri/src/commands/onboarding_history.rs",
@@ -406,8 +407,10 @@
       "src-tauri/src/managed_agents/effective_config/mod.rs",
       "src-tauri/src/managed_agents/effective_config/power_inheritance_tests.rs",
       "src-tauri/src/managed_agents/effective_config/tests.rs",
+      "src-tauri/src/managed_agents/effective_config/tests/fallback_chain_tests.rs",
       "src-tauri/src/managed_agents/env_vars.rs",
       "src-tauri/src/managed_agents/env_vars/tests.rs",
+      "src-tauri/src/managed_agents/fallback_chain.rs",
       "src-tauri/src/managed_agents/git_bash.rs",
       "src-tauri/src/managed_agents/global_config/publication.rs",
       "src-tauri/src/managed_agents/global_config/publication/tests.rs",
@@ -485,6 +488,7 @@
       "src-tauri/src/managed_agents/types/catalog_source/tests.rs",
       "src-tauri/src/managed_agents/types/requests.rs",
       "src-tauri/src/managed_agents/types/respond_to.rs",
+      "src-tauri/src/managed_agents/types/test_defaults.rs",
       "src-tauri/src/managed_agents/types/tests.rs",
       "src-tauri/src/mesh_llm/catalog.rs",
       "src-tauri/src/mesh_llm/discovery.rs",
@@ -533,11 +537,11 @@
     ]
   },
   "commands": {
-    "registered": 378,
-    "defined": 378,
+    "registered": 379,
+    "defined": 379,
     "by_reach": {
       "frontend": 367,
-      "NO CALLER FOUND": 9,
+      "NO CALLER FOUND": 10,
       "frontend-plugin-prefixed": 2
     },
     "no_caller": [
@@ -547,6 +551,7 @@
       "electron_frontend_migration_fixture",
       "electron_open_deep_link",
       "electron_read_frontend_migration",
+      "get_recommended_model_chain",
       "operator_pubkey",
       "operator_sign_nip98",
       "start_stt_pipeline"
@@ -729,6 +734,7 @@
     "src-tauri/src/commands/legacy_storage.rs": 1,
     "src-tauri/src/commands/agent_logs.rs": 1,
     "src-tauri/src/commands/os_idle.rs": 1,
+    "src-tauri/src/commands/model_chain.rs": 1,
     "src-tauri/src/commands/task_artifacts.rs": 1,
     "src-tauri/src/commands/messages/markers.rs": 1,
     "src-tauri/src/commands/updater.rs": 1,
@@ -2333,6 +2339,13 @@
         "src/parity/session/script.ts:1119",
         "src/shared/api/projectGit.ts:314"
       ]
+    },
+    "get_recommended_model_chain": {
+      "defining_file": "src-tauri/src/commands/model_chain.rs",
+      "module": "model_chain",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "get_relay_discovery_support": {
       "defining_file": "src-tauri/src/commands/identity_archive.rs",
