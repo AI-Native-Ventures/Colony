@@ -969,6 +969,63 @@ test.describe("Blocks live Gate C", () => {
     ).toHaveCount(0);
     await screenshot(page, evidence, "05-proposals-resolved.png");
 
+    // Exercise the new preview through the real CLI/relay, not seeded Block events.
+    const previewEvents: string[] = [];
+    for (const version of [1, 2]) {
+      const html = `<h1>Persisted preview ${version}</h1><p>Relay-backed revision.</p>`;
+      const source = path.join(evidence, `preview-${version}.html`);
+      await writeFile(source, html);
+      const uploaded = await runCli(cli, relayHttpUrl, [
+        "upload", "file", "--file", source,
+      ], "charlie");
+      if (typeof uploaded.url !== "string") {
+        throw new Error("preview source upload did not return a URL");
+      }
+      const filename = `preview-${version}.json`;
+      await writeEvidence(evidence, filename, {
+        title: `Persisted preview ${version}`,
+        description: "Static relay persistence check",
+        url: uploaded.url,
+        alt: "Saved HTML source",
+        status: "ready-for-review",
+        revision: version,
+        preview_html: html,
+        ...(version === 2 ? { previous_artifact: previewEvents[0] } : {}),
+      });
+      const result = await runCli(cli, relayHttpUrl, [
+        "blocks", "invoke", "--channel", channelId, "--handle", "artifact",
+        "--data", path.join(evidence, filename),
+        "--processor", TEST_IDENTITIES.charlie.pubkey,
+        ...(version === 2 ? ["--reply-to", previewEvents[0]] : []),
+      ], "charlie");
+      if (typeof result.event_id !== "string" || !/^[0-9a-f]{64}$/.test(result.event_id)) {
+        throw new Error("preview invoke did not return a signed event ID");
+      }
+      previewEvents.push(result.event_id);
+    }
+    await page.getByText(name, { exact: true }).click();
+    await page.reload();
+    const previewSummary = page.locator(
+      `[data-testid="message-thread-summary"][data-thread-head-id="${previewEvents[0]}"]`,
+    );
+    await expect(previewSummary).toBeVisible({ timeout: 30_000 });
+    await previewSummary.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await page.mouse.move(0, 0);
+    await waitForAnimations(page);
+    await previewSummary.click();
+    const previewPanel = page.getByTestId("message-thread-panel");
+    for (const version of [1, 2]) {
+      const region = previewPanel.getByRole("region", { name: "Website preview", exact: true })
+        .filter({ hasText: `Version ${version}` });
+      await expect(region.frameLocator("iframe").getByRole("heading", {
+        name: `Persisted preview ${version}`,
+      })).toBeVisible();
+    }
+    await writeEvidence(evidence, "persisted-preview-events.json", {
+      channelId, eventIds: previewEvents, transport: "real CLI and relay", provider: "none",
+    });
+    await screenshot(page, evidence, "06-persisted-preview-revisions.png");
+
     test.info().annotations.push(
       { type: "gate-c-evidence", description: evidence },
       {

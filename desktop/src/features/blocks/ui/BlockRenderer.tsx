@@ -5,6 +5,9 @@ import type {
   BlockTrust,
 } from "@/features/blocks/contracts";
 
+import { WebsiteBundlePreview } from "./WebsiteBundlePreview";
+import { ArtifactHtmlPreview } from "./ArtifactHtmlPreview";
+
 import { blockShellTier } from "@/features/blocks/blockShellTier";
 import {
   BlockRenderProvider,
@@ -13,10 +16,14 @@ import {
 import { BlockPrimitive, type BlockPrimitiveNode } from "./primitives";
 
 function BlockTree({
+  trust,
   data,
   manifest,
+  message,
 }: {
+  message: TimelineMessage;
   data: unknown;
+  trust: BlockTrust;
   manifest: BlockManifest;
 }) {
   const {
@@ -26,6 +33,11 @@ function BlockTree({
     attentionResolution,
     attentionStatusLabel,
   } = useBlockRenderContext();
+  const fields =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const bundle = fields.website_bundle as
+    | { url?: unknown; sha256?: unknown }
+    | undefined;
   return (
     <>
       <BlockPrimitive
@@ -38,6 +50,20 @@ function BlockTree({
         }}
         node={manifest.tree as BlockPrimitiveNode}
       />
+      {trust === "core" && manifest.handle === "artifact" ? (
+        bundle &&
+        typeof bundle.url === "string" &&
+        typeof bundle.sha256 === "string" ? (
+          <WebsiteBundlePreview
+            bundle={{ url: bundle.url, sha256: bundle.sha256 }}
+            artifactId={message.id}
+            threadRoot={message.rootId ?? message.id}
+            revision={typeof fields.revision === "number" ? fields.revision : 1}
+          />
+        ) : (
+          <ArtifactHtmlPreview data={data} />
+        )
+      ) : null}
       {actionError ? (
         <p className="mt-2 text-xs text-destructive" role="alert">
           {actionError}
@@ -127,7 +153,12 @@ export function BlockRenderer({
         data-block-handle={manifest.handle}
         data-block-trust={trust}
       >
-        <BlockTree data={data} manifest={manifest} />
+        <BlockTree
+          data={data}
+          manifest={manifest}
+          trust={trust}
+          message={message}
+        />
         {latestStatus ? (
           <p
             className={
