@@ -627,6 +627,9 @@ export function AgentConfigFields({
     : "";
   const effortFieldVisible = showEffortField && effortField !== undefined;
 
+  // Progressive defaults is the flat Agent defaults dialog, which reads as one
+  // system with the agent dialog's setting rows: same label column, same
+  // inherited/custom pill. Other disclosures keep the plain stacked fields.
   const progressiveDefaults = disclosure === "progressive-defaults";
   const fieldClassName = unstyled
     ? progressiveDefaults
@@ -814,7 +817,9 @@ export function AgentConfigFields({
             placeholder="Select a model"
             provider={providerForDiscovery}
             fieldClassName={unstyled ? fieldClassName : undefined}
+            sourceCustom={(config.model ?? "").trim().length > 0}
             labelClassName={fieldLabelClassName}
+            rowLayout={progressiveDefaults}
             selectClassName={selectClassName}
             showCustomModelOption={
               config.credential_mode !== "colony_credits" &&
@@ -838,6 +843,7 @@ export function AgentConfigFields({
               modelDiscoveryLoading={modelDiscoveryLoading}
               onConfigChange={onConfigChange}
               provider={providerForDiscovery}
+              rowLayout={progressiveDefaults}
             />
           </div>
         </div>

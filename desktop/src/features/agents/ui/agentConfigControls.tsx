@@ -25,6 +25,11 @@ import {
   providerDisplayLabel,
   type PersonaModelOption,
 } from "./agentConfigOptions";
+import {
+  AI_ROW_GRID_CLASS,
+  AI_ROW_LABEL_CLASS,
+  AiSourcePill,
+} from "./aiSettingRow";
 import { MODEL_DISCOVERY_LOADING_VALUE } from "./usePersonaModelDiscovery";
 import type { PersonaModelDiscoveryStatus } from "./personaModelDiscoveryStatus";
 
@@ -353,6 +358,8 @@ export function AgentModelField({
   provider,
   fieldClassName,
   labelClassName,
+  rowLayout = false,
+  sourceCustom,
   selectClassName,
   testId,
   useCustomSelect = false,
@@ -393,6 +400,16 @@ export function AgentModelField({
   fieldClassName?: string;
   /** Optional class override for the label. */
   labelClassName?: string;
+  /**
+   * Put the label in its own column beside the control instead of above it,
+   * matching the agent dialog's setting rows.
+   */
+  rowLayout?: boolean;
+  /**
+   * Whether this model is pinned here rather than inherited. Renders the
+   * inherited/custom pill beside the label in row layout.
+   */
+  sourceCustom?: boolean;
   /** Optional class override for contexts with custom visual treatments. */
   selectClassName?: string;
   /** Optional test id for custom dropdown trigger/options. */
@@ -577,39 +594,55 @@ export function AgentModelField({
   );
 
   return (
-    <div className={cn("space-y-1.5", fieldClassName)}>
-      <RequiredFieldLabel
-        className={labelClassName}
-        htmlFor={id}
-        isRequired={isRequired}
-      >
-        Model
-      </RequiredFieldLabel>
-      {!useCustomSelect && useChevronIcon ? (
-        <div className="relative">
-          {modelSelect}
-          <ChevronDown
-            aria-hidden="true"
-            className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground"
-          />
-        </div>
-      ) : (
-        modelSelect
+    <div
+      className={cn(
+        rowLayout ? AI_ROW_GRID_CLASS : "space-y-1.5",
+        fieldClassName,
       )}
-      {showCustomModelInput ? (
-        <AgentConfigTextInput
-          aria-label="Custom model ID"
-          autoCorrect="off"
-          disabled={disabled}
-          onChange={(event) => onModelChange(event.target.value)}
-          placeholder="Custom model ID"
-          usePersonaInputStyle={usePersonaInputStyle}
-          value={model}
-        />
-      ) : null}
-      {showStatusMessage && statusMessage ? (
-        <p className="text-xs text-muted-foreground">{statusMessage}</p>
-      ) : null}
+    >
+      <span className="flex items-center gap-2">
+        <RequiredFieldLabel
+          className={cn(rowLayout && AI_ROW_LABEL_CLASS, labelClassName)}
+          htmlFor={id}
+          isRequired={isRequired}
+        >
+          Model
+        </RequiredFieldLabel>
+        {rowLayout && sourceCustom !== undefined ? (
+          <AiSourcePill
+            custom={sourceCustom}
+            testId="global-agent-model-pill"
+          />
+        ) : null}
+      </span>
+      {/* `contents` keeps the stacked layout's DOM flow exactly as it was. */}
+      <div className={rowLayout ? "min-w-0 space-y-1.5" : "contents"}>
+        {!useCustomSelect && useChevronIcon ? (
+          <div className="relative">
+            {modelSelect}
+            <ChevronDown
+              aria-hidden="true"
+              className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground"
+            />
+          </div>
+        ) : (
+          modelSelect
+        )}
+        {showCustomModelInput ? (
+          <AgentConfigTextInput
+            aria-label="Custom model ID"
+            autoCorrect="off"
+            disabled={disabled}
+            onChange={(event) => onModelChange(event.target.value)}
+            placeholder="Custom model ID"
+            usePersonaInputStyle={usePersonaInputStyle}
+            value={model}
+          />
+        ) : null}
+        {showStatusMessage && statusMessage ? (
+          <p className="text-xs text-muted-foreground">{statusMessage}</p>
+        ) : null}
+      </div>
     </div>
   );
 }
