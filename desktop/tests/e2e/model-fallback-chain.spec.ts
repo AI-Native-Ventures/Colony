@@ -167,6 +167,8 @@ test("an agent's Customize tab starts from the chain it inherits", async ({
     const dialog = page.getByTestId("persona-dialog");
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
+    // The chain is a row now; its editor opens behind the row's Change.
+    await dialog.getByTestId("customize-ai-change-fallbacks").click();
     await expect(dialog.getByTestId("model-chain-field")).toBeVisible({
       timeout: 10_000,
     });

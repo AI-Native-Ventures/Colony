@@ -627,7 +627,11 @@ export function AgentConfigFields({
     : "";
   const effortFieldVisible = showEffortField && effortField !== undefined;
 
+  // The flat Agent defaults dialog, which borrows the agent dialog's pill.
   const progressiveDefaults = disclosure === "progressive-defaults";
+  const modelPinned = progressiveDefaults
+    ? (config.model ?? "").trim().length > 0
+    : undefined;
   const fieldClassName = unstyled
     ? progressiveDefaults
       ? "space-y-1.5"
@@ -814,6 +818,7 @@ export function AgentConfigFields({
             placeholder="Select a model"
             provider={providerForDiscovery}
             fieldClassName={unstyled ? fieldClassName : undefined}
+            sourceCustom={modelPinned}
             labelClassName={fieldLabelClassName}
             selectClassName={selectClassName}
             showCustomModelOption={
@@ -838,6 +843,7 @@ export function AgentConfigFields({
               modelDiscoveryLoading={modelDiscoveryLoading}
               onConfigChange={onConfigChange}
               provider={providerForDiscovery}
+              showSourcePill={progressiveDefaults}
             />
           </div>
         </div>

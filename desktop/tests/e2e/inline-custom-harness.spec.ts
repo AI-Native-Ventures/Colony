@@ -53,6 +53,8 @@ async function openCreateDialog(page: Page) {
   const dialog = page.getByTestId("persona-dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
+  // Customize is a row per setting; the harness picker opens behind Change.
+  await dialog.getByTestId("customize-ai-change-harness").click();
   return dialog;
 }
 
@@ -68,6 +70,8 @@ async function openDefinitionEditDialog(page: Page, name: string) {
   const dialog = page.getByTestId("persona-dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
+  // Customize is a row per setting; the harness picker opens behind Change.
+  await dialog.getByTestId("customize-ai-change-harness").click();
   return dialog;
 }
 

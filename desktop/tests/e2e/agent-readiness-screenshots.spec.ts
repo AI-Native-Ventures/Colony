@@ -46,6 +46,7 @@ async function selectProvider(
   providerName: string,
 ) {
   await page.getByRole("tab", { name: "Customize for this agent" }).click();
+  await page.getByTestId("customize-ai-change-provider").click();
   await selectDropdownOption(
     page,
     page.locator("#persona-llm-provider"),
@@ -69,6 +70,7 @@ async function setCustomModel(
       ),
     )
     .toContain("discover_agent_models");
+  await page.getByTestId("customize-ai-change-model").click();
   await page.locator("#persona-model").click();
   await page
     .getByRole("button", { name: "Custom model...", exact: true })
@@ -162,6 +164,7 @@ test.describe("agent readiness gate screenshots", () => {
     await openCreateDialog(page);
     await selectProvider(page, "Colony shared compute");
 
+    await page.getByTestId("customize-ai-change-model").click();
     await expect(page.locator("#persona-model")).toContainText("Automatic");
     await expect(page.getByTestId("persona-dialog-submit")).toBeEnabled();
     await settleAnimations(page);
@@ -266,15 +269,16 @@ test.describe("agent readiness gate screenshots", () => {
     await page.getByRole("tab", { name: "Customize for this agent" }).click();
 
     // Switch the auto-selected buzz-agent runtime to Claude Code.
+    await page.getByTestId("customize-ai-change-harness").click();
     await selectDropdownOption(
       page,
       page.locator("#persona-runtime"),
       "Claude Code",
     );
 
-    // Provider stays hidden for CLI-login runtimes. Customize still requires
-    // an explicit model choice.
-    await expect(page.locator("#persona-llm-provider")).not.toBeVisible();
+    // Provider stays hidden for CLI-login runtimes: the row itself is absent.
+    // Customize still requires an explicit model choice.
+    await expect(page.getByTestId("customize-ai-row-provider")).toHaveCount(0);
     await setCustomModel(page, "claude-opus-4-6");
     await expect(page.getByTestId("persona-dialog-submit")).toBeEnabled({
       timeout: 5_000,
@@ -318,16 +322,18 @@ test.describe("agent readiness gate screenshots", () => {
     // Opt into per-agent customization, then switch to Oh My Pi to confirm a
     // genuinely incomplete customized configuration remains blocked.
     await page.getByRole("tab", { name: "Customize for this agent" }).click();
-    await expect(page.locator("#persona-llm-provider")).toBeVisible({
+    await expect(page.getByTestId("customize-ai-row-provider")).toBeVisible({
       timeout: 10_000,
     });
+    await page.getByTestId("customize-ai-change-harness").click();
     await selectDropdownOption(
       page,
       page.locator("#persona-runtime"),
       "Oh My Pi",
     );
 
-    // Provider field still visible for Oh My Pi (also a provider-selection runtime).
+    // Provider row still present for Oh My Pi (also a provider-selection runtime).
+    await page.getByTestId("customize-ai-change-provider").click();
     await expect(page.locator("#persona-llm-provider")).toBeVisible({
       timeout: 5_000,
     });

@@ -74,10 +74,40 @@ export type ModelChainFieldProps = {
   providerSupportsChain: boolean;
   /** Discovery is still running, so the picker says so instead of "no models". */
   optionsLoading?: boolean;
+  /** Rendered next to the label, e.g. the inherited/custom pill. */
+  labelAccessory?: React.ReactNode;
 };
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <span className="text-sm font-medium">{children}</span>;
+/** The label, with room for the inherited/custom pill beside it. */
+function FieldLabel({
+  accessory,
+  children,
+}: {
+  accessory?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className="text-sm font-medium">{children}</span>
+      {accessory}
+    </span>
+  );
+}
+
+/** The field wrapper, shared by the three states the chain can be in. */
+function FieldShell({
+  accessory,
+  children,
+}: {
+  accessory?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5" data-testid="model-chain-field">
+      <FieldLabel accessory={accessory}>{FIELD_LABEL}</FieldLabel>
+      <div className="contents">{children}</div>
+    </div>
+  );
 }
 
 function FreeBadge() {
@@ -250,6 +280,7 @@ function ChainRow({
 
 export function ModelChainField({
   disabled = false,
+  labelAccessory,
   onChange,
   options,
   optionsLoading = false,
@@ -274,22 +305,20 @@ export function ModelChainField({
 
   if (!providerSupportsChain) {
     return (
-      <div className="space-y-1.5" data-testid="model-chain-field">
-        <FieldLabel>{FIELD_LABEL}</FieldLabel>
+      <FieldShell accessory={labelAccessory}>
         <div
           className="rounded-xl border border-input bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground"
           data-testid="model-chain-unsupported"
         >
           Fallbacks need OpenRouter
         </div>
-      </div>
+      </FieldShell>
     );
   }
 
   if (value === null) {
     return (
-      <div className="space-y-1.5" data-testid="model-chain-field">
-        <FieldLabel>{FIELD_LABEL}</FieldLabel>
+      <FieldShell accessory={labelAccessory}>
         <div className="overflow-hidden rounded-xl border border-input">
           {recommended.length === 0 ? (
             <RowShell className="text-muted-foreground">
@@ -331,7 +360,7 @@ export function ModelChainField({
             Customize
           </button>
         </div>
-      </div>
+      </FieldShell>
     );
   }
 
@@ -368,8 +397,7 @@ export function ModelChainField({
   }
 
   return (
-    <div className="space-y-1.5" data-testid="model-chain-field">
-      <FieldLabel>{FIELD_LABEL}</FieldLabel>
+    <FieldShell accessory={labelAccessory}>
       <div className="overflow-hidden rounded-xl border border-input">
         {chain.length === 0 ? (
           <RowShell className="text-muted-foreground">
@@ -479,6 +507,6 @@ export function ModelChainField({
           <span>{warning}</span>
         </div>
       ) : null}
-    </div>
+    </FieldShell>
   );
 }

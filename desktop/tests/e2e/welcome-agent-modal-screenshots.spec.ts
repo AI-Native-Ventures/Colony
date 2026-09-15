@@ -146,16 +146,19 @@ test.describe("welcome and channel agent entry points", () => {
       .locator("#persona-system-prompt")
       .fill("Research a topic and return a concise brief.");
     await page.getByRole("tab", { name: "Customize for this agent" }).click();
+    await page.getByTestId("customize-ai-change-provider").click();
     const provider = page.locator("#persona-llm-provider");
     await provider.press("Enter");
     await page
       .getByRole("menuitemradio", { exact: true, name: "Anthropic" })
       .click();
+    await page.getByTestId("customize-ai-change-model").click();
     await page.locator("#persona-model").click();
     await page
       .getByRole("button", { name: "Custom model...", exact: true })
       .click();
     await page.getByLabel("Custom model ID").fill("claude-opus-4-5");
+    // Anthropic needs a key no layer supplies, so its input is already open.
     await page.getByLabel("Anthropic API Key").fill("sk-test-api-key-for-e2e");
     await expect(page.getByTestId("persona-dialog-submit")).toBeEnabled();
     await page.getByTestId("persona-dialog-submit").click();
