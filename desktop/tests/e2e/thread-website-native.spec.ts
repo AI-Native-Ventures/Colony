@@ -15,7 +15,9 @@ import {
 } from "./blocks-test-helpers";
 
 // Real React card, preload, controller and native view. Fixture relay and bytes.
-test("native website survives mobile and expanded mounts in the channel", async ({ baseURL }, info) => {
+test("native website survives mobile and expanded mounts in the channel", async ({
+  baseURL,
+}, info) => {
   test.skip(
     process.env.COLONY_NATIVE_PREVIEW_PROOF !== "1",
     "Dedicated hosted Electron proof",

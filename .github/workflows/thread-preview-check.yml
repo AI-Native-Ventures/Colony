@@ -30,8 +30,6 @@ jobs:
         run: node --import ./test-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/blockContracts.test.mjs src/features/blocks/ui/primitives/primitives.test.mjs
       - name: Website bundle validation
         run: node --test desktop/src-electron/website-preview/*.test.mjs
-      - name: Require committed formatting
-        run: git diff --exit-code
       - name: Typecheck
         working-directory: desktop
         run: pnpm exec tsc --noEmit
@@ -57,3 +55,6 @@ jobs:
         with:
           name: thread-preview-rendering
           path: desktop/test-results
+      - name: Require committed formatting
+        if: always()
+        run: git diff --exit-code
