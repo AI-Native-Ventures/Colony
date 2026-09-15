@@ -22,6 +22,7 @@ fn base() -> SpawnConfigSnapshot {
         system_prompt: Some("You are a test agent.".into()),
         model: Some("gpt-5".into()),
         provider: Some("openai".into()),
+        fallback_models: Some(vec!["a/one:free".into(), "b/two:free".into()]),
         credential_mode: CredentialMode::Byok,
         session_title: Some("Fizz".into()),
         auth_tag: Some("tag-abcdefgh".into()),
@@ -63,6 +64,7 @@ fn mutations() -> Vec<Mutation> {
         ("system_prompt", |s| s.system_prompt = None),
         ("model", |s| s.model = None),
         ("provider", |s| s.provider = None),
+        ("fallback_models", |s| s.fallback_models = None),
         ("credential_mode", |s| {
             s.credential_mode = CredentialMode::ColonyCredits
         }),

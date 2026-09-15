@@ -541,6 +541,7 @@ fn spawn_agent_child_inner(
     let effective_model = effective_cfg.model.value;
     let effective_provider = effective_cfg.provider.value;
     let effective_effort = effective_cfg.reasoning_effort.value;
+    let effective_fallback_models = effective_cfg.fallback_models.value;
 
     if let Some(prompt) = &effective_prompt {
         command.env("BUZZ_ACP_SYSTEM_PROMPT", prompt);
@@ -709,6 +710,7 @@ fn spawn_agent_child_inner(
             system_prompt: effective_prompt.as_deref(),
             model: effective_model.as_deref(),
             provider: effective_provider.as_deref(),
+            fallback_models: effective_fallback_models,
             credential_mode: global.credential_mode,
         },
     );
