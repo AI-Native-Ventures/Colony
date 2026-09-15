@@ -173,6 +173,18 @@ impl Llm {
             }
             r
         });
+        // Gemma (served over Google's OpenAI-compatible endpoint, and anywhere
+        // else the same weights are hosted) emits its chain-of-thought as
+        // literal `<thought>…</thought>` blocks inside the assistant message
+        // content. Strip them here, at the single point every provider arm
+        // converges, so the text is clean before it reaches the user or any
+        // downstream parser. `tool_calls` are untouched.
+        let result = result.map(|mut r| {
+            if model_leaks_thought_blocks(effective_model) {
+                r.text = strip_thought_blocks(&r.text);
+            }
+            r
+        });
         // Stamp the effective model into Llm errors so log lines carry
         // `llm: (model-name) 404 Not Found: …` instead of the bare status.
         // The `llm: ` prefix comes from `Display for AgentError::Llm`; the
@@ -1500,6 +1512,53 @@ fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
         // Stamped by the dispatch layer (complete) after parse.
         request_model: None,
     })
+}
+
+/// Literal chain-of-thought tags Gemma emits inside assistant content.
+const THOUGHT_OPEN: &str = "<thought>";
+const THOUGHT_CLOSE: &str = "</thought>";
+
+/// Whether a model is known to leak chain-of-thought as literal
+/// `<thought>…</thought>` blocks inside the assistant message content.
+///
+/// Gated on the model id rather than on the provider: Google's Gemma models
+/// are served over Google's OpenAI-compatible endpoint (so they arrive as
+/// `Provider::OpenAi` with a Google base URL and are indistinguishable from
+/// plain OpenAI at the parse site), and the same weights served anywhere else
+/// leak the same way. Gating on the model id also keeps every other model
+/// untouched, so content that legitimately contains the literal substring
+/// survives intact.
+fn model_leaks_thought_blocks(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("gemma")
+}
+
+/// Remove `<thought>…</thought>` blocks from human-visible assistant content.
+///
+/// Handles any number of paired blocks, spanning newlines, non-greedily (each
+/// open pairs with the *next* close). A trailing unclosed `<thought>` — the
+/// shape produced when generation is cut off mid-thought — drops everything
+/// from the tag to the end of the string rather than leaking a half-thought.
+/// Leftover surrounding whitespace is trimmed.
+///
+/// Only the content string goes through here; `tool_calls` are structured
+/// wire fields and are never touched.
+fn strip_thought_blocks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(THOUGHT_OPEN) {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + THOUGHT_OPEN.len()..];
+        match after_open.find(THOUGHT_CLOSE) {
+            Some(end) => rest = &after_open[end + THOUGHT_CLOSE.len()..],
+            // Unclosed: everything from the tag onward is thought.
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_string()
 }
 
 fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
@@ -7929,6 +7988,81 @@ mod tests {
             retry_delay_for_429(Some("0")).is_none(),
             "zero Retry-After must return None (no-op sleep)"
         );
+    }
+
+    // ---- Gemma <thought> stripping -----------------------------------------
+
+    /// A single paired block is removed, and the surrounding answer survives.
+    #[test]
+    fn strip_thought_blocks_removes_a_paired_block() {
+        let raw = "<thought>I should greet them.</thought>Hello there.";
+        assert_eq!(strip_thought_blocks(raw), "Hello there.");
+    }
+
+    /// Several blocks, including one spanning newlines, are all removed and
+    /// only the prose between them survives.
+    #[test]
+    fn strip_thought_blocks_removes_multiple_blocks() {
+        let raw = "<thought>first\nplan\nover lines</thought>Answer A. \
+                   <thought>second plan</thought>Answer B.";
+        assert_eq!(strip_thought_blocks(raw), "Answer A. Answer B.");
+    }
+
+    /// A `<thought>` with no closing tag (a cut-off generation) drops to the
+    /// end of the string rather than leaking a half-thought.
+    #[test]
+    fn strip_thought_blocks_drops_an_unclosed_block_to_the_end() {
+        let raw = "Here is the answer.\n<thought>now let me second-guess";
+        assert_eq!(strip_thought_blocks(raw), "Here is the answer.");
+    }
+
+    /// Content with no thought tags is returned unchanged (modulo the trim).
+    #[test]
+    fn strip_thought_blocks_leaves_clean_content_alone() {
+        let raw = "Just a normal answer with <b>markup</b> in it.";
+        assert_eq!(strip_thought_blocks(raw), raw);
+    }
+
+    /// The gate is the model id, case-insensitively.
+    #[test]
+    fn only_gemma_model_ids_are_gated_for_thought_stripping() {
+        assert!(model_leaks_thought_blocks("gemma-3-27b-it"));
+        assert!(model_leaks_thought_blocks("models/GEMMA-3-12B-IT"));
+        assert!(!model_leaks_thought_blocks("gemini-2.5-pro"));
+        assert!(!model_leaks_thought_blocks("gpt-5"));
+    }
+
+    /// End to end through `complete`: a Gemma model has its `<thought>` block
+    /// stripped out of the surfaced text.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn complete_strips_thought_blocks_for_gemma() {
+        let (base_url, _captured) = spawn_sequence_stub(vec![StubHttpResponse::ok(chat_response(
+            "<thought>plan the reply</thought>The answer is 42.",
+        ))])
+        .await;
+        let mut config = cfg(Provider::OpenAi);
+        config.base_url = base_url;
+        let llm = Llm::new(&config).unwrap();
+
+        let response = complete_model(&llm, &config, "gemma-3-27b-it")
+            .await
+            .unwrap();
+        assert_eq!(response.text, "The answer is 42.");
+    }
+
+    /// The same payload from a non-Gemma model is left completely untouched —
+    /// other models may legitimately emit that substring.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn complete_leaves_thought_blocks_alone_for_other_models() {
+        let raw = "<thought>plan the reply</thought>The answer is 42.";
+        let (base_url, _captured) =
+            spawn_sequence_stub(vec![StubHttpResponse::ok(chat_response(raw))]).await;
+        let mut config = cfg(Provider::OpenAi);
+        config.base_url = base_url;
+        let llm = Llm::new(&config).unwrap();
+
+        let response = complete_model(&llm, &config, "gpt-5").await.unwrap();
+        assert_eq!(response.text, raw);
     }
 
     /// An untyped 503 (no `error.metadata.error_type`) exhausts all
