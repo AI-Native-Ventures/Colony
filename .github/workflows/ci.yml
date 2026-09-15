@@ -1375,6 +1375,22 @@ jobs:
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Partition roll-forward tests
+        # The catch-all partition (`events_p_future`) has a lower bound frozen
+        # by the initial schema. Until this gate existed, every month past that
+        # bound landed in it on every deployment forever, and nothing noticed:
+        # writes kept succeeding. These tests migrate a scratch database and
+        # assert the catch-all actually rolls forward, that an occupied one is
+        # left for the operator script, and that the replica fence's floor
+        # trigger survives the detach and re-attach. buzz-db lib tests, already
+        # in the archive.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-db) and test(/partition::tests/)' \
+            --run-ignored all
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
       - name: Owner-contact write-path guard
         # The guard is a pure source-scanning unit test, so unlike every other
         # step here it runs WITHOUT --run-ignored. It needs a home that already
