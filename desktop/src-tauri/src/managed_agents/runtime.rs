@@ -24,6 +24,7 @@ pub(crate) use path::{compose_path_entries, should_skip_claude_executable, shoul
 pub(crate) use super::access_policy::{build_respond_to_env_with_policy, RespondToEnv};
 
 mod metadata;
+mod model_chain_env;
 pub(crate) use metadata::{
     apply_agent_display_env, resolve_session_title, runtime_metadata_env_vars,
     DISPLAY_NAME_ENV_VAR, SESSION_TITLE_ENV_VAR,
@@ -243,6 +244,14 @@ fn spawn_agent_child_inner(
     )?;
     let spawned_provisioned_lease = provisioned_lease.as_ref().map(|(lease, _)| lease.clone());
 
+    // The fully-layered user env, bound here because the model chain decision
+    // below needs to know what the user authored. It is applied to the command
+    // much further down, after every Buzz-set variable, so it still wins.
+    let spawn_env = provisioned_lease
+        .as_ref()
+        .map(|(_, env)| env)
+        .unwrap_or(&descriptor.env);
+
     let log_path = super::managed_agent_runtime_log_path(app, &runtime_key)?;
     append_log_marker(
         &log_path,
@@ -327,20 +336,20 @@ fn spawn_agent_child_inner(
     command.env("RUST_LOG", provisioned::child_rust_log_filter());
     command.env("BUZZ_PRIVATE_KEY", &record.private_key_nsec);
     command.env("BUZZ_RELAY_URL", &effective_relay_url);
-    // Relay-recommended OpenRouter fallback chain. Absent on a cold cache or a
-    // relay that does not rank, in which case the agent keeps whatever
-    // OPENROUTER_FALLBACK_MODELS its own config supplies — the variable is left
-    // unset rather than cleared, so "no recommendation" and "recommend nothing"
-    // stay distinguishable. The refresh is scheduled, never awaited: ranking
-    // must not sit in the critical path of an agent starting.
-    if let Some(chain) = crate::managed_agents::model_chain::cached_for(&effective_relay_url) {
-        command.env("OPENROUTER_FALLBACK_MODELS", chain.join(","));
-        // Marks the chain as the relay's opinion rather than a person's, which
-        // is what lets a long-lived agent re-read it as the ranking changes.
-        // Without this flag the agent treats the value as authored and leaves
-        // it alone, so a hand-set chain is never overwritten.
-        command.env("BUZZ_MODEL_CHAIN_SOURCE", "relay");
-    }
+    // Relay-recommended OpenRouter fallback chain, decided from the layered
+    // user env because that env is applied after everything written here. A
+    // person who typed their own OPENROUTER_FALLBACK_MODELS keeps it: nothing
+    // is injected and no source flag goes out, so the harness leaves their
+    // chain alone. Everyone else is marked as following the relay even on a
+    // cold cache, because the flag is what lets the harness pick the chain up
+    // on its next refresh; without it an agent that started cold runs on one
+    // model for its whole life. The refresh is scheduled, never awaited:
+    // ranking must not sit in the critical path of an agent starting.
+    model_chain_env::apply_model_chain_env(
+        &mut command,
+        spawn_env,
+        crate::managed_agents::model_chain::cached_for(&effective_relay_url),
+    );
     crate::managed_agents::model_chain::refresh_in_background(&effective_relay_url);
     command.env("BUZZ_ACP_LAZY_POOL", if lazy { "true" } else { "false" });
     command.env("BUZZ_ACP_IDLE_POOL_SLEEP", idle_pool_sleep_env(lazy));
@@ -648,16 +657,10 @@ fn spawn_agent_child_inner(
     // written above — reserved keys were already stripped from descriptor.env so they
     // cannot clobber BUZZ_PRIVATE_KEY, NOSTR_PRIVATE_KEY, etc. `apply_user_env` skips
     // BUZZ_ACP_MODEL/BUZZ_ACP_PROVIDER so the structured model written above survives.
-    let spawn_env = provisioned_lease
-        .as_ref()
-        .map(|(_, env)| env)
-        .unwrap_or(&descriptor.env);
-    // Colony's `apply_user_env` replaces upstream's raw loop over
-    // `descriptor.env`: it writes the provisioned lease's env when an employee
-    // holds one, and it skips BUZZ_ACP_MODEL/BUZZ_ACP_PROVIDER so the
-    // structured model written above survives. Writing the raw descriptor here
-    // as well would bypass the lease and re-introduce the second model
-    // authority this commit exists to remove.
+    // `spawn_env` itself is bound near the top of this function, where the model
+    // chain decision also reads it. It carries the provisioned lease's env when
+    // an employee holds one, so writing the raw descriptor here instead would
+    // bypass the lease.
     super::env_vars::apply_user_env(&mut command, spawn_env);
     // Resolve once and stamp the same value onto the environment and snapshot.
     let acp_session_policy = super::effective_acp_session_policy(record, &personas);

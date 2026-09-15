@@ -11,6 +11,8 @@
 #
 # Scope, deliberately narrow:
 # - Only `conclusion: failure` on a `push` run. A cancelled run is not red.
+# - A first attempt is rerun once before any decision; only a second
+#   attempt that fails on a test step reverts.
 # - Only a merge commit (two parents) whose subject names a pull request.
 #   A back-merge or a direct push is reported, not reverted.
 # - `git revert -m 1` of that one merge. If the revert does not apply
@@ -95,14 +97,23 @@ jobs:
           # revert for that would have thrown away a good merge. If every
           # failed step is one of those, rerun the failed jobs once instead.
           real=$(jq -r '[.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name
-            | select(test("^(Set up|Install|Prefetch|Activate|Retry Hermit|Restore|Save|Prepare|Download|Get |Run actions/|Run cashapp/|Start integration services|Wait for integration services|Summarize flaky tests|Check )") | not)] | join(", ")' <<<"$jobs_json")
+            | select(test("^(Set up|Install|Prefetch|Activate|Retry Hermit|Restore|Save|Prepare|Download|Get |Run actions/|Run cashapp/|Start integration services|Wait for integration services|Start relay|Summarize flaky tests|Check )") | not)] | join(", ")' <<<"$jobs_json")
+          # First attempt: rerun the failed jobs once, whatever failed. The
+          # first develop run after #811 failed one xterm test 3 of 3 on a
+          # 15 s predicate timeout that was green an hour earlier; a revert
+          # for that would have thrown away a good merge and, with a
+          # promotion PR headed by develop, restarted its two hour matrix.
+          # A rerun costs about 15 minutes and settles flake versus real.
+          if [[ "$RUN_ATTEMPT" -lt 2 ]]; then
+            echo "::warning::run $RUN_ID attempt $RUN_ATTEMPT failed ($failed; real steps: ${real:-none}); rerunning failed jobs once before deciding"
+            gh run rerun "$RUN_ID" --repo "$GITHUB_REPOSITORY" --failed
+            echo "revert=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Second attempt: setup-only failures are infrastructure, a human
+          # looks; a failed test step twice in a row is real and reverts.
           if [[ -z "$real" ]]; then
-            if [[ "$RUN_ATTEMPT" -lt 2 ]]; then
-              echo "::warning::run $RUN_ID failed only in setup or aggregator steps ($failed); rerunning failed jobs once instead of reverting"
-              gh run rerun "$RUN_ID" --repo "$GITHUB_REPOSITORY" --failed
-            else
-              echo "::error::run $RUN_ID failed in setup steps twice ($failed); not reverting #$pr, a human has to look"
-            fi
+            echo "::error::run $RUN_ID failed in setup or aggregator steps twice ($failed); not reverting #$pr, a human has to look"
             echo "revert=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
