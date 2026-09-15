@@ -841,12 +841,19 @@ jobs:
         # that binary's unit-test harness, not the binary (the first run of
         # this job shipped an artifact with no git-credential-nostr in it).
         # The extra bins feed Agent Ask E2E, which no longer compiles.
+        #
+        # That same behaviour is why the archive names `--bin buzz-relay`: the
+        # audit-writer guardrail test is a unit test inside
+        # crates/buzz-relay/src/main.rs, so without the bin's test harness in
+        # the archive its filter matches nothing and nextest exits 4 ("no
+        # tests to run") rather than failing a test.
         run: |
           packages=(-p buzz-db -p buzz-relay -p buzz-search -p buzz-test-client -p buzz-cli -p buzz-acp -p git-credential-nostr)
           tests=(--test boot_lifecycle --test fts_integration --test e2e_event_reminder --test e2e_agent_answers_ask --test interrupt_gate --test interrupt_runtime --test provisioned_employees)
           cargo build --profile ci "${packages[@]}" --lib "${tests[@]}" \
             --bin buzz-relay --bin git-credential-nostr --bin buzz --bin buzz-acp --bin ask_stub_agent
           cargo nextest archive --cargo-profile ci "${packages[@]}" --lib "${tests[@]}" \
+            --bin buzz-relay \
             --archive-file target/ci/backend-integration-tests.tar.zst
           ls -l target/ci/buzz-relay target/ci/git-credential-nostr target/ci/buzz target/ci/buzz-acp target/ci/ask_stub_agent
       - name: sccache stats
