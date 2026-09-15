@@ -149,7 +149,9 @@ test("native website survives mobile and expanded mounts in the channel", async 
     await expect(panel.getByText("Version 2", { exact: true })).toBeVisible();
     // The root appears in both channel and thread; each owns its own mount.
     await expect.poll(async () => (await states()).length).toBe(3);
-    await panel.getByRole("button", { name: "Close panel", exact: true }).click();
+    await panel
+      .getByRole("button", { name: "Close panel", exact: true })
+      .click();
     await expect(panel).toHaveCount(0);
     await expect.poll(async () => (await states()).length).toBe(1);
     await page.getByTestId("channel-random").click();
