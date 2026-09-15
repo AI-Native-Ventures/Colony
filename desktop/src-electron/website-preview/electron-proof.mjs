@@ -84,6 +84,16 @@ try {
     bounds: entry.view.getBounds(), visible: entry.view.getVisible(),
     container: entry.container.getBounds(),
   }, null, 2));
+  if (cyan <= 100) {
+    entry.container.removeChildView(entry.view);
+    window.contentView.addChildView(entry.view);
+    entry.view.setBounds(entry.layout.container);
+    await frame.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    const controlSources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1280, height: 1024 } });
+    if (controlSources.length === 1) await writeFile("test-results/native-website-preview/direct-view-control.png", controlSources[0].thumbnail.toPNG());
+    window.contentView.removeChildView(entry.view);
+    entry.container.addChildView(entry.view);
+  }
   assert.ok(cyan > 100, "composited capture must contain the fixture image");
   await host.closeAll();
   window.destroy();
