@@ -74,8 +74,13 @@ try {
   for (let index = 0; index + 3 < pixels.length; index += 4) {
     if (pixels[index] > 220 && pixels[index + 1] > 220 && pixels[index + 2] < 30) cyan += 1;
   }
-  assert.ok(cyan > 100, "composited capture must contain the fixture image");
   await writeFile("test-results/native-website-preview/preview.png", screenshot.toPNG());
+  await writeFile("test-results/native-website-preview/capture.json", JSON.stringify({
+    cyan, size: screenshot.getSize(), state, layout: entry.layout,
+    bounds: entry.view.getBounds(), visible: entry.view.getVisible(),
+    container: entry.container.getBounds(),
+  }, null, 2));
+  assert.ok(cyan > 100, "composited capture must contain the fixture image");
   await host.closeAll();
   window.destroy();
   clearTimeout(watchdog);
