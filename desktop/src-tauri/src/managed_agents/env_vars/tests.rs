@@ -191,6 +191,32 @@ fn reserved_keys_include_code_execution_surface() {
 }
 
 #[test]
+fn reserved_keys_include_the_metering_checkpoint_route() {
+    // A saved BUZZ_METER_OPENAI_UPSTREAM from an earlier vendor survives a
+    // provider change and silently sends every call to the old vendor, which
+    // answers "Model not found" for models the new one serves. The desktop
+    // owns this route: Colony Credits and the isolated launcher both set it
+    // after user env is stripped.
+    for key in [
+        "BUZZ_METER_OPENAI_UPSTREAM",
+        "BUZZ_METER_OPENAI_PROVIDER",
+        "BUZZ_METER_OPENAI_KEY",
+        "BUZZ_METER_ANTHROPIC_UPSTREAM",
+        "BUZZ_METER_ANTHROPIC_PROVIDER",
+        "BUZZ_METER_ANTHROPIC_KEY",
+    ] {
+        assert!(is_reserved_env_key(key), "{key} should be reserved");
+        let agent = map(&[(key, "https://api.x.ai")]);
+        assert!(
+            merged_user_env(&BTreeMap::new(), &agent).is_empty(),
+            "{key} should be stripped at spawn"
+        );
+        let err = validate_user_env_keys(&map(&[(key, "https://api.x.ai")])).unwrap_err();
+        assert!(err.contains(key), "{key} should be refused at save: {err}");
+    }
+}
+
+#[test]
 fn reserved_keys_include_relay_url() {
     // Overriding the relay URL could redirect the agent to an
     // attacker-controlled relay.
@@ -564,10 +590,9 @@ fn merged_env_strips_config_owned_model_keys_and_keeps_the_rest() {
         !merged.contains_key("BUZZ_ACP_REASONING_EFFORT"),
         "a saved effort must never outrank the one the owner picked"
     );
-    assert_eq!(
-        merged.get("BUZZ_METER_OPENAI_PROVIDER").map(String::as_str),
-        Some("xai"),
-        "BUZZ_METER_* is untouched: only the routing keys change behaviour"
+    assert!(
+        !merged.contains_key("BUZZ_METER_OPENAI_PROVIDER"),
+        "the desktop owns the metering checkpoint's vendor slug and route"
     );
     assert_eq!(
         merged.get("ANTHROPIC_API_KEY").map(String::as_str),
