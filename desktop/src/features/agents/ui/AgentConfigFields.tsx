@@ -45,6 +45,8 @@ import {
   AgentDropdownSelect,
   AgentModelField,
 } from "@/features/agents/ui/agentConfigControls";
+import { GlobalFallbackChainField } from "@/features/agents/ui/GlobalFallbackChainField";
+import { BAKED_STRUCTURED_KEYS } from "@/features/agents/ui/globalAgentConfigDefaults";
 import { ProviderCredentialField } from "@/features/agents/ui/ProviderCredentialField";
 import { usePersonaModelDiscovery } from "@/features/agents/ui/usePersonaModelDiscovery";
 import {
@@ -62,21 +64,6 @@ import { AdvancedRequiredBadge } from "./AdvancedRequiredBadge";
 import { ModelEnvOverrideNotice } from "./ModelEnvOverrideNotice";
 import { CardMintKeyCue } from "./CardMintKeyCue";
 import { getGlobalAgentCredentialState } from "./globalAgentCredentialState";
-
-export const EMPTY_GLOBAL_CONFIG: GlobalAgentConfig = {
-  credential_mode: "byok",
-  env_vars: {},
-  fallback_models: [],
-  provider: null,
-  model: null,
-  preferred_runtime: null,
-};
-
-const BAKED_STRUCTURED_KEYS = new Set([
-  "BUZZ_AGENT_PROVIDER",
-  "BUZZ_AGENT_MODEL",
-  BUZZ_AGENT_THINKING_EFFORT,
-]);
 
 const PROGRESSIVE_FIELDS_TRANSITION = {
   duration: 0.22,
@@ -843,6 +830,16 @@ export function AgentConfigFields({
             usePersonaInputStyle={progressiveDefaults}
           />
           <ModelEnvOverrideNotice envVars={config.env_vars} />
+          <div className="mt-3">
+            <GlobalFallbackChainField
+              config={config}
+              disabled={dependentFieldsDisabled}
+              discoveredModelOptions={discoveredModelOptions}
+              modelDiscoveryLoading={modelDiscoveryLoading}
+              onConfigChange={onConfigChange}
+              provider={providerForDiscovery}
+            />
+          </div>
         </div>
       ) : null}
 
