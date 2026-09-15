@@ -335,19 +335,22 @@ fn spawn_agent_child_inner(
     command.env("RUST_LOG", provisioned::child_rust_log_filter());
     command.env("BUZZ_PRIVATE_KEY", &record.private_key_nsec);
     command.env("BUZZ_RELAY_URL", &effective_relay_url);
-    // Relay-recommended OpenRouter fallback chain, decided from the layered
-    // user env because that env is applied after everything written here. A
-    // person who typed their own OPENROUTER_FALLBACK_MODELS keeps it: nothing
-    // is injected and no source flag goes out, so the harness leaves their
-    // chain alone. Everyone else is marked as following the relay even on a
-    // cold cache, because the flag is what lets the harness pick the chain up
-    // on its next refresh; without it an agent that started cold runs on one
-    // model for its whole life. The refresh is scheduled, never awaited:
-    // ranking must not sit in the critical path of an agent starting.
+    // The OpenRouter fallback chain. An authored one -- the Agent defaults
+    // chain, or this agent's own -- is written verbatim and carries no source
+    // flag, so the harness treats it as the person's and never replaces it on a
+    // refresh. With nothing authored, the relay's recommendation goes out
+    // instead and the flag follows even on a cold cache, because the flag is
+    // what lets the harness pick the chain up on its next refresh; without it
+    // an agent that started cold runs on one model for its whole life. The
+    // layered user env is still consulted for a legacy hand-typed value,
+    // because a harness definition's own env never passes the user-env filter.
+    // The refresh is scheduled, never awaited: ranking must not sit in the
+    // critical path of an agent starting.
     model_chain_env::apply_model_chain_env(
         &mut command,
         spawn_env,
         crate::managed_agents::model_chain::cached_for(&effective_relay_url),
+        effective_cfg.fallback_models.value.clone(),
     );
     crate::managed_agents::model_chain::refresh_in_background(&effective_relay_url);
     command.env("BUZZ_ACP_LAZY_POOL", if lazy { "true" } else { "false" });
