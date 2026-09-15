@@ -7,6 +7,7 @@ import { emitSignedEvent, fixtureUuid, GENERAL_CHANNEL_ID, OWNER_PUBKEY, settleT
 
 // Real React card, preload, controller and native view. Fixture relay and bytes.
 test("native website survives mobile and expanded mounts in the channel", async ({}, info) => {
+  test.skip(process.env.COLONY_NATIVE_PREVIEW_PROOF !== "1", "Dedicated hosted Electron proof");
   test.setTimeout(90_000);
   const app = await electron.launch({
     args: ["--no-sandbox", fileURLToPath(new URL("../../src-electron/website-preview/ui-proof-main.mjs", import.meta.url))],
