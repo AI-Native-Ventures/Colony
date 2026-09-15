@@ -16,7 +16,7 @@ jobs:
       - run: just desktop-install-ci
       - name: Format only preview changes
         working-directory: desktop
-        run: pnpm exec biome check src/features/blocks/ui/ArtifactHtmlPreview.tsx src/features/blocks/ui/artifactPreviewDocument.ts src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/ui/BlockRenderer.tsx src/features/blocks/blockRepository.ts tests/e2e/thread-html-preview.spec.ts
+        run: pnpm exec biome check --write src/features/blocks/ui/WebsiteBundlePreview.tsx src/features/blocks/ui/ArtifactHtmlPreview.tsx src/features/blocks/ui/artifactPreviewDocument.ts src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/ui/BlockRenderer.tsx src/features/blocks/blockRepository.ts tests/e2e/thread-html-preview.spec.ts
       - name: Capture formatting patch
         if: always()
         run: git diff > /tmp/thread-preview-format.patch
@@ -30,6 +30,8 @@ jobs:
         run: node --import ./test-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/blockContracts.test.mjs src/features/blocks/ui/primitives/primitives.test.mjs
       - name: Website bundle validation
         run: node --test desktop/src-electron/website-preview/*.test.mjs
+      - name: Require committed formatting
+        run: git diff --exit-code
       - name: Typecheck
         working-directory: desktop
         run: pnpm exec tsc --noEmit
