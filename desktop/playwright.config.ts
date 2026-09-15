@@ -236,6 +236,7 @@ export default defineConfig({
         "**/harness-management.spec.ts",
         "**/harness-catalog-screenshots.spec.ts",
         "**/inline-custom-harness.spec.ts",
+        "**/customize-ai-rows.spec.ts",
         "**/discovery.spec.ts",
         "**/discovery-scroll.spec.ts",
         "**/discovery-lead-detail.spec.ts",

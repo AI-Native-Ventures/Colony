@@ -332,6 +332,8 @@ test.describe("global agent config screenshots", () => {
     await openCreateDialog(page);
     await customizeAgentAi(page);
 
+    // Customize is a row per setting: the harness picker opens behind Change.
+    await page.getByTestId("customize-ai-change-harness").click();
     await expect(
       page
         .getByTestId("agent-custom-configuration-section")
@@ -379,6 +381,13 @@ test.describe("global agent config screenshots", () => {
     await openCreateDialog(page);
     await customizeAgentAi(page);
 
+    // An inherited key is a note on the Provider row; the input opens only for
+    // someone who actually wants a different key.
+    await expect(page.getByTestId("customize-ai-note-provider")).toHaveText(
+      "Key: from defaults",
+    );
+    await page.getByTestId("customize-ai-change-provider").click();
+    await page.getByTestId("customize-ai-use-different-key").click();
     await expect(page.getByLabel("Anthropic API Key")).toHaveAttribute(
       "placeholder",
       "Inherited from global config",
@@ -761,6 +770,7 @@ test.describe("global agent config screenshots", () => {
     const customSection = page.getByTestId(
       "agent-custom-configuration-section",
     );
+    await page.getByTestId("customize-ai-change-harness").click();
     const harness = customSection.locator("#persona-runtime");
     await expect(harness).toBeVisible();
     await expect(harness).toContainText("Choose a harness");
@@ -850,6 +860,7 @@ test.describe("global agent config screenshots", () => {
 
     // Harness selection belongs to the per-agent customization flow.
     await customizeAgentAi(page);
+    await page.getByTestId("customize-ai-change-harness").click();
     await selectDropdownOption(
       page,
       page.locator("#persona-runtime"),
@@ -1029,7 +1040,11 @@ test.describe("global agent config screenshots", () => {
       /Save changes/,
     );
 
-    // The provider picker IS visible (runtime-less editable definition) …
+    // The provider row IS present (runtime-less editable definition) …
+    await expect(page.getByTestId("customize-ai-row-provider")).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.getByTestId("customize-ai-change-provider").click();
     await expect(page.locator("#persona-llm-provider")).toBeVisible({
       timeout: 10_000,
     });
