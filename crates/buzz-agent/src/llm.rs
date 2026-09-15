@@ -511,8 +511,19 @@ impl Llm {
         let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
         let mut bearer = self.auth.bearer().await?;
         let mut refreshed = false;
+        // Index in `requested` of the entry the body currently leads with, and
+        // the rebuilt body for every hop after the first. OpenRouter falls
+        // through server-side on most errors, but not on the ones that name a
+        // single model as broken (an unknown id, a shape no endpoint behind it
+        // can serve): those come back terminal with the rest of the chain
+        // untried. Retrying them here is what keeps one dead primary from
+        // costing the whole turn.
+        let mut lead = 0usize;
+        let mut rebuilt: Option<Value> = None;
         loop {
-            match openrouter_post(&self.http, &url, body, &bearer, cfg.llm_timeout).await {
+            let sent = rebuilt.as_ref().unwrap_or(body);
+            let result = openrouter_post(&self.http, &url, sent, &bearer, cfg.llm_timeout).await;
+            match result {
                 Err(AgentError::LlmAuth(_)) if !refreshed => {
                     refreshed = true;
                     let new_bearer = self.auth.refresh_now(&bearer).await?;
@@ -528,20 +539,51 @@ impl Llm {
                     }
                     bearer = new_bearer;
                 }
-                result => {
+                Err(err) => {
+                    // Only a terminal `Llm` error whose text opens with a status
+                    // is eligible, and only when a tail remains. `LlmAuth`,
+                    // `LlmContextExceeded` and `UnsupportedImageInput` carry no
+                    // leading status by construction, so they never reach here;
+                    // 402 (credits) and 429 (rate limited) are account-wide and
+                    // 401 is handled above, so retrying any of them down the
+                    // chain would just repeat the same rejection.
+                    let eligible = terminal_status(&err)
+                        .filter(|status| !matches!(status, 401 | 402 | 429))
+                        .filter(|_| lead + 1 < requested.len());
+                    let Some(status) = eligible else {
+                        return Err(err);
+                    };
+                    let from = requested[lead].clone();
+                    lead += 1;
+                    let to = requested[lead].clone();
+                    tracing::warn!(from = %from, to = %to, status, "llm: fell back");
+                    let mut next = rebuilt.take().unwrap_or_else(|| body.clone());
+                    if let Some(obj) = next.as_object_mut() {
+                        obj.insert("model".into(), Value::String(to));
+                        obj.insert(
+                            "models".into(),
+                            Value::Array(
+                                requested[lead..]
+                                    .iter()
+                                    .map(|m| Value::String(m.clone()))
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    rebuilt = Some(next);
+                }
+                Ok(value) => {
                     // A completion that came back names the model that served
                     // it, which is the whole availability signal. Failures are
                     // deliberately not recorded: a transport error or an
                     // account-wide 401 says nothing about any individual
                     // model's availability, and counting it would demote the
                     // entire chain for a problem none of its entries caused.
-                    if let Ok(value) = &result {
-                        crate::model_availability::observe_response(
-                            &requested,
-                            value.get("model").and_then(Value::as_str),
-                        );
-                    }
-                    return result;
+                    crate::model_availability::observe_response(
+                        &requested,
+                        value.get("model").and_then(Value::as_str),
+                    );
+                    return Ok(value);
                 }
             }
         }
@@ -1844,6 +1886,24 @@ fn terminal_llm_error(elapsed: std::time::Duration, attempts: u32, detail: &str)
         "{detail} (cumulative {elapsed:?}, {attempts} attempt{})",
         if attempts == 1 { "" } else { "s" },
     ))
+}
+
+/// The HTTP status a terminal `AgentError::Llm` opens with, when it opens with
+/// one at all. `reqwest::StatusCode` displays as `"400 Bad Request"`, so both
+/// that and a bare `"400: ..."` stamp are accepted. Every other error variant,
+/// and any `Llm` message worded rather than stamped (credits exhausted,
+/// exhausted retries, parameter routing), yields `None`.
+fn terminal_status(err: &AgentError) -> Option<u16> {
+    let msg = match err {
+        AgentError::Llm(s) => s.as_str(),
+        _ => return None,
+    };
+    let digits: String = msg.chars().take_while(char::is_ascii_digit).collect();
+    let rest = &msg[digits.len()..];
+    if !rest.starts_with(':') && !rest.starts_with(' ') {
+        return None;
+    }
+    digits.parse().ok().filter(|s| (400..600).contains(s))
 }
 
 /// Internal HTTP failure wrapper for the OpenAI-family `post` helper.
@@ -7202,7 +7262,8 @@ mod tests {
     /// (repeating the last one once the queue is exhausted, so an
     /// over-budget attempt count is visible rather than hanging), and
     /// captures each request's raw header block for header-attribution
-    /// assertions. Returns (url, captured_header_blocks, attempt_counter).
+    /// assertions. Returns (url, captured_raw_requests, attempt_counter);
+    /// each capture is the header block followed by the request body.
     async fn spawn_openrouter_stub(
         responses: Vec<CannedResponse>,
     ) -> (
@@ -7258,10 +7319,18 @@ mod tests {
                     while body_len < content_length {
                         match sock.read(&mut tmp).await {
                             Ok(0) | Err(_) => break,
-                            Ok(n) => body_len += n,
+                            Ok(n) => {
+                                buf.extend_from_slice(&tmp[..n]);
+                                body_len += n;
+                            }
                         }
                     }
-                    captured.lock().await.push(header_str);
+                    // Header block plus body: header assertions read the prefix,
+                    // request-shape assertions parse the JSON after it.
+                    captured
+                        .lock()
+                        .await
+                        .push(String::from_utf8_lossy(&buf).into_owned());
                     attempts.fetch_add(1, Ordering::SeqCst);
 
                     let mut q = queue.lock().await;
@@ -8149,6 +8218,132 @@ mod tests {
             auth.refreshes.load(Ordering::SeqCst),
             1,
             "exactly one refresh"
+        );
+    }
+
+    /// Parses the JSON body out of one raw capture from `spawn_openrouter_stub`.
+    fn captured_body(raw: &str) -> Value {
+        let body = raw
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .expect("capture has a header/body separator");
+        serde_json::from_str(body).expect("request body is JSON")
+    }
+
+    /// A 400 naming the primary model as unknown is terminal at OpenRouter: the
+    /// rest of the chain is never tried server-side. The client retries with
+    /// entry two leading and the tail behind it, and the answer comes from that
+    /// second request.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_openrouter_falls_through_to_next_chain_entry_on_400() {
+        use std::sync::atomic::Ordering;
+
+        let (url, captured, attempts) = spawn_openrouter_stub(vec![
+            CannedResponse::new(
+                400,
+                r#"{"code":"invalid-argument","error":"Model not found: a"}"#,
+            ),
+            CannedResponse::new(
+                200,
+                r#"{"model":"b","choices":[{"message":{"content":"ok"}}]}"#,
+            ),
+        ])
+        .await;
+        let llm = llm_with(Arc::new(StaticAuth {
+            token: "key".into(),
+        }));
+        let mut c = cfg(Provider::OpenRouter);
+        c.base_url = url;
+
+        let value = llm
+            .post_openrouter(&c, &json!({"model": "a", "models": ["a", "b", "c"]}))
+            .await
+            .expect("the second chain entry answers");
+        assert_eq!(
+            value.get("model").and_then(Value::as_str),
+            Some("b"),
+            "result must come from the second response"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "one attempt per chain entry tried, no more"
+        );
+        let requests = captured.lock().await;
+        let second = captured_body(requests.get(1).expect("two requests captured"));
+        assert_eq!(
+            second.get("model"),
+            Some(&json!("b")),
+            "second request must lead with the second chain entry: {second}"
+        );
+        assert_eq!(
+            second.get("models"),
+            Some(&json!(["b", "c"])),
+            "second request must carry the remaining tail: {second}"
+        );
+    }
+
+    /// Without a `models` array there is no chain to fall through, so the same
+    /// 400 is terminal on the first attempt.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_openrouter_without_chain_fails_fast_on_400() {
+        use std::sync::atomic::Ordering;
+
+        let (url, _captured, attempts) = spawn_openrouter_stub(vec![CannedResponse::new(
+            400,
+            r#"{"code":"invalid-argument","error":"Model not found: a"}"#,
+        )])
+        .await;
+        let llm = llm_with(Arc::new(StaticAuth {
+            token: "key".into(),
+        }));
+        let mut c = cfg(Provider::OpenRouter);
+        c.base_url = url;
+
+        let err = llm
+            .post_openrouter(&c, &json!({"model": "a"}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, AgentError::Llm(s) if s.starts_with("400 Bad Request:")),
+            "400 without a chain must stay terminal: got {err:?}"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "no fallthrough without a chain"
+        );
+    }
+
+    /// A 401 is account-wide, so no entry further down the chain would fare any
+    /// better. The static-key path is terminal after one request.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_openrouter_401_does_not_fall_through() {
+        use std::sync::atomic::Ordering;
+
+        let (url, _captured, attempts) = spawn_openrouter_stub(vec![CannedResponse::new(
+            401,
+            r#"{"error":{"message":"invalid api key"}}"#,
+        )])
+        .await;
+        let llm = llm_with(Arc::new(StaticAuth {
+            token: "static-key".into(),
+        }));
+        let mut c = cfg(Provider::OpenRouter);
+        c.base_url = url;
+
+        let err = llm
+            .post_openrouter(&c, &json!({"model": "a", "models": ["a", "b", "c"]}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, AgentError::LlmAuth(s) if s.contains("static key rejected")),
+            "401 must stay an auth failure, not a chain hop: got {err:?}"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "401 must not walk the chain"
         );
     }
 }
