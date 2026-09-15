@@ -32,7 +32,6 @@ export function HarnessModelDefaultNotice({
 
 export function AgentCreateAiDefaultsSummary({
   canChooseProvider,
-  fallbacks,
   harness,
   inheritedModel,
   inheritedProvider,
@@ -42,10 +41,6 @@ export function AgentCreateAiDefaultsSummary({
   triggerRef,
 }: {
   canChooseProvider: boolean;
-  fallbacks?: {
-    entries: readonly string[];
-    source: "agent" | "global" | "relay";
-  };
   harness: string;
   inheritedModel: InheritedDefault;
   inheritedProvider: InheritedDefault;
@@ -61,7 +56,6 @@ export function AgentCreateAiDefaultsSummary({
       triggerRef={triggerRef}
       explicitModel=""
       explicitProvider=""
-      fallbacks={fallbacks}
       harness={harness}
       inheritedModel={inheritedModel}
       inheritedProvider={inheritedProvider}

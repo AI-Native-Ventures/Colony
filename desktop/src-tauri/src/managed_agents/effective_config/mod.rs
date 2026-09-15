@@ -15,15 +15,6 @@ pub enum ConfigSource {
     Definition,
     Global,
     InstanceLegacy,
-    /// Nobody authored this value, so the relay's own recommendation decides.
-    ///
-    /// Only the fallback chain reaches this tier: an unauthored chain is the
-    /// relay's hourly model ranking, injected at spawn from
-    /// `managed_agents::model_chain`. It is below `Global` because it is not
-    /// user-settable at all, which is also why its `ResolvedField::value` is
-    /// always `None`: the desktop does not resolve the relay's chain here, it
-    /// only records that nothing above the relay claimed the field.
-    Relay,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,14 +42,6 @@ pub struct EffectiveAgentConfig {
     /// joins the chain, and `spawn_snapshot` has to start carrying it so the
     /// restart badge can see an effort-only edit.
     pub reasoning_effort: ResolvedField<String>,
-    /// The OpenRouter fallback chain, resolved definition then global then
-    /// relay.
-    ///
-    /// `Some(list)` is an authored chain and spawn injects it verbatim,
-    /// including `Some(vec![])`, which is an agent deliberately running with no
-    /// fallbacks. `None` (source [`ConfigSource::Relay`]) means nobody authored
-    /// one, and spawn hands the agent the relay's recommendation instead.
-    pub fallback_models: ResolvedField<Vec<String>>,
 }
 
 impl EffectiveAgentConfig {
@@ -200,24 +183,6 @@ pub fn resolve_effective_harness_command_or_legacy(
         .unwrap_or_else(|_| super::record_agent_command(record, definitions))
 }
 
-/// The global fallback chain, or the relay tier when the owner has not
-/// authored one.
-///
-/// An empty global chain is not "no fallbacks": it is the stored shape of "use
-/// Colony's recommended chain", which is what makes the relay the tier below.
-fn global_fallback_models(global: &GlobalAgentConfig) -> ResolvedField<Vec<String>> {
-    if global.fallback_models.is_empty() {
-        return ResolvedField {
-            value: None,
-            source: ConfigSource::Relay,
-        };
-    }
-    ResolvedField {
-        value: Some(global.fallback_models.clone()),
-        source: ConfigSource::Global,
-    }
-}
-
 /// The global reasoning effort, which is the only tier that carries one.
 fn global_reasoning_effort(global: &GlobalAgentConfig) -> ResolvedField<String> {
     ResolvedField {
@@ -257,15 +222,6 @@ fn resolve_linked(
         source: ConfigSource::Definition,
     };
 
-    let fallback_models = match &definition.fallback_models {
-        // An empty list is authored too: it is the agent that wants none.
-        Some(models) => ResolvedField {
-            value: Some(models.clone()),
-            source: ConfigSource::Definition,
-        },
-        None => global_fallback_models(global),
-    };
-
     EffectiveAgentConfig {
         harness: ResolvedField {
             value: None,
@@ -275,7 +231,6 @@ fn resolve_linked(
         provider,
         system_prompt,
         reasoning_effort: global_reasoning_effort(global),
-        fallback_models,
     }
 }
 
@@ -395,9 +350,6 @@ fn resolve_definition_less(
         provider,
         system_prompt,
         reasoning_effort: global_reasoning_effort(global),
-        // A record has no chain field of its own, so a definition-less
-        // instance resolves the global chain, then the relay's.
-        fallback_models: global_fallback_models(global),
     };
 
     // Legacy mesh compatibility. A record with an explicit `provider` has

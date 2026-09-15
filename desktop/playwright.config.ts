@@ -71,7 +71,6 @@ export default defineConfig({
       testIgnore: skipScreenshotSpecs,
       testMatch: [
         "**/smoke.spec.ts",
-        "**/model-fallback-chain.spec.ts",
         "**/inline-reply-model.spec.ts",
         "**/composer-dictation.spec.ts",
         "**/rich-document-previews.spec.ts",

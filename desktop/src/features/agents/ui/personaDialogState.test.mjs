@@ -92,8 +92,6 @@ test("duplicatePersonaDialogState copies persona fields into a new draft", () =>
     runtime: "provider-a",
     model: "model-a",
     provider: undefined,
-    // Absent on the persona, so the duplicate inherits rather than pinning.
-    fallbackModels: undefined,
     namePool: [],
     envVars: {},
   });
@@ -151,43 +149,9 @@ test("editPersonaDialogState preserves the persona id for updates", () => {
     runtime: undefined,
     model: undefined,
     provider: undefined,
-    fallbackModels: undefined,
     namePool: [],
     envVars: {},
   });
-});
-
-test("editPersonaDialogState carries the persona's own fallback chain", () => {
-  const persona = {
-    id: "persona-chain",
-    displayName: "Kit",
-    avatarUrl: null,
-    systemPrompt: "Keep it weird.",
-    runtime: null,
-    model: null,
-    provider: null,
-    isBuiltIn: false,
-    isActive: true,
-    createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-02T00:00:00Z",
-  };
-  assert.deepEqual(
-    editPersonaDialogState({ ...persona, fallbackModels: ["a/one:free"] })
-      .initialValues.fallbackModels,
-    ["a/one:free"],
-  );
-  // An explicit empty chain is "no fallbacks for this agent", not "inherit",
-  // so it must survive the round trip as an empty list.
-  assert.deepEqual(
-    editPersonaDialogState({ ...persona, fallbackModels: [] }).initialValues
-      .fallbackModels,
-    [],
-  );
-  assert.equal(
-    editPersonaDialogState({ ...persona, fallbackModels: null }).initialValues
-      .fallbackModels,
-    null,
-  );
 });
 
 test("editPersonaDialogState seeds envVars and namePool from the persona", () => {

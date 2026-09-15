@@ -125,10 +125,6 @@ pub struct CreatePersonaRequest {
     pub model: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
-    /// OpenRouter fallback chain for this definition. Absent inherits the
-    /// global chain; `Some(vec![])` means "no fallbacks for this agent".
-    #[serde(default)]
-    pub fallback_models: Option<Vec<String>>,
     #[serde(default)]
     pub name_pool: Vec<String>,
     /// Environment variables for agents created from this persona.
@@ -161,13 +157,6 @@ pub struct UpdatePersonaRequest {
     pub model: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
-    /// OpenRouter fallback chain for this definition.
-    ///
-    /// Absent clears the definition's chain back to inheriting the global one,
-    /// the same way an absent `model` clears back to the global model. An
-    /// explicit empty list is the distinct "no fallbacks for this agent".
-    #[serde(default)]
-    pub fallback_models: Option<Vec<String>>,
     #[serde(default)]
     pub name_pool: Vec<String>,
     /// Environment variables for agents created from this persona.
@@ -371,7 +360,6 @@ mod tests {
             runtime: None,
             model: None,
             provider: None,
-            fallback_models: None,
             name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,

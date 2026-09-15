@@ -77,12 +77,6 @@ pub struct PersonaEventContent {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
-    /// OpenRouter fallback chain, absent when the definition inherits the
-    /// global one. `skip_serializing_if` keeps pre-chain content bytes, and
-    /// therefore `persona_content_hash`, unchanged for every definition that
-    /// has never authored a chain.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fallback_models: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub name_pool: Vec<String>,
     /// Definition-level defaults copied onto instances at creation
@@ -238,7 +232,6 @@ pub fn persona_from_event(event: &nostr::Event) -> Result<AgentDefinition, Strin
         runtime: content.runtime,
         model: content.model,
         provider: content.provider,
-        fallback_models: content.fallback_models,
         name_pool: content.name_pool,
         is_builtin: false,
         is_active: true,
@@ -610,7 +603,6 @@ pub fn persona_event_content(record: &AgentDefinition) -> PersonaEventContent {
         runtime: record.runtime.clone(),
         model: record.model.clone(),
         provider: record.provider.clone(),
-        fallback_models: record.fallback_models.clone(),
         name_pool: record.name_pool.clone(),
         // NIP-AP behavioral defaults: live since the create-path unification
         // (B5) — carried on AgentDefinition in wire shape and copied verbatim.

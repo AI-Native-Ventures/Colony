@@ -30,7 +30,6 @@ use tauri::AppHandle;
 use crate::managed_agents::env_vars::{
     validate_user_env_keys, DERIVED_PROVIDER_MODEL_ENV_KEYS, MAX_ENV_VALUE_BYTES,
 };
-use crate::managed_agents::fallback_chain::{normalize_fallback_models, validate_fallback_models};
 use crate::managed_agents::storage::{atomic_write_json_restricted, managed_agents_base_dir};
 use crate::managed_agents::types::{AgentDefinition, ManagedAgentRecord};
 
@@ -121,20 +120,6 @@ pub struct GlobalAgentConfig {
     /// effort field yet, so nothing can disagree with what the owner chose.
     #[serde(default)]
     pub reasoning_effort: Option<String>,
-
-    /// Global OpenRouter fallback chain: the models the harness tries, in
-    /// order, when the primary model refuses.
-    ///
-    /// Empty means "use Colony's recommended chain", which is the relay's own
-    /// hourly ranking (`managed_agents::model_chain`). Non-empty is a chain the
-    /// owner authored, and the harness is told not to refresh it.
-    ///
-    /// Stored normalized by [`normalize_global_config_fields`]: trimmed, blanks
-    /// and later duplicates dropped, at most
-    /// [`MAX_FALLBACK_MODELS`](crate::managed_agents::fallback_chain::MAX_FALLBACK_MODELS)
-    /// entries.
-    #[serde(default)]
-    pub fallback_models: Vec<String>,
 }
 
 /// Validate a `GlobalAgentConfig` before persisting it.
@@ -223,10 +208,6 @@ pub fn validate_global_config(config: &GlobalAgentConfig) -> Result<(), String> 
         }
     }
 
-    // The chain reaches the harness as one comma-joined env value, so an id
-    // carrying whitespace or a comma is refused rather than stored.
-    validate_fallback_models("fallback_models", &config.fallback_models)?;
-
     Ok(())
 }
 
@@ -266,56 +247,11 @@ pub fn normalize_global_config_fields(config: &mut GlobalAgentConfig) {
             config.reasoning_effort = None;
         }
     }
-    // An empty chain is how "use Colony's recommended chain" is stored, so a
-    // list that normalizes away entirely lands back on the relay's opinion
-    // rather than on a chain of blanks.
-    config.fallback_models = normalize_fallback_models(&config.fallback_models);
 }
 
 fn global_config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(managed_agents_base_dir(app)?.join("global-agent-config.json"))
 }
-
-/// Move a hand-typed `OPENROUTER_FALLBACK_MODELS` out of the global `env_vars`
-/// and onto the structured `fallback_models` field.
-///
-/// The key became config-owned when the chain got a field of its own
-/// ([`CONFIG_OWNED_MODEL_ENV_KEYS`](crate::managed_agents::env_vars::CONFIG_OWNED_MODEL_ENV_KEYS)),
-/// which means spawn now strips a copy left in `env_vars`. Without this move a
-/// chain someone typed under Advanced would simply stop being applied on the
-/// upgrade, with nothing on screen to say why.
-///
-/// The entry then leaves `env_vars` so the chain has exactly one home. An
-/// already authored `fallback_models` still wins and the entry is dropped
-/// unread: the picker is the truth, exactly as it is for `model` and
-/// `provider`. Like the record migration this runs on every load and is
-/// idempotent, with the next save making it permanent on disk.
-///
-/// Returns `true` when the config changed, so callers can log the adoption.
-fn migrate_env_fallback_models(config: &mut GlobalAgentConfig) -> bool {
-    let mut raw: Option<String> = None;
-    config.env_vars.retain(|key, value| {
-        if key.eq_ignore_ascii_case(FALLBACK_MODELS_ENV_KEY) {
-            raw = Some(value.clone());
-            return false;
-        }
-        true
-    });
-    let Some(raw) = raw else {
-        return false;
-    };
-    if !config.fallback_models.is_empty() {
-        // Dropped rather than adopted: the field already says what the owner
-        // wants, so the leftover entry is only a way to disagree with it.
-        return true;
-    }
-    let entries: Vec<String> = raw.split(',').map(str::to_string).collect();
-    config.fallback_models = normalize_fallback_models(&entries);
-    true
-}
-
-/// The env key the harness reads the chain from.
-const FALLBACK_MODELS_ENV_KEY: &str = "OPENROUTER_FALLBACK_MODELS";
 
 fn remove_managed_meter_opt_out(config: &mut GlobalAgentConfig) {
     config
@@ -339,9 +275,6 @@ pub fn load_global_agent_config(app: &AppHandle) -> Result<GlobalAgentConfig, St
     // Keep the file readable, but remove the value from the effective/UI
     // config so an upgrade immediately restores Desktop-owned Spend coverage.
     remove_managed_meter_opt_out(&mut config);
-    // A chain typed under Advanced before the field existed would otherwise be
-    // stripped at spawn and silently stop applying.
-    migrate_env_fallback_models(&mut config);
     Ok(config)
 }
 

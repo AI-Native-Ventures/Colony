@@ -17,21 +17,19 @@ import { AlertTriangle } from "lucide-react";
 export const CONFIG_OWNED_MODEL_ENV_KEYS = [
   "BUZZ_ACP_MODEL",
   "BUZZ_ACP_PROVIDER",
-  "OPENROUTER_FALLBACK_MODELS",
 ] as const;
 
 /** What the notice says the key is for, so the sentence reads naturally. */
 const FIELD_LABEL: Record<string, string> = {
   BUZZ_ACP_MODEL: "model",
   BUZZ_ACP_PROVIDER: "provider",
-  OPENROUTER_FALLBACK_MODELS: "fallback chain",
 };
 
 export type IgnoredModelEnvOverride = {
   /** The key exactly as it is stored, so the user can find it under Advanced. */
   key: string;
   value: string;
-  /** "model", "provider", or "fallback chain". */
+  /** "model" or "provider". */
   label: string;
 };
 

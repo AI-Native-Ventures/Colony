@@ -573,9 +573,6 @@ pub async fn confirm_agent_snapshot_import(
             runtime: snapshot.definition.runtime.clone(),
             model: snapshot.definition.model.clone(),
             provider: snapshot.definition.provider.clone(),
-            // Agent snapshots do not carry a chain yet, so an imported
-            // definition follows the global one.
-            fallback_models: None,
             name_pool: snapshot.definition.name_pool.clone(),
             is_builtin: false,
             is_active: true,

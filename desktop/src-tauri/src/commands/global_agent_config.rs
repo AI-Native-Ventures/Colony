@@ -875,7 +875,6 @@ mod tests {
             credential_mode: CredentialMode::ColonyCredits,
             env_vars: BTreeMap::new(),
             provider: Some("anthropic".to_string()),
-            fallback_models: Vec::new(),
             model: None,
             preferred_runtime: Some("goose".to_string()),
             reasoning_effort: None,

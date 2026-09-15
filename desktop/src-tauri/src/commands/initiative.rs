@@ -400,8 +400,6 @@ fn resolve_chat_agent_persona(
             runtime: agent.runtime.clone(),
             model: agent.model.clone(),
             provider: agent.provider.clone(),
-            // No chain is proposed here: the agent follows the global one.
-            fallback_models: None,
             name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,

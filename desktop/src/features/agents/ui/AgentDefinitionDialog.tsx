@@ -29,8 +29,10 @@ import {
   ADVANCED_FIELDS_MOTION_TRANSITION,
   AUTO_MODEL_DROPDOWN_VALUE,
   AUTO_PROVIDER_DROPDOWN_VALUE,
+  BLOCK_BUILD_HIDDEN_PROVIDER_IDS,
   buildPersonaRuntimeDropdownOptions,
   CUSTOM_PROVIDER_DROPDOWN_VALUE,
+  computeLocalModeGate,
   formatRuntimeOptionLabel,
   getDefaultPersonaRuntime,
   getPersonaModelOptions,
@@ -43,7 +45,6 @@ import {
   PERSONA_FIELD_SHELL_CLASS,
   PERSONA_LABEL_OPTIONAL_CLASS,
   shouldClearKnownModelForSelectionScope,
-  useHiddenProviderIds,
 } from "./agentConfigOptions";
 import { RequiredFieldLabel } from "./agentConfigControls";
 import { relayMeshModelPickerState } from "./relayMeshModelPicker";
@@ -77,9 +78,6 @@ import {
 import { applyAgentAiConfigurationModeChange } from "./agentAiConfigurationModeChange";
 import { useProviderApiKeyFieldState } from "./providerApiKeyFieldState";
 import { buildRuntimeModelProviderPayload } from "./agentDefinitionSubmitPayload";
-import { useLocalModeGate } from "./useLocalModeGate";
-import { ModelChainField } from "./ModelChainField";
-import { useAgentFallbackChain } from "./useAgentFallbackChain";
 import { AgentDefinitionDialogFooter } from "./AgentDefinitionDialogFooter";
 import { AgentDefinitionDialogShell } from "./AgentDefinitionDialogShell";
 import { AddCustomHarnessDialog } from "./AddCustomHarnessDialog";
@@ -300,7 +298,6 @@ export function AgentDefinitionDialog({
       setIsCustomModelEditing(false);
       setProvider("");
       setAiConfigurationMode("defaults");
-      fallbackChain.reset();
       setIsCustomProviderEditing(false);
       setNamePoolText("");
       setEnvVars({});
@@ -357,8 +354,6 @@ export function AgentDefinitionDialog({
       model: modelForSubmit,
       provider: providerForSubmit,
       namePool: namePoolInput,
-      fallbackModels:
-        aiConfigurationMode === "defaults" ? null : fallbackChain.value,
       envVars,
       behavior: behaviorForSubmit(
         behaviorDraft,
@@ -432,21 +427,34 @@ export function AgentDefinitionDialog({
     setProvider(next.provider);
     setModel(next.model);
     setEnvVars(next.envVars);
-    // Agent defaults means inheriting everything, the chain included.
-    if (nextMode === "defaults") fallbackChain.reset();
   }
   const { data: bakedEnvKeys } = useBakedBuildEnvKeysQuery({ enabled: open });
-  const localModeGate = useLocalModeGate({
-    bakedEnvKeys,
-    envVars,
-    globalEnvVars: globalConfig.env_vars,
-    globalModel: inheritedModelDefault.value,
-    globalProvider: inheritedProviderDefault.value,
-    model,
-    provider: trimmedProvider,
-    runtimeFileConfig,
-    runtimeId: runtime,
-  });
+  const localModeGate = React.useMemo(
+    () =>
+      computeLocalModeGate({
+        bakedEnvKeys,
+        envVars,
+        globalEnvVars: globalConfig.env_vars,
+        globalProvider: inheritedProviderDefault.value,
+        globalModel: inheritedModelDefault.value,
+        isProviderMode: false,
+        model,
+        provider: trimmedProvider,
+        runtimeId: runtime,
+        runtimeFileConfig,
+      }),
+    [
+      bakedEnvKeys,
+      envVars,
+      globalConfig.env_vars,
+      inheritedModelDefault.value,
+      inheritedProviderDefault.value,
+      model,
+      trimmedProvider,
+      runtime,
+      runtimeFileConfig,
+    ],
+  );
   // requiredEnvKeys: the gate already handles baked-, global-, and file-
   // satisfied keys so no further filtering is needed.
   const { requiredEnvKeys } = localModeGate;
@@ -553,7 +561,17 @@ export function AgentDefinitionDialog({
     modelFieldVisible,
     provider: effectiveProvider,
   });
-  const hideProviderIds = useHiddenProviderIds(bakedEnvKeys);
+  // On internal Block builds, BUZZ_AGENT_PROVIDER is baked in and a boot
+  // migration rewrites any persisted Databricks v1 values → v2. Hide the v1
+  // option there so it is not offered for new selections. OSS builds have no
+  // baked provider, so v1 remains visible.
+  const hideProviderIds = React.useMemo(
+    () =>
+      (bakedEnvKeys ?? []).includes("BUZZ_AGENT_PROVIDER")
+        ? BLOCK_BUILD_HIDDEN_PROVIDER_IDS
+        : new Set<string>(),
+    [bakedEnvKeys],
+  );
   const providerOptions = getPersonaProviderOptions(
     trimmedProvider,
     runtime,
@@ -586,16 +604,6 @@ export function AgentDefinitionDialog({
     modelDiscoveryLoading && discoveredModelOptions === null,
     modelOptions,
   );
-  const fallbackChain = useAgentFallbackChain({
-    disabled: isPending,
-    globalChain: globalConfig.fallback_models ?? [],
-    initialFallbackModels: initialValues?.fallbackModels,
-    open,
-    options: discoveredModelOptions,
-    optionsLoading: modelDiscoveryLoading && discoveredModelOptions === null,
-    primaryModel: model,
-    provider: effectiveProvider,
-  });
   const previewLabel = displayName.trim() || "Agent name";
   const previewAvatarUrl = avatarUrl.trim() || null;
   const runtimeWarningText = selectedRuntime
@@ -884,14 +892,9 @@ export function AgentDefinitionDialog({
             ) : null}
           </AnimatePresence>
 
-          {modelFieldVisible && aiConfigurationMode === "custom" ? (
-            <ModelChainField {...fallbackChain.fieldProps} />
-          ) : null}
-
           {aiConfigurationMode === "defaults" ? (
             <AgentCreateAiDefaultsSummary
               canChooseProvider={runtimeCanChooseLlmProvider}
-              fallbacks={fallbackChain.inherited}
               harness={runtimeSummaryLabel}
               inheritedModel={inheritedModelDefault}
               inheritedProvider={inheritedProviderDefault}

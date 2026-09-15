@@ -52,9 +52,6 @@ test("the Colony Agent branch preselects Colony Credits and DeepSeek V4 Flash", 
   assert.deepEqual(defaultColonyAgentConfig(), {
     credential_mode: "colony_credits",
     env_vars: {},
-    // Empty is what "use Colony's recommended chain" looks like on disk, so
-    // the hosted lane starts on the relay's ranking like every other lane.
-    fallback_models: [],
     provider: "openai-compat",
     model: "deepseek-v4-flash",
     preferred_runtime: "buzz-agent",

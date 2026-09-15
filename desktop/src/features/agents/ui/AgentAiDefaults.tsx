@@ -26,26 +26,6 @@ export function formatAiDefaultsSummary({
   return parts.length > 0 ? parts.join(" · ") : "Not configured";
 }
 
-/**
- * The Fallbacks row's text.
- *
- * An empty chain is a decision ("this agent stops at its model"), not a
- * missing value, so it reads as None. A chain that came from the relay is
- * labelled, because the owner did not choose those ids and the list can change
- * under them when the relay reranks.
- */
-export function formatFallbacksSummary({
-  entries,
-  source,
-}: {
-  entries: readonly string[];
-  source: "agent" | "global" | "relay";
-}): string {
-  if (entries.length === 0) return "None";
-  const joined = entries.join(", ");
-  return source === "relay" ? `${joined} (Colony recommended)` : joined;
-}
-
 export function AgentAiDefaultsNotice({
   isConfigured = true,
   onEditDefaults,
@@ -53,7 +33,6 @@ export function AgentAiDefaultsNotice({
   explicitModel,
   explicitProvider,
   envVars,
-  fallbacks,
   harness,
   inheritedModel,
   inheritedProvider,
@@ -69,11 +48,6 @@ export function AgentAiDefaultsNotice({
    * configuration overrides. See {@link ModelEnvOverrideNotice}.
    */
   envVars?: Record<string, string> | null;
-  /** The chain this agent actually runs with, and where it came from. */
-  fallbacks?: {
-    entries: readonly string[];
-    source: "agent" | "global" | "relay";
-  };
   harness?: string;
   inheritedModel: InheritedDefault;
   inheritedProvider: InheritedDefault;
@@ -124,17 +98,6 @@ export function AgentAiDefaultsNotice({
         <dd className="truncate text-foreground">
           {model || "Not configured"}
         </dd>
-        {fallbacks ? (
-          <>
-            <dt className="text-muted-foreground">Fallbacks</dt>
-            <dd
-              className="truncate text-foreground"
-              data-testid="agent-ai-defaults-fallbacks"
-            >
-              {formatFallbacksSummary(fallbacks)}
-            </dd>
-          </>
-        ) : null}
       </dl>
       <ModelEnvOverrideNotice envVars={envVars} />
       <Button

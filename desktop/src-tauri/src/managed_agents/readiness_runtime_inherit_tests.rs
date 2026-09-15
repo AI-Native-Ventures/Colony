@@ -137,7 +137,6 @@ mod tests {
             runtime: Some("claude".to_string()),
             model: None,
             provider: None,
-            fallback_models: None,
             name_pool: vec![],
             is_builtin: false,
             is_active: true,

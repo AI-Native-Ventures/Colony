@@ -95,7 +95,6 @@ fn persona(id: &str, runtime: Option<&str>, prompt: &str) -> AgentDefinition {
         runtime: runtime.map(str::to_string),
         model: None,
         provider: None,
-        fallback_models: None,
         name_pool: vec![],
         is_builtin: false,
         is_active: true,
@@ -205,66 +204,6 @@ fn persona_prompt_edit_changes_snapshot() {
     assert_ne!(
         snapshot(&rec, &before, &[], "wss://ws.example", &Default::default()),
         snapshot(&rec, &after, &[], "wss://ws.example", &Default::default())
-    );
-}
-
-/// Editing the Agent defaults chain changes what a restart would inject, so
-/// the restart badge has to light for every agent inheriting it.
-#[test]
-fn a_global_fallback_chain_edit_changes_snapshot() {
-    let mut rec = record();
-    rec.persona_id = Some("pers".into());
-    let personas = [persona("pers", Some("claude"), "prompt")];
-    let before = GlobalAgentConfig::default();
-    let after = GlobalAgentConfig {
-        fallback_models: vec!["a/one:free".into(), "b/two:free".into()],
-        ..Default::default()
-    };
-    assert_ne!(
-        snapshot(&rec, &personas, &[], "wss://ws.example", &before),
-        snapshot(&rec, &personas, &[], "wss://ws.example", &after)
-    );
-}
-
-/// The chain is an atomic leaf, so a reorder is a real edit rather than a
-/// no-op: it changes which model the harness tries first.
-#[test]
-fn reordering_a_fallback_chain_changes_snapshot() {
-    let mut rec = record();
-    rec.persona_id = Some("pers".into());
-    let mut before = persona("pers", Some("claude"), "prompt");
-    before.fallback_models = Some(vec!["a/one:free".into(), "b/two:free".into()]);
-    let mut after = before.clone();
-    after.fallback_models = Some(vec!["b/two:free".into(), "a/one:free".into()]);
-    assert_ne!(
-        snapshot(
-            &rec,
-            &[before],
-            &[],
-            "wss://ws.example",
-            &Default::default()
-        ),
-        snapshot(&rec, &[after], &[], "wss://ws.example", &Default::default())
-    );
-}
-
-/// Turning fallbacks off for one agent is not the same as inheriting the
-/// global chain, and a snapshot that conflated the two would leave the agent
-/// running with fallbacks it was told to drop.
-#[test]
-fn an_empty_per_agent_chain_is_distinct_from_inheriting() {
-    let mut rec = record();
-    rec.persona_id = Some("pers".into());
-    let inheriting = persona("pers", Some("claude"), "prompt");
-    let mut none_at_all = inheriting.clone();
-    none_at_all.fallback_models = Some(Vec::new());
-    let global = GlobalAgentConfig {
-        fallback_models: vec!["a/one:free".into()],
-        ..Default::default()
-    };
-    assert_ne!(
-        snapshot(&rec, &[inheriting], &[], "wss://ws.example", &global),
-        snapshot(&rec, &[none_at_all], &[], "wss://ws.example", &global)
     );
 }
 

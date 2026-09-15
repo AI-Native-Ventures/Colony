@@ -536,11 +536,10 @@ fn record_with(
 
 #[test]
 fn config_owned_predicate_covers_every_routing_key_case_insensitively() {
-    assert_eq!(CONFIG_OWNED_MODEL_ENV_KEYS.len(), 4);
+    assert_eq!(CONFIG_OWNED_MODEL_ENV_KEYS.len(), 3);
     assert!(is_config_owned_model_env_key("BUZZ_ACP_MODEL"));
     assert!(is_config_owned_model_env_key("buzz_acp_provider"));
     assert!(is_config_owned_model_env_key("buzz_acp_reasoning_effort"));
-    assert!(is_config_owned_model_env_key("openrouter_fallback_models"));
     // Adjacent keys that must keep working.
     assert!(!is_config_owned_model_env_key("BUZZ_AGENT_MODEL"));
     assert!(!is_config_owned_model_env_key("BUZZ_ACP_SYSTEM_PROMPT"));

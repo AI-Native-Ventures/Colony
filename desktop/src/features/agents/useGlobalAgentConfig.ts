@@ -17,7 +17,6 @@ import type { GlobalAgentConfig } from "@/shared/api/types";
 const EMPTY_CONFIG: GlobalAgentConfig = {
   credential_mode: "byok",
   env_vars: {},
-  fallback_models: [],
   provider: null,
   model: null,
   preferred_runtime: null,

@@ -293,8 +293,6 @@ fn create_persona_input(
         runtime: trim_optional(&definition.runtime),
         model: trim_optional(&definition.model),
         provider: trim_optional(&definition.provider),
-        // Not in the signed contract: a proposed agent follows the global chain.
-        fallback_models: None,
         name_pool: Vec::new(),
         env_vars: BTreeMap::new(),
         behavior: Some(normalized_behavior(&definition.behavior)?),
@@ -372,7 +370,6 @@ fn update_persona_input(
         model: trim_optional(&definition.model),
         provider: trim_optional(&definition.provider),
         // Not in the signed contract: preserve instead of manufacturing state.
-        fallback_models: current.fallback_models.clone(),
         name_pool: current.name_pool.clone(),
         // Secrets are never accepted by this command and therefore never
         // replaced by Agent Proposal execution.
@@ -632,7 +629,6 @@ mod tests {
             runtime: action.definition.runtime.clone(),
             model: None,
             provider: None,
-            fallback_models: None,
             name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,
