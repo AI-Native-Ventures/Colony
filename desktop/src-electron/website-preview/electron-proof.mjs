@@ -69,31 +69,31 @@ try {
   stage = "capture preview";
   console.log(stage);
   await frame.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1280, height: 1024 } });
-  const source = sources.length === 1 ? sources[0] : undefined;
-  assert.ok(source, "single isolated CI display must be available for composed capture");
-  const screenshot = source.thumbnail;
-  const pixels = screenshot.toBitmap();
+  // DOM readiness precedes the OS compositor. Poll the actual output, bounded
+  // to five seconds, without changing the view hierarchy under test.
+  let screenshot;
   let cyan = 0;
-  for (let index = 0; index + 3 < pixels.length; index += 4) {
-    if (pixels[index] > 220 && pixels[index + 1] > 220 && pixels[index + 2] < 30) cyan += 1;
-  }
+  let attempts = 0;
+  const deadline = Date.now() + 5_000;
+  do {
+    attempts += 1;
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1280, height: 1024 } });
+    assert.equal(sources.length, 1, "single isolated CI display must be available for composed capture");
+    screenshot = sources[0].thumbnail;
+    const pixels = screenshot.toBitmap();
+    cyan = 0;
+    for (let index = 0; index + 3 < pixels.length; index += 4) {
+      if (pixels[index] > 220 && pixels[index + 1] > 220 && pixels[index + 2] < 30) cyan += 1;
+    }
+    if (cyan > 100) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
   await writeFile("test-results/native-website-preview/preview.png", screenshot.toPNG());
   await writeFile("test-results/native-website-preview/capture.json", JSON.stringify({
-    cyan, size: screenshot.getSize(), state, layout: entry.layout,
+    cyan, attempts, size: screenshot.getSize(), state, layout: entry.layout,
     bounds: entry.view.getBounds(), visible: entry.view.getVisible(),
     container: entry.container.getBounds(),
   }, null, 2));
-  if (cyan <= 100) {
-    entry.container.removeChildView(entry.view);
-    window.contentView.addChildView(entry.view);
-    entry.view.setBounds(entry.layout.container);
-    await frame.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-    const controlSources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1280, height: 1024 } });
-    if (controlSources.length === 1) await writeFile("test-results/native-website-preview/direct-view-control.png", controlSources[0].thumbnail.toPNG());
-    window.contentView.removeChildView(entry.view);
-    entry.container.addChildView(entry.view);
-  }
   assert.ok(cyan > 100, "composited capture must contain the fixture image");
   await host.closeAll();
   window.destroy();

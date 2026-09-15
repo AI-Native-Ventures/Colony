@@ -42,6 +42,11 @@ jobs:
         timeout-minutes: 2
         working-directory: desktop
         run: xvfb-run -a pnpm exec electron --no-sandbox src-electron/website-preview/electron-proof.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: native-website-preview
+          path: desktop/test-results/native-website-preview
       - name: Render preview in existing channel UI
         working-directory: desktop
         run: pnpm build:e2e && pnpm exec playwright test thread-html-preview.spec.ts --project=smoke
