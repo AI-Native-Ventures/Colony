@@ -34,6 +34,7 @@ try {
   stage = "create window";
   console.log(stage);
   window = new BrowserWindow({ width: 1000, height: 800, show: true });
+  await window.loadURL("data:text/html,<html><body style='margin:0;background:white'></body></html>");
   host = createWebsitePreviewHost({ WebContentsView, View, session, clipStrategy: "clip", loadPreview: async () => site });
   stage = "open preview";
   console.log(stage);
