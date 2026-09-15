@@ -335,6 +335,19 @@ impl Llm {
             }
         })
         .await;
+        // The same Gemma chain-of-thought guard `complete` applies, for the
+        // same reason: the summariser is the same model, so a handoff summary
+        // can arrive wrapped in `<thought>` blocks. Unstripped they are
+        // re-seated into the fresh context as part of the `[Context Handoff]`
+        // block, where they both poison the next turn's input and surface to
+        // the user. This is the single point every provider arm converges.
+        let result = result.map(|summary| {
+            if model_leaks_thought_blocks(effective_model) {
+                strip_thought_blocks(&summary)
+            } else {
+                summary
+            }
+        });
         if result.is_ok() {
             let duration_ms = call_start.elapsed().as_millis();
             tracing::info!(
@@ -8048,6 +8061,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.text, "The answer is 42.");
+    }
+
+    /// The compaction path runs the same model, so a handoff summary can come
+    /// back wrapped in `<thought>`. Unstripped it would be re-seated into the
+    /// fresh context as part of the `[Context Handoff]` block.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn summarize_strips_thought_blocks_for_gemma() {
+        let (base_url, _captured) = spawn_sequence_stub(vec![StubHttpResponse::ok(chat_response(
+            "<thought>what mattered in this session?</thought>Shipped the parser fix.",
+        ))])
+        .await;
+        let mut config = cfg(Provider::OpenAi);
+        config.base_url = base_url;
+        let llm = Llm::new(&config).unwrap();
+
+        let summary = llm
+            .summarize(&config, "system", "history", 256, "gemma-3-27b-it")
+            .await
+            .unwrap();
+        assert_eq!(summary, "Shipped the parser fix.");
+    }
+
+    /// The identical summary from a non-Gemma model is left untouched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn summarize_leaves_thought_blocks_alone_for_other_models() {
+        let raw = "<thought>what mattered in this session?</thought>Shipped the parser fix.";
+        let (base_url, _captured) =
+            spawn_sequence_stub(vec![StubHttpResponse::ok(chat_response(raw))]).await;
+        let mut config = cfg(Provider::OpenAi);
+        config.base_url = base_url;
+        let llm = Llm::new(&config).unwrap();
+
+        let summary = llm
+            .summarize(&config, "system", "history", 256, "gpt-5")
+            .await
+            .unwrap();
+        assert_eq!(summary, raw);
     }
 
     /// The same payload from a non-Gemma model is left completely untouched —
