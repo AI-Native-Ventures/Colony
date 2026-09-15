@@ -1,7 +1,7 @@
 // Real Electron host proof with fixture bytes; no relay, loader network or model.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
-import { app, BrowserWindow, WebContentsView, View, session, protocol } from "electron";
+import { app, BrowserWindow, WebContentsView, View, session, protocol, desktopCapturer } from "electron";
 import { createWebsitePreviewHost } from "./host.mjs";
 import { PREVIEW_SCHEME_DESCRIPTOR } from "./scheme.mjs";
 protocol.registerSchemesAsPrivileged([PREVIEW_SCHEME_DESCRIPTOR]);
@@ -33,7 +33,7 @@ try {
   await app.whenReady();
   stage = "create window";
   console.log(stage);
-  window = new BrowserWindow({ width: 1000, height: 800, show: true });
+  window = new BrowserWindow({ width: 1000, height: 800, show: true, title: "Colony native preview proof" });
   await window.loadURL("data:text/html,<html><body style='margin:0;background:white'></body></html>");
   host = createWebsitePreviewHost({ WebContentsView, View, session, clipStrategy: "clip", loadPreview: async () => site });
   stage = "open preview";
@@ -69,7 +69,10 @@ try {
   stage = "capture preview";
   console.log(stage);
   await frame.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-  const screenshot = await window.capturePage();
+  const sources = await desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 1000, height: 800 } });
+  const source = sources.find((item) => item.name === window.getTitle());
+  assert.ok(source, "proof window must be available for composed capture");
+  const screenshot = source.thumbnail;
   const pixels = screenshot.toBitmap();
   let cyan = 0;
   for (let index = 0; index + 3 < pixels.length; index += 4) {
