@@ -27,6 +27,8 @@ const watchdog = setTimeout(() => {
 }, 60_000);
 let host;
 let window;
+// Let Electron finish evaluating its ESM entrypoint before awaiting readiness.
+async function run() {
 try {
   await app.whenReady();
   stage = "create window";
@@ -77,3 +79,6 @@ try {
   window?.destroy();
   app.exit(1);
 }
+
+}
+void run();
