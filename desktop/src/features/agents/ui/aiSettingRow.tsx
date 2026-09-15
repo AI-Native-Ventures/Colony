@@ -12,11 +12,8 @@ import type * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 
-/** The label column, wide enough for the longest label the rows carry. */
-export const AI_ROW_LABEL_CLASS = "w-[6.5rem] shrink-0 text-sm";
-
-/** Label column plus a value column, with room for trailing actions. */
-export const AI_ROW_GRID_CLASS =
+/** Label column plus a value column, wide enough for the labels rows carry. */
+const AI_ROW_GRID_CLASS =
   "grid grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-x-3";
 
 export function AiSourcePill({

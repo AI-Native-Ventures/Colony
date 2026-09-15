@@ -25,11 +25,7 @@ import {
   providerDisplayLabel,
   type PersonaModelOption,
 } from "./agentConfigOptions";
-import {
-  AI_ROW_GRID_CLASS,
-  AI_ROW_LABEL_CLASS,
-  AiSourcePill,
-} from "./aiSettingRow";
+import { AiSourcePill } from "./aiSettingRow";
 import { MODEL_DISCOVERY_LOADING_VALUE } from "./usePersonaModelDiscovery";
 import type { PersonaModelDiscoveryStatus } from "./personaModelDiscoveryStatus";
 
@@ -358,7 +354,6 @@ export function AgentModelField({
   provider,
   fieldClassName,
   labelClassName,
-  rowLayout = false,
   sourceCustom,
   selectClassName,
   testId,
@@ -401,13 +396,8 @@ export function AgentModelField({
   /** Optional class override for the label. */
   labelClassName?: string;
   /**
-   * Put the label in its own column beside the control instead of above it,
-   * matching the agent dialog's setting rows.
-   */
-  rowLayout?: boolean;
-  /**
-   * Whether this model is pinned here rather than inherited. Renders the
-   * inherited/custom pill beside the label in row layout.
+   * Whether this model is pinned here rather than inherited. Renders the agent
+   * dialog's inherited/custom pill beside the label. Omit for no pill.
    */
   sourceCustom?: boolean;
   /** Optional class override for contexts with custom visual treatments. */
@@ -594,29 +584,24 @@ export function AgentModelField({
   );
 
   return (
-    <div
-      className={cn(
-        rowLayout ? AI_ROW_GRID_CLASS : "space-y-1.5",
-        fieldClassName,
-      )}
-    >
+    <div className={cn("space-y-1.5", fieldClassName)}>
       <span className="flex items-center gap-2">
         <RequiredFieldLabel
-          className={cn(rowLayout && AI_ROW_LABEL_CLASS, labelClassName)}
+          className={labelClassName}
           htmlFor={id}
           isRequired={isRequired}
         >
           Model
         </RequiredFieldLabel>
-        {rowLayout && sourceCustom !== undefined ? (
+        {sourceCustom !== undefined ? (
           <AiSourcePill
             custom={sourceCustom}
             testId="global-agent-model-pill"
           />
         ) : null}
       </span>
-      {/* `contents` keeps the stacked layout's DOM flow exactly as it was. */}
-      <div className={rowLayout ? "min-w-0 space-y-1.5" : "contents"}>
+      {/* `contents` keeps this field's DOM flow exactly as it was. */}
+      <div className="contents">
         {!useCustomSelect && useChevronIcon ? (
           <div className="relative">
             {modelSelect}

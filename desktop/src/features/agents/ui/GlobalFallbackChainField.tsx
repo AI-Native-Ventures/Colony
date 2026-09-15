@@ -22,7 +22,7 @@ export function GlobalFallbackChainField({
   modelDiscoveryLoading,
   onConfigChange,
   provider,
-  rowLayout = false,
+  showSourcePill = false,
 }: {
   config: GlobalAgentConfig;
   disabled: boolean;
@@ -30,8 +30,8 @@ export function GlobalFallbackChainField({
   modelDiscoveryLoading: boolean;
   onConfigChange: (next: GlobalAgentConfig) => void;
   provider: string;
-  /** Lay the label out as a column beside the chain, like the setting rows. */
-  rowLayout?: boolean;
+  /** Show the agent dialog's inherited/custom pill beside the label. */
+  showSourcePill?: boolean;
 }) {
   const providerSupportsChain = providerSupportsFallbackChain(provider);
   const recommended = useRecommendedModelChain(providerSupportsChain);
@@ -41,7 +41,7 @@ export function GlobalFallbackChainField({
     <ModelChainField
       disabled={disabled}
       labelAccessory={
-        rowLayout ? (
+        showSourcePill ? (
           <AiSourcePill custom={authored.length > 0} testId={PILL_TEST_ID} />
         ) : undefined
       }
@@ -53,7 +53,6 @@ export function GlobalFallbackChainField({
       primaryModel={config.model ?? ""}
       providerSupportsChain={providerSupportsChain}
       recommended={recommended}
-      rowLayout={rowLayout}
       value={authored.length === 0 ? null : authored}
     />
   );

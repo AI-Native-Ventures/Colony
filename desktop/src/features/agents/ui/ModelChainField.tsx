@@ -53,10 +53,6 @@ import {
   remainingChainSlots,
 } from "@/features/agents/ui/modelChain.lib";
 import { buildModelDropdownOptionsForScope } from "@/features/agents/ui/runtimeModelProviderSelection";
-import {
-  AI_ROW_GRID_CLASS,
-  AI_ROW_LABEL_CLASS,
-} from "@/features/agents/ui/aiSettingRow";
 import { cn } from "@/shared/lib/cn";
 
 const FIELD_LABEL = "If that model is unavailable, try in order";
@@ -80,61 +76,36 @@ export type ModelChainFieldProps = {
   optionsLoading?: boolean;
   /** Rendered next to the label, e.g. the inherited/custom pill. */
   labelAccessory?: React.ReactNode;
-  /**
-   * Put the label in its own column beside the chain instead of above it,
-   * matching the agent dialog's setting rows.
-   */
-  rowLayout?: boolean;
 };
 
+/** The label, with room for the inherited/custom pill beside it. */
 function FieldLabel({
   accessory,
   children,
-  rowLayout,
 }: {
   accessory?: React.ReactNode;
   children: React.ReactNode;
-  rowLayout?: boolean;
 }) {
   return (
     <span className="flex items-center gap-2">
-      <span
-        className={cn("text-sm font-medium", rowLayout && AI_ROW_LABEL_CLASS)}
-      >
-        {children}
-      </span>
+      <span className="text-sm font-medium">{children}</span>
       {accessory}
     </span>
   );
 }
 
-/**
- * The field wrapper. In row layout the label sits in its own column beside the
- * chain, so this field lines up with the setting rows around it.
- */
+/** The field wrapper, shared by the three states the chain can be in. */
 function FieldShell({
   accessory,
   children,
-  rowLayout,
 }: {
   accessory?: React.ReactNode;
   children: React.ReactNode;
-  rowLayout?: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        rowLayout ? AI_ROW_GRID_CLASS : "space-y-1.5",
-        "items-start",
-      )}
-      data-testid="model-chain-field"
-    >
-      <FieldLabel accessory={accessory} rowLayout={rowLayout}>
-        {FIELD_LABEL}
-      </FieldLabel>
-      <div className={rowLayout ? "min-w-0 space-y-1.5" : "contents"}>
-        {children}
-      </div>
+    <div className="space-y-1.5" data-testid="model-chain-field">
+      <FieldLabel accessory={accessory}>{FIELD_LABEL}</FieldLabel>
+      <div className="contents">{children}</div>
     </div>
   );
 }
@@ -316,7 +287,6 @@ export function ModelChainField({
   primaryModel,
   providerSupportsChain,
   recommended,
-  rowLayout = false,
   value,
 }: ModelChainFieldProps) {
   // Per-row state the chain itself cannot carry: a stable id (React key and
@@ -335,7 +305,7 @@ export function ModelChainField({
 
   if (!providerSupportsChain) {
     return (
-      <FieldShell accessory={labelAccessory} rowLayout={rowLayout}>
+      <FieldShell accessory={labelAccessory}>
         <div
           className="rounded-xl border border-input bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground"
           data-testid="model-chain-unsupported"
@@ -348,7 +318,7 @@ export function ModelChainField({
 
   if (value === null) {
     return (
-      <FieldShell accessory={labelAccessory} rowLayout={rowLayout}>
+      <FieldShell accessory={labelAccessory}>
         <div className="overflow-hidden rounded-xl border border-input">
           {recommended.length === 0 ? (
             <RowShell className="text-muted-foreground">
@@ -427,7 +397,7 @@ export function ModelChainField({
   }
 
   return (
-    <FieldShell accessory={labelAccessory} rowLayout={rowLayout}>
+    <FieldShell accessory={labelAccessory}>
       <div className="overflow-hidden rounded-xl border border-input">
         {chain.length === 0 ? (
           <RowShell className="text-muted-foreground">
