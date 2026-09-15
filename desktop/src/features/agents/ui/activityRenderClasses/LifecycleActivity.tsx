@@ -1,6 +1,8 @@
 import { AlertCircle, CheckCircle2, ShieldCheck, XCircle } from "lucide-react";
 
+import { chainExhaustedFailure } from "../agentTurnModelNote";
 import { formatTranscriptTimestampTitle } from "../agentSessionUtils";
+import { useEffectiveModelChain } from "../useEffectiveModelChain";
 import { ActivityRow, ActivityRowLabel } from "./ActivityRow";
 import { ToolActivity } from "./ToolActivity";
 import type { ActivityRenderClassItemProps } from "./types";
@@ -38,6 +40,7 @@ function permissionOutcomeTone(outcome: string): "approve" | "deny" | "cancel" {
 }
 
 export function LifecycleActivity(props: ActivityRenderClassItemProps) {
+  const chain = useEffectiveModelChain();
   if (props.item.type === "tool") {
     return <ToolActivity {...props} />;
   }
@@ -103,6 +106,12 @@ export function LifecycleActivity(props: ActivityRenderClassItemProps) {
   }
 
   if (isError) {
+    // A chain that ran out is one failure, not the last provider's body: say
+    // so, and list what was tried.
+    const exhausted = chainExhaustedFailure({
+      chain,
+      message: props.item.text,
+    });
     return (
       <div
         className="rounded-md border border-destructive/20 bg-destructive/5 px-2 py-1.5 text-left text-xs text-destructive"
@@ -110,8 +119,15 @@ export function LifecycleActivity(props: ActivityRenderClassItemProps) {
         title={timestampTitle}
       >
         <AlertCircle className="mr-1.5 inline h-3.5 w-3.5 align-text-bottom" />
-        <span className="font-medium">{props.item.title}</span>
-        {props.item.text ? (
+        <span className="font-medium">
+          {exhausted ? exhausted.text : props.item.title}
+        </span>
+        {exhausted ? (
+          <span className="opacity-80" data-testid="transcript-chain-exhausted">
+            {" "}
+            · {exhausted.ids.join(", ")}
+          </span>
+        ) : props.item.text ? (
           <span className="opacity-80"> · {props.item.text}</span>
         ) : null}
       </div>
