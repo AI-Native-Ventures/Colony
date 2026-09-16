@@ -129,8 +129,8 @@ jobs:
           path: |
             desktop/test-results/blocks
             desktop/playwright-report
-            /tmp/blocks-relay-run.log
-            /tmp/blocks-acp-run.log
+            /tmp/blocks-relay-*.log
+            /tmp/blocks-acp-*.log
           if-no-files-found: ignore
           retention-days: 7
       - name: Save pnpm store cache
