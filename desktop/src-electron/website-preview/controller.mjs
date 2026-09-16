@@ -1,3 +1,4 @@
+import { createWebsiteHandover } from "./handover.mjs";
 import { randomUUID } from "node:crypto";
 
 /** Own preview handles for one trusted app renderer and selected community. */
@@ -5,10 +6,11 @@ export class PreviewController {
   generation = 0;
   handles = new Set();
 
-  constructor({ host, window, context }) {
+  constructor({ host, window, context, saveHandover }) {
     this.host = host;
     this.window = window;
     this.context = context;
+    this.saveHandover = saveHandover;
   }
 
   /** Revoke synchronously before asynchronous view/session cleanup. */
@@ -50,6 +52,15 @@ export class PreviewController {
       throw new Error("Preview handle is no longer active");
     }
     const identity = { window: this.window, handle: payload.handle };
+    if (action === "export") {
+      const entry = this.host.byHandle.get(payload.handle);
+      if (!entry?.site || !this.saveHandover) throw new Error("Saved website is not ready to download");
+      const bytes = await createWebsiteHandover(entry.site, entry);
+      const active = () => generation === this.generation
+        && this.context() === community && this.handles.has(payload.handle);
+      if (!active()) throw new Error("Preview context changed before download");
+      return this.saveHandover(bytes, `website-version-${entry.revision}.zip`, active);
+    }
     if (action === "bounds") {
       return this.host.updateBounds({ ...identity, bounds: payload.bounds, clip: payload.clip });
     }

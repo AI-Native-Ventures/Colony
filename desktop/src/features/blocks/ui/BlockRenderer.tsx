@@ -86,6 +86,7 @@ function BlockTree({
         typeof bundle.sha256 === "string" ? (
           <WebsiteBundlePreview
             bundle={{ url: bundle.url, sha256: bundle.sha256 }}
+            approved={Boolean(designDecision)}
             artifactId={message.id}
             threadRoot={message.rootId ?? message.id}
             revision={typeof fields.revision === "number" ? fields.revision : 1}

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { SignInImport } from "./browser-import/manager.mjs";
 import {
   app,
+  dialog,
   BrowserWindow,
   WebContentsView,
   View,
@@ -203,6 +204,16 @@ async function boot() {
   });
   const previews = new PreviewController({
     host: previewHost, window, context: () => businessContext,
+    saveHandover: async (bytes, filename, active) => {
+      const result = await dialog.showSaveDialog(window, {
+        title: "Save website files", defaultPath: filename,
+        filters: [{ name: "Website archive", extensions: ["zip"] }],
+      });
+      if (result.canceled || !result.filePath) return { saved: false };
+      if (!active()) throw new Error("Community changed; reopen the website before saving");
+      await writeFile(result.filePath, bytes);
+      return { saved: true };
+    },
   });
   resources.add(() => previewHost.closeAll());
   const managedBrowser = new ManagedBrowser({
