@@ -17,6 +17,7 @@ function WebsiteView({
   const element = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [hasSourceArchive, setHasSourceArchive] = useState(false);
   const [downloadHandle, setDownloadHandle] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState("");
   const [saving, setSaving] = useState(false);
@@ -102,10 +103,11 @@ function WebsiteView({
       });
     };
     setReady(false);
+    setHasSourceArchive(false);
     setDownloadHandle(null);
     setError(null);
     void desktop
-      .request<{ handle: string }>("preview:open", {
+      .request<{ handle: string; hasSourceArchive?: boolean }>("preview:open", {
         ...request,
         ...geometry(),
       })
@@ -117,6 +119,7 @@ function WebsiteView({
             .catch(() => {});
         } else {
           setReady(true);
+          setHasSourceArchive(state.hasSourceArchive === true);
           setDownloadHandle(handle);
           update();
         }
@@ -173,8 +176,9 @@ function WebsiteView({
             {saving ? "Preparing files…" : "Download website files"}
           </Button>
           <p className="text-xs text-muted-foreground">
-            Exact preview files and assets. Original project sources and backend
-            services may be separate.
+            {hasSourceArchive
+              ? "Includes the reviewed website files and a verified project source archive. Backend services are not included."
+              : "Includes the reviewed website files. No project source archive was attached."}
           </p>
           {downloadNotice ? (
             <p role="status" className="text-sm">

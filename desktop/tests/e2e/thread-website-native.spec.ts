@@ -164,11 +164,18 @@ test("native website survives mobile and expanded mounts in the channel", async 
     expect(metadata.manifestSha256).toBe("a".repeat(64));
     expect(Object.keys(archive).sort()).toEqual([
       "colony-handover.json",
+      "source/project.zip",
       "website/index.html",
       "website/logo.svg",
       "website/site.css",
       "website/site.js",
     ]);
+    const sourceArchive = archive["source/project.zip"];
+    expect(createHash("sha256").update(sourceArchive).digest("hex")).toBe(
+      metadata.sourceArchive.sha256,
+    );
+    expect(unzipSync(sourceArchive)["README.md"]).toBeDefined();
+    await expect(preview.getByText(/verified project source archive/)).toBeVisible();
     for (const file of metadata.files) {
       const bytes = archive[`website/${file.path}`];
       expect(bytes.length).toBe(file.size);

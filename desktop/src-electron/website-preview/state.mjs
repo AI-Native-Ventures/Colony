@@ -30,6 +30,7 @@ export function previewState(entry, status) {
     pixelWidth: entry.pixelWidth,
     pixelHeight: entry.pixelHeight,
     status: resolved,
+    hasSourceArchive: Boolean(entry.site?.sourceArchive),
     visible:
       resolved === "ready" &&
       entry.requestedVisible &&
