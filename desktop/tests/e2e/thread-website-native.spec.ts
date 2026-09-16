@@ -175,7 +175,9 @@ test("native website survives mobile and expanded mounts in the channel", async 
       metadata.sourceArchive.sha256,
     );
     expect(unzipSync(sourceArchive)["README.md"]).toBeDefined();
-    await expect(preview.getByText(/verified project source archive/)).toBeVisible();
+    await expect(
+      preview.getByText(/verified project source archive/),
+    ).toBeVisible();
     for (const file of metadata.files) {
       const bytes = archive[`website/${file.path}`];
       expect(bytes.length).toBe(file.size);

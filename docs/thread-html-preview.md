@@ -68,10 +68,12 @@ owner decision. No approval action publishes a site or changes DNS.
 
 Once approved, **Download website files** exports the retained, verified browser
 files in a ZIP. Its `colony-handover.json` records artifact ID, revision, manifest
-digest and each file hash. This is currently a browser-ready export, not a complete
-original-project handover: it does not yet bind a separate source archive or carry
-the approval event. Those remain acceptance gaps; a mutable source URL is not
-proof of archive integrity.
+digest and each file hash. An optional `source_archive` in the pinned website manifest supplies an HTTPS
+URL, SHA-256 and byte size for an opaque project ZIP. It is verified before the
+preview is ready, counts toward the 64 MiB total, and exports as
+`source/project.zip`. The UI reports whether it was attached. Its integrity is
+proven; completeness of the project still requires agent review. The exported
+metadata does not yet carry the signed approval event, which remains a gap.
 
 ## Verified stages and remaining gates (2026-09-16)
 
@@ -84,10 +86,14 @@ proof of archive integrity.
 - [35067439641](https://github.com/AI-Native-Ventures/Colony/actions/runs/35067439641)
   and its preview run passed after the CLI owner-attention correction and agent
   guidance version 8. Live adoption of the instructions remains unproven.
-- Real-relay website authorization checks are pending: worker, wrong revision and
-  wrong digest must be refused before the exact owner decision succeeds.
-- Packaged Mac validation is pending. The packager now stages the main-process
-  ZIP dependency explicitly; source-tree tests alone cannot prove packaging.
+- [35072040699](https://github.com/AI-Native-Ventures/Colony/actions/runs/35072040699)
+  passed real CLI/relay authorization: worker, wrong-revision and wrong-digest
+  decisions were rejected, and the exact owner decision was persisted. No model
+  inference was used.
+- [35070838025](https://github.com/AI-Native-Ventures/Colony/actions/runs/35070838025)
+  passed Mac packaging, relocated-app startup, signup and isolation checks on
+  e3fb6988a, including the staged ZIP dependency. This predates source-archive
+  support and does not exercise the native save dialog.
 - Full original-source handover, approval provenance in its archive, final visual
   parity and a real agent website delivery remain outstanding.
 
