@@ -162,8 +162,17 @@ try {
       recursive: true,
       filter: (source) =>
         !/\.(test\.mjs|md)$|smoke\.mjs$/.test(source) &&
-        path.basename(source) !== "onboarding-fixture",
+        path.basename(source) !== "onboarding-fixture" &&
+        !["electron-proof.mjs", "ui-proof-main.mjs", "proof-fixture.mjs", "host-test-support.mjs", "fixtures"].includes(path.basename(source)),
     },
+  );
+  // The main-process handover archive imports fflate at runtime. Unlike renderer
+  // imports it is not bundled by Vite, and the staged app has no dependency install.
+  await mkdir(path.join(appDir, "node_modules"), { recursive: true });
+  await cp(
+    await realpath(path.join(desktop, "node_modules", "fflate")),
+    path.join(appDir, "node_modules", "fflate"),
+    { recursive: true },
   );
   const nodePtyResult = await stageNodePty({
     source: await realpath(path.join(desktop, "node_modules", "node-pty")),
