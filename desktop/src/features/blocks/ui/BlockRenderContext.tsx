@@ -150,7 +150,11 @@ export function BlockRenderProvider({
   const websiteInputs = React.useMemo(() => {
     const inputs = new Map<string, unknown>();
     const input = websiteDesignInput(data);
-    if (manifest.handle === "artifact" && instance.decisionMakerPubkey && input) {
+    if (
+      manifest.handle === "artifact" &&
+      instance.decisionMakerPubkey &&
+      input
+    ) {
       inputs.set("artifact.approve-design", input);
     }
     return inputs;
@@ -171,7 +175,13 @@ export function BlockRenderProvider({
       inputs.set(actionId, input);
     }
     return inputs;
-  }, [approvalInputs, blueprintInputs, initiativeInputs, interviewInputs, websiteInputs]);
+  }, [
+    approvalInputs,
+    blueprintInputs,
+    initiativeInputs,
+    interviewInputs,
+    websiteInputs,
+  ]);
   const directActionIds = React.useMemo(() => {
     if (manifest.handle === "agent-proposal") return new Set<string>();
     const direct = new Set(
@@ -462,7 +472,9 @@ export function BlockRenderProvider({
           ? directActionInputs
           : undefined,
         actionUnavailableReasons,
-        hideIndirectSignedActions: manifest.handle === "agent-proposal" || manifest.handle === "artifact",
+        hideIndirectSignedActions:
+          manifest.handle === "agent-proposal" ||
+          manifest.handle === "artifact",
         resolvingActionIds,
         pendingActionId,
         completedActionIds,

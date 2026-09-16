@@ -61,6 +61,7 @@ test("native website survives mobile and expanded mounts in the channel", async 
       instanceId: fixtureUuid(9301),
       manifestId: signed.id,
       processorPubkey: OWNER_PUBKEY,
+      requiresAttention: true,
       data: {
         title: "Website design",
         description: "Review the saved website",
@@ -88,6 +89,22 @@ test("native website survives mobile and expanded mounts in the channel", async 
       );
     await expect.poll(async () => (await states()).length).toBe(1);
     await expect(preview.getByRole("status")).toHaveCount(0);
+    await page.getByRole("button", { name: "Approve this design", exact: true }).click();
+    const decision = () => page.evaluate(() => {
+      const events = (window as Window & {
+        __BUZZ_E2E_PUBLISHED_EVENTS__?: Array<{
+          kind: number; content: string; tags: string[][];
+        }>;
+      }).__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [];
+      return events.find(item => item.kind === 40010 && item.tags.some(
+        tag => tag[0] === "block-action" && tag[2] === "artifact.approve-design",
+      ));
+    });
+    await expect.poll(async () => (await decision())?.content).toBe(
+      JSON.stringify({ manifest_sha256: "a".repeat(64), revision: 1, scope: "design-only" }),
+    );
+    expect((await decision())?.tags).toContainEqual(["e", event.id, "", "block-instance"]);
+
     await preview.getByRole("button", { name: "Mobile", exact: true }).click();
     await expect(
       preview.getByRole("button", { name: "Mobile", exact: true }),
