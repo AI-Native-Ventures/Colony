@@ -1,3 +1,4 @@
+import { websiteDesignInput } from "../websiteDesign";
 import { resolveInterviewActionInputs } from "../interviewAction";
 import * as React from "react";
 
@@ -146,8 +147,16 @@ export function BlockRenderProvider({
     () => resolveInterviewActionInputs(manifest.handle, data),
     [manifest.handle, data],
   );
-  const directActionInputs = React.useMemo(() => {
+  const websiteInputs = React.useMemo(() => {
     const inputs = new Map<string, unknown>();
+    const input = websiteDesignInput(data);
+    if (manifest.handle === "artifact" && instance.decisionMakerPubkey && input) {
+      inputs.set("artifact.approve-design", input);
+    }
+    return inputs;
+  }, [data, manifest.handle, instance.decisionMakerPubkey]);
+  const directActionInputs = React.useMemo(() => {
+    const inputs = new Map<string, unknown>(websiteInputs);
     if (approvalInputs?.ok) {
       for (const [actionId, input] of approvalInputs.inputs) {
         inputs.set(actionId, input);
@@ -162,7 +171,7 @@ export function BlockRenderProvider({
       inputs.set(actionId, input);
     }
     return inputs;
-  }, [approvalInputs, blueprintInputs, initiativeInputs, interviewInputs]);
+  }, [approvalInputs, blueprintInputs, initiativeInputs, interviewInputs, websiteInputs]);
   const directActionIds = React.useMemo(() => {
     if (manifest.handle === "agent-proposal") return new Set<string>();
     const direct = new Set(
@@ -231,7 +240,7 @@ export function BlockRenderProvider({
         setActionError("This action is not declared by the pinned view.");
         return;
       }
-      let currentInput = input;
+      let currentInput = websiteInputs.get(interaction.action_id) ?? input;
       const derivedBlueprintInput = blueprintInputs.get(interaction.action_id);
       if (derivedBlueprintInput) {
         currentInput = derivedBlueprintInput;
@@ -375,6 +384,7 @@ export function BlockRenderProvider({
     },
     [
       blueprintInputs,
+      websiteInputs,
       data,
       initiativeInputs,
       instance,
@@ -452,7 +462,7 @@ export function BlockRenderProvider({
           ? directActionInputs
           : undefined,
         actionUnavailableReasons,
-        hideIndirectSignedActions: manifest.handle === "agent-proposal",
+        hideIndirectSignedActions: manifest.handle === "agent-proposal" || manifest.handle === "artifact",
         resolvingActionIds,
         pendingActionId,
         completedActionIds,
