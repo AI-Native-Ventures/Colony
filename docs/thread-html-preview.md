@@ -1,6 +1,6 @@
-# Static HTML previews in artifact Blocks
+# Website previews and design review in artifact Blocks
 
-This first slice extends the existing artifact Block. It does not install a Website Manager team or create a separate job. It is source implemented, not live proven.
+This feature extends the existing artifact Block without installing another team or creating a separate job. The sections below distinguish the static fallback from the complete bundle viewer and its current proof boundaries.
 
 An agent uses its existing signed-in CLI context:
 
@@ -44,14 +44,53 @@ No paid model call is part of CI. This gate is a separate supervised runtime exe
 
 ## Complete website bundles (integration in progress)
 
-Artifact 1.3.0 adds optional `website_bundle: {url, sha256}`. The HTTPS URL
+Artifact 1.4.0 includes optional `website_bundle: {url, sha256}`. The HTTPS URL
 points to a `colony.website-preview/1` manifest; the digest pins its exact bytes.
 Each manifest file has a relative path, HTTPS URL, SHA-256 digest, MIME type and
 byte size. The loader verifies every asset before the native viewer opens it.
 The event retains its normal title, description, source/thumbnail URL, status and
 revision. Historical artifacts and small static `preview_html` remain valid.
 
-This contract alone does not enable the viewer: Electron dispatch and the React
-mount still need connecting. Native preview scope now uses the existing artifact
-event ID, community, thread, revision and manifest digest, without a website job
-broker or a new team. Preview sessions have no app preload or shared cookies.
+Electron dispatch and the React artifact row now mount an isolated native viewer.
+Its scope includes the artifact event ID, community, thread, revision and manifest
+digest. Desktop/mobile controls and expansion retain the existing channel and
+adjacent thread. Preview sessions have no app preload or shared cookies.
+
+## Exact-version design approval
+
+A ready-for-review bundle published by the updated CLI requests attention from
+its authenticated owner. `artifact.approve-design` signs a design-only scope,
+revision and manifest digest, in addition to the standard pinned Block instance,
+manifest and processor. The relay requires the designated human owner of that
+processor. The renderer checks the signed owner action; an agent-written
+`status: approved` does not establish approval. Each new revision needs its own
+owner decision. No approval action publishes a site or changes DNS.
+
+Once approved, **Download website files** exports the retained, verified browser
+files in a ZIP. Its `colony-handover.json` records artifact ID, revision, manifest
+digest and each file hash. This is currently a browser-ready export, not a complete
+original-project handover: it does not yet bind a separate source archive or carry
+the approval event. Those remain acceptance gaps; a mutable source URL is not
+proof of archive integrity.
+
+## Verified stages and remaining gates (2026-09-16)
+
+- [35065425443](https://github.com/AI-Native-Ventures/Colony/actions/runs/35065425443)
+  passed the React approval-to-download path through a real Electron preload,
+  controller and native view. The resulting ZIP's identity and file hashes were
+  checked, along with a later revision remaining unapproved. Relay, website bytes
+  and native save-dialog selection were fixtures; the archive creation and file
+  write were real. This does not prove production-main wiring or a packaged app.
+- [35067439641](https://github.com/AI-Native-Ventures/Colony/actions/runs/35067439641)
+  and its preview run passed after the CLI owner-attention correction and agent
+  guidance version 8. Live adoption of the instructions remains unproven.
+- Real-relay website authorization checks are pending: worker, wrong revision and
+  wrong digest must be refused before the exact owner decision succeeds.
+- Packaged Mac validation is pending. The packager now stages the main-process
+  ZIP dependency explicitly; source-tree tests alone cannot prove packaging.
+- Full original-source handover, approval provenance in its archive, final visual
+  parity and a real agent website delivery remain outstanding.
+
+PR 812 is a draft. None of the above constitutes merge, production deployment,
+or completion of the approved Website Manager experience. CI uses deterministic
+fixtures and does not purchase model inference or build a commercial website.
