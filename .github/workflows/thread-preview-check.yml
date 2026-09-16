@@ -16,7 +16,7 @@ jobs:
       - run: just desktop-install-ci
       - name: Format only preview changes
         working-directory: desktop
-        run: pnpm exec biome check --write src/features/blocks/websiteDesign.ts src/features/blocks/ui/BlockRenderContext.tsx src/features/blocks/ui/WebsiteBundlePreview.tsx src/features/blocks/ui/ArtifactHtmlPreview.tsx src/features/blocks/ui/artifactPreviewDocument.ts src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/ui/BlockRenderer.tsx src/features/blocks/blockRepository.ts tests/e2e/thread-html-preview.spec.ts tests/e2e/thread-website-native.spec.ts
+        run: pnpm exec biome check --write src/features/blocks/websiteDesign.ts src/features/blocks/ui/BlockRenderContext.tsx src/features/blocks/ui/WebsiteBundlePreview.tsx src/features/blocks/ui/ArtifactHtmlPreview.tsx src/features/blocks/ui/artifactPreviewDocument.ts src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/ui/BlockRenderer.tsx src/features/blocks/blockRepository.ts tests/e2e/thread-html-preview.spec.ts tests/e2e/thread-website-native.spec.ts tests/e2e/blocks-live.spec.ts
       - name: Format website decision validation
         run: rustfmt --edition 2021 crates/buzz-relay/src/blocks.rs crates/buzz-cli/src/commands/blocks.rs
       - name: Capture formatting patch

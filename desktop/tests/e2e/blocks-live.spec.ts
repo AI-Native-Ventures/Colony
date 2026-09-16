@@ -1026,6 +1026,62 @@ test.describe("Blocks live Gate C", () => {
     });
     await screenshot(page, evidence, "06-persisted-preview-revisions.png");
 
+    // Real relay authorization only: rendering and bytes are proven separately.
+    const websiteDataPath = path.join(evidence, "website-review.json");
+    await writeEvidence(evidence, "website-review.json", {
+      title: "Owner-bound website review",
+      description: "Deterministic authorization fixture; no model request",
+      url: "https://example.com/source.zip",
+      alt: "Source archive fixture",
+      status: "ready-for-review",
+      revision: 1,
+      website_bundle: {
+        url: "https://example.com/manifest.json",
+        sha256: "a".repeat(64),
+      },
+    });
+    const website = await runCli(cli, relayHttpUrl, [
+      "blocks", "invoke", "--channel", channelId, "--handle", "artifact",
+      "--data", websiteDataPath, "--processor", TEST_IDENTITIES.charlie.pubkey,
+    ], "charlie");
+    if (typeof website.event_id !== "string") {
+      throw new Error("Website review did not persist");
+    }
+    const websiteInputPath = path.join(evidence, "website-decision.json");
+    const websiteActionArgs = [
+      "blocks", "act", "--channel", channelId, "--instance", website.event_id,
+      "--action", "artifact.approve-design", "--input", websiteInputPath,
+    ];
+    const exactDecision = {
+      scope: "design-only", revision: 1, manifest_sha256: "a".repeat(64),
+    };
+    const refused: Array<{ label: string; error: string }> = [];
+    for (const attempt of [
+      { label: "worker", identity: "charlie" as const, input: exactDecision },
+      { label: "wrong-revision", identity: "tyler" as const, input: { ...exactDecision, revision: 2 } },
+      { label: "wrong-digest", identity: "tyler" as const, input: { ...exactDecision, manifest_sha256: "b".repeat(64) } },
+    ]) {
+      await writeEvidence(evidence, "website-decision.json", attempt.input);
+      let rejection: unknown;
+      try {
+        const result = await runCli(cli, relayHttpUrl, websiteActionArgs, attempt.identity);
+        if (result.accepted === false) rejection = result;
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection, `${attempt.label} must be rejected`).toBeTruthy();
+      const reason = String(rejection instanceof Error ? rejection.message : JSON.stringify(rejection));
+      expect(reason).toMatch(/decision maker|Design approval must match this exact website version/i);
+      refused.push({ label: attempt.label, error: reason });
+    }
+    await writeEvidence(evidence, "website-decision.json", exactDecision);
+    const approved = await runCli(cli, relayHttpUrl, websiteActionArgs);
+    expect(approved.accepted).toBe(true);
+    await writeEvidence(evidence, "website-approval-authority.json", {
+      instanceEventId: website.event_id, approved, refused,
+      transport: "real CLI and relay", provider: "none",
+    });
+
     test.info().annotations.push(
       { type: "gate-c-evidence", description: evidence },
       {
