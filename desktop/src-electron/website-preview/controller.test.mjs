@@ -1,3 +1,5 @@
+import { site } from "./proof-fixture.mjs";
+import { unzipSync } from "fflate";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PreviewController } from "./controller.mjs";
@@ -51,4 +53,36 @@ test("two cards for the same artifact receive separate native mounts", async () 
   await assert.rejects(controller.request("bounds", { ...payload, handle: channel.handle }), /no longer active/);
   const remaining = await controller.request("bounds", { ...payload, handle: thread.handle });
   assert.equal(remaining.handle, thread.handle);
+});
+
+
+test("handover uses the retained version and revokes a save after community reset", async () => {
+  const community = { id: "community" };
+  const entry = { site, artifactId: "b".repeat(64), revision: 2 };
+  let finishSave;
+  let saveStarted;
+  const started = new Promise(resolve => { saveStarted = resolve; });
+  const controller = new PreviewController({
+    host: { byHandle: new Map([["h", entry]]), invalidateAll: async () => {} },
+    window: {}, context: () => community,
+    saveHandover: async (bytes, filename, active) => {
+      const files = unzipSync(bytes);
+      const meta = JSON.parse(Buffer.from(files["colony-handover.json"]).toString());
+      assert.equal(meta.artifactId, entry.artifactId);
+      assert.equal(meta.revision, 2);
+      assert.equal(filename, "website-version-2.zip");
+      saveStarted();
+      await new Promise(resolve => { finishSave = resolve; });
+      return { saved: active() };
+    },
+  });
+  controller.handles.add("h");
+  const pending = controller.request("export", {
+    communityId: community.id, handle: "h", revision: 999, artifactId: "f".repeat(64),
+  });
+  await started;
+  await controller.reset();
+  finishSave();
+  assert.deepEqual(await pending, { saved: false });
+  await assert.rejects(controller.request("export", { communityId: community.id, handle: "h" }));
 });

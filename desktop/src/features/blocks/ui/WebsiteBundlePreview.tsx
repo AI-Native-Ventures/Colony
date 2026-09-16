@@ -25,13 +25,25 @@ function WebsiteView({
     setSaving(true);
     setDownloadNotice("");
     try {
-      const result = await electronDesktop()?.request<{ saved: boolean }>("preview:export", {
-        ...request, handle: downloadHandle,
-      });
-      setDownloadNotice(result?.saved ? "Website files saved." : "Save cancelled.");
+      const result = await electronDesktop()?.request<{ saved: boolean }>(
+        "preview:export",
+        {
+          ...request,
+          handle: downloadHandle,
+        },
+      );
+      setDownloadNotice(
+        result?.saved ? "Website files saved." : "Save cancelled.",
+      );
     } catch (failure) {
-      setDownloadNotice(failure instanceof Error ? failure.message : "Could not save website files.");
-    } finally { setSaving(false); }
+      setDownloadNotice(
+        failure instanceof Error
+          ? failure.message
+          : "Could not save website files.",
+      );
+    } finally {
+      setSaving(false);
+    }
   };
   useEffect(() => {
     const desktop = electronDesktop();
@@ -136,28 +148,41 @@ function WebsiteView({
   }, [request]);
   return (
     <>
-    <div
-      ref={element}
-      className="relative overflow-hidden rounded-lg border bg-white"
-      style={{ height: large ? "65vh" : 340 }}
-    >
-      {error ? (
-        <p role="alert" className="p-4 text-sm text-destructive">
-          {error}
-        </p>
-      ) : !ready ? (
-        <p role="status" className="p-4 text-sm text-muted-foreground">
-          Loading saved website…
-        </p>
+      <div
+        ref={element}
+        className="relative overflow-hidden rounded-lg border bg-white"
+        style={{ height: large ? "65vh" : 340 }}
+      >
+        {error ? (
+          <p role="alert" className="p-4 text-sm text-destructive">
+            {error}
+          </p>
+        ) : !ready ? (
+          <p role="status" className="p-4 text-sm text-muted-foreground">
+            Loading saved website…
+          </p>
+        ) : null}
+      </div>
+      {approved && ready ? (
+        <div className="mt-3 space-y-2">
+          <Button
+            variant="outline"
+            disabled={saving}
+            onClick={() => void download()}
+          >
+            {saving ? "Preparing files…" : "Download website files"}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Exact preview files and assets. Original project sources and backend
+            services may be separate.
+          </p>
+          {downloadNotice ? (
+            <p role="status" className="text-sm">
+              {downloadNotice}
+            </p>
+          ) : null}
+        </div>
       ) : null}
-    </div>
-    {approved && ready ? <div className="mt-3 space-y-2">
-      <Button variant="outline" disabled={saving} onClick={() => void download()}>
-        {saving ? "Preparing files…" : "Download website files"}
-      </Button>
-      <p className="text-xs text-muted-foreground">Exact preview files and assets. Original project sources and backend services may be separate.</p>
-      {downloadNotice ? <p role="status" className="text-sm">{downloadNotice}</p> : null}
-    </div> : null}
     </>
   );
 }
@@ -227,7 +252,9 @@ export function WebsiteBundlePreview({
           Expand preview
         </Button>
       </div>
-      {!expanded && <WebsiteView request={request} large={false} approved={approved} />}
+      {!expanded && (
+        <WebsiteView request={request} large={false} approved={approved} />
+      )}
       <p className="text-xs text-muted-foreground">
         Saved website preview. Reply in this thread to request changes. This
         does not publish the website.
@@ -235,7 +262,9 @@ export function WebsiteBundlePreview({
       <Dialog open={expanded} onOpenChange={setExpanded}>
         <DialogContent className="w-[95vw] max-w-6xl">
           <DialogTitle>Website preview · Version {revision}</DialogTitle>
-          {expanded && <WebsiteView request={request} large approved={approved} />}
+          {expanded && (
+            <WebsiteView request={request} large approved={approved} />
+          )}
         </DialogContent>
       </Dialog>
     </section>

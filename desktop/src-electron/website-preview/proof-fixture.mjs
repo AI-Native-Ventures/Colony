@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Deterministic bytes used only by CI preview proofs.
 export const sha = "a".repeat(64);
 const bodies = new Map([
@@ -6,7 +7,7 @@ const bodies = new Map([
   ["site.js", ["text/javascript", 'window.fixtureReady=true;']],
   ["logo.svg", ["image/svg+xml", '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="cyan"/></svg>']],
 ]);
-const files = [...bodies].map(([path, [mime, body]]) => ({ path, mime, size: Buffer.byteLength(body) }));
+const files = [...bodies].map(([path, [mime, body]]) => ({ path, mime, size: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex") }));
 export const site = {
   entrypoint: "index.html", manifestSha256: sha, files,
   getFile(path) {
