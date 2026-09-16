@@ -47,20 +47,31 @@ export function websiteDesignDecision(
       parsed.value.instanceId !== instance.instanceId ||
       parsed.value.manifestId !== instance.manifestId ||
       parsed.value.processorPubkey !== instance.processorPubkey
-    ) continue;
+    )
+      continue;
     try {
       const input = JSON.parse(event.content);
       if (
         input.scope !== expected.scope ||
         input.revision !== expected.revision ||
         input.manifest_sha256 !== expected.manifest_sha256
-      ) continue;
-      if (verifyEvent({
-        id: event.id, pubkey: event.pubkey, created_at: event.created_at,
-        kind: event.kind, tags: event.tags.map(tag => [...tag]),
-        content: event.content, sig: event.sig,
-      })) return event.id;
-    } catch { /* Malformed or unsigned events cannot establish approval. */ }
+      )
+        continue;
+      if (
+        verifyEvent({
+          id: event.id,
+          pubkey: event.pubkey,
+          created_at: event.created_at,
+          kind: event.kind,
+          tags: event.tags.map((tag) => [...tag]),
+          content: event.content,
+          sig: event.sig,
+        })
+      )
+        return event.id;
+    } catch {
+      /* Malformed or unsigned events cannot establish approval. */
+    }
   }
   return null;
 }

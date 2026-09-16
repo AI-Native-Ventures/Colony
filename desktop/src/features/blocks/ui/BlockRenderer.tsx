@@ -42,17 +42,37 @@ function BlockTree({
     | { url?: unknown; sha256?: unknown }
     | undefined;
   const website = trust === "core" && manifest.handle === "artifact" && bundle;
-  const designDecision = website ? websiteDesignDecision(message, instance, data) : null;
-  const displayData = website ? {
-    ...fields,
-    status: designDecision ? "approved" : fields.status === "approved" ? "ready-for-review" : fields.status,
-  } : data;
+  const designDecision = website
+    ? websiteDesignDecision(message, instance, data)
+    : null;
+  const displayData = website
+    ? {
+        ...fields,
+        status: designDecision
+          ? "approved"
+          : fields.status === "approved"
+            ? "ready-for-review"
+            : fields.status,
+      }
+    : data;
   return (
     <>
-      {designDecision ? <p className="text-sm font-medium">Design approved for this version. Not published.</p> : null}
+      {designDecision ? (
+        <p className="text-sm font-medium">
+          Design approved for this version. Not published.
+        </p>
+      ) : null}
       <BlockPrimitive
         context={{
-          actionEnvironment: designDecision ? { ...actionEnvironment, completedActionIds: new Set([...actionEnvironment.completedActionIds ?? [], "artifact.approve-design"]) } : actionEnvironment,
+          actionEnvironment: designDecision
+            ? {
+                ...actionEnvironment,
+                completedActionIds: new Set([
+                  ...(actionEnvironment.completedActionIds ?? []),
+                  "artifact.approve-design",
+                ]),
+              }
+            : actionEnvironment,
           attentionResolution: website ? undefined : attentionResolution,
           attentionStatusLabel,
           data: displayData,
