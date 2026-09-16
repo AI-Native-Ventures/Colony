@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { unzipSync } from "fflate";
 import { createHash } from "node:crypto";
-import { installMockBridge } from "../helpers/bridge";
+import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { waitForAnimations } from "../helpers/animations";
 import {
   emitSignedEvent,
@@ -50,6 +50,13 @@ test("native website survives mobile and expanded mounts in the channel", async 
       ),
     );
     const signed = signManifest(manifest);
+    // Mock relay transport still needs a real owner signature for approval.
+    await page.addInitScript((identity) => {
+      window.localStorage.setItem(
+        "buzz:e2e-identity-override.v1",
+        JSON.stringify(identity),
+      );
+    }, TEST_IDENTITIES.tyler);
     await installMockBridge(page, {
       activeIdentityInDefaultChannels: true,
       blockEvents: [signed, signCatalog(signed, manifest)],
@@ -142,7 +149,9 @@ test("native website survives mobile and expanded mounts in the channel", async 
         exact: true,
       }),
     ).toBeVisible();
-    await preview.getByRole("button", { name: "Download website files" }).click();
+    await preview
+      .getByRole("button", { name: "Download website files" })
+      .click();
     await expect
       .poll(() => app.evaluate("globalThis.previewProof.savedFilename"))
       .toBe("website-version-1.zip");
@@ -163,7 +172,9 @@ test("native website survives mobile and expanded mounts in the channel", async 
     for (const file of metadata.files) {
       const bytes = archive[`website/${file.path}`];
       expect(bytes.length).toBe(file.size);
-      expect(createHash("sha256").update(bytes).digest("hex")).toBe(file.sha256);
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+        file.sha256,
+      );
     }
 
     await preview.getByRole("button", { name: "Mobile", exact: true }).click();
