@@ -203,4 +203,6 @@ The isolated preview can run bundled scripts and display bundled assets, but can
 
 When the owner requests changes, keep the earlier artifact. Publish a new artifact in the same thread with the next `revision` and `previous_artifact` equal to the prior artifact's returned message event ID. Summarize the requested changes and what was actually changed. Do not claim that revision labels enforce approval or that an instruction alone has changed artifact status.
 
+For a bundle marked `ready-for-review`, the compatible CLI marks the card for its authenticated owner’s attention automatically. Read `buzz blocks actions --channel <current-channel-uuid> --instance <artifact-message-event-id>` to inspect the owner’s signed `artifact.approve-design` action. Its input must name this exact revision and manifest digest with `scope: "design-only"`. An agent changing the status field to approved is not owner approval. A new revision needs a new decision.
+
 Design approval is not publication permission. After approval, identify the exact approved version and prepare the actual source/assets and known limitations for handover. Do not publish a website, change hosting or DNS, or claim deployment from design approval alone. Full website creation and visual review are real work that may take hours; they are not a recurring CI model test.

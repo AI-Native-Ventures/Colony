@@ -389,6 +389,13 @@ async fn invoke(
     Ok(())
 }
 
+// Website design approval is per instance; ordinary artifacts keep their existing flow.
+fn requires_website_design_attention(handle: &str, data: &Value) -> bool {
+    handle == "artifact"
+        && data.get("status").and_then(Value::as_str) == Some("ready-for-review")
+        && data.get("website_bundle").is_some_and(Value::is_object)
+}
+
 /// Publish one Block instance as an ordinary channel message, validating the
 /// data against its pinned manifest before anything reaches the relay.
 ///
@@ -406,7 +413,11 @@ pub(crate) async fn publish_instance(
         root_event_id: event_id,
         parent_event_id: event_id,
     });
-    let attention = if resolved.manifest.validation.requires_attention {
+    let website_review = requires_website_design_attention(
+        &resolved.manifest.handle,
+        &publication.data,
+    );
+    let attention = if resolved.manifest.validation.requires_attention || website_review {
         let decision_maker = match client.auth_tag_owner_hex() {
             Some(owner) => PublicKey::parse(&owner)
                 .map_err(|error| CliError::Usage(format!("invalid auth-tag owner: {error}")))?,
@@ -886,11 +897,21 @@ mod tests {
     use super::{
         build_catalog_action_request, instance_coordinates, normalize_action_write_response,
         receipt_resolves_attention, render_fallback, require_tested_validation,
+        requires_website_design_attention,
         resolve_instance_processor, CATALOG_ACTION_SCHEMA, CATALOG_ACTION_TTL_SECONDS,
     };
     use buzz_core::block::{parse_manifest, BlockValidation, BlockValidationState};
     use nostr::{EventBuilder, EventId, Keys, Kind, Tag};
     use serde_json::json;
+
+    #[test]
+    fn website_reviews_require_owner_attention_without_changing_ordinary_artifacts() {
+        let review = json!({"status": "ready-for-review", "website_bundle": {"sha256": "a".repeat(64)}});
+        assert!(requires_website_design_attention("artifact", &review));
+        assert!(!requires_website_design_attention("report", &review));
+        assert!(!requires_website_design_attention("artifact", &json!({"status": "ready-for-review"})));
+        assert!(!requires_website_design_attention("artifact", &json!({"status": "approved", "website_bundle": {}})));
+    }
 
     #[test]
     fn non_attention_interview_receipt_does_not_resolve_an_attention_queue() {
