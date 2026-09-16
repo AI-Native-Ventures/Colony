@@ -777,12 +777,20 @@ fn validate_action_authority(
 // Design decisions are deliberately separate from publication permissions.
 fn validate_website_design_binding(data: Option<&Value>, input: &Value) -> Result<(), String> {
     let data = data.ok_or("Website design approval requires pinned inline artifact data")?;
-    let digest = data.pointer("/website_bundle/sha256").and_then(Value::as_str)
+    let digest = data
+        .pointer("/website_bundle/sha256")
+        .and_then(Value::as_str)
         .ok_or("Website design approval requires a saved website bundle")?;
-    if digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
         return Err("Website bundle digest is invalid".into());
     }
-    let revision = data.get("revision").and_then(Value::as_u64)
+    let revision = data
+        .get("revision")
+        .and_then(Value::as_u64)
         .filter(|revision| *revision > 0)
         .ok_or("Website design approval requires an explicit revision")?;
     if data.get("status").and_then(Value::as_str) != Some("ready-for-review") {
@@ -1163,17 +1171,32 @@ pub(crate) async fn validate_public_envelope(
             validate_approval_hash_binding(&typed_manifest, data, action)?;
             if action.action_id == "artifact.approve-design" {
                 if instance.handle != "artifact" || instance.attention_pubkey.is_none() {
-                    return Err("Website design approval requires a designated decision maker".into());
+                    return Err(
+                        "Website design approval requires a designated decision maker".into(),
+                    );
                 }
                 validate_website_design_binding(data, &action.content)?;
-                let owned = state.db.is_agent_owner(
-                    tenant.community(), &action.processor_pubkey, event.pubkey.as_bytes(),
-                ).await.map_err(|error| format!("database error checking website decision maker: {error}"))?;
-                let actor = state.db.get_agent_channel_policy(
-                    tenant.community(), event.pubkey.as_bytes(),
-                ).await.map_err(|error| format!("database error checking website actor: {error}"))?;
+                let owned = state
+                    .db
+                    .is_agent_owner(
+                        tenant.community(),
+                        &action.processor_pubkey,
+                        event.pubkey.as_bytes(),
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!("database error checking website decision maker: {error}")
+                    })?;
+                let actor = state
+                    .db
+                    .get_agent_channel_policy(tenant.community(), event.pubkey.as_bytes())
+                    .await
+                    .map_err(|error| format!("database error checking website actor: {error}"))?;
                 if !owned || !actor.is_some_and(|policy| policy.1.is_none()) {
-                    return Err("Website design approval requires the responsible agent's human owner".into());
+                    return Err(
+                        "Website design approval requires the responsible agent's human owner"
+                            .into(),
+                    );
                 }
             }
             let declaration = manifest_action(&manifest, &action.action_id)
