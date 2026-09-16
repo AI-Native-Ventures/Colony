@@ -24,3 +24,35 @@ An existing worker can attach a complete saved website (HTML, local images, CSS 
 Use a tiny two-page bundle with one image, stylesheet and local script to verify preview transport and isolation. Assert revision identity, missing-asset failure, denied external requests, no privileged bridge and no shared account session. Run these deterministic checks on GitHub. Then exercise that preview in the packaged Electron app. A real business website redesign remains a separate hours-long pilot and is never a recurring paid CI requirement.
 
 Do not report this phase complete based on a skill paragraph, mockup, fixture screenshot, or successful general app startup. Those are separate proof stages. PR 812 remains the draft foundation; do not enable auto-merge while review is incomplete.
+
+
+## Approval integration decisions (2026-09-16)
+
+The existing artifact `status: approved` is an agent-authored claim, not evidence
+of an owner decision. Do not use it to unlock handover or display verified
+approval. Existing signed actions already pin the instance event, manifest,
+instance ID and processor; relay `validate_action_authority` also enforces the
+attention recipient when one exists. Absence of an attention recipient currently
+allows other channel members to act, so website approval must fail closed unless
+a designated human owner is present and signs.
+
+Implement `artifact.approve-design` as a separate action from external publication
+approval. Its payload must match the pinned artifact's bundle digest and revision,
+with an explicit design-only scope. Require inline immutable artifact data for
+this decision so the relay can verify it without fetching a mutable URL. Preserve
+older artifacts and their download action. Derive the visible approval from the
+validated owner's signed event, not a processor receipt or the artifact status.
+A subsequent revision starts unapproved even when the previous revision was
+approved. Requesting changes remains an ordinary reply in the same thread.
+
+The handover must reference that exact artifact and approval event and provide a
+real source archive whose digest is pinned with the deliverable. It must not
+route through a publication permission or claim that a source URL alone proves
+archive integrity. Do not create another leader or introduce a website-job broker.
+
+Current proof: GitHub 35023395241 on 3313ac4ad passes React artifact card to real
+preload/controller/native preview in a test-only Electron shell, including mobile,
+expansion and three simultaneous mounts across channel and side thread. Account,
+relay and bundle bytes are fixtures. Production main and packaged runtime remain
+unproven. Agent bundle guidance version 7 is committed in 2c98e5193; GitHub
+35025673756 passed, but live adoption is unproven.
