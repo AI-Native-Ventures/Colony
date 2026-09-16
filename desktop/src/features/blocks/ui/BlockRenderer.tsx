@@ -1,3 +1,4 @@
+import { websiteDesignDecision } from "../websiteDesign";
 import type { TimelineMessage } from "@/features/messages/types";
 import type {
   BlockInstanceRef,
@@ -20,7 +21,9 @@ function BlockTree({
   data,
   manifest,
   message,
+  instance,
 }: {
+  instance: BlockInstanceRef;
   message: TimelineMessage;
   data: unknown;
   trust: BlockTrust;
@@ -38,15 +41,22 @@ function BlockTree({
   const bundle = fields.website_bundle as
     | { url?: unknown; sha256?: unknown }
     | undefined;
+  const website = trust === "core" && manifest.handle === "artifact" && bundle;
+  const designDecision = website ? websiteDesignDecision(message, instance, data) : null;
+  const displayData = website ? {
+    ...fields,
+    status: designDecision ? "approved" : fields.status === "approved" ? "ready-for-review" : fields.status,
+  } : data;
   return (
     <>
+      {designDecision ? <p className="text-sm font-medium">Design approved for this version. Not published.</p> : null}
       <BlockPrimitive
         context={{
-          actionEnvironment,
-          attentionResolution,
+          actionEnvironment: designDecision ? { ...actionEnvironment, completedActionIds: new Set([...actionEnvironment.completedActionIds ?? [], "artifact.approve-design"]) } : actionEnvironment,
+          attentionResolution: website ? undefined : attentionResolution,
           attentionStatusLabel,
-          data,
-          rootData: data,
+          data: displayData,
+          rootData: displayData,
         }}
         node={manifest.tree as BlockPrimitiveNode}
       />
@@ -158,6 +168,7 @@ export function BlockRenderer({
           manifest={manifest}
           trust={trust}
           message={message}
+          instance={instance}
         />
         {latestStatus ? (
           <p

@@ -1,3 +1,8 @@
+import { verifyEvent } from "nostr-tools/pure";
+import type { TimelineMessage } from "@/features/messages/types";
+import type { BlockInstanceRef } from "./contracts";
+import { parseBlockAction } from "./blockTags";
+
 /** Facts signed by the owner for design review; never publication permission. */
 export function websiteDesignInput(data: unknown) {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
@@ -20,4 +25,42 @@ export function websiteDesignInput(data: unknown) {
     revision: value.revision,
     manifest_sha256: digest,
   };
+}
+
+/** Find the designated decision maker's signed approval of this exact instance. */
+export function websiteDesignDecision(
+  message: TimelineMessage,
+  instance: BlockInstanceRef,
+  data: unknown,
+): string | null {
+  const expected = websiteDesignInput(data);
+  if (!expected || !instance.decisionMakerPubkey || !instance.processorPubkey)
+    return null;
+  for (const event of message.blockState?.actions ?? []) {
+    const parsed = parseBlockAction(event.tags);
+    if (
+      event.kind !== 40010 ||
+      event.pubkey !== instance.decisionMakerPubkey ||
+      !parsed.ok ||
+      parsed.value.actionId !== "artifact.approve-design" ||
+      parsed.value.instanceEventId !== message.id ||
+      parsed.value.instanceId !== instance.instanceId ||
+      parsed.value.manifestId !== instance.manifestId ||
+      parsed.value.processorPubkey !== instance.processorPubkey
+    ) continue;
+    try {
+      const input = JSON.parse(event.content);
+      if (
+        input.scope !== expected.scope ||
+        input.revision !== expected.revision ||
+        input.manifest_sha256 !== expected.manifest_sha256
+      ) continue;
+      if (verifyEvent({
+        id: event.id, pubkey: event.pubkey, created_at: event.created_at,
+        kind: event.kind, tags: event.tags.map(tag => [...tag]),
+        content: event.content, sig: event.sig,
+      })) return event.id;
+    } catch { /* Malformed or unsigned events cannot establish approval. */ }
+  }
+  return null;
 }
