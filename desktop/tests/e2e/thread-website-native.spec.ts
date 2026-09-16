@@ -1,6 +1,8 @@
 import { _electron as electron, expect, test } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { unzipSync } from "fflate";
+import { createHash } from "node:crypto";
 import { installMockBridge } from "../helpers/bridge";
 import { waitForAnimations } from "../helpers/animations";
 import {
@@ -23,7 +25,9 @@ test("native website survives mobile and expanded mounts in the channel", async 
     "Dedicated hosted Electron proof",
   );
   test.setTimeout(90_000);
+  const handoverPath = info.outputPath("website-version-1.zip");
   const app = await electron.launch({
+    env: { ...process.env, COLONY_PROOF_HANDOVER_PATH: handoverPath },
     args: [
       "--no-sandbox",
       fileURLToPath(
@@ -89,6 +93,9 @@ test("native website survives mobile and expanded mounts in the channel", async 
       );
     await expect.poll(async () => (await states()).length).toBe(1);
     await expect(preview.getByRole("status")).toHaveCount(0);
+    await expect(
+      preview.getByRole("button", { name: "Download website files" }),
+    ).toHaveCount(0);
     await page
       .getByRole("button", { name: "Approve this design", exact: true })
       .click();
@@ -129,6 +136,35 @@ test("native website survives mobile and expanded mounts in the channel", async 
       "",
       "block-instance",
     ]);
+
+    await expect(
+      page.getByText("Design approved for this version. Not published.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await preview.getByRole("button", { name: "Download website files" }).click();
+    await expect
+      .poll(() => app.evaluate("globalThis.previewProof.savedFilename"))
+      .toBe("website-version-1.zip");
+    const archive = unzipSync(readFileSync(handoverPath));
+    const metadata = JSON.parse(
+      Buffer.from(archive["colony-handover.json"]).toString("utf8"),
+    );
+    expect(metadata.artifactId).toBe(event.id);
+    expect(metadata.revision).toBe(1);
+    expect(metadata.manifestSha256).toBe("a".repeat(64));
+    expect(Object.keys(archive).sort()).toEqual([
+      "colony-handover.json",
+      "website/index.html",
+      "website/logo.svg",
+      "website/site.css",
+      "website/site.js",
+    ]);
+    for (const file of metadata.files) {
+      const bytes = archive[`website/${file.path}`];
+      expect(bytes.length).toBe(file.size);
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(file.sha256);
+    }
 
     await preview.getByRole("button", { name: "Mobile", exact: true }).click();
     await expect(
@@ -189,6 +225,12 @@ test("native website survives mobile and expanded mounts in the channel", async 
     const panel = page.getByTestId("message-thread-panel");
     await expect(panel).toBeVisible();
     await expect(panel.getByText("Version 2", { exact: true })).toBeVisible();
+    const revisionPreview = panel
+      .getByRole("region", { name: "Saved website preview", exact: true })
+      .filter({ hasText: "Version 2" });
+    await expect(
+      revisionPreview.getByRole("button", { name: "Download website files" }),
+    ).toHaveCount(0);
     // The root appears in both channel and thread; each owns its own mount.
     await expect.poll(async () => (await states()).length).toBe(3);
     await panel
