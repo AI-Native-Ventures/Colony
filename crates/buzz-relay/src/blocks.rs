@@ -774,6 +774,29 @@ fn validate_action_authority(
     Ok(())
 }
 
+// Design decisions are deliberately separate from publication permissions.
+fn validate_website_design_binding(data: Option<&Value>, input: &Value) -> Result<(), String> {
+    let data = data.ok_or("Website design approval requires pinned inline artifact data")?;
+    let digest = data.pointer("/website_bundle/sha256").and_then(Value::as_str)
+        .ok_or("Website design approval requires a saved website bundle")?;
+    if digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+        return Err("Website bundle digest is invalid".into());
+    }
+    let revision = data.get("revision").and_then(Value::as_u64)
+        .filter(|revision| *revision > 0)
+        .ok_or("Website design approval requires an explicit revision")?;
+    if data.get("status").and_then(Value::as_str) != Some("ready-for-review") {
+        return Err("This website version is not awaiting design approval".into());
+    }
+    if input.get("scope").and_then(Value::as_str) != Some("design-only")
+        || input.get("manifest_sha256").and_then(Value::as_str) != Some(digest)
+        || input.get("revision").and_then(Value::as_u64) != Some(revision)
+    {
+        return Err("Design approval must match this exact website version".into());
+    }
+    Ok(())
+}
+
 fn validate_receipt_authority(
     receipt_signer: &[u8],
     action_signer: &[u8],
@@ -1138,6 +1161,21 @@ pub(crate) async fn validate_public_envelope(
             )
             .map_err(|error| format!("Block action does not match its pinned question: {error}"))?;
             validate_approval_hash_binding(&typed_manifest, data, action)?;
+            if action.action_id == "artifact.approve-design" {
+                if instance.handle != "artifact" || instance.attention_pubkey.is_none() {
+                    return Err("Website design approval requires a designated decision maker".into());
+                }
+                validate_website_design_binding(data, &action.content)?;
+                let owned = state.db.is_agent_owner(
+                    tenant.community(), &action.processor_pubkey, event.pubkey.as_bytes(),
+                ).await.map_err(|error| format!("database error checking website decision maker: {error}"))?;
+                let actor = state.db.get_agent_channel_policy(
+                    tenant.community(), event.pubkey.as_bytes(),
+                ).await.map_err(|error| format!("database error checking website actor: {error}"))?;
+                if !owned || !actor.is_some_and(|policy| policy.1.is_none()) {
+                    return Err("Website design approval requires the responsible agent's human owner".into());
+                }
+            }
             let declaration = manifest_action(&manifest, &action.action_id)
                 .ok_or_else(|| "Block action ID is not declared by its manifest".to_string())?;
             if let Some(schema) = declaration
@@ -1200,6 +1238,31 @@ pub(crate) async fn validate_public_envelope(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn website_design_approval_binds_digest_revision_and_scope() {
+        let data = serde_json::json!({
+            "website_bundle": { "sha256": "a".repeat(64) },
+            "revision": 2, "status": "ready-for-review"
+        });
+        let valid = serde_json::json!({
+            "manifest_sha256": "a".repeat(64), "revision": 2, "scope": "design-only"
+        });
+        assert!(super::validate_website_design_binding(Some(&data), &valid).is_ok());
+        for (key, wrong) in [
+            ("manifest_sha256", serde_json::json!("b".repeat(64))),
+            ("revision", serde_json::json!(1)),
+            ("scope", serde_json::json!("publish")),
+        ] {
+            let mut input = valid.clone();
+            input[key] = wrong;
+            assert!(super::validate_website_design_binding(Some(&data), &input).is_err());
+        }
+        assert!(super::validate_website_design_binding(None, &valid).is_err());
+        let mut claimed = data.clone();
+        claimed["status"] = serde_json::json!("approved");
+        assert!(super::validate_website_design_binding(Some(&claimed), &valid).is_err());
+    }
+
     use super::*;
     use buzz_core::block::BlockInteraction;
     use buzz_sdk::blocks::{build_block_receipt, BlockReceiptInput, BlockReceiptStatus};
