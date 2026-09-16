@@ -55,7 +55,7 @@ export class PreviewController {
     if (action === "export") {
       const entry = this.host.byHandle.get(payload.handle);
       if (!entry?.site || !this.saveHandover) throw new Error("Saved website is not ready to download");
-      const bytes = await createWebsiteHandover(entry.site, entry);
+      const bytes = await createWebsiteHandover(entry.site, entry, payload.approvalEvent);
       const active = () => generation === this.generation
         && this.context() === community && this.handles.has(payload.handle);
       if (!active()) throw new Error("Preview context changed before download");

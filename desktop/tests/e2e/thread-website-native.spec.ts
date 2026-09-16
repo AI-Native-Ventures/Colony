@@ -2,6 +2,7 @@ import { _electron as electron, expect, test } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { unzipSync } from "fflate";
+import { verifyEvent } from "nostr-tools/pure";
 import { createHash } from "node:crypto";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { waitForAnimations } from "../helpers/animations";
@@ -164,12 +165,20 @@ test("native website survives mobile and expanded mounts in the channel", async 
     expect(metadata.manifestSha256).toBe("a".repeat(64));
     expect(Object.keys(archive).sort()).toEqual([
       "colony-handover.json",
+      "design-approval.json",
       "source/project.zip",
       "website/index.html",
       "website/logo.svg",
       "website/site.css",
       "website/site.js",
     ]);
+    const approvalRecord = JSON.parse(
+      Buffer.from(archive["design-approval.json"]).toString("utf8"),
+    );
+    expect(verifyEvent(approvalRecord)).toBe(true);
+    expect(approvalRecord.pubkey).toBe(OWNER_PUBKEY);
+    expect(approvalRecord.id).toBe(metadata.approval.eventId);
+    expect(approvalRecord.content).toBe((await decision())?.content);
     const sourceArchive = archive["source/project.zip"];
     expect(createHash("sha256").update(sourceArchive).digest("hex")).toBe(
       metadata.sourceArchive.sha256,

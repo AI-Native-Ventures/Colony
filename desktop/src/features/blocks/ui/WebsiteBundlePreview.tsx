@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { electronDesktop } from "@/shared/api/electronNativeBridge";
+import type { RelayEvent } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/shared/ui/dialog";
 
@@ -9,10 +10,12 @@ function WebsiteView({
   request,
   large,
   approved,
+  approvalEvent,
 }: {
   request: Record<string, unknown>;
   large: boolean;
   approved: boolean;
+  approvalEvent?: RelayEvent;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +34,7 @@ function WebsiteView({
         {
           ...request,
           handle: downloadHandle,
+          approvalEvent,
         },
       );
       setDownloadNotice(
@@ -197,12 +201,14 @@ export function WebsiteBundlePreview({
   threadRoot,
   revision,
   approved = false,
+  approvalEvent,
 }: {
   bundle: { url: string; sha256: string };
   artifactId: string;
   threadRoot: string;
   revision: number;
   approved?: boolean;
+  approvalEvent?: RelayEvent;
 }) {
   const { activeCommunity } = useCommunities();
   const [mobile, setMobile] = useState(false);
@@ -257,7 +263,7 @@ export function WebsiteBundlePreview({
         </Button>
       </div>
       {!expanded && (
-        <WebsiteView request={request} large={false} approved={approved} />
+        <WebsiteView request={request} large={false} approved={approved} approvalEvent={approvalEvent} />
       )}
       <p className="text-xs text-muted-foreground">
         Saved website preview. Reply in this thread to request changes. This
@@ -267,7 +273,7 @@ export function WebsiteBundlePreview({
         <DialogContent className="w-[95vw] max-w-6xl">
           <DialogTitle>Website preview · Version {revision}</DialogTitle>
           {expanded && (
-            <WebsiteView request={request} large approved={approved} />
+            <WebsiteView request={request} large approved={approved} approvalEvent={approvalEvent} />
           )}
         </DialogContent>
       </Dialog>
