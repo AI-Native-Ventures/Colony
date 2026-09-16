@@ -413,10 +413,8 @@ pub(crate) async fn publish_instance(
         root_event_id: event_id,
         parent_event_id: event_id,
     });
-    let website_review = requires_website_design_attention(
-        &resolved.manifest.handle,
-        &publication.data,
-    );
+    let website_review =
+        requires_website_design_attention(&resolved.manifest.handle, &publication.data);
     let attention = if resolved.manifest.validation.requires_attention || website_review {
         let decision_maker = match client.auth_tag_owner_hex() {
             Some(owner) => PublicKey::parse(&owner)
@@ -897,8 +895,8 @@ mod tests {
     use super::{
         build_catalog_action_request, instance_coordinates, normalize_action_write_response,
         receipt_resolves_attention, render_fallback, require_tested_validation,
-        requires_website_design_attention,
-        resolve_instance_processor, CATALOG_ACTION_SCHEMA, CATALOG_ACTION_TTL_SECONDS,
+        requires_website_design_attention, resolve_instance_processor, CATALOG_ACTION_SCHEMA,
+        CATALOG_ACTION_TTL_SECONDS,
     };
     use buzz_core::block::{parse_manifest, BlockValidation, BlockValidationState};
     use nostr::{EventBuilder, EventId, Keys, Kind, Tag};
@@ -906,11 +904,18 @@ mod tests {
 
     #[test]
     fn website_reviews_require_owner_attention_without_changing_ordinary_artifacts() {
-        let review = json!({"status": "ready-for-review", "website_bundle": {"sha256": "a".repeat(64)}});
+        let review =
+            json!({"status": "ready-for-review", "website_bundle": {"sha256": "a".repeat(64)}});
         assert!(requires_website_design_attention("artifact", &review));
         assert!(!requires_website_design_attention("report", &review));
-        assert!(!requires_website_design_attention("artifact", &json!({"status": "ready-for-review"})));
-        assert!(!requires_website_design_attention("artifact", &json!({"status": "approved", "website_bundle": {}})));
+        assert!(!requires_website_design_attention(
+            "artifact",
+            &json!({"status": "ready-for-review"})
+        ));
+        assert!(!requires_website_design_attention(
+            "artifact",
+            &json!({"status": "approved", "website_bundle": {}})
+        ));
     }
 
     #[test]

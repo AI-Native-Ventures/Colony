@@ -18,7 +18,7 @@ jobs:
         working-directory: desktop
         run: pnpm exec biome check --write src/features/blocks/websiteDesign.ts src/features/blocks/ui/BlockRenderContext.tsx src/features/blocks/ui/WebsiteBundlePreview.tsx src/features/blocks/ui/ArtifactHtmlPreview.tsx src/features/blocks/ui/artifactPreviewDocument.ts src/features/blocks/ui/artifactPreviewDocument.test.mjs src/features/blocks/ui/BlockRenderer.tsx src/features/blocks/blockRepository.ts tests/e2e/thread-html-preview.spec.ts tests/e2e/thread-website-native.spec.ts
       - name: Format website decision validation
-        run: rustfmt --edition 2021 crates/buzz-relay/src/blocks.rs
+        run: rustfmt --edition 2021 crates/buzz-relay/src/blocks.rs crates/buzz-cli/src/commands/blocks.rs
       - name: Capture formatting patch
         if: always()
         run: git diff > /tmp/thread-preview-format.patch
