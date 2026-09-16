@@ -36,7 +36,15 @@ export function websiteDesignDecision(
   const expected = websiteDesignInput(data);
   if (!expected || !instance.decisionMakerPubkey || !instance.processorPubkey)
     return null;
+  const channels = (message.blockEvent?.tags ?? message.tags ?? []).filter(
+    (tag) => tag[0] === "h",
+  );
+  const channel = channels[0]?.[1];
+  if (channels.length !== 1 || !channel) return null;
   for (const event of message.blockState?.actions ?? []) {
+    const actionChannels = event.tags.filter((tag) => tag[0] === "h");
+    if (actionChannels.length !== 1 || actionChannels[0]?.[1] !== channel)
+      continue;
     const parsed = parseBlockAction(event.tags);
     if (
       event.kind !== 40010 ||
