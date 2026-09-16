@@ -263,7 +263,12 @@ export function WebsiteBundlePreview({
         </Button>
       </div>
       {!expanded && (
-        <WebsiteView request={request} large={false} approved={approved} approvalEvent={approvalEvent} />
+        <WebsiteView
+          request={request}
+          large={false}
+          approved={approved}
+          approvalEvent={approvalEvent}
+        />
       )}
       <p className="text-xs text-muted-foreground">
         Saved website preview. Reply in this thread to request changes. This
@@ -273,7 +278,12 @@ export function WebsiteBundlePreview({
         <DialogContent className="w-[95vw] max-w-6xl">
           <DialogTitle>Website preview · Version {revision}</DialogTitle>
           {expanded && (
-            <WebsiteView request={request} large approved={approved} approvalEvent={approvalEvent} />
+            <WebsiteView
+              request={request}
+              large
+              approved={approved}
+              approvalEvent={approvalEvent}
+            />
           )}
         </DialogContent>
       </Dialog>

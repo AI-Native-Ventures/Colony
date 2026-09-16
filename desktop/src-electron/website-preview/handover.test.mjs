@@ -47,8 +47,8 @@ test("handover preserves signed approval provenance and rejects another version"
   }, new Uint8Array(32).fill(1));
   const entries = unzipSync(await createWebsiteHandover(site, identity, event));
   const saved = JSON.parse(Buffer.from(entries["design-approval.json"]).toString());
-  assert.equal(verifyEvent(saved), true);
   assert.deepEqual(saved, JSON.parse(JSON.stringify(event)));
+  assert.equal(verifyEvent(saved), true);
   await assert.rejects(createWebsiteHandover(site, { ...identity, revision: 3 }, event));
   await assert.rejects(createWebsiteHandover(site, identity, { ...event, content: "{}" }));
 });

@@ -1,7 +1,7 @@
 // Test-only shell: real preload/controller/preview; account and relay are fixtures.
 import { app, BrowserWindow, WebContentsView, View, session, protocol, ipcMain } from "electron";
 import { fileURLToPath } from "node:url";
-import { writeFile } from "node:fs/promises";
+import { createHandoverSaver } from "./save.mjs";
 import { createWebsitePreviewHost } from "./host.mjs";
 import { PreviewController } from "./controller.mjs";
 import { PREVIEW_SCHEME_DESCRIPTOR } from "./scheme.mjs";
@@ -16,12 +16,13 @@ app.whenReady().then(async () => {
   const community = { id: "e2e-default-community" };
   const controller = new PreviewController({ host, window, context: () => community,
     // Only the native save dialog is substituted; the UI, IPC and archive are real.
-    saveHandover: async (bytes, filename, active) => {
-      if (!active() || !process.env.COLONY_PROOF_HANDOVER_PATH) return { saved: false };
-      await writeFile(process.env.COLONY_PROOF_HANDOVER_PATH, bytes);
-      globalThis.previewProof.savedFilename = filename;
-      return { saved: true };
-    },
+    saveHandover: createHandoverSaver(window, {
+      async showSaveDialog(_window, options) {
+        const filePath = process.env.COLONY_PROOF_HANDOVER_PATH;
+        globalThis.previewProof.savedFilename = options.defaultPath;
+        return { canceled: !filePath, filePath };
+      },
+    }),
   });
   globalThis.previewProof = { host, controller };
   ipcMain.handle("colony:request", async (event, type, payload) => {

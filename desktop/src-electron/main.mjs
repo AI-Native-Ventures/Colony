@@ -31,6 +31,7 @@ import { runtimePaths } from "./runtime-paths.mjs";
 import { DesktopDeepLinks } from "./deep-links.mjs";
 
 import { createWebsitePreviewHost, resolveProductionClipStrategy } from "./website-preview/host.mjs";
+import { createHandoverSaver } from "./website-preview/save.mjs";
 import { PreviewController } from "./website-preview/controller.mjs";
 import { PREVIEW_SCHEME_DESCRIPTOR } from "./website-preview/scheme.mjs";
 
@@ -204,16 +205,7 @@ async function boot() {
   });
   const previews = new PreviewController({
     host: previewHost, window, context: () => businessContext,
-    saveHandover: async (bytes, filename, active) => {
-      const result = await dialog.showSaveDialog(window, {
-        title: "Save website files", defaultPath: filename,
-        filters: [{ name: "Website archive", extensions: ["zip"] }],
-      });
-      if (result.canceled || !result.filePath) return { saved: false };
-      if (!active()) throw new Error("Community changed; reopen the website before saving");
-      await writeFile(result.filePath, bytes);
-      return { saved: true };
-    },
+    saveHandover: createHandoverSaver(window, dialog),
   });
   resources.add(() => previewHost.closeAll());
   const managedBrowser = new ManagedBrowser({

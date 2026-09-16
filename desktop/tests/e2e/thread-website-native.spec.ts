@@ -156,6 +156,7 @@ test("native website survives mobile and expanded mounts in the channel", async 
     await expect
       .poll(() => app.evaluate("globalThis.previewProof.savedFilename"))
       .toBe("website-version-1.zip");
+    await expect(preview.getByText("Website files saved.")).toBeVisible();
     const archive = unzipSync(readFileSync(handoverPath));
     const metadata = JSON.parse(
       Buffer.from(archive["colony-handover.json"]).toString("utf8"),
