@@ -1192,7 +1192,7 @@ pub(crate) async fn validate_public_envelope(
                     .get_agent_channel_policy(tenant.community(), event.pubkey.as_bytes())
                     .await
                     .map_err(|error| format!("database error checking website actor: {error}"))?;
-                if !owned || !actor.is_some_and(|policy| policy.1.is_none()) {
+                if !owned || actor.is_none_or(|policy| policy.1.is_some()) {
                     return Err(
                         "Website design approval requires the responsible agent's human owner"
                             .into(),
