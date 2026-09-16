@@ -26,11 +26,22 @@ export async function createWebsiteHandover(site, identity) {
     entries[key] = new Uint8Array(file.bytes);
     hashes.push({ path: descriptor.path, sha256: digest, size: file.bytes.length });
   }
+  let sourceArchive = null;
+  if (site.sourceArchive) {
+    const bytes = site.getSourceArchive?.();
+    if (!bytes || bytes.length !== site.sourceArchive.size
+        || createHash("sha256").update(bytes).digest("hex") !== site.sourceArchive.sha256) {
+      throw new Error("Source archive changed since review");
+    }
+    if (total + bytes.length > MAX_TOTAL_BYTES) throw new Error("Website handover is too large");
+    entries["source/project.zip"] = new Uint8Array(bytes);
+    sourceArchive = { path: "source/project.zip", sha256: site.sourceArchive.sha256, size: bytes.length };
+  }
   entries["colony-handover.json"] = new TextEncoder().encode(JSON.stringify({
     schema: "colony.website-handover/1", artifactId: identity.artifactId,
     revision: identity.revision, manifestSha256: site.manifestSha256,
-    entrypoint: `website/${site.entrypoint}`, files: hashes,
-    description: "Exact browser-ready preview files. Original project sources and backend services are not included unless present in this bundle. This archive does not publish a website or grant publication permission.",
+    entrypoint: `website/${site.entrypoint}`, files: hashes, sourceArchive,
+    description: "Exact browser-ready preview files. A source archive is included only when listed in sourceArchive; its integrity is verified, not its completeness or functionality. Backend services are not provisioned. This archive does not publish a website or grant publication permission.",
   }, null, 2));
   return new Promise((resolve, reject) => {
     zip(entries, { level: 0 }, (error, bytes) => error ? reject(error) : resolve(bytes));

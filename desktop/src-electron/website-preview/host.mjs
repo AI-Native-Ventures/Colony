@@ -411,6 +411,13 @@ export class WebsitePreviewHost {
         "the entrypoint is not a listed file",
       );
     }
+    if (site.sourceArchive) {
+      if (!Number.isSafeInteger(site.sourceArchive.size) || site.sourceArchive.size <= 0) {
+        throw invalid("invalid_artifact", "the verified source archive size is malformed");
+      }
+      total += site.sourceArchive.size;
+      if (total > MAX_TOTAL_BYTES) throw invalid("artifact_too_large", "the verified artifact exceeds 64 MiB");
+    }
     const used = this.usedBytes() - entry.reservedBytes;
     if (used + total > this.maxTotalBytes) {
       throw invalid("memory_limit", "the preview memory budget is exhausted");

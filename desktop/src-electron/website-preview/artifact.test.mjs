@@ -860,3 +860,21 @@ test("matches the retained preview manifest compatibility vectors", () => {
     assert.equal(code, vector.expect, vector.name);
   }
 });
+
+test("source archive is hash verified, copied and never served as a website asset", async () => {
+  const world = createWorld();
+  const html = bytes("<h1>Website</h1>");
+  const source = bytes("opaque project archive fixture");
+  const file = fileEntry("index.html", html);
+  const archive = { url: "https://cdn.example.com/project.zip", sha256: sha256Hex(source), size: source.length };
+  world.routes.set(file.url, () => reply({ chunks: [html] }));
+  world.routes.set(archive.url, () => reply({ chunks: [source] }));
+  const ref = manifestRef(world, manifestBytes([file], { source_archive: archive }));
+  const site = await loadWebsitePreview({ manifestRef: ref, dependencies: world.dependencies });
+  assert.deepEqual(site.getSourceArchive(), source);
+  site.getSourceArchive().fill(0);
+  assert.deepEqual(site.getSourceArchive(), source);
+  assert.equal(site.getFile("project.zip"), null);
+  world.routes.set(archive.url, () => reply({ chunks: [Buffer.alloc(source.length)] }));
+  await expectCode(loadWebsitePreview({ manifestRef: ref, dependencies: world.dependencies }), "digest_mismatch");
+});

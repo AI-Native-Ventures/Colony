@@ -178,6 +178,21 @@ export async function loadWebsitePreview(options = {}) {
       });
     }
 
+    let sourceBytes = null;
+    if (manifest.sourceArchive) {
+      const source = manifest.sourceArchive;
+      const fetched = await fetchBoundBytes(source.url, {
+        ...fetchOptions, maxBytes: source.size, label: "source archive",
+      });
+      if (fetched.bytes.length !== source.size) {
+        throw sizeMismatch("source archive", source.size, fetched.bytes.length);
+      }
+      const actual = sha256Hex(fetched.bytes);
+      if (actual !== source.sha256) throw digestMismatch("source archive", source.sha256, actual);
+      // Retain opaque archive bytes; never extract or execute agent-provided source.
+      sourceBytes = Buffer.from(fetched.bytes);
+    }
+
     const files = Object.freeze(
       [...store.values()].map((entry) => entry.metadata),
     );
@@ -199,6 +214,8 @@ export async function loadWebsitePreview(options = {}) {
       entrypointFile:
         files.find((file) => file.path === manifest.entrypoint) ?? null,
       getFile,
+      sourceArchive: manifest.sourceArchive ?? null,
+      getSourceArchive: () => sourceBytes === null ? null : Buffer.from(sourceBytes),
     });
   } finally {
     scope.dispose();

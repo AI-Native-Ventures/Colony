@@ -26,3 +26,14 @@ test("handover refuses changed bytes, duplicates and unsafe paths", async () => 
   await assert.rejects(createWebsiteHandover({ ...site,
     files: [{ ...file, path: "../escape.html" }] }, identity));
 });
+
+test("handover includes exact pinned source archive and rejects altered source", async () => {
+  const source = Buffer.from("opaque source archive");
+  const fullSite = { ...site, sourceArchive: { size: source.length,
+    sha256: createHash("sha256").update(source).digest("hex") }, getSourceArchive: () => Buffer.from(source) };
+  const entries = unzipSync(await createWebsiteHandover(fullSite, identity));
+  assert.deepEqual(Buffer.from(entries["source/project.zip"]), source);
+  const metadata = JSON.parse(Buffer.from(entries["colony-handover.json"]).toString());
+  assert.equal(metadata.sourceArchive.sha256, fullSite.sourceArchive.sha256);
+  await assert.rejects(createWebsiteHandover({ ...fullSite, getSourceArchive: () => Buffer.alloc(source.length) }, identity));
+});

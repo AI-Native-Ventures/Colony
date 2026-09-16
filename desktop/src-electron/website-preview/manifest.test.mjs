@@ -25,3 +25,14 @@ test("rejects private source addresses and malformed digests", () => {
     { url: "http://example.com/site" }, { sha256: "not-a-digest" },
   ]) assert.throws(() => parse([{ ...file("index.html"), ...patch }]));
 });
+
+test("source archive retains URL and byte limits", () => {
+  const source = { url: "https://example.com/source.zip", sha256: "b".repeat(64), size: 50 };
+  const withSource = (patch) => parsePreviewManifest(Buffer.from(JSON.stringify({
+    schema: PREVIEW_SCHEMA, entrypoint: "index.html", files: [file("index.html")], source_archive: { ...source, ...patch },
+  })));
+  assert.equal(withSource({}).sourceArchive.sha256, source.sha256);
+  for (const patch of [{ size: 0 }, { size: 100_000_000 }, { url: "https://127.0.0.1/source.zip" }, { sha256: "bad" }]) {
+    assert.throws(() => withSource(patch));
+  }
+});

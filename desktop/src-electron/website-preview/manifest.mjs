@@ -62,12 +62,12 @@ function invalidPath(path, reason) {
   );
 }
 
-function requirePlainObject(value, fields, label, code) {
+function requirePlainObject(value, fields, label, code, optional = []) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new PreviewArtifactError(code, `${label} must be a JSON object`);
   }
   for (const key of Object.keys(value)) {
-    if (!fields.includes(key)) {
+    if (!fields.includes(key) && !optional.includes(key)) {
       throw new PreviewArtifactError(
         code,
         `${label} has unknown field ${JSON.stringify(key)}`,
@@ -282,6 +282,7 @@ export function parsePreviewManifest(bytes) {
     MANIFEST_FIELDS,
     "manifest",
     "manifest_json",
+    ["source_archive"],
   );
   if (manifest.schema !== PREVIEW_SCHEMA) {
     throw new PreviewArtifactError(
@@ -387,6 +388,22 @@ export function parsePreviewManifest(bytes) {
     );
   }
 
+  let sourceArchive = null;
+  if (Object.hasOwn(manifest, "source_archive")) {
+    const source = requirePlainObject(manifest.source_archive,
+      ["url", "sha256", "size"], "source_archive", "manifest_json");
+    validatePublicUrl(source.url);
+    validateSha256(source.sha256);
+    if (!Number.isSafeInteger(source.size) || source.size <= 0
+        || source.size > MAX_FILE_BYTES) {
+      throw new PreviewArtifactError("file_too_large", "Source archive must be between 1 byte and 16 MiB");
+    }
+    if (total + source.size > MAX_TOTAL_BYTES) {
+      throw new PreviewArtifactError("total_too_large", "Website and source archive exceed 64 MiB");
+    }
+    sourceArchive = Object.freeze({ ...source });
+  }
+
   const entrypoint = files.find((file) => file.path === manifest.entrypoint);
   if (entrypoint === undefined) {
     throw new PreviewArtifactError(
@@ -406,5 +423,6 @@ export function parsePreviewManifest(bytes) {
     schema: PREVIEW_SCHEMA,
     entrypoint: manifest.entrypoint,
     files: Object.freeze(files),
+    ...(sourceArchive ? { sourceArchive } : {}),
   });
 }
