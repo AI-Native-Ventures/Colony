@@ -73,9 +73,9 @@ URL, SHA-256 and byte size for an opaque project ZIP. It is verified before the
 preview is ready, counts toward the 64 MiB total, and exports as
 `source/project.zip`. The UI reports whether it was attached. Its integrity is
 proven; completeness of the project still requires agent review. The exported
-metadata does not yet carry the signed approval event, which remains a gap.
+archive also carries `design-approval.json`, the signed owner action, with its event ID and path recorded in the metadata. The renderer verifies the owner signature and exact artifact binding before enabling this download. Native export checks the event hash and revision binding; it does not independently establish owner authority.
 
-## Verified stages and remaining gates (2026-09-16)
+## Verified stages and remaining gates (2026-09-17)
 
 - [35065425443](https://github.com/AI-Native-Ventures/Colony/actions/runs/35065425443)
   passed the React approval-to-download path through a real Electron preload,
@@ -94,8 +94,23 @@ metadata does not yet carry the signed approval event, which remains a gap.
   passed Mac packaging, relocated-app startup, signup and isolation checks on
   e3fb6988a, including the staged ZIP dependency. This predates source-archive
   support and does not exercise the native save dialog.
-- Full original-source handover, approval provenance in its archive, final visual
-  parity and a real agent website delivery remain outstanding.
+- [35079064353](https://github.com/AI-Native-Ventures/Colony/actions/runs/35079064353)
+  passed deterministic preview checks on `7c29765bd`, including source ZIP export,
+  exported approval signature verification and the shared production save helper.
+  The native save-dialog selection remains substituted. General CI on this head
+  passed its selected checks; most broader jobs were skipped by path selection.
+- [35197060786](https://github.com/AI-Native-Ventures/Colony/actions/runs/35197060786)
+  was dispatched for the latest head and was still building when last checked.
+  It is not yet package proof.
+- Production integration review found that the main process currently selects the
+  public transport only. The authenticated relay-media transport exists but is
+  not connected to the host. The existing `fetch_media_bytes` native command
+  validates image/media content and cannot simply be reused for arbitrary website
+  JSON, HTML, scripts and ZIPs. Private relay-hosted bundles therefore remain an
+  integration gap; do not make private files public to work around it.
+- Final visual parity, completed implementation review, authenticated private
+  bundle retrieval and a real agent website delivery remain outstanding. Source
+  archive integrity is tested; original-project completeness requires review.
 
 PR 812 is a draft. None of the above constitutes merge, production deployment,
 or completion of the approved Website Manager experience. CI uses deterministic
