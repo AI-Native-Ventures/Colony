@@ -13,6 +13,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../auth/auth.dart';
 import 'nostr_models.dart';
 import 'relay_client.dart';
+import 'relay_http_query_client.dart';
 import 'relay_provider.dart';
 import 'relay_socket.dart';
 
@@ -77,11 +78,15 @@ typedef RelaySocketFactory =
 class RelaySessionNotifier extends Notifier<SessionState> {
   RelaySessionNotifier({
     http.Client? httpClient,
+    http.Client Function()? httpClientFactory,
     RelaySocketFactory socketFactory = RelaySocket.new,
-  }) : _httpClient = httpClient,
+  }) : _httpQueryClient = RelayHttpQueryClient(
+         client: httpClient,
+         clientFactory: httpClientFactory,
+       ),
        _socketFactory = socketFactory;
 
-  final http.Client? _httpClient;
+  final RelayHttpQueryClient _httpQueryClient;
   final RelaySocketFactory _socketFactory;
 
   static const _baseReconnectDelayMs = 1000;
@@ -137,26 +142,22 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     final bodyBytes = utf8.encode(
       jsonEncode(filters.map((filter) => filter.toJson()).toList()),
     );
-    final client = _httpClient ?? http.Client();
-    final shouldCloseClient = _httpClient == null;
-    final response = await client
-        .post(
-          Uri.parse(url),
-          headers: {
-            'Authorization': buildNip98AuthHeader(
-              method: 'POST',
-              url: url,
-              bodyBytes: bodyBytes,
-              nsec: config.nsec,
-            ),
-            'Content-Type': 'application/json',
-          },
-          body: bodyBytes,
-        )
-        .timeout(timeout)
-        .whenComplete(() {
-          if (shouldCloseClient) client.close();
-        });
+    // Reuse the session transport on success. A timeout rotates immediately
+    // for new queries, then closes the retired client after its peers finish.
+    final response = await _httpQueryClient.post(
+      Uri.parse(url),
+      headers: {
+        'Authorization': buildNip98AuthHeader(
+          method: 'POST',
+          url: url,
+          bodyBytes: bodyBytes,
+          nsec: config.nsec,
+        ),
+        'Content-Type': 'application/json',
+      },
+      body: bodyBytes,
+      timeout: timeout,
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw RelayException(response.statusCode, response.body);
     }
@@ -644,7 +645,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _recentDeliveryKeys.clear();
     _socket?.dispose();
     _socket = null;
-    _httpClient?.close();
+    _httpQueryClient.close();
   }
 }
 

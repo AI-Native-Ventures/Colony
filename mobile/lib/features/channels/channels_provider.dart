@@ -274,53 +274,37 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     // see every channel as having no messages. Skipped on backstop refreshes since
     // live subscriptions keep lastMessageAt current after the initial load.
     if (fetchLastMessage) {
-      final lastMessageResults = await Future.wait(
-        channels.map((channel) async {
-          if (!channel.isMember || channel.isArchived) return null;
-          try {
-            if (channel.isDm) {
-              final events = await session.fetchHistory(
-                NostrFilter(
-                  kinds: EventKind.channelMessageEventKinds,
-                  tags: {
-                    '#h': [channel.id],
-                  },
-                  limit: 1,
-                ),
-              );
-              if (events.isEmpty) return null;
-              return MapEntry(channel.id, events.first.createdAt);
-            }
-            final events = await session.fetchHistory(
-              NostrFilter(
-                kinds: EventKind.channelMessageEventKinds,
-                tags: {
-                  '#h': [channel.id],
-                },
-                limit: 20,
-              ),
-            );
-            for (final event in events) {
-              if (shouldNotifyForEvent(
-                event,
-                myPk,
-                mutedChannelIds: _mutedChannelIds(),
-                channelId: channel.id,
-              )) {
-                return MapEntry(channel.id, event.createdAt);
-              }
-            }
-            return null;
-          } catch (_) {
-            return null;
-          }
-        }),
-      );
+      final activeChannels = [
+        for (final channel in channels)
+          if (channel.isMember && !channel.isArchived) channel,
+      ];
+      final channelById = {
+        for (final channel in activeChannels) channel.id: channel,
+      };
+      final events = await _fetchLastMessageEvents(session, activeChannels);
 
       final lastMessageMap = <String, int>{};
-      for (final entry
-          in lastMessageResults.whereType<MapEntry<String, int>>()) {
-        lastMessageMap[entry.key] = entry.value;
+      final mutedChannelIds = _mutedChannelIds();
+      for (final event in events) {
+        final channelId = event.channelId;
+        if (channelId == null) continue;
+        final channel = channelById[channelId];
+        if (channel == null) continue;
+        // A DM's newest message always counts; elsewhere only a message that
+        // would notify moves the channel's last-activity marker.
+        if (!channel.isDm &&
+            !shouldNotifyForEvent(
+              event,
+              myPk,
+              mutedChannelIds: mutedChannelIds,
+              channelId: channelId,
+            )) {
+          continue;
+        }
+        final current = lastMessageMap[channelId];
+        if (current == null || event.createdAt > current) {
+          lastMessageMap[channelId] = event.createdAt;
+        }
       }
 
       for (var i = 0; i < channels.length; i++) {
@@ -369,6 +353,70 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       await _subscribeLive(channels);
     }
     return channels;
+  }
+
+  /// Fetches each channel's independent latest-message window in one HTTP
+  /// bridge request. The relay preserves NIP-01 per-filter limits while
+  /// executing the filters with bounded concurrency, avoiding an unbounded
+  /// burst of websocket REQs on communities with many channels.
+  Future<List<NostrEvent>> _fetchLastMessageEvents(
+    RelaySessionNotifier session,
+    List<Channel> channels,
+  ) async {
+    if (channels.isEmpty) return const [];
+
+    final filters = [
+      for (final channel in channels)
+        NostrFilter(
+          kinds: EventKind.channelMessageEventKinds,
+          tags: {
+            '#h': [channel.id],
+          },
+          limit: channel.isDm ? 1 : 20,
+        ),
+    ];
+
+    return _fetchChannelHistoryBatch(
+      session,
+      filters,
+      operation: 'latest-message query',
+    );
+  }
+
+  Future<List<NostrEvent>> _fetchChannelHistoryBatch(
+    RelaySessionNotifier session,
+    List<NostrFilter> filters, {
+    required String operation,
+  }) async {
+    if (filters.isEmpty) return const [];
+
+    try {
+      return await session.queryRelay(filters);
+    } catch (error) {
+      debugPrint(
+        '[ChannelsNotifier] batched $operation failed; '
+        'using bounded websocket fallback: $error',
+      );
+    }
+
+    const fallbackConcurrency = 4;
+    final events = <NostrEvent>[];
+    for (var start = 0; start < filters.length; start += fallbackConcurrency) {
+      final end = min(start + fallbackConcurrency, filters.length);
+      final results = await Future.wait(
+        filters.sublist(start, end).map((filter) async {
+          try {
+            return await session.fetchHistory(filter);
+          } catch (_) {
+            return const <NostrEvent>[];
+          }
+        }),
+      );
+      for (final result in results) {
+        events.addAll(result);
+      }
+    }
+    return events;
   }
 
   /// Records the members carried by kind:39002 events already fetched here.
