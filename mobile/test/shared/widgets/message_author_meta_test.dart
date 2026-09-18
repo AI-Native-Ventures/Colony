@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('keeps the separator and timestamp next to a short name', (
+  testWidgets('keeps the timestamp next to a short name without a separator', (
     tester,
   ) async {
     const displayNameKey = Key('author-display-name');
@@ -31,11 +31,14 @@ void main() {
     await tester.pumpAndSettle();
 
     final displayNameRect = tester.getRect(find.byKey(displayNameKey));
-    final separatorRect = tester.getRect(find.text('·'));
     final timestampRect = tester.getRect(find.byKey(timestampKey));
 
-    expect(separatorRect.left - displayNameRect.right, Grid.half);
-    expect(timestampRect.left - separatorRect.right, Grid.half);
+    expect(find.text('·'), findsNothing);
+    expect(timestampRect.left - displayNameRect.right, Grid.xxs);
+    expect(
+      tester.widget<Text>(find.byKey(timestampKey)).style?.fontSize,
+      messageTimestampTextStyle.fontSize,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -113,5 +116,70 @@ void main() {
     expect(timestamp.maxLines, 1);
     expect(timestamp.overflow, TextOverflow.ellipsis);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('renders the timestamp smaller than the author name', (
+    tester,
+  ) async {
+    const displayNameKey = Key('author-display-name');
+    const timestampKey = Key('author-timestamp');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: const Scaffold(
+          body: SizedBox(
+            width: 300,
+            child: MessageAuthorMeta(
+              displayName: 'Alice',
+              timestamp: '2m',
+              displayNameKey: displayNameKey,
+              timestampKey: timestampKey,
+              nameColor: Colors.black,
+              metadataColor: Colors.grey,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final timestampStyle = tester.widget<Text>(find.byKey(timestampKey)).style;
+    // The timestamp takes its own style rather than the author-metadata one,
+    // and keeps the metadata colour.
+    expect(timestampStyle?.fontSize, messageTimestampTextStyle.fontSize);
+    expect(
+      timestampStyle!.fontSize!,
+      lessThan(messageUsernameTextStyle.fontSize!),
+    );
+    expect(timestampStyle.color, Colors.grey);
+  });
+
+  testWidgets('an explicit timestampStyle overrides the default', (
+    tester,
+  ) async {
+    const timestampKey = Key('author-timestamp');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: const Scaffold(
+          body: SizedBox(
+            width: 300,
+            child: MessageAuthorMeta(
+              displayName: 'Alice',
+              timestamp: '2m',
+              timestampKey: timestampKey,
+              nameColor: Colors.black,
+              metadataColor: Colors.grey,
+              timestampStyle: TextStyle(fontSize: 9),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<Text>(find.byKey(timestampKey)).style?.fontSize, 9);
   });
 }

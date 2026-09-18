@@ -801,7 +801,11 @@ void main() {
       expect(aliceUsername.style?.fontSize, messageMetadataTextStyle.fontSize);
       expect(aliceUsername.style?.fontWeight, FontWeight.w400);
       expect(aliceUsername.style?.height, messageMetadataTextStyle.height);
-      expect(aliceTimestamp.style?.fontSize, messageMetadataTextStyle.fontSize);
+      // Timestamps carry their own compact style now, not the metadata one.
+      expect(
+        aliceTimestamp.style?.fontSize,
+        messageTimestampTextStyle.fontSize,
+      );
       expect(aliceTimestamp.style?.fontWeight, FontWeight.w400);
       final helloContent = findRichText('Hello world!');
       final helloText = tester.widget<RichText>(helloContent);
