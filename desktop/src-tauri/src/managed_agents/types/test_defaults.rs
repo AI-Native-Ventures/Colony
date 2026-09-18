@@ -38,6 +38,7 @@ impl Default for AgentDefinition {
             respond_to: None,
             respond_to_allowlist: Vec::new(),
             parallelism: None,
+            session_policy: Default::default(),
             created_at: String::new(),
             updated_at: String::new(),
         }
