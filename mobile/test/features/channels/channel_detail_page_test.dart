@@ -2291,6 +2291,101 @@ void main() {
       expect(observer.pushCount, initialPushCount + 1);
     });
 
+    testWidgets('thread hides the Latest control while pinned to the tail', (
+      tester,
+    ) async {
+      final threadMessages = formatTimeline([
+        _textMsg(
+          id: 'msg1',
+          pubkey: 'alice',
+          content: 'Thread root',
+          createdAt: 1000,
+        ),
+      ]);
+      await tester.pumpWidget(_buildTestable(messages: const []));
+      await tester.pumpAndSettle();
+
+      Navigator.of(tester.element(find.byType(ChannelDetailPage))).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ThreadDetailPage(
+            threadHead: threadMessages.single,
+            allMessages: threadMessages,
+            channelId: _channelId,
+            currentPubkey: 'self',
+            isMember: true,
+            isArchived: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // A short thread opens already at its newest message, so the control
+      // would be noise.
+      expect(find.byKey(const ValueKey('thread-jump-to-latest')), findsNothing);
+    });
+
+    testWidgets('thread offers the Latest control once scrolled away', (
+      tester,
+    ) async {
+      final replies = [
+        _textMsg(
+          id: 'msg1',
+          pubkey: 'alice',
+          content: 'Thread root',
+          createdAt: 1000,
+        ),
+        for (var i = 0; i < 40; i++)
+          _textMsg(
+            id: 'reply$i',
+            pubkey: 'bob',
+            content: 'Reply number $i',
+            createdAt: 1000 + i + 1,
+            extraTags: [
+              ['e', 'msg1', '', 'root'],
+              ['e', 'msg1', '', 'reply'],
+            ],
+          ),
+      ];
+      final threadMessages = formatTimeline(replies);
+      await tester.pumpWidget(_buildTestable(messages: const []));
+      await tester.pumpAndSettle();
+
+      Navigator.of(tester.element(find.byType(ChannelDetailPage))).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ThreadDetailPage(
+            threadHead: threadMessages.first,
+            allMessages: threadMessages,
+            channelId: _channelId,
+            currentPubkey: 'self',
+            isMember: true,
+            isArchived: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('thread-jump-to-latest')), findsNothing);
+
+      // Reversed list: dragging down walks back toward older replies, so
+      // the tail leaves the viewport.
+      await tester.drag(
+        find.byKey(const ValueKey('thread-message-list')),
+        const Offset(0, 600),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('thread-jump-to-latest')),
+        findsOneWidget,
+      );
+
+      // Tapping it returns to the newest reply and retires the control.
+      await tester.tap(find.byKey(const ValueKey('thread-jump-to-latest')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('thread-jump-to-latest')), findsNothing);
+    });
+
     testWidgets('thread shows day dividers when replies cross days', (
       tester,
     ) async {

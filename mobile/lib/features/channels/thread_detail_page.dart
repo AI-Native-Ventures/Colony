@@ -11,6 +11,7 @@ import '../../shared/widgets/message_author_meta.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'channel_link_navigation.dart';
+import 'latest_message_button.dart';
 import 'channel_typing_provider.dart';
 import 'channel_typing_indicator.dart';
 import 'thread_replies_provider.dart';
@@ -98,6 +99,7 @@ class ThreadDetailPage extends HookConsumerWidget {
     useEffect(() => listViewport.dispose, [listViewport]);
     final didJumpToInitialMessage = useRef(false);
     final followsThreadTail = useRef(false);
+    final isAtThreadTail = useState(true);
     final userOptedOutOfTailFollow = useRef(false);
     final tailIntent = useMemoized(_ThreadTailIntent.new);
     final pendingTailAlignment = useRef<double?>(null);
@@ -165,10 +167,30 @@ class ThreadDetailPage extends HookConsumerWidget {
       );
     }
 
+    Future<void> scrollToThreadTail() async {
+      if (!itemScrollController.isAttached) return;
+      userOptedOutOfTailFollow.value = false;
+      followsThreadTail.value = true;
+      // Reversed list: index 0 is the newest reply, or the head when there
+      // are none.
+      await itemScrollController.scrollTo(
+        index: replies.isEmpty ? replies.length : 0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+      if (context.mounted) isAtThreadTail.value = true;
+    }
+
     useEffect(() {
       void onPositionsChanged() {
-        if (!userOptedOutOfTailFollow.value && threadTailIsVisible()) {
+        final tailVisible = threadTailIsVisible();
+        if (!userOptedOutOfTailFollow.value && tailVisible) {
           followsThreadTail.value = true;
+        }
+        // Drives the Latest control, so it must track the tail even while the
+        // user has opted out of following it.
+        if (isAtThreadTail.value != tailVisible) {
+          isAtThreadTail.value = tailVisible;
         }
       }
 
@@ -285,124 +307,157 @@ class ThreadDetailPage extends HookConsumerWidget {
       body: Column(
         children: [
           Expanded(
-            child: ScrollablePositionedList.builder(
-              key: const ValueKey('thread-message-list'),
-              itemScrollController: itemScrollController,
-              itemPositionsListener: itemPositionsListener,
-              // Reversed so the list opens pinned to the newest reply,
-              // matching the channel message list.
-              reverse: true,
-              padding: EdgeInsets.only(
-                left: Grid.gutter,
-                right: Grid.gutter,
-                top: frostedAppBarHeight(context, bottomHeight: taskBarHeight),
-                bottom: 0,
-              ),
-              itemCount: replies.length + 1, // +1 for thread head
-              itemBuilder: (context, index) {
-                if (index == replies.length) {
-                  // Thread head.
-                  return Padding(
-                    key: ValueKey('thread-message-group-${liveHead.id}'),
-                    padding: EdgeInsets.only(bottom: index == 0 ? Grid.xs : 0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        DayDivider(label: formatDayHeading(liveHead.createdAt)),
-                        _ThreadMessage(
-                          message: liveHead,
-                          channelNames: channelNamesMap,
-                          channelId: channelId,
-                          currentPubkey: currentPubkey,
-                          showAuthor: true,
-                          isHighlighted: liveHead.id == initialMessageId,
-                          allMessages: allMsgs,
-                          isMember: isMember,
-                          isArchived: isArchived,
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            vertical: Grid.xxs,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: ScrollablePositionedList.builder(
+                    key: const ValueKey('thread-message-list'),
+                    itemScrollController: itemScrollController,
+                    itemPositionsListener: itemPositionsListener,
+                    // Reversed so the list opens pinned to the newest reply,
+                    // matching the channel message list.
+                    reverse: true,
+                    padding: EdgeInsets.only(
+                      left: Grid.gutter,
+                      right: Grid.gutter,
+                      top: frostedAppBarHeight(
+                        context,
+                        bottomHeight: taskBarHeight,
+                      ),
+                      bottom: 0,
+                    ),
+                    itemCount: replies.length + 1, // +1 for thread head
+                    itemBuilder: (context, index) {
+                      if (index == replies.length) {
+                        // Thread head.
+                        return Padding(
+                          key: ValueKey('thread-message-group-${liveHead.id}'),
+                          padding: EdgeInsets.only(
+                            bottom: index == 0 ? Grid.xs : 0,
                           ),
-                          child: Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '${replies.length} ${replies.length == 1 ? 'reply' : 'replies'}',
-                                style: context.textTheme.labelMedium?.copyWith(
-                                  color: context.colors.onSurfaceVariant,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                              DayDivider(
+                                label: formatDayHeading(liveHead.createdAt),
                               ),
-                              const SizedBox(width: Grid.xxs),
-                              Expanded(
-                                child: Divider(
-                                  color: context.colors.outlineVariant,
+                              _ThreadMessage(
+                                message: liveHead,
+                                channelNames: channelNamesMap,
+                                channelId: channelId,
+                                currentPubkey: currentPubkey,
+                                showAuthor: true,
+                                isHighlighted: liveHead.id == initialMessageId,
+                                allMessages: allMsgs,
+                                isMember: isMember,
+                                isArchived: isArchived,
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: Grid.xxs,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      '${replies.length} ${replies.length == 1 ? 'reply' : 'replies'}',
+                                      style: context.textTheme.labelMedium
+                                          ?.copyWith(
+                                            color:
+                                                context.colors.onSurfaceVariant,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                    ),
+                                    const SizedBox(width: Grid.xxs),
+                                    Expanded(
+                                      child: Divider(
+                                        color: context.colors.outlineVariant,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
                           ),
+                        );
+                      }
+
+                      // Reversed list: index 0 = newest reply.
+                      final chronIdx = replies.length - 1 - index;
+                      final reply = replies[chronIdx];
+                      final prevReply = chronIdx > 0
+                          ? replies[chronIdx - 1]
+                          : null;
+                      final previousMessage = prevReply ?? liveHead;
+                      final showDayDivider = !isSameDay(
+                        previousMessage.createdAt,
+                        reply.createdAt,
+                      );
+                      final showAuthor =
+                          prevReply == null ||
+                          showDayDivider ||
+                          prevReply.pubkey.toLowerCase() !=
+                              reply.pubkey.toLowerCase() ||
+                          (reply.createdAt - prevReply.createdAt) > 300;
+
+                      // Check if this reply itself has children (nested thread).
+                      final nestedChildren = childrenByParent[reply.id];
+                      final nestedSummary =
+                          nestedChildren != null && nestedChildren.isNotEmpty
+                          ? _buildNestedSummary(reply.id, nestedChildren)
+                          : null;
+
+                      return Padding(
+                        key: ValueKey('thread-message-group-${reply.id}'),
+                        padding: EdgeInsets.only(
+                          bottom: index == 0 ? Grid.xs : 0,
                         ),
-                      ],
-                    ),
-                  );
-                }
-
-                // Reversed list: index 0 = newest reply.
-                final chronIdx = replies.length - 1 - index;
-                final reply = replies[chronIdx];
-                final prevReply = chronIdx > 0 ? replies[chronIdx - 1] : null;
-                final previousMessage = prevReply ?? liveHead;
-                final showDayDivider = !isSameDay(
-                  previousMessage.createdAt,
-                  reply.createdAt,
-                );
-                final showAuthor =
-                    prevReply == null ||
-                    showDayDivider ||
-                    prevReply.pubkey.toLowerCase() !=
-                        reply.pubkey.toLowerCase() ||
-                    (reply.createdAt - prevReply.createdAt) > 300;
-
-                // Check if this reply itself has children (nested thread).
-                final nestedChildren = childrenByParent[reply.id];
-                final nestedSummary =
-                    nestedChildren != null && nestedChildren.isNotEmpty
-                    ? _buildNestedSummary(reply.id, nestedChildren)
-                    : null;
-
-                return Padding(
-                  key: ValueKey('thread-message-group-${reply.id}'),
-                  padding: EdgeInsets.only(bottom: index == 0 ? Grid.xs : 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (showDayDivider)
-                        DayDivider(label: formatDayHeading(reply.createdAt)),
-                      _ThreadMessage(
-                        message: reply,
-                        channelNames: channelNamesMap,
-                        channelId: channelId,
-                        currentPubkey: currentPubkey,
-                        showAuthor: showAuthor,
-                        isHighlighted: reply.id == initialMessageId,
-                        allMessages: allMsgs,
-                        isMember: isMember,
-                        isArchived: isArchived,
-                      ),
-                      if (nestedSummary != null)
-                        _NestedThreadSummaryRow(
-                          summary: nestedSummary,
-                          replyMessage: reply,
-                          allMessages: allMsgs,
-                          channelId: channelId,
-                          currentPubkey: currentPubkey,
-                          isMember: isMember,
-                          isArchived: isArchived,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (showDayDivider)
+                              DayDivider(
+                                label: formatDayHeading(reply.createdAt),
+                              ),
+                            _ThreadMessage(
+                              message: reply,
+                              channelNames: channelNamesMap,
+                              channelId: channelId,
+                              currentPubkey: currentPubkey,
+                              showAuthor: showAuthor,
+                              isHighlighted: reply.id == initialMessageId,
+                              allMessages: allMsgs,
+                              isMember: isMember,
+                              isArchived: isArchived,
+                            ),
+                            if (nestedSummary != null)
+                              _NestedThreadSummaryRow(
+                                summary: nestedSummary,
+                                replyMessage: reply,
+                                allMessages: allMsgs,
+                                channelId: channelId,
+                                currentPubkey: currentPubkey,
+                                isMember: isMember,
+                                isArchived: isArchived,
+                              ),
+                          ],
                         ),
-                    ],
+                      );
+                    },
                   ),
-                );
-              },
+                ),
+                if (!isAtThreadTail.value)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: Grid.xs,
+                    child: Center(
+                      child: LatestMessageButton(
+                        key: const ValueKey('thread-jump-to-latest'),
+                        onPressed: scrollToThreadTail,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
           AnimatedSize(

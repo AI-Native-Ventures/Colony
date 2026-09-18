@@ -27,6 +27,7 @@ import 'agent_activity/working_bots_provider.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
+import 'latest_message_button.dart';
 import 'channel_typing_indicator.dart';
 import 'channels_provider.dart';
 import 'compose_bar.dart';

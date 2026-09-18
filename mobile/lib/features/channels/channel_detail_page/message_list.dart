@@ -351,19 +351,9 @@ class _MessageList extends HookConsumerWidget {
             right: 0,
             bottom: Grid.xs,
             child: Center(
-              child: FilledButton.icon(
+              child: LatestMessageButton(
                 key: const ValueKey('channel-jump-to-latest'),
                 onPressed: scrollToLatest,
-                style: FilledButton.styleFrom(
-                  backgroundColor: context.colors.primaryContainer,
-                  foregroundColor: context.colors.onPrimaryContainer,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: Grid.gutter,
-                    vertical: Grid.xxs,
-                  ),
-                ),
-                icon: const Icon(LucideIcons.arrowDown, size: 16),
-                label: const Text('Latest'),
               ),
             ),
           ),
