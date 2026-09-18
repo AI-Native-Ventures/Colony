@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../shared/animated_avatar.dart';
 import '../../shared/custom_emoji/custom_emoji_provider.dart';
 import '../../shared/custom_emoji/custom_emoji_render.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/avatar_image.dart';
 import '../../shared/widgets/masked_avatar_badge.dart';
+import '../../shared/widgets/progressive_animated_avatar.dart';
 import 'profile_provider.dart';
 import 'set_status_sheet.dart';
 import 'user_status_provider.dart';
@@ -16,7 +19,7 @@ import 'user_status_provider.dart';
 /// puts an edit-photo pencil in that badge; here it carries the status glyph and
 /// opens the status sheet instead. The notch shape — including the fillets where
 /// it meets the avatar's edge — comes from [AvatarBadgeMaskGeometry.badge].
-class SettingsProfileHeader extends ConsumerWidget {
+class SettingsProfileHeader extends HookConsumerWidget {
   const SettingsProfileHeader({super.key});
 
   static const _avatarSize = 128.0;
@@ -26,6 +29,14 @@ class SettingsProfileHeader extends ConsumerWidget {
     final profile = ref.watch(profileProvider).asData?.value;
     final status = ref.watch(userStatusProvider).asData?.value;
     final hasStatus = status != null && !status.isEmpty;
+    final animatedAvatar = parseAnimatedAvatarUrl(profile?.avatarUrl);
+    // Null while animating: the animation widget owns rendering then.
+    final stoppedAnimationUrl = useState<String?>(null);
+    final avatarUrl = animatedAvatar == null
+        ? profile?.avatarUrl
+        : stoppedAnimationUrl.value == animatedAvatar.animationUrl
+        ? animatedAvatar.posterUrl
+        : null;
 
     void openStatusSheet() =>
         showSetStatusSheet(context, currentStatus: status);
@@ -36,16 +47,31 @@ class SettingsProfileHeader extends ConsumerWidget {
         children: [
           MaskedAvatarBadge(
             size: _avatarSize,
-            avatar: ColoredBox(
-              color: context.colors.primaryContainer,
-              child: AvatarImageContent(
-                imageUrl: profile?.avatarUrl,
-                fallback: Text(
-                  profile?.initial ?? '?',
-                  style: context.textTheme.displaySmall?.copyWith(
-                    color: context.colors.onPrimaryContainer,
-                  ),
-                ),
+            avatar: GestureDetector(
+              key: const ValueKey('settings-profile-avatar'),
+              onTap: animatedAvatar == null
+                  ? null
+                  : () => stoppedAnimationUrl.value =
+                        stoppedAnimationUrl.value == animatedAvatar.animationUrl
+                        ? null
+                        : animatedAvatar.animationUrl,
+              child: ColoredBox(
+                key: const ValueKey('settings-profile-avatar-background'),
+                color: animatedAvatar == null
+                    ? context.colors.primaryContainer
+                    : Colors.transparent,
+                child:
+                    animatedAvatar != null &&
+                        stoppedAnimationUrl.value != animatedAvatar.animationUrl
+                    ? ProgressiveAnimatedAvatar(
+                        key: ValueKey(animatedAvatar.animationUrl),
+                        descriptor: animatedAvatar,
+                        fallback: _AvatarFallback(initial: profile?.initial),
+                      )
+                    : AvatarImageContent(
+                        imageUrl: avatarUrl,
+                        fallback: _AvatarFallback(initial: profile?.initial),
+                      ),
               ),
             ),
             badge: _StatusBadge(
@@ -90,6 +116,22 @@ class SettingsProfileHeader extends ConsumerWidget {
 
 /// Fills the notch left by [MaskedAvatarBadge], so its size comes from the mask
 /// geometry rather than being set here.
+class _AvatarFallback extends StatelessWidget {
+  const _AvatarFallback({required this.initial});
+
+  final String? initial;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      initial ?? '?',
+      style: context.textTheme.displaySmall?.copyWith(
+        color: context.colors.onPrimaryContainer,
+      ),
+    );
+  }
+}
+
 class _StatusBadge extends StatelessWidget {
   const _StatusBadge({required this.emoji, required this.onTap});
 

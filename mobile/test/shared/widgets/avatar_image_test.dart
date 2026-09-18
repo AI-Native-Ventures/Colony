@@ -4,19 +4,65 @@ import 'package:buzz/shared/widgets/avatar_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 void main() {
   const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
       '<text x="16" y="24" text-anchor="middle">🦝</text></svg>';
 
-  Widget subject(String? imageUrl) => MaterialApp(
-    home: AvatarImage(
-      imageUrl: imageUrl,
-      radius: 16,
-      fallback: const Text('R'),
+  // Remote URLs render through MediaImage, which reads providers.
+  Widget subject(String? imageUrl, {Color? backgroundColor}) => ProviderScope(
+    child: MaterialApp(
+      home: AvatarImage(
+        imageUrl: imageUrl,
+        radius: 16,
+        backgroundColor: backgroundColor,
+        fallback: const Text('R'),
+      ),
     ),
   );
+
+  testWidgets('renders animated-avatar posters without an opaque background', (
+    tester,
+  ) async {
+    const posterUrl = 'https://relay.example/media/poster.png';
+    const animationUrl = 'https://relay.example/media/animation.png';
+    final animatedUrl =
+        '$posterUrl#buzz-anim=${Uri.encodeComponent(animationUrl)}';
+
+    await tester.pumpWidget(subject(animatedUrl, backgroundColor: Colors.red));
+
+    expect(
+      tester.widget<CircleAvatar>(find.byType(CircleAvatar)).backgroundColor,
+      Colors.transparent,
+    );
+    expect(
+      tester
+          .widget<AvatarImageContent>(find.byType(AvatarImageContent))
+          .imageUrl,
+      posterUrl,
+    );
+  });
+
+  testWidgets('leaves a plain avatar URL and its background alone', (
+    tester,
+  ) async {
+    const plainUrl = 'https://relay.example/media/poster.png';
+
+    await tester.pumpWidget(subject(plainUrl, backgroundColor: Colors.red));
+
+    expect(
+      tester.widget<CircleAvatar>(find.byType(CircleAvatar)).backgroundColor,
+      Colors.red,
+    );
+    expect(
+      tester
+          .widget<AvatarImageContent>(find.byType(AvatarImageContent))
+          .imageUrl,
+      plainUrl,
+    );
+  });
 
   testWidgets('renders raccoon percent-encoded SVG data avatar', (
     tester,
