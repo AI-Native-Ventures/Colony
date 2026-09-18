@@ -20,7 +20,13 @@ pub(crate) fn ensure_supported(runtime_id: Option<&str>) -> Result<(), String> {
     if !cfg!(target_os = "macos") {
         return Err("Isolated local teammates are currently supported on macOS only".into());
     }
-    if !matches!(runtime_id, Some("buzz-agent" | "claude" | "codex")) {
+    let Some(id) = runtime_id else {
+        return Err("This Electron beta requires Colony Agent for isolated local teammates".into());
+    };
+    let builtin = crate::managed_agents::discovery::known_acp_runtime_exact(id).is_some();
+    let preset_ids = crate::managed_agents::discovery::preset_harness_ids();
+    let preset = preset_ids.iter().any(|pid| *pid == id);
+    if !(builtin || preset) {
         return Err("This Electron beta requires Colony Agent for isolated local teammates".into());
     }
     Ok(())
@@ -195,10 +201,58 @@ pub(super) fn prepare_worker(
     policy.allow_meter_listener(meter_port)?;
     let network = WorkerNetwork::start(destinations)?;
     policy.allow_loopback_port(network.port())?;
+
+    // Resolve runtime-declared env vars so harness-specific settings survive
+    // the isolation filter (e.g. GOOSE_MODE, GOOSE_PROVIDER, GOOSE_MODEL).
+    let declared_env_vars: Vec<String> = {
+        let agent_command = get("BUZZ_ACP_AGENT_COMMAND");
+        let program_name = original.get_program().to_str().unwrap_or("");
+        let resolved_name = if agent_command.is_empty() {
+            crate::managed_agents::discovery::normalize_command_identity(program_name)
+        } else {
+            crate::managed_agents::discovery::normalize_command_identity(agent_command)
+        };
+        let mut vars: Vec<String> = Vec::new();
+        if let Some(rt) = crate::managed_agents::discovery::known_acp_runtime_exact(&resolved_name)
+        {
+            if let Some(v) = rt.model_env_var {
+                vars.push(v.to_string());
+            }
+            if let Some(v) = rt.provider_env_var {
+                vars.push(v.to_string());
+            }
+            if let Some(v) = rt.thinking_env_var {
+                vars.push(v.to_string());
+            }
+            if let Some(v) = rt.max_tokens_env_var {
+                vars.push(v.to_string());
+            }
+            if let Some(v) = rt.context_limit_env_var {
+                vars.push(v.to_string());
+            }
+            if let Some(v) = rt.max_rounds_env_var {
+                vars.push(v.to_string());
+            }
+            for (k, _) in rt.default_env {
+                vars.push(k.to_string());
+            }
+        } else if crate::managed_agents::discovery::preset_harness_ids()
+            .iter()
+            .any(|pid| *pid == resolved_name)
+        {
+            if let Some(v) =
+                crate::managed_agents::discovery::preset_provider_env_var(&resolved_name)
+            {
+                vars.push(v.to_string());
+            }
+        }
+        vars
+    };
+
     let mut command = policy.command(original.get_program())?;
     command.args(original.get_args());
     for (key, value) in env {
-        if permitted_env(&key, &provider) {
+        if permitted_env(&key, &provider, &declared_env_vars) {
             command.env(key, value);
         }
     }
@@ -343,13 +397,14 @@ fn meter_upstream_is_provider_chosen(provider: &str) -> bool {
     matches!(provider, "openai" | "openai-compat")
 }
 
-fn permitted_env(key: &str, provider: &str) -> bool {
+fn permitted_env(key: &str, provider: &str, declared_env_vars: &[String]) -> bool {
     key.starts_with("BUZZ_")
         || key.starts_with("GIT_CONFIG_")
         || matches!(
             key,
             "NOSTR_PRIVATE_KEY" | "GIT_TERMINAL_PROMPT" | "RUST_LOG" | "MCP_HOOK_SERVERS"
         )
+        || declared_env_vars.iter().any(|allowed| allowed == key)
         || (provider == "anthropic" && key.starts_with("ANTHROPIC_"))
         || (matches!(provider, "openai" | "openai-compat" | "deepseek" | "google")
             && key.starts_with("OPENAI_COMPAT_"))
@@ -362,8 +417,8 @@ mod tests {
     use super::*;
     #[test]
     fn environment_keeps_only_worker_config_and_the_selected_provider() {
-        assert!(permitted_env("BUZZ_PRIVATE_KEY", "openai"));
-        assert!(permitted_env("OPENAI_COMPAT_API_KEY", "openai"));
+        assert!(permitted_env("BUZZ_PRIVATE_KEY", "openai", &[]));
+        assert!(permitted_env("OPENAI_COMPAT_API_KEY", "openai", &[]));
         for key in [
             "ANTHROPIC_API_KEY",
             "AWS_SECRET_ACCESS_KEY",
@@ -373,7 +428,7 @@ mod tests {
             "DYLD_INSERT_LIBRARIES",
             "NODE_OPTIONS",
         ] {
-            assert!(!permitted_env(key, "openai"), "{key}");
+            assert!(!permitted_env(key, "openai", &[]), "{key}");
         }
     }
     fn route(provider: &str, env: &[(&str, &str)]) -> MeterRoute {
@@ -438,14 +493,14 @@ mod tests {
 
     #[test]
     fn google_keeps_its_openai_compatible_credential_env() {
-        assert!(permitted_env("OPENAI_COMPAT_API_KEY", "google"));
-        assert!(permitted_env("OPENAI_COMPAT_BASE_URL", "google"));
+        assert!(permitted_env("OPENAI_COMPAT_API_KEY", "google", &[]));
+        assert!(permitted_env("OPENAI_COMPAT_BASE_URL", "google", &[]));
         for key in [
             "ANTHROPIC_API_KEY",
             "OPENROUTER_API_KEY",
             "DEEPSEEK_API_KEY",
         ] {
-            assert!(!permitted_env(key, "google"), "{key}");
+            assert!(!permitted_env(key, "google", &[]), "{key}");
         }
     }
 
@@ -485,5 +540,69 @@ mod tests {
         let link = root.path().join("home");
         std::os::unix::fs::symlink(root.path(), &link).unwrap();
         assert!(private_directory(&link).is_err());
+    }
+
+    #[test]
+    fn ensure_supported_allows_new_runtimes_and_refuses_unknown() {
+        // All allowed builtins and presets must pass on macOS Electron.
+        for id in [
+            "goose",
+            "opencode",
+            "buzz-agent",
+            "claude",
+            "codex",
+            "kimi",
+            "grok",
+            "prime-agent",
+        ] {
+            assert!(
+                ensure_supported(Some(id)).is_ok(),
+                "{id} should be supported"
+            );
+        }
+        assert!(ensure_supported(Some("unknown-runtime")).is_err());
+    }
+
+    #[test]
+    fn preset_ids_from_catalog_pass_ensure_supported() {
+        // Every preset harness id exposed by discovery must be allowed by
+        // ensure_supported so adding a new preset does not silently refuse it.
+        for preset_id in crate::managed_agents::discovery::preset_harness_ids() {
+            assert!(
+                ensure_supported(Some(preset_id)).is_ok(),
+                "preset {preset_id} should pass ensure_supported"
+            );
+        }
+    }
+
+    #[test]
+    fn goose_env_vars_survive_isolation_filter() {
+        // Goose's declared env vars must pass; unrelated vendor credentials
+        // must still be blocked when the provider is openrouter.
+        let goose_vars: Vec<String> = [
+            "GOOSE_PROVIDER",
+            "GOOSE_MODEL",
+            "GOOSE_MODE",
+            "GOOSE_THINKING_EFFORT",
+            "GOOSE_MAX_TOKENS",
+            "GOOSE_CONTEXT_LIMIT",
+            "GOOSE_MAX_ROUNDS",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert!(permitted_env("GOOSE_PROVIDER", "openrouter", &goose_vars));
+        assert!(permitted_env("GOOSE_MODEL", "openrouter", &goose_vars));
+        assert!(permitted_env("GOOSE_MODE", "openrouter", &goose_vars));
+        assert!(permitted_env(
+            "GOOSE_THINKING_EFFORT",
+            "openrouter",
+            &goose_vars
+        ));
+        assert!(!permitted_env(
+            "ANTHROPIC_API_KEY",
+            "openrouter",
+            &goose_vars
+        ));
     }
 }
