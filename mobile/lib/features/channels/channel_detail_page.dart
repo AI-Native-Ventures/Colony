@@ -261,11 +261,12 @@ class ChannelDetailPage extends HookConsumerWidget {
                 ],
               ),
         actions: [
-          _MembersButton(
-            channelId: resolvedChannel.id,
-            channel: resolvedChannel,
-            currentPubkey: currentPubkey,
-          ),
+          if (_showsMembersAction(resolvedChannel))
+            _MembersButton(
+              channelId: resolvedChannel.id,
+              channel: resolvedChannel,
+              currentPubkey: currentPubkey,
+            ),
           if (!resolvedChannel.isDm)
             IconButton(
               color: context.colors.primary,
@@ -410,6 +411,7 @@ class ChannelDetailPage extends HookConsumerWidget {
                         channelId: channel.id,
                         content: content,
                         mentionPubkeys: mentionPubkeys,
+                        channel: resolvedChannel,
                         mediaTags: mediaTags,
                       ),
             )

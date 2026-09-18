@@ -1,5 +1,15 @@
 part of '../channel_detail_page.dart';
 
+/// A two-person DM has no membership to manage, so the Members action is
+/// hidden there and kept for group DMs and ordinary channels.
+bool _showsMembersAction(Channel channel) {
+  if (!channel.isDm) return true;
+  final participants = channel.participantPubkeys
+      .map((pubkey) => pubkey.toLowerCase())
+      .toSet();
+  return participants.length != 2;
+}
+
 double _scaledTextHeight(BuildContext context, TextStyle style) {
   final scaledFontSize = MediaQuery.textScalerOf(
     context,
