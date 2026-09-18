@@ -27,6 +27,7 @@ import 'agent_activity/working_bots_provider.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
+import 'android_ime_lift.dart';
 import 'latest_message_button.dart';
 import 'channel_typing_indicator.dart';
 import 'channels_provider.dart';
@@ -220,6 +221,12 @@ class ChannelDetailPage extends HookConsumerWidget {
     }, [channel.id, readState.isReady, readTimestamp]);
 
     return FrostedScaffold(
+      // Android delivers IME insets frame by frame. Resizing the whole body
+      // through that animation makes the timeline jitter, so the viewport
+      // stays fixed and only the composer follows the keyboard. Forum pages
+      // keep the default resize: they scroll a form, not a pinned timeline.
+      resizeToAvoidBottomInset:
+          !usesFixedAndroidImeViewport || resolvedChannel.isForum,
       appBar: FrostedAppBar(
         iconColor: context.colors.primary,
         titleContentHeight: appBarTitleContentHeight,
@@ -398,23 +405,25 @@ class ChannelDetailPage extends HookConsumerWidget {
           if (!resolvedChannel.isForum &&
               resolvedChannel.isMember &&
               !resolvedChannel.isArchived)
-            ComposeBar(
-              channelId: channel.id,
-              channelName: resolvedChannel.isDm ? '' : resolvedChannel.name,
-              onSend:
-                  (
-                    content,
-                    mentionPubkeys, {
-                    mediaTags = const <List<String>>[],
-                  }) => ref
-                      .read(sendMessageProvider)
-                      .call(
-                        channelId: channel.id,
-                        content: content,
-                        mentionPubkeys: mentionPubkeys,
-                        channel: resolvedChannel,
-                        mediaTags: mediaTags,
-                      ),
+            AndroidImeLift(
+              child: ComposeBar(
+                channelId: channel.id,
+                channelName: resolvedChannel.isDm ? '' : resolvedChannel.name,
+                onSend:
+                    (
+                      content,
+                      mentionPubkeys, {
+                      mediaTags = const <List<String>>[],
+                    }) => ref
+                        .read(sendMessageProvider)
+                        .call(
+                          channelId: channel.id,
+                          content: content,
+                          mentionPubkeys: mentionPubkeys,
+                          channel: resolvedChannel,
+                          mediaTags: mediaTags,
+                        ),
+              ),
             )
           else if (!resolvedChannel.isDm &&
               (!resolvedChannel.isMember || resolvedChannel.isArchived))

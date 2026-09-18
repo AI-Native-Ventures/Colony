@@ -11,6 +11,7 @@ import '../../shared/widgets/message_author_meta.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'channel_link_navigation.dart';
+import 'android_ime_lift.dart';
 import 'latest_message_button.dart';
 import 'channel_typing_provider.dart';
 import 'channel_typing_indicator.dart';
@@ -298,6 +299,9 @@ class ThreadDetailPage extends HookConsumerWidget {
     final taskBarHeight = hasOpenTask ? threadTaskHeaderHeight : 0.0;
 
     return FrostedScaffold(
+      // Matches the channel timeline: on Android the viewport stays fixed
+      // through the IME animation and only the composer follows it.
+      resizeToAvoidBottomInset: !usesFixedAndroidImeViewport,
       appBar: FrostedAppBar(
         title: const Text('Thread'),
         titleStyle: channelTitleTextStyle,
@@ -471,26 +475,28 @@ class ThreadDetailPage extends HookConsumerWidget {
                 : ChannelTypingIndicator(entries: threadTyping),
           ),
           if (isMember && !isArchived)
-            ComposeBar(
-              channelId: channelId,
-              hintText: 'Reply in thread\u2026',
-              threadHeadId: threadHead.id,
-              rootId: effectiveRootId,
-              onSend:
-                  (
-                    content,
-                    mentionPubkeys, {
-                    mediaTags = const <List<String>>[],
-                  }) => ref
-                      .read(sendMessageProvider)
-                      .call(
-                        channelId: channelId,
-                        content: content,
-                        mentionPubkeys: mentionPubkeys,
-                        parentEventId: threadHead.id,
-                        rootEventId: effectiveRootId,
-                        mediaTags: mediaTags,
-                      ),
+            AndroidImeLift(
+              child: ComposeBar(
+                channelId: channelId,
+                hintText: 'Reply in thread\u2026',
+                threadHeadId: threadHead.id,
+                rootId: effectiveRootId,
+                onSend:
+                    (
+                      content,
+                      mentionPubkeys, {
+                      mediaTags = const <List<String>>[],
+                    }) => ref
+                        .read(sendMessageProvider)
+                        .call(
+                          channelId: channelId,
+                          content: content,
+                          mentionPubkeys: mentionPubkeys,
+                          parentEventId: threadHead.id,
+                          rootEventId: effectiveRootId,
+                          mediaTags: mediaTags,
+                        ),
+              ),
             ),
         ],
       ),
