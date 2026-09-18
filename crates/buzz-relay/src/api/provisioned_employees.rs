@@ -551,7 +551,9 @@ mod tests {
         // Ours is seeded rather than standing down.
         let (chief, _) = seeded_line(&db, community, "chief-of-staff").await;
 
-        // And it is what the escalation path resolves to, not the Scout.
+        // And it is what the escalation path resolves to, not the workspace's
+        // own agent. Both are named Scout now, which is the case worth
+        // covering: the office follows the provisioned record, never the name.
         let tenant = crate::tenant::bind_community(&db, &host)
             .await
             .expect("bind community");
@@ -570,7 +572,8 @@ mod tests {
             "the workspace's own agent no longer ranks as the executive"
         );
 
-        // The Scout's record is untouched: we do not edit a user's events.
+        // The workspace's own record is untouched: we do not edit a user's
+        // events.
         let stored = events_of_kind(
             &db,
             community,
