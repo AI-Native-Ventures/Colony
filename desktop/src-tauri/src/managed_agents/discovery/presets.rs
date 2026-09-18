@@ -228,14 +228,6 @@ pub(crate) fn preset_harness_ids() -> &'static [&'static str] {
         .as_slice()
 }
 
-/// Return a preset harness's declared provider env var by id, if any.
-pub(crate) fn preset_provider_env_var(id: &str) -> Option<&'static str> {
-    PRESET_HARNESSES
-        .iter()
-        .find(|p| p.id == id)
-        .and_then(|p| p.provider_env_var)
-}
-
 /// Return the primary command for a preset harness by id, or `None` if the id
 /// is not a known preset.
 ///
