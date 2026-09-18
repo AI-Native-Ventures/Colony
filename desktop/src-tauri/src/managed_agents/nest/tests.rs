@@ -444,6 +444,7 @@ fn make_persona(id: &str, display_name: &str) -> AgentDefinition {
         respond_to: None,
         respond_to_allowlist: Vec::new(),
         parallelism: None,
+        session_policy: Default::default(),
         created_at: String::new(),
         updated_at: String::new(),
     }
@@ -515,6 +516,9 @@ fn make_agent(name: &str, persona_id: Option<&str>) -> ManagedAgentRecord {
         definition_respond_to_allowlist: Vec::new(),
         definition_parallelism: None,
         relay_mesh: None,
+        // The fields this fixture does not care about, so a field added on
+        // either side of a develop sync does not break it again.
+        ..Default::default()
     }
 }
 
