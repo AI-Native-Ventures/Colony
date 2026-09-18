@@ -2278,6 +2278,61 @@ void main() {
       expect(newestThreadGroup.padding, const EdgeInsets.only(bottom: Grid.xs));
     });
   });
+
+  // Regression: upstream 7634fe7456 thread tail settle.
+  testWidgets('thread settles on latest reply after paginated hydration', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    final rootEvent = _textMsg(
+      id: 'thread-root',
+      pubkey: 'alice',
+      content: 'Root',
+      createdAt: 1000,
+    );
+    final replies = [
+      for (var i = 0; i < 5; i++)
+        _textMsg(
+          id: 'reply-$i',
+          pubkey: 'bob',
+          content: 'Reply $i',
+          createdAt: 1100 + i,
+          extraTags: const [
+            ['e', 'thread-root', '', 'reply'],
+          ],
+        ),
+    ];
+    await tester.pumpWidget(
+      _buildTestable(
+        messages: [rootEvent],
+        threadReplies: {'thread-root': replies},
+        users: const {
+          'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+          'bob': UserProfile(pubkey: 'bob', displayName: 'Bob'),
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    final threadHead = formatTimeline([rootEvent]).single;
+    Navigator.of(tester.element(find.byType(ChannelDetailPage))).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ThreadDetailPage(
+          threadHead: threadHead,
+          allMessages: [threadHead],
+          channelId: _channelId,
+          currentPubkey: 'self',
+          isMember: true,
+          isArchived: false,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final latestReply = find.byKey(
+      const ValueKey('thread-message-group-reply-4'),
+    );
+    expect(latestReply, findsOneWidget);
+  });
 }
 
 Channel _channel({required String id, required String name}) => Channel(
