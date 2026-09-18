@@ -29,6 +29,7 @@ import 'package:buzz/features/profile/user_status_cache_provider.dart';
 import 'package:buzz/features/profile/user_profile.dart';
 import 'package:buzz/shared/relay/relay.dart';
 import 'package:buzz/shared/theme/theme.dart';
+import 'package:buzz/shared/widgets/frosted_app_bar.dart';
 import 'package:buzz/shared/widgets/skeleton.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -192,6 +193,8 @@ Widget _buildTestable({
   String? canvasContent,
   String? initialMessageId,
   String? initialThreadRootId,
+  InitialThreadRouteBehavior initialThreadRouteBehavior =
+      InitialThreadRouteBehavior.push,
   Map<String, List<NostrEvent>> threadReplies = const {},
   TextScaler textScaler = TextScaler.noScaling,
   RelaySessionNotifier? relaySessionNotifier,
@@ -258,6 +261,7 @@ Widget _buildTestable({
         channel: resolvedChannel,
         initialMessageId: initialMessageId,
         initialThreadRootId: initialThreadRootId,
+        initialThreadRouteBehavior: initialThreadRouteBehavior,
       ),
     ),
   );
@@ -801,7 +805,11 @@ void main() {
       expect(aliceUsername.style?.fontSize, messageMetadataTextStyle.fontSize);
       expect(aliceUsername.style?.fontWeight, FontWeight.w400);
       expect(aliceUsername.style?.height, messageMetadataTextStyle.height);
-      expect(aliceTimestamp.style?.fontSize, messageMetadataTextStyle.fontSize);
+      // Timestamps carry their own compact style now, not the metadata one.
+      expect(
+        aliceTimestamp.style?.fontSize,
+        messageTimestampTextStyle.fontSize,
+      );
       expect(aliceTimestamp.style?.fontWeight, FontWeight.w400);
       final helloContent = findRichText('Hello world!');
       final helloText = tester.widget<RichText>(helloContent);
@@ -1061,6 +1069,75 @@ void main() {
     });
 
     testWidgets(
+      'pins the current day below the app bar after its divider scrolls away',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 600);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final firstDay =
+            DateTime(2025, 1, 1, 12).toUtc().millisecondsSinceEpoch ~/ 1000;
+        final messages = [
+          for (var day = 0; day < 3; day += 1)
+            for (var index = 0; index < 10; index += 1)
+              _textMsg(
+                id: 'day-$day-message-$index',
+                pubkey: 'alice',
+                content: 'Day $day message $index',
+                createdAt: firstDay + day * 86400 + index,
+              ),
+        ];
+
+        await tester.pumpWidget(
+          _buildTestable(
+            messages: messages,
+            users: const {
+              'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final messageList = find.byKey(const ValueKey('channel-message-list'));
+        final list = tester.widget<ScrollablePositionedList>(messageList);
+        list.itemScrollController!.jumpTo(index: 14, alignment: 0.8);
+        await tester.pumpAndSettle();
+
+        final stickyHeader = find.byKey(
+          const ValueKey('channel-sticky-date-header'),
+        );
+        final stickySurface = find.byKey(
+          const ValueKey('channel-sticky-date-header-surface'),
+        );
+        expect(stickyHeader, findsOneWidget);
+        expect(stickySurface, findsOneWidget);
+        // Day 1 owns the rows under the app bar, so day 1 is what it names.
+        expect(
+          find.descendant(
+            of: stickyHeader,
+            matching: find.text(formatDayHeading(firstDay + 86400)),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          tester.getTopLeft(stickySurface).dy,
+          closeTo(
+            frostedAppBarHeight(tester.element(stickyHeader)) + Grid.twelve,
+            1,
+          ),
+        );
+        expect(
+          find.descendant(
+            of: stickyHeader,
+            matching: find.byType(BackdropFilter),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
       'keeps follow mode off while a tall newest message stays visible',
       (tester) async {
         tester.view.physicalSize = const Size(400, 600);
@@ -1106,9 +1183,11 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(findRichText('Newest message line 0'), findsOneWidget);
+        // The newest row is still on screen and barely a drag away, so the
+        // control has nothing to offer yet.
         expect(
           find.byKey(const ValueKey('channel-jump-to-latest')),
-          findsOneWidget,
+          findsNothing,
         );
 
         messagesNotifier.setMessages([
@@ -2162,11 +2241,96 @@ void main() {
       expect(threadPage.threadHead.id, 'parent');
       expect(threadPage.initialMessageId, 'target');
 
-      final highlighted = tester.widget<DecoratedBox>(
-        find.byKey(const ValueKey('thread-message-target')),
+      BoxDecoration targetDecoration() =>
+          tester
+                  .widget<AnimatedContainer>(
+                    find.byKey(const ValueKey('thread-message-target')),
+                  )
+                  .decoration
+              as BoxDecoration;
+
+      // The glow reveals once the jump has landed. pumpAndSettle already
+      // advances past the reveal delay, so its absence beforehand is not a
+      // frame this harness can express.
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(targetDecoration().color, isNot(Colors.transparent));
+
+      // It releases rather than reading as permanent selection. Pumping past
+      // the hold also drains the timers before teardown.
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pumpAndSettle();
+      expect(targetDecoration().color, Colors.transparent);
+    });
+  });
+
+  group('Initial thread route behavior', () {
+    List<NostrEvent> threadFixture() {
+      final head = _textMsg(
+        id: 'head',
+        pubkey: 'alice',
+        content: 'Thread head',
+        createdAt: 1000,
       );
-      final decoration = highlighted.decoration as BoxDecoration;
-      expect(decoration.color, isNot(Colors.transparent));
+      final reply = _textMsg(
+        id: 'reply1',
+        pubkey: 'bob',
+        content: 'A reply',
+        createdAt: 1100,
+        extraTags: const [
+          ['e', 'head', '', 'root'],
+          ['e', 'head', '', 'reply'],
+        ],
+      );
+      return [head, reply];
+    }
+
+    testWidgets('default push keeps the channel route beneath the thread', (
+      tester,
+    ) async {
+      final observer = _TestNavigatorObserver();
+      final messages = threadFixture();
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: messages,
+          initialThreadRootId: 'head',
+          threadReplies: {'head': messages},
+          navigatorObservers: [observer],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ThreadDetailPage), findsOneWidget);
+      // Pushed, not replaced: the channel route stays under the thread so
+      // Back returns to it. Asserted on the observer because routes below
+      // the top are offstage and cannot be found by type.
+      expect(observer.replaceCount, 0);
+      expect(observer.pushCount, greaterThan(0));
+    });
+
+    testWidgets('replaceCurrentRoute drops the temporary channel route', (
+      tester,
+    ) async {
+      final observer = _TestNavigatorObserver();
+      final messages = threadFixture();
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: messages,
+          initialThreadRootId: 'head',
+          initialThreadRouteBehavior:
+              InitialThreadRouteBehavior.replaceCurrentRoute,
+          threadReplies: {'head': messages},
+          navigatorObservers: [observer],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ThreadDetailPage), findsOneWidget);
+      // Activity hydrates through the channel only to reach the thread; that
+      // route must not survive, or Back lands on a channel the user never
+      // asked for.
+      expect(observer.replaceCount, 1);
     });
   });
 
@@ -2285,6 +2449,101 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(observer.pushCount, initialPushCount + 1);
+    });
+
+    testWidgets('thread hides the Latest control while pinned to the tail', (
+      tester,
+    ) async {
+      final threadMessages = formatTimeline([
+        _textMsg(
+          id: 'msg1',
+          pubkey: 'alice',
+          content: 'Thread root',
+          createdAt: 1000,
+        ),
+      ]);
+      await tester.pumpWidget(_buildTestable(messages: const []));
+      await tester.pumpAndSettle();
+
+      Navigator.of(tester.element(find.byType(ChannelDetailPage))).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ThreadDetailPage(
+            threadHead: threadMessages.single,
+            allMessages: threadMessages,
+            channelId: _channelId,
+            currentPubkey: 'self',
+            isMember: true,
+            isArchived: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // A short thread opens already at its newest message, so the control
+      // would be noise.
+      expect(find.byKey(const ValueKey('thread-jump-to-latest')), findsNothing);
+    });
+
+    testWidgets('thread offers the Latest control once scrolled away', (
+      tester,
+    ) async {
+      final replies = [
+        _textMsg(
+          id: 'msg1',
+          pubkey: 'alice',
+          content: 'Thread root',
+          createdAt: 1000,
+        ),
+        for (var i = 0; i < 40; i++)
+          _textMsg(
+            id: 'reply$i',
+            pubkey: 'bob',
+            content: 'Reply number $i',
+            createdAt: 1000 + i + 1,
+            extraTags: [
+              ['e', 'msg1', '', 'root'],
+              ['e', 'msg1', '', 'reply'],
+            ],
+          ),
+      ];
+      final threadMessages = formatTimeline(replies);
+      await tester.pumpWidget(_buildTestable(messages: const []));
+      await tester.pumpAndSettle();
+
+      Navigator.of(tester.element(find.byType(ChannelDetailPage))).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ThreadDetailPage(
+            threadHead: threadMessages.first,
+            allMessages: threadMessages,
+            channelId: _channelId,
+            currentPubkey: 'self',
+            isMember: true,
+            isArchived: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('thread-jump-to-latest')), findsNothing);
+
+      // Reversed list: dragging down walks back toward older replies, so
+      // the tail leaves the viewport.
+      await tester.drag(
+        find.byKey(const ValueKey('thread-message-list')),
+        const Offset(0, 600),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('thread-jump-to-latest')),
+        findsOneWidget,
+      );
+
+      // Tapping it returns to the newest reply and retires the control.
+      await tester.tap(find.byKey(const ValueKey('thread-jump-to-latest')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('thread-jump-to-latest')), findsNothing);
     });
 
     testWidgets('thread shows day dividers when replies cross days', (
@@ -2511,10 +2770,17 @@ class _FakeChannelActions extends ChannelActions {
 
 class _TestNavigatorObserver extends NavigatorObserver {
   int pushCount = 0;
+  int replaceCount = 0;
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     pushCount += 1;
     super.didPush(route, previousRoute);
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    replaceCount += 1;
+    super.didReplace(newRoute: newRoute, oldRoute: oldRoute);
   }
 }

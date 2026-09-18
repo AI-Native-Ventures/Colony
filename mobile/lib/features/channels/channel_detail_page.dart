@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math' show min;
+import 'dart:math' show max, min;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
@@ -27,6 +27,7 @@ import 'agent_activity/working_bots_provider.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
+import 'android_ime_lift.dart';
 import 'channel_typing_indicator.dart';
 import 'channels_provider.dart';
 import 'compose_bar.dart';
@@ -34,6 +35,7 @@ import 'date_formatters.dart';
 import 'day_divider.dart';
 import 'dm_channel_labels.dart';
 import 'ephemeral_channel_display.dart';
+import 'jump_to_latest_button.dart';
 import 'manage_channel_sheet.dart';
 import 'members_sheet.dart';
 import 'message_actions.dart';
@@ -46,6 +48,7 @@ import 'reaction_row.dart';
 import 'send_message_provider.dart';
 import '../profile/user_profile_sheet.dart';
 import 'small_avatar.dart';
+import 'sticky_date_header.dart';
 import 'thread_detail_page.dart';
 import 'thread_tasks/thread_task_header_bar.dart';
 import 'thread_tasks/thread_task_providers.dart';
@@ -112,16 +115,29 @@ int? _channelReadTimestamp({
   return dateTimeToUnixSeconds(channel.lastMessageAt);
 }
 
+/// Controls how a hydrated initial thread is added to the navigation stack.
+enum InitialThreadRouteBehavior {
+  /// Keep the channel route beneath the thread.
+  push,
+
+  /// Replace the temporary channel route so Back returns to its origin.
+  replaceCurrentRoute,
+}
+
 class ChannelDetailPage extends HookConsumerWidget {
   final Channel channel;
   final String? initialMessageId;
   final String? initialThreadRootId;
+
+  /// How the automatically opened initial thread affects the route stack.
+  final InitialThreadRouteBehavior initialThreadRouteBehavior;
 
   const ChannelDetailPage({
     super.key,
     required this.channel,
     this.initialMessageId,
     this.initialThreadRootId,
+    this.initialThreadRouteBehavior = InitialThreadRouteBehavior.push,
   });
 
   @override
@@ -219,6 +235,12 @@ class ChannelDetailPage extends HookConsumerWidget {
     }, [channel.id, readState.isReady, readTimestamp]);
 
     return FrostedScaffold(
+      // Android delivers IME insets frame by frame. Resizing the whole body
+      // through that animation makes the timeline jitter, so the viewport
+      // stays fixed and only the composer follows the keyboard. Forum pages
+      // keep the default resize: they scroll a form, not a pinned timeline.
+      resizeToAvoidBottomInset:
+          !usesFixedAndroidImeViewport || resolvedChannel.isForum,
       appBar: FrostedAppBar(
         iconColor: context.colors.primary,
         titleContentHeight: appBarTitleContentHeight,
@@ -362,6 +384,8 @@ class ChannelDetailPage extends HookConsumerWidget {
                           allMessages: messages,
                           initialMessageId: initialMessageId,
                           initialThreadRootId: initialThreadRootId,
+                          initialThreadRouteBehavior:
+                              initialThreadRouteBehavior,
                           channelId: channel.id,
                           currentPubkey: currentPubkey,
                           isMember: resolvedChannel.isMember,
@@ -397,23 +421,25 @@ class ChannelDetailPage extends HookConsumerWidget {
           if (!resolvedChannel.isForum &&
               resolvedChannel.isMember &&
               !resolvedChannel.isArchived)
-            ComposeBar(
-              channelId: channel.id,
-              channelName: resolvedChannel.isDm ? '' : resolvedChannel.name,
-              onSend:
-                  (
-                    content,
-                    mentionPubkeys, {
-                    mediaTags = const <List<String>>[],
-                  }) => ref
-                      .read(sendMessageProvider)
-                      .call(
-                        channelId: channel.id,
-                        content: content,
-                        mentionPubkeys: mentionPubkeys,
-                        channel: resolvedChannel,
-                        mediaTags: mediaTags,
-                      ),
+            AndroidImeLift(
+              child: ComposeBar(
+                channelId: channel.id,
+                channelName: resolvedChannel.isDm ? '' : resolvedChannel.name,
+                onSend:
+                    (
+                      content,
+                      mentionPubkeys, {
+                      mediaTags = const <List<String>>[],
+                    }) => ref
+                        .read(sendMessageProvider)
+                        .call(
+                          channelId: channel.id,
+                          content: content,
+                          mentionPubkeys: mentionPubkeys,
+                          channel: resolvedChannel,
+                          mediaTags: mediaTags,
+                        ),
+              ),
             )
           else if (!resolvedChannel.isDm &&
               (!resolvedChannel.isMember || resolvedChannel.isArchived))

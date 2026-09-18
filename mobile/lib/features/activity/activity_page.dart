@@ -160,6 +160,10 @@ class ActivityPage extends HookConsumerWidget {
             channel: channel,
             initialMessageId: target.id,
             initialThreadRootId: threadRootId,
+            // Activity is the Back destination; the channel route it
+            // hydrates through is temporary and must not survive.
+            initialThreadRouteBehavior:
+                InitialThreadRouteBehavior.replaceCurrentRoute,
           ),
         ),
       );
@@ -180,6 +184,10 @@ class ActivityPage extends HookConsumerWidget {
           builder: (_) => ChannelDetailPage(
             channel: channel,
             initialThreadRootId: draft.threadHeadId,
+            // Activity is the Back destination; the channel route it
+            // hydrates through is temporary and must not survive.
+            initialThreadRouteBehavior:
+                InitialThreadRouteBehavior.replaceCurrentRoute,
           ),
         ),
       );

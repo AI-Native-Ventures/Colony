@@ -334,7 +334,8 @@ void main() {
     expect(usernameText.style?.fontSize, messageMetadataTextStyle.fontSize);
     expect(usernameText.style?.fontWeight, FontWeight.w400);
     expect(usernameText.style?.height, messageMetadataTextStyle.height);
-    expect(timestampText.style?.fontSize, messageMetadataTextStyle.fontSize);
+    // Timestamps carry their own compact style, one step below the username.
+    expect(timestampText.style?.fontSize, activityTimestampTextStyle.fontSize);
     expect(timestampText.style?.fontWeight, FontWeight.w400);
 
     final avatars = tester.widgetList<AvatarImage>(find.byType(AvatarImage));

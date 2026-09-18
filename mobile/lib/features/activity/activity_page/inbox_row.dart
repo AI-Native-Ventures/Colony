@@ -107,7 +107,7 @@ class _InboxRow extends ConsumerWidget {
                           nameColor: context.colors.onSurface,
                           metadataColor: mutedColor,
                           nameStyle: activityUsernameTextStyle,
-                          metadataStyle: activityTimestampTextStyle,
+                          timestampStyle: activityTimestampTextStyle,
                           displayNameKey: ValueKey(
                             'activity-author-${item.id}',
                           ),
