@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../shared/auth/auth.dart';
 import '../../shared/clipboard_utils.dart';
+import '../../shared/community/community_membership_provider.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/app_list.dart';
@@ -17,12 +18,22 @@ import 'accent_picker_page.dart';
 import 'theme_picker_page.dart';
 
 part 'settings_page/appearance_section.dart';
+part 'settings_page/community_section.dart';
 part 'settings_page/connection_section.dart';
 
 class SettingsPage extends HookConsumerWidget {
-  const SettingsPage({super.key, required this.profileHeader});
+  /// Creates the settings page.
+  const SettingsPage({
+    super.key,
+    required this.profileHeader,
+    required this.invitePageBuilder,
+  });
 
+  /// Header widget displayed at the top of settings.
   final Widget profileHeader;
+
+  /// Builds the community-invite page pushed from the invite settings row.
+  final WidgetBuilder invitePageBuilder;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -41,6 +52,7 @@ class SettingsPage extends HookConsumerWidget {
               ),
               children: [
                 profileHeader,
+                _CommunitySection(invitePageBuilder: invitePageBuilder),
                 const _AppearanceSection(),
                 const _ConnectionSection(),
                 const _RemoveCommunitySection(),
