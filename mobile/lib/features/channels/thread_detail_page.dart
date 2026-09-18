@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -41,6 +43,13 @@ part 'thread_detail_helpers.dart';
 ///
 /// Shows the thread head message, direct replies, typing indicators scoped to
 /// the thread, and a compose bar for replying.
+/// The linked message glows briefly after navigation settles, then releases
+/// so it does not read as permanent selection.
+const _landingHighlightDuration = Duration(seconds: 3);
+const _landingHighlightDelay = Duration(milliseconds: 50);
+const _landingHighlightTransitionDuration = Duration(milliseconds: 300);
+const _landingHighlightOpacity = 0.12;
+
 class ThreadDetailPage extends HookConsumerWidget {
   final TimelineMessage threadHead;
   final List<TimelineMessage> allMessages;
@@ -106,6 +115,11 @@ class ThreadDetailPage extends HookConsumerWidget {
     final pendingTailAlignment = useRef<double?>(null);
     final initialTailSettle = useMemoized(InitialThreadTailSettle.new);
     final previousReplyCount = useRef(replies.length);
+    final highlightedMessageId = useState<String?>(null);
+    final initialTargetReadyForHighlight = useState(false);
+    final reducedLandingHighlightMotion = MediaQuery.disableAnimationsOf(
+      context,
+    );
     final viewportHeight = useListenable(listViewport.height).value;
     useEffect(() {
       final messageId = initialMessageId;
@@ -133,10 +147,49 @@ class ThreadDetailPage extends HookConsumerWidget {
           followsThreadTail.value = false;
           pendingTailAlignment.value = null;
           itemScrollController.jumpTo(index: targetIndex, alignment: 0.35);
+          initialTargetReadyForHighlight.value = true;
         },
       );
       return null;
     }, [initialMessageId, fetchedReplies, replies.length]);
+
+    // Reveal the highlight only once the route has settled on the target,
+    // hold it, then release. Showing it before the jump lands paints a glow
+    // on whatever happens to be on screen.
+    useEffect(
+      () {
+        final messageId = initialMessageId;
+        if (messageId == null || !initialTargetReadyForHighlight.value) {
+          return null;
+        }
+        var disposed = false;
+        Timer? revealTimer;
+        Timer? releaseTimer;
+        revealTimer = Timer(_landingHighlightDelay, () {
+          if (disposed) return;
+          highlightedMessageId.value = messageId;
+          releaseTimer = Timer(
+            _landingHighlightDuration +
+                (reducedLandingHighlightMotion
+                    ? Duration.zero
+                    : _landingHighlightTransitionDuration),
+            () {
+              if (!disposed) highlightedMessageId.value = null;
+            },
+          );
+        });
+        return () {
+          disposed = true;
+          revealTimer?.cancel();
+          releaseTimer?.cancel();
+        };
+      },
+      [
+        initialMessageId,
+        initialTargetReadyForHighlight.value,
+        reducedLandingHighlightMotion,
+      ],
+    );
     final readState = ref.watch(readStateProvider);
     final visibleReplyReadKey = replies
         .map((reply) => '${reply.id}:${reply.createdAt}')
@@ -351,7 +404,8 @@ class ThreadDetailPage extends HookConsumerWidget {
                                 channelId: channelId,
                                 currentPubkey: currentPubkey,
                                 showAuthor: true,
-                                isHighlighted: liveHead.id == initialMessageId,
+                                isHighlighted:
+                                    liveHead.id == highlightedMessageId.value,
                                 allMessages: allMsgs,
                                 isMember: isMember,
                                 isArchived: isArchived,
@@ -428,7 +482,8 @@ class ThreadDetailPage extends HookConsumerWidget {
                               channelId: channelId,
                               currentPubkey: currentPubkey,
                               showAuthor: showAuthor,
-                              isHighlighted: reply.id == initialMessageId,
+                              isHighlighted:
+                                  reply.id == highlightedMessageId.value,
                               allMessages: allMsgs,
                               isMember: isMember,
                               isArchived: isArchived,
@@ -689,11 +744,17 @@ class _ThreadMessage extends ConsumerWidget {
 
     return Padding(
       padding: EdgeInsets.only(top: showAuthor ? Grid.xs : 0),
-      child: DecoratedBox(
+      child: AnimatedContainer(
         key: ValueKey('thread-message-${message.id}'),
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : _landingHighlightTransitionDuration,
+        curve: Curves.easeOut,
         decoration: BoxDecoration(
           color: isHighlighted
-              ? context.colors.primary.withValues(alpha: 0.12)
+              ? context.colors.primary.withValues(
+                  alpha: _landingHighlightOpacity,
+                )
               : Colors.transparent,
           borderRadius: BorderRadius.circular(Radii.md),
         ),

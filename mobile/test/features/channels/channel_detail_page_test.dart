@@ -192,6 +192,8 @@ Widget _buildTestable({
   String? canvasContent,
   String? initialMessageId,
   String? initialThreadRootId,
+  InitialThreadRouteBehavior initialThreadRouteBehavior =
+      InitialThreadRouteBehavior.push,
   Map<String, List<NostrEvent>> threadReplies = const {},
   TextScaler textScaler = TextScaler.noScaling,
   RelaySessionNotifier? relaySessionNotifier,
@@ -258,6 +260,7 @@ Widget _buildTestable({
         channel: resolvedChannel,
         initialMessageId: initialMessageId,
         initialThreadRootId: initialThreadRootId,
+        initialThreadRouteBehavior: initialThreadRouteBehavior,
       ),
     ),
   );
@@ -2166,11 +2169,96 @@ void main() {
       expect(threadPage.threadHead.id, 'parent');
       expect(threadPage.initialMessageId, 'target');
 
-      final highlighted = tester.widget<DecoratedBox>(
-        find.byKey(const ValueKey('thread-message-target')),
+      BoxDecoration targetDecoration() =>
+          tester
+                  .widget<AnimatedContainer>(
+                    find.byKey(const ValueKey('thread-message-target')),
+                  )
+                  .decoration
+              as BoxDecoration;
+
+      // The glow reveals once the jump has landed. pumpAndSettle already
+      // advances past the reveal delay, so its absence beforehand is not a
+      // frame this harness can express.
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(targetDecoration().color, isNot(Colors.transparent));
+
+      // It releases rather than reading as permanent selection. Pumping past
+      // the hold also drains the timers before teardown.
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pumpAndSettle();
+      expect(targetDecoration().color, Colors.transparent);
+    });
+  });
+
+  group('Initial thread route behavior', () {
+    List<NostrEvent> threadFixture() {
+      final head = _textMsg(
+        id: 'head',
+        pubkey: 'alice',
+        content: 'Thread head',
+        createdAt: 1000,
       );
-      final decoration = highlighted.decoration as BoxDecoration;
-      expect(decoration.color, isNot(Colors.transparent));
+      final reply = _textMsg(
+        id: 'reply1',
+        pubkey: 'bob',
+        content: 'A reply',
+        createdAt: 1100,
+        extraTags: const [
+          ['e', 'head', '', 'root'],
+          ['e', 'head', '', 'reply'],
+        ],
+      );
+      return [head, reply];
+    }
+
+    testWidgets('default push keeps the channel route beneath the thread', (
+      tester,
+    ) async {
+      final observer = _TestNavigatorObserver();
+      final messages = threadFixture();
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: messages,
+          initialThreadRootId: 'head',
+          threadReplies: {'head': messages},
+          navigatorObservers: [observer],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ThreadDetailPage), findsOneWidget);
+      // Pushed, not replaced: the channel route stays under the thread so
+      // Back returns to it. Asserted on the observer because routes below
+      // the top are offstage and cannot be found by type.
+      expect(observer.replaceCount, 0);
+      expect(observer.pushCount, greaterThan(0));
+    });
+
+    testWidgets('replaceCurrentRoute drops the temporary channel route', (
+      tester,
+    ) async {
+      final observer = _TestNavigatorObserver();
+      final messages = threadFixture();
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: messages,
+          initialThreadRootId: 'head',
+          initialThreadRouteBehavior:
+              InitialThreadRouteBehavior.replaceCurrentRoute,
+          threadReplies: {'head': messages},
+          navigatorObservers: [observer],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ThreadDetailPage), findsOneWidget);
+      // Activity hydrates through the channel only to reach the thread; that
+      // route must not survive, or Back lands on a channel the user never
+      // asked for.
+      expect(observer.replaceCount, 1);
     });
   });
 
@@ -2610,10 +2698,17 @@ class _FakeChannelActions extends ChannelActions {
 
 class _TestNavigatorObserver extends NavigatorObserver {
   int pushCount = 0;
+  int replaceCount = 0;
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     pushCount += 1;
     super.didPush(route, previousRoute);
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    replaceCount += 1;
+    super.didReplace(newRoute: newRoute, oldRoute: oldRoute);
   }
 }
