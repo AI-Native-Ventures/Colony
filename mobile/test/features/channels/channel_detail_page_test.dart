@@ -29,6 +29,7 @@ import 'package:buzz/features/profile/user_status_cache_provider.dart';
 import 'package:buzz/features/profile/user_profile.dart';
 import 'package:buzz/shared/relay/relay.dart';
 import 'package:buzz/shared/theme/theme.dart';
+import 'package:buzz/shared/widgets/frosted_app_bar.dart';
 import 'package:buzz/shared/widgets/skeleton.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1068,6 +1069,75 @@ void main() {
     });
 
     testWidgets(
+      'pins the current day below the app bar after its divider scrolls away',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 600);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final firstDay =
+            DateTime(2025, 1, 1, 12).toUtc().millisecondsSinceEpoch ~/ 1000;
+        final messages = [
+          for (var day = 0; day < 3; day += 1)
+            for (var index = 0; index < 10; index += 1)
+              _textMsg(
+                id: 'day-$day-message-$index',
+                pubkey: 'alice',
+                content: 'Day $day message $index',
+                createdAt: firstDay + day * 86400 + index,
+              ),
+        ];
+
+        await tester.pumpWidget(
+          _buildTestable(
+            messages: messages,
+            users: const {
+              'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final messageList = find.byKey(const ValueKey('channel-message-list'));
+        final list = tester.widget<ScrollablePositionedList>(messageList);
+        list.itemScrollController!.jumpTo(index: 14, alignment: 0.8);
+        await tester.pumpAndSettle();
+
+        final stickyHeader = find.byKey(
+          const ValueKey('channel-sticky-date-header'),
+        );
+        final stickySurface = find.byKey(
+          const ValueKey('channel-sticky-date-header-surface'),
+        );
+        expect(stickyHeader, findsOneWidget);
+        expect(stickySurface, findsOneWidget);
+        // Day 1 owns the rows under the app bar, so day 1 is what it names.
+        expect(
+          find.descendant(
+            of: stickyHeader,
+            matching: find.text(formatDayHeading(firstDay + 86400)),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          tester.getTopLeft(stickySurface).dy,
+          closeTo(
+            frostedAppBarHeight(tester.element(stickyHeader)) + Grid.twelve,
+            1,
+          ),
+        );
+        expect(
+          find.descendant(
+            of: stickyHeader,
+            matching: find.byType(BackdropFilter),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
       'keeps follow mode off while a tall newest message stays visible',
       (tester) async {
         tester.view.physicalSize = const Size(400, 600);
@@ -1113,9 +1183,11 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(findRichText('Newest message line 0'), findsOneWidget);
+        // The newest row is still on screen and barely a drag away, so the
+        // control has nothing to offer yet.
         expect(
           find.byKey(const ValueKey('channel-jump-to-latest')),
-          findsOneWidget,
+          findsNothing,
         );
 
         messagesNotifier.setMessages([

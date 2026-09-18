@@ -30,9 +30,17 @@ class _MessageList extends HookConsumerWidget {
     final displayEntries = groupMembershipTimelineEntries(entries);
     final itemScrollController = useMemoized(ItemScrollController.new);
     final itemPositionsListener = useMemoized(ItemPositionsListener.create);
+    final stickyDateHeaderState = useValueNotifier(
+      StickyDateHeaderState.hidden,
+    );
+    final stickyDayTimestamp = useValueNotifier<int?>(null);
+    final timelineViewportHeight = useRef(MediaQuery.sizeOf(context).height);
     final isLoadingOlder = useState(false);
     final isAtLatest = useState(true);
+    final isJumpToLatestVisible = useState(false);
     final hasUserScrolled = useState(false);
+    final distanceFromLatest = useRef(0.0);
+    final hasUnseenLatestEntry = useRef(false);
     final followsLatest = useRef(
       initialMessageId == null && initialThreadRootId == null,
     );
@@ -42,6 +50,43 @@ class _MessageList extends HookConsumerWidget {
     final previousLatestEntryId = useRef<String?>(null);
     final didOpenInitialThread = useRef(false);
     final didJumpToInitialMessage = useRef(false);
+
+    // The sticky header answers "which day is under the app bar", so it needs
+    // the day of every row, the row that opened that day, and which rows are
+    // themselves a day header. The list is reversed, so index these by the
+    // reversed index the position reports use.
+    final dayTimestampByReversedIndex = <int, int>{};
+    final dayStartByReversedIndex = <int, int>{};
+    final dayHeaderTimestampByReversedIndex = <int, int>{};
+    var currentDayTimestamp =
+        displayEntries.firstOrNull?.first.message.createdAt;
+    var currentDayStartIndex = displayEntries.isEmpty
+        ? -1
+        : displayEntries.length - 1;
+    for (
+      var chronologicalIndex = 0;
+      chronologicalIndex < displayEntries.length;
+      chronologicalIndex += 1
+    ) {
+      final message = displayEntries[chronologicalIndex].first.message;
+      final previousMessage = chronologicalIndex > 0
+          ? displayEntries[chronologicalIndex - 1].last.message
+          : null;
+      final startsDay =
+          previousMessage == null ||
+          !isSameDay(previousMessage.createdAt, message.createdAt);
+      final reversedIndex = displayEntries.length - 1 - chronologicalIndex;
+      if (startsDay) {
+        currentDayTimestamp = message.createdAt;
+        currentDayStartIndex = reversedIndex;
+        dayHeaderTimestampByReversedIndex[reversedIndex] = message.createdAt;
+      }
+      final dayTimestamp = currentDayTimestamp;
+      if (dayTimestamp != null) {
+        dayTimestampByReversedIndex[reversedIndex] = dayTimestamp;
+        dayStartByReversedIndex[reversedIndex] = currentDayStartIndex;
+      }
+    }
 
     int? reversedIndexOf(String? messageId) {
       if (messageId == null) return null;
@@ -57,6 +102,8 @@ class _MessageList extends HookConsumerWidget {
       if (!itemScrollController.isAttached || isAutoScrolling.value) return;
       followsLatest.value = true;
       hasUserScrolled.value = false;
+      hasUnseenLatestEntry.value = false;
+      isJumpToLatestVisible.value = false;
       isAutoScrolling.value = true;
       try {
         await itemScrollController.scrollTo(
@@ -91,41 +138,219 @@ class _MessageList extends HookConsumerWidget {
       );
     }
 
-    useEffect(() {
-      void onPositionsChanged() {
-        final positions = itemPositionsListener.itemPositions.value;
-        if (positions.isEmpty) return;
-        final nextIsAtLatest = latestIsAtBoundary();
-        if (nextIsAtLatest) {
-          if (!isAtLatest.value) isAtLatest.value = true;
-        } else if (followsLatest.value && !hasUserScrolled.value) {
-          // The viewport can shrink when the composer or keyboard opens.
-          // Preserve auto-follow until the user scrolls the timeline.
-          if (!isAtLatest.value) isAtLatest.value = true;
-          scheduleAutoScrollToLatest();
-        } else if (isAtLatest.value) {
-          isAtLatest.value = false;
-        }
-
-        final oldestVisible = positions
-            .map((position) => position.index)
-            .reduce((a, b) => a > b ? a : b);
-        if (!hasUserScrolled.value ||
-            oldestVisible < displayEntries.length - 3 ||
-            isLoadingOlder.value) {
-          return;
-        }
-        final notifier = ref.read(channelMessagesProvider(channelId).notifier);
-        if (notifier.reachedOldest) return;
-        isLoadingOlder.value = true;
-        notifier.fetchOlder().whenComplete(() => isLoadingOlder.value = false);
+    void updateStickyDateHeader(Iterable<ItemPosition> rawPositions) {
+      void setStickyDateHeader(
+        StickyDateHeaderState state, {
+        int? activeDayTimestamp,
+      }) {
+        stickyDateHeaderState.value = state;
+        stickyDayTimestamp.value = activeDayTimestamp;
       }
 
-      itemPositionsListener.itemPositions.addListener(onPositionsChanged);
-      return () => itemPositionsListener.itemPositions.removeListener(
-        onPositionsChanged,
+      final viewportHeight = timelineViewportHeight.value;
+      if (viewportHeight <= 0 || displayEntries.isEmpty) {
+        setStickyDateHeader(StickyDateHeaderState.hidden);
+        return;
+      }
+
+      final positions = rawPositions
+          .where(
+            (position) =>
+                position.index < displayEntries.length &&
+                position.itemLeadingEdge < 1 &&
+                position.itemTrailingEdge > 0,
+          )
+          .toList();
+      if (positions.isEmpty) {
+        if (!isLoadingOlder.value) {
+          setStickyDateHeader(StickyDateHeaderState.hidden);
+        }
+        return;
+      }
+
+      final stickyTop =
+          frostedAppBarHeight(
+            context,
+            titleContentHeight: appBarTitleContentHeight,
+          ) +
+          Grid.twelve;
+      double physicalTop(ItemPosition position) =>
+          viewportHeight * (1 - position.itemTrailingEdge);
+      double physicalBottom(ItemPosition position) =>
+          viewportHeight * (1 - position.itemLeadingEdge);
+
+      final positionAtStickyTop = positions
+          .where(
+            (position) =>
+                physicalTop(position) <= stickyTop &&
+                physicalBottom(position) > stickyTop,
+          )
+          .firstOrNull;
+      if (positionAtStickyTop == null) {
+        if (!isLoadingOlder.value) {
+          setStickyDateHeader(StickyDateHeaderState.hidden);
+        }
+        return;
+      }
+
+      final activeDayTimestamp =
+          dayTimestampByReversedIndex[positionAtStickyTop.index];
+      final activeDayStartIndex =
+          dayStartByReversedIndex[positionAtStickyTop.index];
+      if (activeDayTimestamp == null || activeDayStartIndex == null) {
+        setStickyDateHeader(StickyDateHeaderState.hidden);
+        return;
+      }
+
+      // Only stand in for a header the timeline has actually scrolled past.
+      final activeHeaderPosition = positions
+          .where((position) => position.index == activeDayStartIndex)
+          .firstOrNull;
+      final oldestVisibleIndex = positions
+          .map((position) => position.index)
+          .reduce((a, b) => a > b ? a : b);
+      final activeHeaderHasCrossed = activeHeaderPosition != null
+          ? physicalTop(activeHeaderPosition) <= stickyTop
+          : activeDayStartIndex > oldestVisibleIndex;
+      if (!activeHeaderHasCrossed) {
+        setStickyDateHeader(StickyDateHeaderState.hidden);
+        return;
+      }
+
+      // The next day header coming up pushes the sticky one off the top rather
+      // than crossfading two dates in the same place.
+      double? nextHeaderTop;
+      for (final position in positions) {
+        if (!dayHeaderTimestampByReversedIndex.containsKey(position.index) ||
+            position.index >= activeDayStartIndex) {
+          continue;
+        }
+        final top = physicalTop(position);
+        if (top <= stickyTop ||
+            (nextHeaderTop != null && top >= nextHeaderTop)) {
+          continue;
+        }
+        nextHeaderTop = top;
+      }
+
+      final stickyHeaderHeight = StickyDateHeader.heightOf(context);
+      final rawTranslateY = nextHeaderTop == null
+          ? 0.0
+          : min(0.0, nextHeaderTop - stickyTop - stickyHeaderHeight - 5);
+      final translateY = rawTranslateY
+          .clamp(-(stickyHeaderHeight + 5), 0.0)
+          .toDouble();
+      setStickyDateHeader(
+        StickyDateHeaderState(
+          label: formatDayHeading(activeDayTimestamp),
+          // Half-pixel quantisation: position reports arrive far more often
+          // than the header can meaningfully move.
+          translateY: (translateY * 2).round() / 2,
+        ),
+        activeDayTimestamp: activeDayTimestamp,
       );
-    }, [channelId, entries.length, itemPositionsListener]);
+    }
+
+    void updateJumpToLatestVisibility(
+      Iterable<ItemPosition> positions, {
+      double? viewportDimension,
+    }) {
+      final latestIsVisible = positions.any(
+        (position) =>
+            position.index == 0 &&
+            position.itemLeadingEdge < 1 &&
+            position.itemTrailingEdge > 0,
+      );
+      final viewportHeight = viewportDimension ?? timelineViewportHeight.value;
+      final visiblePageHeight = max(
+        0.0,
+        viewportHeight -
+            frostedAppBarHeight(
+              context,
+              titleContentHeight: appBarTitleContentHeight,
+            ),
+      );
+      // Showing it for any scroll at all would make it permanent furniture.
+      // It earns its place when the newest message is off screen, more than a
+      // page away, or has arrived unseen.
+      final shouldShow =
+          !latestIsAtBoundary() &&
+          (hasUnseenLatestEntry.value ||
+              !latestIsVisible ||
+              distanceFromLatest.value > visiblePageHeight);
+      if (isJumpToLatestVisible.value != shouldShow) {
+        isJumpToLatestVisible.value = shouldShow;
+      }
+    }
+
+    useEffect(
+      () {
+        void onPositionsChanged() {
+          final positions = itemPositionsListener.itemPositions.value;
+          if (positions.isEmpty) return;
+          updateStickyDateHeader(positions);
+          updateJumpToLatestVisibility(positions);
+          final nextIsAtLatest = latestIsAtBoundary();
+          if (nextIsAtLatest) {
+            hasUnseenLatestEntry.value = false;
+            if (isJumpToLatestVisible.value) {
+              isJumpToLatestVisible.value = false;
+            }
+            if (!isAtLatest.value) isAtLatest.value = true;
+          } else if (followsLatest.value && !hasUserScrolled.value) {
+            // The viewport can shrink when the composer or keyboard opens.
+            // Preserve auto-follow until the user scrolls the timeline.
+            if (!isAtLatest.value) isAtLatest.value = true;
+            scheduleAutoScrollToLatest();
+          } else if (isAtLatest.value) {
+            isAtLatest.value = false;
+          }
+
+          final oldestVisible = positions
+              .map((position) => position.index)
+              .reduce((a, b) => a > b ? a : b);
+          if (!hasUserScrolled.value ||
+              oldestVisible < displayEntries.length - 3 ||
+              isLoadingOlder.value) {
+            return;
+          }
+          final notifier = ref.read(
+            channelMessagesProvider(channelId).notifier,
+          );
+          if (notifier.reachedOldest) return;
+          isLoadingOlder.value = true;
+          notifier.fetchOlder().whenComplete(
+            () => isLoadingOlder.value = false,
+          );
+        }
+
+        var disposed = false;
+        itemPositionsListener.itemPositions.addListener(onPositionsChanged);
+        // Positions do not change on a first layout that already sits at the
+        // tail, so evaluate once rather than waiting for a scroll.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!disposed && context.mounted) onPositionsChanged();
+        });
+        return () {
+          disposed = true;
+          itemPositionsListener.itemPositions.removeListener(
+            onPositionsChanged,
+          );
+        };
+      },
+      [
+        channelId,
+        entries.length,
+        itemPositionsListener,
+        appBarTitleContentHeight,
+      ],
+    );
+
+    useEffect(() {
+      stickyDateHeaderState.value = StickyDateHeaderState.hidden;
+      stickyDayTimestamp.value = null;
+      return null;
+    }, [channelId]);
 
     useEffect(() {
       if (initialThreadRootId == null || didOpenInitialThread.value) {
@@ -187,12 +412,25 @@ class _MessageList extends HookConsumerWidget {
       previousLatestEntryId.value = latestEntryId;
       if (previous == null ||
           latestEntryId == null ||
-          previous == latestEntryId ||
-          !isAtLatest.value) {
+          previous == latestEntryId) {
         return null;
       }
+      if (!isAtLatest.value) {
+        // A message the user has not been carried down to is what makes the
+        // control worth showing even a short scroll from the tail.
+        hasUnseenLatestEntry.value = true;
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (context.mounted) scrollToLatest();
+        if (!context.mounted) return;
+        if (isAtLatest.value) {
+          scrollToLatest();
+          return;
+        }
+        final positions = itemPositionsListener.itemPositions.value;
+        if (positions.isNotEmpty) {
+          if (latestIsAtBoundary()) hasUnseenLatestEntry.value = false;
+          updateJumpToLatestVisibility(positions);
+        }
       });
       return null;
     }, [latestEntryId]);
@@ -237,8 +475,34 @@ class _MessageList extends HookConsumerWidget {
 
     return Stack(
       children: [
-        NotificationListener<ScrollNotification>(
+        NotificationListener<Notification>(
           onNotification: (notification) {
+            // Inner scrollables (a code block, a horizontal attachment strip)
+            // must not be mistaken for the timeline's own metrics.
+            if (notification is ScrollMetricsNotification &&
+                notification.depth != 0) {
+              return false;
+            }
+            if (notification is ScrollNotification && notification.depth != 0) {
+              return false;
+            }
+            if (notification is ScrollMetricsNotification) {
+              timelineViewportHeight.value =
+                  notification.metrics.viewportDimension;
+              return false;
+            }
+            if (notification is! ScrollNotification) return false;
+            timelineViewportHeight.value =
+                notification.metrics.viewportDimension;
+            distanceFromLatest.value = max(
+              0.0,
+              notification.metrics.pixels -
+                  notification.metrics.minScrollExtent,
+            );
+            updateJumpToLatestVisibility(
+              itemPositionsListener.itemPositions.value,
+              viewportDimension: notification.metrics.viewportDimension,
+            );
             if (notification is UserScrollNotification &&
                 notification.direction != ScrollDirection.idle) {
               hasUserScrolled.value = true;
@@ -315,7 +579,11 @@ class _MessageList extends HookConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (showDayDivider)
-                      DayDivider(label: formatDayHeading(message.createdAt)),
+                      DayDivider(
+                        label: formatDayHeading(message.createdAt),
+                        dayTimestamp: message.createdAt,
+                        stickyDayTimestamp: stickyDayTimestamp,
+                      ),
                     if (message.isSystem)
                       _SystemMessageRow(
                         message: message,
@@ -356,19 +624,72 @@ class _MessageList extends HookConsumerWidget {
             },
           ),
         ),
-        if (!isAtLatest.value)
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: Grid.xs,
-            child: Center(
-              child: LatestMessageButton(
-                key: const ValueKey('channel-jump-to-latest'),
-                onPressed: scrollToLatest,
+        Positioned(
+          left: 0,
+          right: 0,
+          top:
+              frostedAppBarHeight(
+                context,
+                titleContentHeight: appBarTitleContentHeight,
+              ) +
+              Grid.twelve,
+          child: StickyDateHeader(
+            key: const ValueKey('channel-sticky-date-header'),
+            state: stickyDateHeaderState,
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: Grid.xs,
+          child: Center(
+            child: AnimatedSwitcher(
+              key: const ValueKey('channel-jump-to-latest-switcher'),
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 180),
+              reverseDuration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 160),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(
+                  scale: _JumpToLatestScaleAnimation(animation),
+                  alignment: Alignment.bottomCenter,
+                  child: child,
+                ),
               ),
+              child: !isJumpToLatestVisible.value
+                  ? const SizedBox.shrink(
+                      key: ValueKey('channel-jump-to-latest-hidden'),
+                    )
+                  : JumpToLatestButton(
+                      key: const ValueKey('channel-jump-to-latest'),
+                      onPressed: scrollToLatest,
+                    ),
             ),
           ),
+        ),
       ],
     );
   }
+}
+
+/// Scales the jump-to-latest control from its bottom-center anchor.
+///
+/// Entering starts at 92% so the control grows out of the anchor; leaving
+/// tracks the fade directly so it shrinks away rather than snapping.
+class _JumpToLatestScaleAnimation extends Animation<double>
+    with AnimationWithParentMixin<double> {
+  @override
+  final Animation<double> parent;
+
+  _JumpToLatestScaleAnimation(this.parent);
+
+  @override
+  double get value => parent.status == AnimationStatus.reverse
+      ? parent.value
+      : 0.92 + (0.08 * parent.value);
 }
