@@ -36,7 +36,7 @@ pub(crate) use npm_prefix::user_npm_global_bin_dirs;
 // `persona_events` (upstream snapshot-apply path) classifies pins through
 // these two; `parallelism` keys caps on the normalizer below.
 pub(crate) use presets::{
-    canonical_harness_command, command_for_runtime_id, preset_harness_ids, preset_provider_env_var,
+    canonical_harness_command, command_for_runtime_id, preset_provider_env_var,
 };
 
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
