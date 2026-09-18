@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:hooks_riverpod/misc.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:buzz/features/channels/channel.dart';
@@ -23,6 +24,8 @@ import 'package:buzz/features/channels/read_state/read_state_provider.dart';
 import 'package:buzz/features/channels/small_avatar.dart';
 import 'package:buzz/features/profile/profile_provider.dart';
 import 'package:buzz/features/profile/user_cache_provider.dart';
+import 'package:buzz/features/profile/user_status.dart';
+import 'package:buzz/features/profile/user_status_cache_provider.dart';
 import 'package:buzz/features/profile/user_profile.dart';
 import 'package:buzz/shared/relay/relay.dart';
 import 'package:buzz/shared/theme/theme.dart';
@@ -46,6 +49,43 @@ final _testChannel = Channel(
   memberCount: 5,
   isMember: true,
 );
+
+Channel _dmChannel(List<String> participantPubkeys) => Channel(
+  id: _channelId,
+  name: 'DM',
+  channelType: 'dm',
+  visibility: 'private',
+  description: '',
+  createdBy: 'abc123',
+  createdAt: DateTime(2025),
+  memberCount: participantPubkeys.length,
+  participantPubkeys: participantPubkeys,
+  isMember: true,
+);
+
+/// Seeded so the DM header never calls `userCacheProvider.preload`, which
+/// starts a 50ms batch timer that no widget test tears down.
+const _dmProfiles = {
+  'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+  'bob': UserProfile(pubkey: 'bob', displayName: 'Bob'),
+};
+
+/// A DM header reaches the real status cache, which starts a 120s
+/// `Timer.periodic` that no widget test tears down. Applied per test rather
+/// than to the harness default so no existing test changes behaviour.
+final _noTimerStatusCache = [
+  userStatusCacheProvider.overrideWith(_FakeUserStatusCacheNotifier.new),
+];
+
+class _FakeUserStatusCacheNotifier extends UserStatusCacheNotifier {
+  @override
+  Map<String, UserStatus?> build() => const {};
+
+  /// The real `track` starts both the 50ms batch timer and the 120s refresh
+  /// timer; neither is torn down by a widget test.
+  @override
+  void track(List<String> pubkeys) {}
+}
 
 NostrEvent _textMsg({
   required String id,
@@ -155,6 +195,10 @@ Widget _buildTestable({
   Map<String, List<NostrEvent>> threadReplies = const {},
   TextScaler textScaler = TextScaler.noScaling,
   RelaySessionNotifier? relaySessionNotifier,
+
+  /// Extra provider overrides, appended last so a test can replace anything
+  /// this harness sets by default.
+  List<Override> overrides = const [],
 }) {
   final resolvedChannel = channel ?? _testChannel;
   final fakeChannelsNotifier =
@@ -201,6 +245,7 @@ Widget _buildTestable({
         relaySessionProvider.overrideWith(() => relaySessionNotifier),
       // Compose bar drafts persist through SharedPreferences.
       savedPrefsProvider.overrideWithValue(_testPrefs),
+      ...overrides,
     ],
     child: MaterialApp(
       theme: AppTheme.light(),
@@ -553,6 +598,44 @@ void main() {
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Member'), findsOneWidget);
       expect(find.text('Owner'), findsOneWidget);
+    });
+
+    testWidgets('hides the members action in a two-person DM', (tester) async {
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          channel: _dmChannel(const ['self', 'alice']),
+          users: _dmProfiles,
+          overrides: _noTimerStatusCache,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Two people cannot manage membership, so the action is noise there.
+      expect(find.byTooltip('View members'), findsNothing);
+    });
+
+    testWidgets('keeps the members action in a group DM', (tester) async {
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          channel: _dmChannel(const ['self', 'alice', 'bob']),
+          users: _dmProfiles,
+          overrides: _noTimerStatusCache,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('View members'), findsOneWidget);
+    });
+
+    testWidgets('keeps the members action in an ordinary channel', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_buildTestable(messages: const []));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('View members'), findsOneWidget);
     });
 
     testWidgets('hides composer for archived channels', (tester) async {
