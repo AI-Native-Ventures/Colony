@@ -289,6 +289,222 @@ void main() {
       expect(otherChannelState.transcript, isEmpty);
     },
   );
+
+  group('batched observer telemetry', () {
+    /// Builds an encrypted kind:24200 frame the way the ACP harness does.
+    NostrEvent observerEvent({
+      required nostr.Keys ownerKeychain,
+      required nostr.Keys agentKeychain,
+      required Map<String, dynamic> frame,
+    }) {
+      final encrypted = nip44Encrypt(
+        getConversationKey(agentKeychain.secret, ownerKeychain.public),
+        jsonEncode(frame),
+      );
+      final event = nostr.Event.from(
+        kind: EventKind.agentObserverFrame,
+        content: encrypted,
+        tags: [
+          ['p', ownerKeychain.public],
+          ['agent', agentKeychain.public],
+          ['frame', 'telemetry'],
+        ],
+        secretKey: agentKeychain.secret,
+        verify: false,
+      );
+      return NostrEvent.fromJson(event.toMap());
+    }
+
+    Map<String, dynamic> lifecycleFrame(int seq, String channelId) => {
+      'seq': seq,
+      'timestamp': '2026-04-30T12:00:0$seq.000Z',
+      'kind': 'turn_started',
+      'channelId': channelId,
+      'turnId': 'turn-$seq',
+      'payload': {
+        'triggeringEventIds': ['0123456789abcdef'],
+      },
+    };
+
+    test('expands a batch envelope into its inner frames', () async {
+      final ownerKeychain = nostr.Keys.generate();
+      final agentKeychain = nostr.Keys.generate();
+      final relaySession = _RecordingRelaySession();
+      final container = ProviderContainer(
+        overrides: [
+          relaySessionProvider.overrideWith(() => relaySession),
+          relayConfigProvider.overrideWith(
+            () => _FakeRelayConfigNotifier(nsec: ownerKeychain.nsec),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      const channelId = 'test-channel';
+      final key = (channelId: channelId, agentPubkey: agentKeychain.public);
+      container.read(observerSubscriptionProvider(key));
+      await Future<void>.delayed(Duration.zero);
+
+      // The harness packs several events into one relay event and stamps the
+      // envelope with the LAST inner event's seq, so an unexpanded batch would
+      // show up as a single opaque entry.
+      relaySession.emit(
+        observerEvent(
+          ownerKeychain: ownerKeychain,
+          agentKeychain: agentKeychain,
+          frame: {
+            ...lifecycleFrame(2, channelId),
+            'kind': 'batch',
+            'payload': {
+              'events': [
+                lifecycleFrame(1, channelId),
+                lifecycleFrame(2, channelId),
+              ],
+            },
+          },
+        ),
+      );
+
+      final state = container.read(observerSubscriptionProvider(key));
+      expect(state.connection, ObserverConnectionState.open);
+      expect(
+        container
+            .read(observerRelayProvider)
+            .framesByAgent[agentKeychain.public]
+            ?.map((f) => f.seq),
+        [1, 2],
+      );
+      expect(state.transcript, hasLength(2));
+    });
+
+    test('keeps a malformed batch envelope as a single frame', () async {
+      final ownerKeychain = nostr.Keys.generate();
+      final agentKeychain = nostr.Keys.generate();
+      final relaySession = _RecordingRelaySession();
+      final container = ProviderContainer(
+        overrides: [
+          relaySessionProvider.overrideWith(() => relaySession),
+          relayConfigProvider.overrideWith(
+            () => _FakeRelayConfigNotifier(nsec: ownerKeychain.nsec),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      const channelId = 'test-channel';
+      final key = (channelId: channelId, agentPubkey: agentKeychain.public);
+      container.read(observerSubscriptionProvider(key));
+      await Future<void>.delayed(Duration.zero);
+
+      // A publisher defect must stay visible rather than vanish.
+      relaySession.emit(
+        observerEvent(
+          ownerKeychain: ownerKeychain,
+          agentKeychain: agentKeychain,
+          frame: {
+            ...lifecycleFrame(1, channelId),
+            'kind': 'batch',
+            'payload': {'events': <dynamic>[]},
+          },
+        ),
+      );
+
+      final state = container.read(observerSubscriptionProvider(key));
+      expect(state.errorMessage, isNull);
+      final relayFrames = container
+          .read(observerRelayProvider)
+          .framesByAgent[agentKeychain.public];
+      expect(relayFrames, hasLength(1));
+      expect(relayFrames!.single.kind, 'batch');
+    });
+
+    test('leaves an unbatched frame untouched', () async {
+      final ownerKeychain = nostr.Keys.generate();
+      final agentKeychain = nostr.Keys.generate();
+      final relaySession = _RecordingRelaySession();
+      final container = ProviderContainer(
+        overrides: [
+          relaySessionProvider.overrideWith(() => relaySession),
+          relayConfigProvider.overrideWith(
+            () => _FakeRelayConfigNotifier(nsec: ownerKeychain.nsec),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      const channelId = 'test-channel';
+      final key = (channelId: channelId, agentPubkey: agentKeychain.public);
+      container.read(observerSubscriptionProvider(key));
+      await Future<void>.delayed(Duration.zero);
+
+      // The harness publishes a lone pending event unwrapped.
+      relaySession.emit(
+        observerEvent(
+          ownerKeychain: ownerKeychain,
+          agentKeychain: agentKeychain,
+          frame: lifecycleFrame(7, channelId),
+        ),
+      );
+
+      final state = container.read(observerSubscriptionProvider(key));
+      expect(
+        container
+            .read(observerRelayProvider)
+            .framesByAgent[agentKeychain.public]
+            ?.map((f) => f.seq),
+        [7],
+      );
+      expect(state.transcript, hasLength(1));
+    });
+
+    test('dedupes inner frames repeated across batches', () async {
+      final ownerKeychain = nostr.Keys.generate();
+      final agentKeychain = nostr.Keys.generate();
+      final relaySession = _RecordingRelaySession();
+      final container = ProviderContainer(
+        overrides: [
+          relaySessionProvider.overrideWith(() => relaySession),
+          relayConfigProvider.overrideWith(
+            () => _FakeRelayConfigNotifier(nsec: ownerKeychain.nsec),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      const channelId = 'test-channel';
+      final key = (channelId: channelId, agentPubkey: agentKeychain.public);
+      container.read(observerSubscriptionProvider(key));
+      await Future<void>.delayed(Duration.zero);
+
+      for (var repeat = 0; repeat < 2; repeat++) {
+        relaySession.emit(
+          observerEvent(
+            ownerKeychain: ownerKeychain,
+            agentKeychain: agentKeychain,
+            frame: {
+              ...lifecycleFrame(2, channelId),
+              'kind': 'batch',
+              'payload': {
+                'events': [
+                  lifecycleFrame(1, channelId),
+                  lifecycleFrame(2, channelId),
+                ],
+              },
+            },
+          ),
+        );
+      }
+
+      // Dedupe is per inner frame, so a redelivered batch adds nothing.
+      expect(
+        container
+            .read(observerRelayProvider)
+            .framesByAgent[agentKeychain.public]
+            ?.map((f) => f.seq),
+        [1, 2],
+      );
+    });
+  });
 }
 
 class _RecordingRelaySession extends RelaySessionNotifier {

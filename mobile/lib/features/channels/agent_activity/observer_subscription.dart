@@ -12,6 +12,12 @@ import 'transcript_builder.dart';
 /// Maximum observer events to keep per agent.
 const _maxObserverEvents = 800;
 
+/// Frame kind the ACP harness uses to pack several observer events into one
+/// relay event (`crates/buzz-acp/src/lib.rs`). Its payload is
+/// `{"events": [...]}`, and a single pending event is published unwrapped, so
+/// this envelope only appears when there was something to batch.
+const _observerBatchKind = 'batch';
+
 /// Key for channel-scoped transcript reads.
 typedef ObserverKey = ({String channelId, String agentPubkey});
 
@@ -189,16 +195,31 @@ class ObserverRelayNotifier extends Notifier<ObserverRelayState> {
       return;
     }
 
-    final frame = _decryptFrame(event, normalizedAgent, privHex);
-    if (frame == null) return;
+    final frames = _decryptFrames(event, normalizedAgent, privHex);
+    if (frames == null) return;
 
+    var storageChanged = false;
+    for (final frame in frames) {
+      if (_storeFrame(normalizedAgent, frame)) {
+        storageChanged = true;
+      }
+    }
+
+    if (storageChanged) {
+      _errorMessage = null;
+      _emit(connection: ObserverConnectionState.open);
+    }
+  }
+
+  /// Stores one frame, returning whether it was new.
+  bool _storeFrame(String normalizedAgent, ObserverFrame frame) {
     final dedupeKey = '${frame.seq}:${frame.timestamp}';
     final dedupeKeys = _dedupeKeysByAgent.putIfAbsent(
       normalizedAgent,
       () => <String>{},
     );
     if (!dedupeKeys.add(dedupeKey)) {
-      return;
+      return false;
     }
 
     final frames = _framesByAgent.putIfAbsent(
@@ -216,11 +237,10 @@ class ObserverRelayNotifier extends Notifier<ObserverRelayState> {
       frames.removeRange(0, removeCount);
     }
 
-    _errorMessage = null;
-    _emit(connection: ObserverConnectionState.open);
+    return true;
   }
 
-  ObserverFrame? _decryptFrame(
+  List<ObserverFrame>? _decryptFrames(
     NostrEvent event,
     String normalizedAgent,
     String privHex,
@@ -232,7 +252,23 @@ class ObserverRelayNotifier extends Notifier<ObserverRelayState> {
       );
       final plaintext = nip44Decrypt(conversationKey, event.content);
       final json = jsonDecode(plaintext) as Map<String, dynamic>;
-      return ObserverFrame.fromJson(json);
+      final frame = ObserverFrame.fromJson(json);
+      if (frame.kind != _observerBatchKind) {
+        return [frame];
+      }
+
+      final payload = frame.payload;
+      final events = payload is Map<String, dynamic> ? payload['events'] : null;
+      // Keep a malformed envelope as itself rather than dropping it, so a
+      // publisher defect shows up in the transcript instead of vanishing.
+      if (events is! List || events.isEmpty) {
+        return [frame];
+      }
+
+      return [
+        for (final inner in events)
+          ObserverFrame.fromJson(inner as Map<String, dynamic>),
+      ];
     } catch (error) {
       _errorMessage = 'Observer event decrypt failed: $error';
       _emit(connection: ObserverConnectionState.error);
