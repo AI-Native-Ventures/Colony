@@ -1,9 +1,13 @@
+import { websiteDesignDecision } from "../websiteDesign";
 import type { TimelineMessage } from "@/features/messages/types";
 import type {
   BlockInstanceRef,
   BlockManifest,
   BlockTrust,
 } from "@/features/blocks/contracts";
+
+import { WebsiteBundlePreview } from "./WebsiteBundlePreview";
+import { ArtifactHtmlPreview } from "./ArtifactHtmlPreview";
 
 import { blockShellTier } from "@/features/blocks/blockShellTier";
 import {
@@ -13,10 +17,16 @@ import {
 import { BlockPrimitive, type BlockPrimitiveNode } from "./primitives";
 
 function BlockTree({
+  trust,
   data,
   manifest,
+  message,
+  instance,
 }: {
+  instance: BlockInstanceRef;
+  message: TimelineMessage;
   data: unknown;
+  trust: BlockTrust;
   manifest: BlockManifest;
 }) {
   const {
@@ -26,18 +36,68 @@ function BlockTree({
     attentionResolution,
     attentionStatusLabel,
   } = useBlockRenderContext();
+  const fields =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const bundle = fields.website_bundle as
+    | { url?: unknown; sha256?: unknown }
+    | undefined;
+  const website = trust === "core" && manifest.handle === "artifact" && bundle;
+  const designDecision = website
+    ? websiteDesignDecision(message, instance, data)
+    : null;
+  const displayData = website
+    ? {
+        ...fields,
+        status: designDecision
+          ? "approved"
+          : fields.status === "approved"
+            ? "ready-for-review"
+            : fields.status,
+      }
+    : data;
   return (
     <>
+      {designDecision ? (
+        <p className="text-sm font-medium">
+          Design approved for this version. Not published.
+        </p>
+      ) : null}
       <BlockPrimitive
         context={{
-          actionEnvironment,
-          attentionResolution,
+          actionEnvironment: designDecision
+            ? {
+                ...actionEnvironment,
+                completedActionIds: new Set([
+                  ...(actionEnvironment.completedActionIds ?? []),
+                  "artifact.approve-design",
+                ]),
+              }
+            : actionEnvironment,
+          attentionResolution: website ? undefined : attentionResolution,
           attentionStatusLabel,
-          data,
-          rootData: data,
+          data: displayData,
+          rootData: displayData,
         }}
         node={manifest.tree as BlockPrimitiveNode}
       />
+      {trust === "core" && manifest.handle === "artifact" ? (
+        bundle &&
+        typeof bundle.url === "string" &&
+        typeof bundle.sha256 === "string" ? (
+          <WebsiteBundlePreview
+            bundle={{ url: bundle.url, sha256: bundle.sha256 }}
+            approved={Boolean(designDecision)}
+            approvalEvent={message.blockState?.actions.find(
+              (event) => event.id === designDecision,
+            )}
+            artifactId={message.id}
+            threadRoot={message.rootId ?? message.id}
+            revision={typeof fields.revision === "number" ? fields.revision : 1}
+          />
+        ) : (
+          <ArtifactHtmlPreview data={data} />
+        )
+      ) : null}
       {actionError ? (
         <p className="mt-2 text-xs text-destructive" role="alert">
           {actionError}
@@ -127,7 +187,13 @@ export function BlockRenderer({
         data-block-handle={manifest.handle}
         data-block-trust={trust}
       >
-        <BlockTree data={data} manifest={manifest} />
+        <BlockTree
+          data={data}
+          manifest={manifest}
+          trust={trust}
+          message={message}
+          instance={instance}
+        />
         {latestStatus ? (
           <p
             className={

@@ -70,13 +70,6 @@ try {
   application = await launch();
   const page = await application.firstWindow();
   await page.waitForFunction(() => !!window.colonyDesktop);
-  assert.equal(
-    await page.evaluate(() =>
-      window.colonyDesktop.request("shell", { operation: "version" }),
-    ),
-    appVersion,
-    "Settings must report Colony's version, not the Electron engine version",
-  );
   const cspErrors = [];
   page.on("console", (message) => {
     if (
@@ -105,6 +98,13 @@ try {
     .filter({ visible: true })
     .first()
     .waitFor();
+  assert.equal(
+    await page.evaluate(() =>
+      window.colonyDesktop.request("shell", { operation: "version" }),
+    ),
+    appVersion,
+    "Settings must report Colony's version, not the Electron engine version",
+  );
   assert.deepEqual(cspErrors, [], "the app bootstrap must satisfy its CSP");
   if (built) {
     await page.reload();
