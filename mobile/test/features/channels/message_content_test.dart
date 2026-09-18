@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:buzz/shared/deeplink/deep_link.dart';
+import 'package:buzz/shared/deeplink/pending_deep_link_provider.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:hooks_riverpod/misc.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -1343,6 +1345,101 @@ Photos
         expect(_findRich('Try this:'), findsWidgets);
         expect(_findRich('Did it work?'), findsWidgets);
       });
+    });
+  });
+
+  group('buzz permalink chips', () {
+    const channelId = '11111111-1111-4111-8111-111111111111';
+    final messageId = 'a' * 64;
+
+    testWidgets('renders a message permalink as a compact chip', (
+      tester,
+    ) async {
+      final url = 'buzz://message?channel=$channelId&id=$messageId';
+
+      await tester.pumpWidget(
+        _testable(
+          MessageContent(
+            content: 'see <$url>',
+            channelNames: const {'general': channelId},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The raw URL is noise inline; the chip carries the channel instead.
+      expect(find.text('#general'), findsOneWidget);
+      expect(find.textContaining(messageId), findsNothing);
+    });
+
+    testWidgets('renders a channel permalink as a compact chip', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _testable(
+          MessageContent(
+            content: 'see <buzz://channel/$channelId>',
+            channelNames: const {'general': channelId},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('#general'), findsOneWidget);
+      expect(find.textContaining(channelId), findsNothing);
+    });
+
+    testWidgets('falls back to a generic label for an unknown channel', (
+      tester,
+    ) async {
+      final url = 'buzz://message?channel=$channelId&id=$messageId';
+
+      await tester.pumpWidget(_testable(MessageContent(content: 'see <$url>')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Message'), findsOneWidget);
+      expect(find.textContaining(messageId), findsNothing);
+    });
+
+    testWidgets('tapping a chip parks the link for the dispatcher', (
+      tester,
+    ) async {
+      final url = 'buzz://message?channel=$channelId&id=$messageId';
+      late ProviderContainer container;
+
+      await tester.pumpWidget(
+        _testable(
+          Builder(
+            builder: (context) {
+              container = ProviderScope.containerOf(context);
+              return MessageContent(
+                content: 'see <$url>',
+                channelNames: const {'general': channelId},
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeepLinkProvider), isNull);
+      await tester.tap(find.text('#general'));
+      await tester.pumpAndSettle();
+
+      final parked = container.read(pendingDeepLinkProvider);
+      expect(parked, isA<MessageDeepLink>());
+      expect((parked! as MessageDeepLink).messageId, messageId);
+    });
+
+    testWidgets('leaves an ordinary https link alone', (tester) async {
+      await tester.pumpWidget(
+        _testable(
+          const MessageContent(content: 'see <https://example.com/page>'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('example.com'), findsOneWidget);
     });
   });
 }

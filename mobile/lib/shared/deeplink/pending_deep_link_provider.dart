@@ -42,6 +42,12 @@ class PendingDeepLinkNotifier extends Notifier<BuzzDeepLink?> {
     state = link;
   }
 
+  /// Park an in-app navigation request, e.g. a tapped permalink chip.
+  ///
+  /// Routing through the same pending-link state the OS handler uses means a
+  /// chip tap and an external link reach the dispatcher by one path.
+  void open(Uri uri) => handleUri(uri);
+
   /// Clear the pending link after it has been dispatched (or dropped).
   void consume() => state = null;
 }

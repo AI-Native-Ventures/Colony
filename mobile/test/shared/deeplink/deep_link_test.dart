@@ -292,4 +292,61 @@ void _buildMessageLinkTests() {
       );
     });
   });
+
+  group('parseChannelDeepLink', () {
+    const channelId = '11111111-1111-4111-8111-111111111111';
+
+    test('parses a canonical channel permalink', () {
+      final link = parseChannelDeepLink(Uri.parse('buzz://channel/$channelId'));
+
+      expect(link, isA<ChannelDeepLink>());
+      expect(link!.channelId, channelId);
+    });
+
+    test('lowercases the channel id', () {
+      final link = parseChannelDeepLink(
+        Uri.parse('buzz://channel/${channelId.toUpperCase()}'),
+      );
+
+      expect(link?.channelId, channelId);
+    });
+
+    test('rejects a non-uuid channel segment', () {
+      expect(parseChannelDeepLink(Uri.parse('buzz://channel/general')), isNull);
+    });
+
+    test('rejects extra path segments', () {
+      expect(
+        parseChannelDeepLink(Uri.parse('buzz://channel/$channelId/extra')),
+        isNull,
+      );
+    });
+
+    test('rejects a query or fragment', () {
+      // Desktop's parser refuses these too, so an ambiguous link never
+      // becomes a navigation target on either surface.
+      expect(
+        parseChannelDeepLink(Uri.parse('buzz://channel/$channelId?x=1')),
+        isNull,
+      );
+      expect(
+        parseChannelDeepLink(Uri.parse('buzz://channel/$channelId#frag')),
+        isNull,
+      );
+    });
+
+    test('rejects a non-channel host', () {
+      expect(
+        parseChannelDeepLink(Uri.parse('buzz://message/$channelId')),
+        isNull,
+      );
+    });
+
+    test('parseBuzzDeepLink routes a channel permalink', () {
+      expect(
+        parseBuzzDeepLink(Uri.parse('buzz://channel/$channelId')),
+        isA<ChannelDeepLink>(),
+      );
+    });
+  });
 }

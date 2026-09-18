@@ -47,8 +47,9 @@ void main() {
       find.byType(_CapturedDestination),
     );
     expect(destination.channel.id, 'channel-1');
-    expect(destination.link.messageId, 'message-2');
-    expect(destination.link.threadRootId, 'message-1');
+    final dispatched = destination.link as MessageDeepLink;
+    expect(dispatched.messageId, 'message-2');
+    expect(dispatched.threadRootId, 'message-1');
   });
 
   testWidgets('retains invite and surfaces prepare failure', (tester) async {
@@ -259,7 +260,7 @@ class _CapturedDestination extends StatelessWidget {
   const _CapturedDestination({required this.channel, required this.link});
 
   final Channel channel;
-  final MessageDeepLink link;
+  final BuzzDeepLink link;
 
   @override
   Widget build(BuildContext context) => const SizedBox();

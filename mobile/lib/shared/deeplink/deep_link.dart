@@ -14,6 +14,26 @@ sealed class BuzzDeepLink {
   const BuzzDeepLink();
 }
 
+/// A parsed channel-only deep link.
+///
+/// Canonical form: `buzz://channel/<channel-uuid>`.
+class ChannelDeepLink extends BuzzDeepLink {
+  /// Channel UUID from the sole path segment.
+  final String channelId;
+
+  const ChannelDeepLink({required this.channelId});
+
+  @override
+  bool operator ==(Object other) =>
+      other is ChannelDeepLink && other.channelId == channelId;
+
+  @override
+  int get hashCode => channelId.hashCode;
+
+  @override
+  String toString() => 'ChannelDeepLink(channel: $channelId)';
+}
+
 /// A parsed relay invite link.
 ///
 /// Canonical share links are `https://<relay>/invite/<code>`. The custom
@@ -113,6 +133,35 @@ String buildMessageLink({
     host: 'message',
     queryParameters: params,
   ).toString();
+}
+
+/// Parse a canonical `buzz://channel/<channel-uuid>` URI.
+///
+/// Mirrors `parse_channel_deep_link` in `desktop/src-tauri/src/deep_link.rs`:
+/// the channel id must be the sole path segment and parse as a UUID, and a
+/// query, fragment or credentials make the link ambiguous rather than
+/// navigable.
+ChannelDeepLink? parseChannelDeepLink(Uri uri) {
+  if (uri.scheme != 'buzz' || uri.host != 'channel') return null;
+  if (uri.hasQuery ||
+      uri.hasFragment ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasPort) {
+    return null;
+  }
+  if (uri.pathSegments.length != 1 || uri.pathSegments.single.isEmpty) {
+    return null;
+  }
+  final channelId = uri.pathSegments.single;
+  // Desktop validates with `Uuid::parse_str`, which accepts any hyphenated
+  // UUID rather than only RFC-4122 variants, so this shape check does too.
+  if (!RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    caseSensitive: false,
+  ).hasMatch(channelId)) {
+    return null;
+  }
+  return ChannelDeepLink(channelId: channelId.toLowerCase());
 }
 
 /// Parse a `buzz://message?…` URI into a [MessageDeepLink].
@@ -218,4 +267,6 @@ InviteDeepLink? parseInviteDeepLink(Uri uri) {
 
 /// Parse any supported Buzz deep link.
 BuzzDeepLink? parseBuzzDeepLink(Uri uri) =>
-    parseInviteDeepLink(uri) ?? parseMessageDeepLink(uri);
+    parseInviteDeepLink(uri) ??
+    parseChannelDeepLink(uri) ??
+    parseMessageDeepLink(uri);
