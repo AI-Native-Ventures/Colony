@@ -111,42 +111,16 @@ pub(super) fn prepare_worker(
     } else {
         get("BUZZ_AGENT_PROVIDER").trim().to_ascii_lowercase()
     };
-    let provider_url = match provider.as_str() {
-        "anthropic" => Some(("ANTHROPIC_BASE_URL", "https://api.anthropic.com")),
-        "openai" | "openai-compat" => Some(("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1")),
-        "deepseek" => Some(("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")),
-        "openrouter" => Some(("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")),
-        "" if subscription_tools || !get("BUZZ_ACP_SETUP_PAYLOAD").is_empty() => None,
-        _ => return Err("Isolated teammates require a configured Anthropic, OpenAI, DeepSeek or OpenRouter provider".into()),
-    };
-    let mut meter_upstream = None;
-    if let Some((key, default)) = provider_url {
-        let configured = get(key);
-        let url = if configured.is_empty() {
-            default
-        } else {
-            configured
-        };
-        let meter_key = if provider == "anthropic" {
-            "BUZZ_METER_ANTHROPIC_UPSTREAM"
-        } else {
-            "BUZZ_METER_OPENAI_UPSTREAM"
-        };
-        let configured_meter = get(meter_key);
-        let (meter_key, upstream) = if !configured_meter.is_empty() {
-            (meter_key, configured_meter.to_owned())
-        } else if provider == "anthropic" {
-            (meter_key, url.trim_end_matches('/').to_owned())
-        } else {
-            // SDK base URLs already include their complete API path. Keep it
-            // distinct from the existing meter root override, which adds /v1.
-            ("BUZZ_METER_OPENAI_BASE_URL", url.to_owned())
-        };
+    let meter_upstream = meter_route(
+        &provider,
+        &|key: &str| get(key).to_owned(),
+        subscription_tools || !get("BUZZ_ACP_SETUP_PAYLOAD").is_empty(),
+    )?;
+    if let Some(route) = meter_upstream.as_ref() {
         // The meter owns provider traffic. Resolve only its selected upstream:
         // a provisioned gateway replaces the SDK default, which must neither
         // require DNS nor gain a place in the worker's network allowlist.
-        destinations.push(Destination::resolve(&upstream)?);
-        meter_upstream = Some((meter_key, upstream));
+        destinations.push(Destination::resolve(&route.upstream)?);
     }
     let mut policy = WorkerPolicy::new(workspace)?;
     if let Some(log) = log {
@@ -229,8 +203,12 @@ pub(super) fn prepare_worker(
         }
     }
     command.env_remove("BUZZ_METER_OPENAI_BASE_URL");
-    if let Some((key, upstream)) = meter_upstream {
-        command.env(key, upstream);
+    if let Some(route) = meter_upstream {
+        // This launch resolved the route itself, so no inherited upstream may
+        // survive alongside it: the checkpoint reads whichever key is present.
+        command.env_remove("BUZZ_METER_OPENAI_UPSTREAM");
+        command.env_remove("BUZZ_METER_ANTHROPIC_UPSTREAM");
+        command.env(route.key, route.upstream);
     }
     // These values win over every resolved/provider/user layer.
     binary_dirs.extend([
@@ -283,6 +261,88 @@ struct BrowserRuntime {
     grant: PathBuf,
 }
 
+/// Where this worker's metered provider traffic goes, and the env key the
+/// checkpoint reads it from.
+struct MeterRoute {
+    key: &'static str,
+    upstream: String,
+}
+
+/// Resolve the metering checkpoint's upstream for one launch.
+///
+/// `lookup` reads the worker's resolved environment; `provider_optional` is
+/// true for launches that legitimately carry no provider (subscription tools,
+/// and setup-mode agents that have not chosen one yet).
+fn meter_route(
+    provider: &str,
+    lookup: &dyn Fn(&str) -> String,
+    provider_optional: bool,
+) -> Result<Option<MeterRoute>, String> {
+    let provider_url = match provider {
+        "anthropic" => Some(("ANTHROPIC_BASE_URL", "https://api.anthropic.com")),
+        "openai" | "openai-compat" => Some(("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1")),
+        "deepseek" => Some(("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")),
+        "google" => Some((
+            "OPENAI_COMPAT_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+        )),
+        "openrouter" => Some(("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")),
+        "" if provider_optional => None,
+        _ => return Err("Isolated teammates require a configured Anthropic, OpenAI, DeepSeek, Google or OpenRouter provider".into()),
+    };
+    let Some((key, default)) = provider_url else {
+        return Ok(None);
+    };
+    let configured = lookup(key);
+    let url = if configured.is_empty() {
+        default.to_owned()
+    } else {
+        configured
+    };
+    let meter_key = if provider == "anthropic" {
+        "BUZZ_METER_ANTHROPIC_UPSTREAM"
+    } else {
+        "BUZZ_METER_OPENAI_UPSTREAM"
+    };
+    let configured_meter = lookup(meter_key);
+    if !configured_meter.is_empty() && !meter_upstream_is_provider_chosen(provider) {
+        tracing::warn!(
+            provider,
+            meter_key,
+            "ignoring a configured meter upstream: this provider serves its own models from its own API"
+        );
+    }
+    if !configured_meter.is_empty() && meter_upstream_is_provider_chosen(provider) {
+        return Ok(Some(MeterRoute {
+            key: meter_key,
+            upstream: configured_meter,
+        }));
+    }
+    if provider == "anthropic" {
+        return Ok(Some(MeterRoute {
+            key: meter_key,
+            upstream: url.trim_end_matches('/').to_owned(),
+        }));
+    }
+    // SDK base URLs already include their complete API path. Keep it
+    // distinct from the existing meter root override, which adds /v1.
+    Ok(Some(MeterRoute {
+        key: "BUZZ_METER_OPENAI_BASE_URL",
+        upstream: url,
+    }))
+}
+
+/// Whether a configured meter upstream may override the provider's own URL.
+///
+/// Only the OpenAI-compatible providers leave the vendor open: that is where
+/// Colony Credits points the checkpoint at the relay gateway, and where an
+/// operator names the compatible endpoint. `openrouter`, `deepseek`, `google`
+/// and `anthropic` each have exactly one upstream, so a configured value there
+/// can only send their traffic somewhere that does not serve their models.
+fn meter_upstream_is_provider_chosen(provider: &str) -> bool {
+    matches!(provider, "openai" | "openai-compat")
+}
+
 fn permitted_env(key: &str, provider: &str) -> bool {
     key.starts_with("BUZZ_")
         || key.starts_with("GIT_CONFIG_")
@@ -291,7 +351,7 @@ fn permitted_env(key: &str, provider: &str) -> bool {
             "NOSTR_PRIVATE_KEY" | "GIT_TERMINAL_PROMPT" | "RUST_LOG" | "MCP_HOOK_SERVERS"
         )
         || (provider == "anthropic" && key.starts_with("ANTHROPIC_"))
-        || (matches!(provider, "openai" | "openai-compat" | "deepseek")
+        || (matches!(provider, "openai" | "openai-compat" | "deepseek" | "google")
             && key.starts_with("OPENAI_COMPAT_"))
         || (provider == "deepseek" && key == "DEEPSEEK_API_KEY")
         || (provider == "openrouter" && key.starts_with("OPENROUTER_"))
@@ -316,6 +376,108 @@ mod tests {
             assert!(!permitted_env(key, "openai"), "{key}");
         }
     }
+    fn route(provider: &str, env: &[(&str, &str)]) -> MeterRoute {
+        let env: BTreeMap<String, String> = env
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect();
+        let lookup = |key: &str| env.get(key).cloned().unwrap_or_default();
+        meter_route(provider, &lookup, false)
+            .expect("a configured provider resolves a route")
+            .expect("a configured provider has a meter upstream")
+    }
+
+    #[test]
+    fn a_stale_meter_upstream_cannot_redirect_a_vendor_that_serves_its_own_models() {
+        // The Chief of Staff records carried this value from an earlier xAI
+        // setup. Honouring it sent every OpenRouter call to api.x.ai, which
+        // answered "Model not found" for models OpenRouter serves.
+        for provider in ["openrouter", "deepseek", "google"] {
+            let resolved = route(
+                provider,
+                &[("BUZZ_METER_OPENAI_UPSTREAM", "https://api.x.ai")],
+            );
+            assert_eq!(resolved.key, "BUZZ_METER_OPENAI_BASE_URL", "{provider}");
+            assert!(
+                !resolved.upstream.contains("x.ai"),
+                "{provider} resolved to {}",
+                resolved.upstream
+            );
+        }
+        assert_eq!(
+            route(
+                "openrouter",
+                &[("BUZZ_METER_OPENAI_UPSTREAM", "https://api.x.ai")],
+            )
+            .upstream,
+            "https://openrouter.ai/api/v1"
+        );
+    }
+
+    #[test]
+    fn google_routes_the_checkpoint_at_the_gemini_openai_endpoint() {
+        // Google serves Gemini and Gemma over an OpenAI-compatible endpoint, so
+        // the worker talks the OpenAI dialect against Google's own base URL.
+        let resolved = route("google", &[]);
+        assert_eq!(resolved.key, "BUZZ_METER_OPENAI_BASE_URL");
+        assert_eq!(
+            resolved.upstream,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+
+        // An operator-configured base URL still wins over the preset default.
+        let overridden = route(
+            "google",
+            &[(
+                "OPENAI_COMPAT_BASE_URL",
+                "https://proxy.example/v1beta/openai",
+            )],
+        );
+        assert_eq!(overridden.upstream, "https://proxy.example/v1beta/openai");
+    }
+
+    #[test]
+    fn google_keeps_its_openai_compatible_credential_env() {
+        assert!(permitted_env("OPENAI_COMPAT_API_KEY", "google"));
+        assert!(permitted_env("OPENAI_COMPAT_BASE_URL", "google"));
+        for key in [
+            "ANTHROPIC_API_KEY",
+            "OPENROUTER_API_KEY",
+            "DEEPSEEK_API_KEY",
+        ] {
+            assert!(!permitted_env(key, "google"), "{key}");
+        }
+    }
+
+    #[test]
+    fn colony_credits_still_points_the_checkpoint_at_its_gateway() {
+        // `runtime/provisioned.rs` sets this after the reserved-key strip, and
+        // its providers are exactly the OpenAI-compatible ones.
+        for provider in ["openai", "openai-compat"] {
+            let resolved = route(
+                provider,
+                &[(
+                    "BUZZ_METER_OPENAI_UPSTREAM",
+                    "https://relay.example/gateway/openai",
+                )],
+            );
+            assert_eq!(resolved.key, "BUZZ_METER_OPENAI_UPSTREAM", "{provider}");
+            assert_eq!(
+                resolved.upstream, "https://relay.example/gateway/openai",
+                "{provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_openrouter_worker_without_a_meter_override_keeps_its_configured_base_url() {
+        let resolved = route(
+            "openrouter",
+            &[("OPENROUTER_BASE_URL", "https://openrouter.ai/api/alpha")],
+        );
+        assert_eq!(resolved.upstream, "https://openrouter.ai/api/alpha");
+    }
+
     #[cfg(unix)]
     #[test]
     fn worker_directory_refuses_a_symlink() {

@@ -1,4 +1,31 @@
 import { defineConfig, devices } from "@playwright/test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// The pull request gate (PLAYWRIGHT_SKIP_SCREENSHOT_SPECS=1, set by ci.yml on
+// ordinary pull requests) leaves every spec that takes a screenshot to the
+// develop push after merge. Measured 2026-09-14: 100 of 211 spec files and
+// 525 of 1625 tests call `.screenshot(`; they exist to produce PR images and
+// were a third of the smoke wall clock. They still run on every develop push
+// and on promotion pull requests, where a regression reverts the merge.
+function screenshotSpecs(): string[] {
+  const dir = fileURLToPath(new URL("./tests/e2e", import.meta.url));
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".spec.ts"))
+    .filter((name) =>
+      readFileSync(join(dir, name), "utf8").includes(".screenshot("),
+    )
+    .map((name) => `**/${name}`);
+}
+const skipScreenshotSpecs =
+  process.env.PLAYWRIGHT_SKIP_SCREENSHOT_SPECS === "1" ? screenshotSpecs() : [];
+
+// One worker unless PLAYWRIGHT_WORKERS says otherwise. Two workers on the
+// 4 vCPU CI runner made three timing-sensitive specs fail 3 of 3 attempts
+// across two runs on 2026-09-14 (send-channel-binding, virtualization,
+// community-rail), so CI does not set it.
+const workers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10) || 1;
 
 const previewPort = process.env.PLAYWRIGHT_PORT ?? "4173";
 const previewUrl =
@@ -23,7 +50,7 @@ export default defineConfig({
     timeout: process.env.CI ? 15_000 : 10_000,
   },
   retries: process.env.CI ? 2 : 0,
-  workers: 1,
+  workers,
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: "playwright-report" }],
@@ -41,8 +68,10 @@ export default defineConfig({
   projects: [
     {
       name: "smoke",
+      testIgnore: skipScreenshotSpecs,
       testMatch: [
         "**/smoke.spec.ts",
+        "**/model-fallback-chain.spec.ts",
         "**/inline-reply-model.spec.ts",
         "**/composer-dictation.spec.ts",
         "**/rich-document-previews.spec.ts",
@@ -207,6 +236,8 @@ export default defineConfig({
         "**/harness-management.spec.ts",
         "**/harness-catalog-screenshots.spec.ts",
         "**/inline-custom-harness.spec.ts",
+        "**/customize-ai-rows.spec.ts",
+        "**/activity-fallback-line.spec.ts",
         "**/discovery.spec.ts",
         "**/discovery-scroll.spec.ts",
         "**/discovery-lead-detail.spec.ts",
@@ -254,7 +285,6 @@ export default defineConfig({
         "**/sidebar-relay-card.spec.ts",
         "**/persona-env-vars.spec.ts",
         "**/persona-sync.spec.ts",
-        "**/team-snapshot.spec.ts",
         "**/blocks-live.spec.ts",
         "**/company-approval.spec.ts",
         "**/agents-everywhere.live.spec.ts",

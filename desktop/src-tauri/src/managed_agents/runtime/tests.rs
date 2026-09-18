@@ -274,28 +274,14 @@ fn persona_with_provider(
     provider: Option<&str>,
 ) -> crate::managed_agents::AgentDefinition {
     crate::managed_agents::AgentDefinition {
-        role_id: None,
-        role_title: None,
         id: id.to_string(),
         display_name: id.to_string(),
-        avatar_url: None,
         system_prompt: prompt.to_string(),
-        runtime: None,
         model: model.map(str::to_string),
         provider: provider.map(str::to_string),
-        name_pool: Vec::new(),
-        is_builtin: false,
-        is_active: true,
-        shared: false,
-        source_team: None,
-        source_team_persona_slug: None,
-        catalog_source: None,
-        env_vars: std::collections::BTreeMap::new(),
-        respond_to: None,
-        respond_to_allowlist: Vec::new(),
-        parallelism: None,
         created_at: "2026-06-09T00:00:00Z".to_string(),
         updated_at: "2026-06-09T00:00:00Z".to_string(),
+        ..Default::default()
     }
 }
 

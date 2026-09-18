@@ -76,10 +76,10 @@ use huddle::{
 };
 use initial_window::*;
 use managed_agents::{
-    backfill_coordination_team_membership, backfill_persona_snapshots, ensure_nest,
-    list_managed_agent_runtimes, put_managed_agent_runtime_lifecycle,
-    reconcile_managed_agent_runtimes, restart_managed_agent_runtime, start_managed_agent_runtime,
-    stop_managed_agent_runtime, try_regenerate_nest,
+    backfill_persona_snapshots, ensure_nest, list_managed_agent_runtimes,
+    put_managed_agent_runtime_lifecycle, reconcile_managed_agent_runtimes,
+    restart_managed_agent_runtime, start_managed_agent_runtime, stop_managed_agent_runtime,
+    try_regenerate_nest,
 };
 #[cfg(not(feature = "mesh-llm"))]
 use mesh_llm_stubs::*;
@@ -287,6 +287,16 @@ pub fn run() {
                 migration::run_boot_migrations(&app_handle);
             }
 
+            // Point the model-chain cache at the agents dir. It is read on the
+            // synchronous spawn path, which has no handle to resolve a path
+            // from, so the path is handed over here where the dir is first
+            // known. Without it the cache works, but only in memory.
+            if let Ok(agents_dir) = crate::managed_agents::managed_agents_base_dir(&app_handle) {
+                crate::managed_agents::model_chain::set_cache_path(
+                    agents_dir.join("model-chain-cache.json"),
+                );
+            }
+
             // Resolve persisted identity key (env var → file → generate+save).
             // This is fatal — the app should not start with an ephemeral identity
             // that will be lost on restart, as that silently breaks channel
@@ -334,15 +344,6 @@ pub fn run() {
             // block launch, but a missing persona is logged loudly inside.
             if let Err(e) = backfill_persona_snapshots(&app_handle) {
                 eprintln!("buzz-desktop: persona-snapshot backfill failed: {e}");
-            }
-
-            // Backfill hired agents' personas onto the coordination team for
-            // installs that hired employees before this device started
-            // seeding a default one (`load_teams` seeds it lazily, but never
-            // retroactively adds existing agents as members). Best-effort —
-            // a failure here must not block launch.
-            if let Err(e) = backfill_coordination_team_membership(&app_handle) {
-                eprintln!("buzz-desktop: coordination-team backfill failed: {e}");
             }
 
             // Warm the loaded-harness registry BEFORE restore so cold-launch

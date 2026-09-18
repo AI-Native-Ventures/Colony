@@ -2,6 +2,8 @@ import type * as React from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { AgentAiConfigurationMode } from "./agentAiConfigurationPolicy";
 import { AgentAiDefaultsNotice } from "./AgentAiDefaults";
+import { AiSettingRow } from "./aiSettingRow";
+import { CUSTOMIZE_AI_ROW_LABELS } from "./customizeAiRows.lib";
 import type { InheritedDefault } from "./bakedEnvHelpers";
 
 export type { AgentAiConfigurationMode } from "./agentAiConfigurationPolicy";
@@ -13,25 +15,30 @@ export function HarnessModelDefaultNotice({
   harness: string;
   model?: string | null;
 }) {
+  // Same rows as the Customize tab, so the two tabs of one dialog do not read
+  // as two different products. This harness drives its own provider, so the
+  // summary is the harness and the model it runs.
   return (
-    <dl
-      className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 text-sm"
-      data-testid="agent-harness-defaults-notice"
-    >
-      <dt className="text-muted-foreground">Harness</dt>
-      <dd className="truncate text-foreground">
-        {harness || "Not configured"}
-      </dd>
-      <dt className="text-muted-foreground">Model</dt>
-      <dd className="truncate text-foreground">
-        {model?.trim() || "Harness default"}
-      </dd>
-    </dl>
+    <div data-testid="agent-harness-defaults-notice">
+      <AiSettingRow
+        custom={false}
+        label={CUSTOMIZE_AI_ROW_LABELS.harness}
+        testId="agent-harness-defaults-harness"
+        value={harness || "Not configured"}
+      />
+      <AiSettingRow
+        custom={false}
+        label={CUSTOMIZE_AI_ROW_LABELS.model}
+        testId="agent-harness-defaults-model"
+        value={model?.trim() || "Harness default"}
+      />
+    </div>
   );
 }
 
 export function AgentCreateAiDefaultsSummary({
   canChooseProvider,
+  fallbacks,
   harness,
   inheritedModel,
   inheritedProvider,
@@ -41,6 +48,10 @@ export function AgentCreateAiDefaultsSummary({
   triggerRef,
 }: {
   canChooseProvider: boolean;
+  fallbacks?: {
+    entries: readonly string[];
+    source: "agent" | "global" | "relay";
+  };
   harness: string;
   inheritedModel: InheritedDefault;
   inheritedProvider: InheritedDefault;
@@ -56,6 +67,7 @@ export function AgentCreateAiDefaultsSummary({
       triggerRef={triggerRef}
       explicitModel=""
       explicitProvider=""
+      fallbacks={fallbacks}
       harness={harness}
       inheritedModel={inheritedModel}
       inheritedProvider={inheritedProvider}

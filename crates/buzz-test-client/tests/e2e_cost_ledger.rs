@@ -314,7 +314,7 @@ fn work_context(purpose: CommercialPurpose, client_org: Option<&str>) -> AgentWo
     AgentWorkContext {
         task_id: "task-1".to_string(),
         initiative_id: None,
-        owning_team_id: "web-team".to_string(),
+        owning_team_id: Some("web-team".to_string()),
         cost_centre_id: match purpose {
             CommercialPurpose::ClientDelivery => "web-delivery".to_string(),
             _ => "internal-ops".to_string(),
@@ -732,7 +732,7 @@ async fn a_correction_moves_a_record_without_erasing_what_it_said() {
         usage_record_event_id: record_id.clone(),
         assign: RuleAssignment {
             cost_centre_id: "web-delivery".to_string(),
-            owning_team_id: "web-team".to_string(),
+            owning_team_id: Some("web-team".to_string()),
             commercial_purpose: CommercialPurpose::ClientDelivery,
             client_organization_id: Some("tennant-group".to_string()),
             task_id: None,
@@ -833,7 +833,7 @@ async fn a_rule_attributes_a_record_that_named_no_work() {
         match_model: None,
         assign: RuleAssignment {
             cost_centre_id: "internal-ops".to_string(),
-            owning_team_id: "web-team".to_string(),
+            owning_team_id: Some("web-team".to_string()),
             commercial_purpose: CommercialPurpose::Marketing,
             client_organization_id: None,
             task_id: None,

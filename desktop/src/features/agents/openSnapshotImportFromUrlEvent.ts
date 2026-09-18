@@ -12,7 +12,7 @@
 export type PendingSnapshotImport = {
   fileBytes: number[];
   fileName: string;
-  snapshotKind: "agent" | "team";
+  snapshotKind: "agent";
 };
 
 const OPEN_SNAPSHOT_IMPORT_EVENT = "buzz:open-snapshot-import";

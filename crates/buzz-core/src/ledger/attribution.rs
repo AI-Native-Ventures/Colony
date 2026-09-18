@@ -17,7 +17,7 @@ pub struct RuleAssignment {
     /// Cost centre charged.
     pub cost_centre_id: String,
     /// Team accountable.
-    pub owning_team_id: String,
+    pub owning_team_id: Option<String>,
     /// Commercial reason for the work.
     pub commercial_purpose: CommercialPurpose,
     /// Client receiving the work, when this is client delivery.
@@ -191,7 +191,7 @@ mod tests {
     fn assignment(centre: &str, purpose: CommercialPurpose) -> RuleAssignment {
         RuleAssignment {
             cost_centre_id: centre.to_string(),
-            owning_team_id: "web-team".to_string(),
+            owning_team_id: Some("web-team".to_string()),
             commercial_purpose: purpose,
             client_organization_id: None,
             task_id: None,

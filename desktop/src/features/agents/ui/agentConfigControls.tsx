@@ -25,6 +25,7 @@ import {
   providerDisplayLabel,
   type PersonaModelOption,
 } from "./agentConfigOptions";
+import { AiSourcePill } from "./aiSettingRow";
 import { MODEL_DISCOVERY_LOADING_VALUE } from "./usePersonaModelDiscovery";
 import type { PersonaModelDiscoveryStatus } from "./personaModelDiscoveryStatus";
 
@@ -353,6 +354,7 @@ export function AgentModelField({
   provider,
   fieldClassName,
   labelClassName,
+  sourceCustom,
   selectClassName,
   testId,
   useCustomSelect = false,
@@ -393,6 +395,11 @@ export function AgentModelField({
   fieldClassName?: string;
   /** Optional class override for the label. */
   labelClassName?: string;
+  /**
+   * Whether this model is pinned here rather than inherited. Renders the agent
+   * dialog's inherited/custom pill beside the label. Omit for no pill.
+   */
+  sourceCustom?: boolean;
   /** Optional class override for contexts with custom visual treatments. */
   selectClassName?: string;
   /** Optional test id for custom dropdown trigger/options. */
@@ -578,38 +585,49 @@ export function AgentModelField({
 
   return (
     <div className={cn("space-y-1.5", fieldClassName)}>
-      <RequiredFieldLabel
-        className={labelClassName}
-        htmlFor={id}
-        isRequired={isRequired}
-      >
-        Model
-      </RequiredFieldLabel>
-      {!useCustomSelect && useChevronIcon ? (
-        <div className="relative">
-          {modelSelect}
-          <ChevronDown
-            aria-hidden="true"
-            className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground"
+      <span className="flex items-center gap-2">
+        <RequiredFieldLabel
+          className={labelClassName}
+          htmlFor={id}
+          isRequired={isRequired}
+        >
+          Model
+        </RequiredFieldLabel>
+        {sourceCustom !== undefined ? (
+          <AiSourcePill
+            custom={sourceCustom}
+            testId="global-agent-model-pill"
           />
-        </div>
-      ) : (
-        modelSelect
-      )}
-      {showCustomModelInput ? (
-        <AgentConfigTextInput
-          aria-label="Custom model ID"
-          autoCorrect="off"
-          disabled={disabled}
-          onChange={(event) => onModelChange(event.target.value)}
-          placeholder="Custom model ID"
-          usePersonaInputStyle={usePersonaInputStyle}
-          value={model}
-        />
-      ) : null}
-      {showStatusMessage && statusMessage ? (
-        <p className="text-xs text-muted-foreground">{statusMessage}</p>
-      ) : null}
+        ) : null}
+      </span>
+      {/* `contents` keeps this field's DOM flow exactly as it was. */}
+      <div className="contents">
+        {!useCustomSelect && useChevronIcon ? (
+          <div className="relative">
+            {modelSelect}
+            <ChevronDown
+              aria-hidden="true"
+              className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground"
+            />
+          </div>
+        ) : (
+          modelSelect
+        )}
+        {showCustomModelInput ? (
+          <AgentConfigTextInput
+            aria-label="Custom model ID"
+            autoCorrect="off"
+            disabled={disabled}
+            onChange={(event) => onModelChange(event.target.value)}
+            placeholder="Custom model ID"
+            usePersonaInputStyle={usePersonaInputStyle}
+            value={model}
+          />
+        ) : null}
+        {showStatusMessage && statusMessage ? (
+          <p className="text-xs text-muted-foreground">{statusMessage}</p>
+        ) : null}
+      </div>
     </div>
   );
 }

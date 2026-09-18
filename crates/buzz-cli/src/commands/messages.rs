@@ -595,16 +595,14 @@ pub struct SendMessageParams {
     pub task: Option<String>,
     /// Initiative containing that Task, when it has one.
     pub initiative: Option<String>,
-    /// Team accountable for that Task.
+    /// Team accountable for that Task, when the work is explicitly team-owned.
     pub team: Option<String>,
 }
 
 /// The exact work-context tags a message may carry.
 ///
-/// `--task` and `--team` come as a pair: the Task says what the spend is for
-/// and the team says who is accountable for it, and a harness that received one
-/// without the other could not resolve the work at all. `--initiative` is
-/// optional because not all work belongs to one.
+/// A Task identifies the work, including direct assignments without a team.
+/// Optional team and initiative references must always accompany a Task.
 fn work_context_tags(p: &SendMessageParams) -> Result<Vec<nostr::Tag>, CliError> {
     let record_id = |value: &str| -> bool {
         let mut bytes = value.bytes();
@@ -620,50 +618,30 @@ fn work_context_tags(p: &SendMessageParams) -> Result<Vec<nostr::Tag>, CliError>
             })
     };
 
-    let mut tags = Vec::new();
-    match (p.task.as_deref(), p.team.as_deref()) {
-        (None, None) => {
-            if p.initiative.is_some() {
-                return Err(CliError::Usage(
-                    "--initiative needs --task and --team: an initiative alone does not say what this turn is charged to".into(),
-                ));
-            }
-            return Ok(tags);
-        }
-        (Some(_), None) | (None, Some(_)) => {
+    let Some(task) = p.task.as_deref() else {
+        if p.team.is_some() || p.initiative.is_some() {
             return Err(CliError::Usage(
-                "--task and --team go together: one names the work, the other names who is accountable for it".into(),
+                "--team and --initiative require --task: a task names the work".into(),
             ));
         }
-        (Some(task), Some(team)) => {
-            for (flag, value) in [("--task", task), ("--team", team)] {
-                if !record_id(value) {
-                    return Err(CliError::Usage(format!(
-                        "{flag} is not a company record id (lowercase, digits, and . _ : -)"
-                    )));
-                }
-            }
-            tags.push(
-                nostr::Tag::parse(["task", task])
-                    .map_err(|e| CliError::Other(format!("task tag: {e}")))?,
-            );
-            if let Some(initiative) = p.initiative.as_deref() {
-                if !record_id(initiative) {
-                    return Err(CliError::Usage(
-                        "--initiative is not a company record id (lowercase, digits, and . _ : -)"
-                            .into(),
-                    ));
-                }
-                tags.push(
-                    nostr::Tag::parse(["initiative", initiative])
-                        .map_err(|e| CliError::Other(format!("initiative tag: {e}")))?,
-                );
-            }
-            tags.push(
-                nostr::Tag::parse(["team", team])
-                    .map_err(|e| CliError::Other(format!("team tag: {e}")))?,
-            );
+        return Ok(Vec::new());
+    };
+    let mut tags = Vec::new();
+    for (name, value) in [
+        ("task", Some(task)),
+        ("initiative", p.initiative.as_deref()),
+        ("team", p.team.as_deref()),
+    ] {
+        let Some(value) = value else { continue };
+        if !record_id(value) {
+            return Err(CliError::Usage(format!(
+                "--{name} is not a company record id (lowercase, digits, and . _ : -)"
+            )));
         }
+        tags.push(
+            nostr::Tag::parse([name, value])
+                .map_err(|e| CliError::Other(format!("{name} tag: {e}")))?,
+        );
     }
     Ok(tags)
 }
@@ -1593,18 +1571,45 @@ mod work_context_flag_tests {
         );
     }
 
-    // A harness that got one without the other could not resolve the work at
-    // all, and would run the turn unattributed rather than refuse it.
     #[test]
-    fn a_task_without_its_team_is_refused_and_so_is_the_reverse() {
-        assert!(work_context_tags(&params(Some("co:chat:1"), None, None)).is_err());
+    fn a_direct_task_needs_no_team_tag() {
+        let tags =
+            work_context_tags(&params(Some("co:chat:1"), None, None)).expect("direct assignment");
+        assert_eq!(
+            names(&tags),
+            vec![vec!["task".to_string(), "co:chat:1".to_string()]]
+        );
+    }
+
+    #[test]
+    fn a_direct_task_can_belong_to_an_initiative_without_a_team() {
+        let tags = work_context_tags(&params(Some("co:chat:1"), Some("co:launch"), None))
+            .expect("direct assignment in an initiative");
+        assert_eq!(
+            names(&tags),
+            vec![
+                vec!["task".to_string(), "co:chat:1".to_string()],
+                vec!["initiative".to_string(), "co:launch".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn team_and_initiative_references_require_a_task() {
         assert!(work_context_tags(&params(None, None, Some("team-a"))).is_err());
         assert!(work_context_tags(&params(None, Some("co:launch"), None)).is_err());
+        assert!(work_context_tags(&params(None, Some("co:launch"), Some("team-a"))).is_err());
     }
 
     #[test]
     fn an_identifier_the_company_contract_would_reject_never_reaches_the_relay() {
         for (task, initiative, team) in [
+            (Some(""), None, None),
+            (Some("Co:Chat"), None, None),
+            (Some("co chat"), None, None),
+            (Some("co:chat"), Some("Launch"), None),
+            (Some("co:chat"), Some(""), None),
+            (Some("co:chat"), None, Some("")),
             (Some("Co:Chat"), None, Some("team-a")),
             (Some("co chat"), None, Some("team-a")),
             (Some("co:chat"), None, Some("TEAM")),

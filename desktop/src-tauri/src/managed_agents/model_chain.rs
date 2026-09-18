@@ -21,9 +21,21 @@
 //! than clearing it. The relay omits the field when ranking is disabled or has
 //! not completed its first fetch, and neither is a statement that the client
 //! should stop using the chain it already has.
+//!
+//! # One entry per relay, kept on disk
+//!
+//! A person with five communities spawns agents against five relays, so a
+//! single cached slot meant every spawn evicted the previous relay's answer and
+//! read back nothing. The cache is therefore a map keyed by relay URL, and it
+//! is written to `<agents dir>/model-chain-cache.json` so a chain fetched in
+//! one session is already there for the next one. An entry loaded from disk is
+//! served immediately but counts as stale, so the spawn that reads it also
+//! schedules a refresh.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// How long a cached chain is served before a refresh is scheduled.
 ///
@@ -36,37 +48,171 @@ const REFRESH_AFTER: Duration = Duration::from_secs(900);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Cached {
-    relay_url: String,
     chain: Vec<String>,
-    fetched_at: Instant,
+    /// When this process fetched the entry. `None` for an entry read back from
+    /// disk: the write could have been days ago, so it is served but counts as
+    /// stale and the reading spawn schedules a refresh.
+    fetched_at: Option<Instant>,
+    /// Wall-clock time of the fetch, carried so a reload and re-save does not
+    /// lose the original timestamp.
+    fetched_at_unix: u64,
 }
 
-static CACHE: RwLock<Option<Cached>> = RwLock::new(None);
+/// One entry per relay URL. `None` means the file has not been read yet.
+static CACHE: RwLock<Option<HashMap<String, Cached>>> = RwLock::new(None);
 
-/// The cached chain for `relay_url`, if one was fetched.
+/// Where the map is persisted. Unset until [`set_cache_path`] runs, and while
+/// unset the cache works in memory only.
+static CACHE_PATH: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// On-disk shape of one entry.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedEntry {
+    chain: Vec<String>,
+    fetched_at_unix: u64,
+}
+
+/// Point the cache at `<agents dir>/model-chain-cache.json`.
 ///
-/// Returns `None` for a cold cache, and also when the cache holds a chain for a
-/// different relay: chains are relay-scoped, and serving one community's
-/// ranking to another is worse than serving none.
-pub fn cached_for(relay_url: &str) -> Option<Vec<String>> {
-    let guard = CACHE.read().ok()?;
-    let cached = guard.as_ref()?;
-    if cached.relay_url != relay_url {
-        return None;
+/// Called once at startup, where the agents dir is first known. `cached_for`
+/// sits on the synchronous spawn path and has no `AppHandle` to resolve the
+/// path from, so the path is handed to the module instead of looked up.
+pub fn set_cache_path(path: PathBuf) {
+    if let Ok(mut guard) = CACHE_PATH.write() {
+        *guard = Some(path);
     }
-    Some(cached.chain.clone())
+}
+
+fn cache_path() -> Option<PathBuf> {
+    CACHE_PATH.read().ok()?.clone()
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Read the persisted map, if there is one to read.
+///
+/// Every failure is the same answer: an empty map. A cache file that is
+/// missing, unreadable or malformed is no worse than a cold start.
+fn read_from_disk() -> HashMap<String, Cached> {
+    let Some(path) = cache_path() else {
+        return HashMap::new();
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    let parsed: HashMap<String, PersistedEntry> = match serde_json::from_str(&content) {
+        Ok(p) => p,
+        Err(error) => {
+            tracing::debug!(%error, "model chain: cache file could not be parsed");
+            return HashMap::new();
+        }
+    };
+    parsed
+        .into_iter()
+        .filter(|(relay, entry)| !relay.trim().is_empty() && !entry.chain.is_empty())
+        .map(|(relay, entry)| {
+            (
+                relay,
+                Cached {
+                    chain: entry.chain,
+                    fetched_at: None,
+                    fetched_at_unix: entry.fetched_at_unix,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Write the whole map out. Best effort: a failed write costs a refresh next
+/// launch, so it is logged and dropped rather than surfaced.
+fn write_to_disk(entries: &HashMap<String, Cached>) {
+    let Some(path) = cache_path() else {
+        return;
+    };
+    let persisted: HashMap<&str, PersistedEntry> = entries
+        .iter()
+        .map(|(relay, cached)| {
+            (
+                relay.as_str(),
+                PersistedEntry {
+                    chain: cached.chain.clone(),
+                    fetched_at_unix: cached.fetched_at_unix,
+                },
+            )
+        })
+        .collect();
+    let payload = match serde_json::to_vec_pretty(&persisted) {
+        Ok(p) => p,
+        Err(error) => {
+            tracing::debug!(%error, "model chain: cache could not be serialized");
+            return;
+        }
+    };
+    if let Err(error) =
+        crate::managed_agents::storage::atomic_write_json_restricted(&path, &payload)
+    {
+        tracing::debug!(%error, "model chain: cache could not be written");
+    }
+}
+
+/// Run `read` against the map, loading it from disk on first access.
+fn with_entries<T>(read: impl FnOnce(&HashMap<String, Cached>) -> T) -> Option<T> {
+    if let Ok(guard) = CACHE.read() {
+        if let Some(entries) = guard.as_ref() {
+            return Some(read(entries));
+        }
+    }
+    // First access in this process: fill the map from disk. The read happens
+    // outside the write lock so a slow filesystem cannot block a concurrent
+    // reader for longer than the insert itself.
+    let loaded = read_from_disk();
+    let mut guard = CACHE.write().ok()?;
+    let entries = guard.get_or_insert(loaded);
+    Some(read(entries))
+}
+
+/// The cached chain for `relay_url`, if one was fetched or loaded.
+///
+/// Chains are relay-scoped: a relay with no entry reads as a cold cache rather
+/// than borrowing another community's ranking.
+pub fn cached_for(relay_url: &str) -> Option<Vec<String>> {
+    with_entries(|entries| entries.get(relay_url).map(|c| c.chain.clone()))?
 }
 
 /// Whether a refresh is worth scheduling for `relay_url`.
+///
+/// Per relay, so a fresh entry for one community never suppresses the first
+/// fetch for another.
 fn is_stale(relay_url: &str) -> bool {
-    match CACHE.read() {
-        Ok(guard) => match guard.as_ref() {
-            Some(c) => c.relay_url != relay_url || c.fetched_at.elapsed() >= REFRESH_AFTER,
+    // A poisoned lock is not a reason to stop refreshing, hence the `true`.
+    with_entries(|entries| match entries.get(relay_url) {
+        Some(cached) => match cached.fetched_at {
+            Some(at) => at.elapsed() >= REFRESH_AFTER,
             None => true,
         },
-        // A poisoned lock is not a reason to stop refreshing.
-        Err(_) => true,
-    }
+        None => true,
+    })
+    .unwrap_or(true)
+}
+
+/// Record a freshly fetched chain for `relay_url` and persist the map.
+fn store(relay_url: &str, chain: Vec<String>) {
+    let cached = Cached {
+        chain,
+        fetched_at: Some(Instant::now()),
+        fetched_at_unix: now_unix(),
+    };
+    let Ok(mut guard) = CACHE.write() else {
+        return;
+    };
+    let entries = guard.get_or_insert_with(read_from_disk);
+    entries.insert(relay_url.to_string(), cached);
+    write_to_disk(entries);
 }
 
 /// Extract the chain from a NIP-11 document body.
@@ -130,14 +276,8 @@ pub fn refresh_in_background(relay_url: &str) {
             tracing::debug!("model chain: relay advertises no chain");
             return;
         };
-        if let Ok(mut guard) = CACHE.write() {
-            tracing::info!(?chain, relay = %relay_url, "model chain: refreshed from relay");
-            *guard = Some(Cached {
-                relay_url,
-                chain,
-                fetched_at: Instant::now(),
-            });
-        }
+        tracing::info!(?chain, relay = %relay_url, "model chain: refreshed from relay");
+        store(&relay_url, chain);
     });
 }
 
@@ -146,22 +286,35 @@ pub(crate) fn reset_for_test() {
     if let Ok(mut guard) = CACHE.write() {
         *guard = None;
     }
+    if let Ok(mut guard) = CACHE_PATH.write() {
+        *guard = None;
+    }
 }
 
 #[cfg(test)]
 pub(crate) fn seed_for_test(relay_url: &str, chain: Vec<String>) {
-    if let Ok(mut guard) = CACHE.write() {
-        *guard = Some(Cached {
-            relay_url: relay_url.to_string(),
-            chain,
-            fetched_at: Instant::now(),
-        });
-    }
+    store(relay_url, chain);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// The cache is process-wide, so tests that touch it run one at a time.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_cache() -> std::sync::MutexGuard<'static, ()> {
+        // A test that panicked while holding the lock must not fail every other
+        // cache test with a poisoning error.
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn temp_cache_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("buzz-model-chain-{name}-{}", now_unix()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
 
     /// The happy path: a relay that ranks produces a chain in relay order.
     #[test]
@@ -204,9 +357,10 @@ mod tests {
     }
 
     /// Chains are relay-scoped. Serving one community's ranking to another is
-    /// worse than serving none, so a mismatched relay reads as a cold cache.
+    /// worse than serving none, so a relay with no entry reads as a cold cache.
     #[test]
     fn a_chain_is_never_served_across_relays() {
+        let _guard = lock_cache();
         reset_for_test();
         seed_for_test("wss://a.example", vec!["m/one:free".to_string()]);
         assert_eq!(
@@ -217,10 +371,85 @@ mod tests {
         reset_for_test();
     }
 
+    /// The outage this cache caused: a person with several communities spawns
+    /// against several relays, and one slot meant each spawn evicted the last.
+    /// Every relay keeps its own entry now.
+    #[test]
+    fn two_relays_are_cached_independently() {
+        let _guard = lock_cache();
+        reset_for_test();
+        seed_for_test("wss://a.example", vec!["m/one:free".to_string()]);
+        seed_for_test("wss://b.example", vec!["m/two:free".to_string()]);
+        assert_eq!(
+            cached_for("wss://a.example"),
+            Some(vec!["m/one:free".to_string()])
+        );
+        assert_eq!(
+            cached_for("wss://b.example"),
+            Some(vec!["m/two:free".to_string()])
+        );
+        reset_for_test();
+    }
+
+    /// Staleness is per relay too: a fresh entry for one community must not
+    /// suppress the very first fetch for another.
+    #[test]
+    fn staleness_is_decided_per_relay() {
+        let _guard = lock_cache();
+        reset_for_test();
+        seed_for_test("wss://a.example", vec!["m/one:free".to_string()]);
+        assert!(!is_stale("wss://a.example"));
+        assert!(is_stale("wss://b.example"));
+        reset_for_test();
+    }
+
+    /// A chain fetched in one session is there for the next one. The entry read
+    /// back is served immediately and still counts as stale, so the spawn that
+    /// reads it also schedules a refresh.
+    #[test]
+    fn the_map_survives_a_restart_through_disk() {
+        let _guard = lock_cache();
+        reset_for_test();
+        let dir = temp_cache_dir("roundtrip");
+        let path = dir.join("model-chain-cache.json");
+        set_cache_path(path.clone());
+
+        store("wss://a.example", vec!["m/one:free".to_string()]);
+        store("wss://b.example", vec!["m/two:free".to_string()]);
+        assert!(path.exists(), "the refresh should have written the cache");
+
+        // Simulate the next launch: memory is empty, the file is not.
+        reset_for_test();
+        set_cache_path(path.clone());
+        assert_eq!(
+            cached_for("wss://a.example"),
+            Some(vec!["m/one:free".to_string()])
+        );
+        assert_eq!(
+            cached_for("wss://b.example"),
+            Some(vec!["m/two:free".to_string()])
+        );
+        assert!(is_stale("wss://a.example"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        reset_for_test();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A cold cache yields nothing, which is what lets the spawn path leave
     /// OPENROUTER_FALLBACK_MODELS unset rather than setting it empty.
     #[test]
     fn a_cold_cache_yields_nothing() {
+        let _guard = lock_cache();
         reset_for_test();
         assert_eq!(cached_for("wss://a.example"), None);
     }

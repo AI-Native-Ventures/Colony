@@ -3,6 +3,8 @@ import { Markdown } from "@/shared/ui/markdown";
 import { useAgentSessionTranscriptVariant } from "../agentSessionTranscriptContext";
 import { formatTranscriptTimestampTitle } from "../agentSessionUtils";
 import type { TranscriptItem } from "../agentSessionTypes";
+import { turnServedModelNote } from "../agentTurnModelNote";
+import { useEffectiveModelChain } from "../useEffectiveModelChain";
 import { ToolActivity } from "./ToolActivity";
 import { TranscriptTimestamp } from "./TranscriptTimestamp";
 import type { ActivityRenderClassItemProps } from "./types";
@@ -27,8 +29,14 @@ function MessageItem({
   profiles?: UserProfileLookup;
 }) {
   const variant = useAgentSessionTranscriptVariant();
+  const chain = useEffectiveModelChain();
   const isCompactPreview = variant === "compactPreview";
   const isAssistant = item.role === "assistant";
+  // Which model actually answered, when it was not the one the agent asked for.
+  const servedNote = turnServedModelNote({
+    chain,
+    servedModel: item.servedModel,
+  });
   const text = item.text.trim();
   const messageLink = getTranscriptMessageLink(item);
 
@@ -67,6 +75,14 @@ function MessageItem({
             content={text || " "}
           />
         </div>
+        {servedNote ? (
+          <p
+            className="text-2xs text-muted-foreground"
+            data-testid="transcript-served-model"
+          >
+            {servedNote}
+          </p>
+        ) : null}
       </div>
     </div>
   );
