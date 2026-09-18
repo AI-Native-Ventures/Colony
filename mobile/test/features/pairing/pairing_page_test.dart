@@ -79,7 +79,111 @@ void main() {
 
       expect(overlay.value.statusBarIconBrightness, Brightness.light);
       expect(overlay.value.statusBarColor, Colors.transparent);
-      expect(find.text('Verify Security Code'), findsOneWidget);
+      expect(find.text('Confirm desktop code'), findsOneWidget);
+    });
+
+    testWidgets('renders the code as six separate digit boxes', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            pairingProvider.overrideWith(() => _ConfirmingSasPairingNotifier()),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const PairingPage(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      for (var index = 1; index <= 6; index++) {
+        expect(
+          find.byKey(Key('pairing-sas-code-digit-$index')),
+          findsOneWidget,
+        );
+      }
+      // Each digit stands alone rather than as one run of text.
+      expect(find.text('1'), findsOneWidget);
+      expect(find.text('6'), findsOneWidget);
+      expect(find.text('123 456'), findsNothing);
+    });
+
+    testWidgets('tells the user to compare the code on both devices', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            pairingProvider.overrideWith(() => _ConfirmingSasPairingNotifier()),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const PairingPage(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The comparison IS the security control, so the copy has to name it.
+      expect(find.textContaining('matches on both devices'), findsOneWidget);
+      // And it must still say what confirming does.
+      expect(find.textContaining('transfer to this device'), findsOneWidget);
+    });
+
+    testWidgets('keeps both confirm and cancel actions available', (
+      tester,
+    ) async {
+      var confirmed = 0;
+      var denied = 0;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            pairingProvider.overrideWith(
+              () => _RecordingSasPairingNotifier(
+                onConfirm: () => confirmed++,
+                onDeny: () => denied++,
+              ),
+            ),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const PairingPage(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Codes match'));
+      await tester.pumpAndSettle();
+      expect(confirmed, 1);
+      expect(denied, 0);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(denied, 1);
+    });
+
+    testWidgets('replaces the actions with a waiting state once confirmed', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            pairingProvider.overrideWith(() => _ConfirmedSasPairingNotifier()),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const PairingPage(),
+          ),
+        ),
+      );
+      // pump, not pumpAndSettle: the waiting state shows a looping spinner
+      // that never settles.
+      await tester.pump();
+
+      // Confirming must not leave a second chance to confirm.
+      expect(find.widgetWithText(FilledButton, 'Codes match'), findsNothing);
+      expect(find.textContaining('waiting for desktop'), findsOneWidget);
     });
 
     testWidgets('reveals pairing code field and connect action', (
@@ -233,6 +337,54 @@ class _ConfirmingSasPairingNotifier extends Notifier<PairingState>
   PairingState build() => const PairingState(
     status: PairingStatus.confirmingSas,
     sasCode: '123456',
+  );
+
+  @override
+  Future<void> pair(String rawInput) async {}
+
+  @override
+  void reset() {}
+
+  @override
+  void confirmSas() {}
+
+  @override
+  void denySas() {}
+}
+
+class _RecordingSasPairingNotifier extends Notifier<PairingState>
+    implements PairingNotifier {
+  _RecordingSasPairingNotifier({required this.onConfirm, required this.onDeny});
+
+  final VoidCallback onConfirm;
+  final VoidCallback onDeny;
+
+  @override
+  PairingState build() => const PairingState(
+    status: PairingStatus.confirmingSas,
+    sasCode: '123456',
+  );
+
+  @override
+  Future<void> pair(String rawInput) async {}
+
+  @override
+  void reset() {}
+
+  @override
+  void confirmSas() => onConfirm();
+
+  @override
+  void denySas() => onDeny();
+}
+
+class _ConfirmedSasPairingNotifier extends Notifier<PairingState>
+    implements PairingNotifier {
+  @override
+  PairingState build() => const PairingState(
+    status: PairingStatus.confirmingSas,
+    sasCode: '123456',
+    userConfirmedSas: true,
   );
 
   @override

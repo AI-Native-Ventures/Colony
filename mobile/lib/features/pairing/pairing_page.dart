@@ -200,106 +200,127 @@ class _SasVerificationView extends StatelessWidget {
     required this.onDeny,
   });
 
+  static const _digitSize = 54.0;
+  static const _digitGap = 6.0;
+  static const _digitGroupGap = 14.0;
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
+    final verificationContent = Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        const Spacer(flex: 2),
-
-        Icon(LucideIcons.shieldCheck, size: 56, color: context.colors.primary),
-        const SizedBox(height: Grid.sm),
-
-        Text('Verify Security Code', style: context.textTheme.headlineSmall),
-        const SizedBox(height: Grid.xs),
-
         Text(
-          confirmed
-              ? 'Waiting for desktop to confirm...'
-              : 'Does your desktop app show this code?',
+          'Confirm desktop code',
+          textAlign: TextAlign.center,
+          style: context.textTheme.headlineSmall?.copyWith(
+            color: _onboardingInk,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.4,
+          ),
+        ),
+        const SizedBox(height: Grid.xxs),
+        Text(
+          'Make sure the six-digit code matches on both devices. Your Colony '
+          'identity will transfer to this device. Only continue if you '
+          'started this pairing from your desktop.',
           textAlign: TextAlign.center,
           style: context.textTheme.bodyMedium?.copyWith(
-            color: context.colors.onSurfaceVariant,
+            color: _onboardingMutedInk,
           ),
         ),
-
-        const SizedBox(height: Grid.lg),
-
-        // Large SAS code display
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-          decoration: BoxDecoration(
-            color: context.colors.primaryContainer.withValues(alpha: 0.3),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: context.colors.primary.withValues(alpha: 0.3),
-              width: 2,
+        const SizedBox(height: Grid.md),
+        Semantics(
+          label:
+              'Confirmation code ${sasCode.substring(0, 3)} '
+              '${sasCode.substring(3)}',
+          child: ExcludeSemantics(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var index = 0; index < sasCode.length; index++) ...[
+                    if (index > 0)
+                      SizedBox(width: index == 3 ? _digitGroupGap : _digitGap),
+                    Container(
+                      key: Key('pairing-sas-code-digit-${index + 1}'),
+                      width: _digitSize,
+                      padding: const EdgeInsets.symmetric(vertical: Grid.xs),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: context.colors.primary.withValues(alpha: 0.15),
+                        ),
+                      ),
+                      child: Text(
+                        sasCode[index],
+                        style: context.textTheme.displaySmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: _onboardingInk,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
-          child: Text(
-            '${sasCode.substring(0, 3)} ${sasCode.substring(3)}',
-            style: context.textTheme.displayMedium?.copyWith(
-              fontFamily: 'GeistMono',
-              fontWeight: FontWeight.w700,
-              letterSpacing: 8,
-              color: context.colors.primary,
-            ),
-          ),
         ),
+      ],
+    );
 
-        const SizedBox(height: Grid.lg),
-
-        Text(
-          'You are about to transfer your Colony identity\nto this device. Only confirm if you initiated\nthis pairing from your desktop.',
-          textAlign: TextAlign.center,
-          style: context.textTheme.bodySmall?.copyWith(
-            color: context.colors.onSurfaceVariant,
-          ),
-        ),
-
-        const SizedBox(height: Grid.lg),
-
-        // Confirm / Deny buttons
-        if (confirmed)
-          Row(
+    final verificationActions = confirmed
+        ? Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               ColonyLoadingIndicator(
                 size: 24,
-                color: context.colors.primary,
+                color: _onboardingInk,
                 semanticLabel: 'Connecting',
               ),
               const SizedBox(width: Grid.twelve),
               Text(
-                'Confirmed — waiting for desktop',
+                'Confirmed \u2014 waiting for desktop',
                 style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.onSurfaceVariant,
+                  color: _onboardingMutedInk,
                 ),
               ),
             ],
           )
-        else
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onDeny,
-                  icon: const Icon(LucideIcons.x),
-                  label: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: Grid.sm),
-              Expanded(
-                child: FilledButton.icon(
+        : SizedBox(
+            width: double.infinity,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FilledButton.icon(
                   onPressed: onConfirm,
+                  style: _onboardingButtonStyle,
                   icon: const Icon(LucideIcons.check),
-                  label: const Text('Codes Match'),
+                  label: const Text('Codes match'),
                 ),
-              ),
-            ],
-          ),
+                const SizedBox(height: Grid.xs),
+                TextButton(
+                  onPressed: onDeny,
+                  child: Text(
+                    'Cancel',
+                    style: context.textTheme.labelLarge?.copyWith(
+                      color: _onboardingMutedInk,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
 
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Spacer(flex: 2),
+        verificationContent,
+        const SizedBox(height: Grid.lg),
+        verificationActions,
         const Spacer(flex: 3),
       ],
     );
