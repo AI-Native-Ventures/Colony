@@ -33,8 +33,7 @@ pub(crate) use codex_probe::{
     probe_codex_acp_version_with_path, MIN_CODEX_ACP_VERSION,
 };
 pub(crate) use npm_prefix::user_npm_global_bin_dirs;
-// `persona_events` (upstream snapshot-apply path) classifies pins through
-// these two; `parallelism` keys caps on the normalizer below.
+// `persona_events` (snapshot-apply) classifies pins through these two; `parallelism` keys caps on the normalizer below.
 pub(crate) use presets::{canonical_harness_command, command_for_runtime_id};
 
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
@@ -1202,7 +1201,8 @@ pub(crate) fn discover_acp_runtime_availability(runtime_id: &str) -> Option<AcpA
 // by id in the frontend `RUNTIME_LOGOS` map.
 
 pub(crate) use presets::{
-    preset_catalog_entry, preset_harness_definitions, preset_harness_ids, PRESET_HARNESSES,
+    preset_catalog_entry, preset_harness_definitions, preset_harness_ids, preset_provider_env_var,
+    PRESET_HARNESSES,
 };
 
 /// Discover all ACP runtimes, optionally merging user-defined custom harnesses
