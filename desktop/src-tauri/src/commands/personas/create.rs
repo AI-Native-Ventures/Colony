@@ -7,9 +7,10 @@ use uuid::Uuid;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        apply_persona_behavior, load_personas, normalize_persona_role, save_personas,
-        try_regenerate_nest, validate_agent_definition_text, AgentDefinition, CatalogSource,
-        CreatePersonaRequest,
+        apply_persona_behavior,
+        fallback_chain::{normalize_fallback_models, validate_fallback_models},
+        load_personas, normalize_persona_role, save_personas, try_regenerate_nest,
+        validate_agent_definition_text, AgentDefinition, CatalogSource, CreatePersonaRequest,
     },
     util::now_iso,
 };
@@ -62,6 +63,15 @@ pub(crate) async fn create_persona_with_preparation(
         let runtime = trim_optional(input.runtime);
         let model = trim_optional(input.model);
         let provider = trim_optional(input.provider);
+        // Validated before normalizing so an id that cannot survive the joined
+        // spawn env is refused rather than quietly reshaped.
+        let fallback_models = input
+            .fallback_models
+            .map(|models| {
+                validate_fallback_models("fallbackModels", &models)?;
+                Ok::<_, String>(normalize_fallback_models(&models))
+            })
+            .transpose()?;
         // Normalized before the store is touched: a coordinate that can't match
         // a publication is worse than no coordinate, because it silently
         // re-enables the duplicate add it exists to prevent.
@@ -97,6 +107,7 @@ pub(crate) async fn create_persona_with_preparation(
             runtime,
             model,
             provider,
+            fallback_models,
             name_pool,
             is_builtin: false,
             is_active: true,

@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::{
-    normalize_global_config_fields, remove_managed_meter_opt_out, resolve_effective_model_provider,
-    strip_empty_env_vars, validate_global_config, CredentialMode, GlobalAgentConfig,
+    migrate_env_fallback_models, normalize_global_config_fields, remove_managed_meter_opt_out,
+    resolve_effective_model_provider, strip_empty_env_vars, validate_global_config, CredentialMode,
+    GlobalAgentConfig,
 };
 use crate::managed_agents::{AgentDefinition, BackendKind, ManagedAgentRecord, RespondTo};
 
@@ -265,6 +266,7 @@ fn roundtrip_serialization() {
     let config = GlobalAgentConfig {
         env_vars: BTreeMap::from([("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string())]),
         provider: Some("anthropic".to_string()),
+        fallback_models: Vec::new(),
         model: Some("claude-opus-4".to_string()),
         preferred_runtime: Some("claude".to_string()),
         reasoning_effort: Some("xhigh".to_string()),
@@ -354,6 +356,87 @@ fn default_global_config_serializes_all_fields() {
     );
 }
 
+// ── fallback_models ──────────────────────────────────────────────────────────
+
+fn chain(entries: &[&str]) -> Vec<String> {
+    entries.iter().map(|e| (*e).to_string()).collect()
+}
+
+/// An empty chain is the wire value for "use Colony's recommended chain", so
+/// it has to survive a round trip as an empty list rather than as absent.
+#[test]
+fn a_missing_fallback_chain_deserializes_as_empty() {
+    let config: GlobalAgentConfig =
+        serde_json::from_str(r#"{"model":"a/one:free"}"#).expect("legacy config must deserialize");
+    assert!(config.fallback_models.is_empty());
+    let json = serde_json::to_string(&config).expect("serialize");
+    assert!(
+        json.contains("\"fallback_models\""),
+        "serialized JSON must always include fallback_models; got: {json}"
+    );
+}
+
+#[test]
+fn validate_rejects_a_model_id_carrying_whitespace() {
+    let config = GlobalAgentConfig {
+        fallback_models: chain(&["a/one :free"]),
+        ..Default::default()
+    };
+    let error = validate_global_config(&config).expect_err("a split id must be refused");
+    assert!(error.contains("fallback_models"), "got: {error}");
+}
+
+#[test]
+fn normalize_trims_deduplicates_and_caps_the_chain() {
+    let mut config = GlobalAgentConfig {
+        fallback_models: chain(&[" a ", "a", "", "b", "c", "d", "e", "f"]),
+        ..Default::default()
+    };
+    normalize_global_config_fields(&mut config);
+    assert_eq!(config.fallback_models, chain(&["a", "b", "c", "d", "e"]));
+}
+
+/// The upgrade path. A chain typed under Advanced before the field existed is
+/// now stripped at spawn, so load has to adopt it or it stops applying with
+/// nothing on screen to say why.
+#[test]
+fn a_hand_typed_env_chain_moves_onto_the_field() {
+    let mut config = config_with_env(&[
+        ("OPENROUTER_FALLBACK_MODELS", " a/one:free, b/two:free "),
+        ("OPENAI_API_KEY", "saved"),
+    ]);
+    assert!(migrate_env_fallback_models(&mut config));
+    assert_eq!(config.fallback_models, chain(&["a/one:free", "b/two:free"]));
+    assert!(!config
+        .env_vars
+        .keys()
+        .any(|key| key.eq_ignore_ascii_case("OPENROUTER_FALLBACK_MODELS")));
+    assert_eq!(
+        config.env_vars.get("OPENAI_API_KEY"),
+        Some(&"saved".to_string())
+    );
+}
+
+#[test]
+fn the_env_chain_migration_is_case_insensitive_and_idempotent() {
+    let mut config = config_with_env(&[("openrouter_fallback_models", "a/one:free")]);
+    assert!(migrate_env_fallback_models(&mut config));
+    assert_eq!(config.fallback_models, chain(&["a/one:free"]));
+    assert!(!migrate_env_fallback_models(&mut config));
+    assert_eq!(config.fallback_models, chain(&["a/one:free"]));
+}
+
+/// The picker is the truth: an authored field is never replaced by a leftover
+/// env copy, and the copy is dropped so it cannot disagree later.
+#[test]
+fn an_authored_chain_wins_over_a_leftover_env_copy() {
+    let mut config = config_with_env(&[("OPENROUTER_FALLBACK_MODELS", "env/one:free")]);
+    config.fallback_models = chain(&["field/one:free"]);
+    assert!(migrate_env_fallback_models(&mut config));
+    assert_eq!(config.fallback_models, chain(&["field/one:free"]));
+    assert!(config.env_vars.is_empty());
+}
+
 // ── resolve_effective_model_provider ─────────────────────────────────────────
 
 fn bare_record() -> ManagedAgentRecord {
@@ -440,6 +523,7 @@ fn persona(id: &str, model: Option<&str>, provider: Option<&str>) -> AgentDefini
         runtime: None,
         model: model.map(str::to_string),
         provider: provider.map(str::to_string),
+        fallback_models: None,
         name_pool: vec![],
         is_builtin: false,
         is_active: true,
@@ -667,6 +751,7 @@ fn populated_global_config_round_trips() {
             .into_iter()
             .collect(),
         provider: Some("anthropic".to_string()),
+        fallback_models: Vec::new(),
         model: Some("claude-opus-4-5".to_string()),
         preferred_runtime: None,
         reasoning_effort: Some("max".to_string()),
@@ -706,6 +791,7 @@ fn record_runtime_wins_over_persona_runtime_for_command_resolution() {
         runtime: Some("goose".to_string()),
         model: None,
         provider: None,
+        fallback_models: None,
         name_pool: vec![],
         is_builtin: false,
         is_active: true,

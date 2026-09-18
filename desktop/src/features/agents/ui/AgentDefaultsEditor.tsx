@@ -34,10 +34,8 @@ import {
 } from "@/features/agents/ui/agentConfigOptions";
 import { AgentDropdownSelect } from "@/features/agents/ui/agentConfigControls";
 import { HarnessCatalogRetryNotice } from "@/features/agents/ui/HarnessCatalogRetryNotice";
-import {
-  AgentConfigFields,
-  EMPTY_GLOBAL_CONFIG,
-} from "@/features/agents/ui/AgentConfigFields";
+import { AgentConfigFields } from "@/features/agents/ui/AgentConfigFields";
+import { EMPTY_GLOBAL_CONFIG } from "@/features/agents/ui/globalAgentConfigDefaults";
 import { ColonyCreditsCredentialChoice } from "@/features/agents/ui/ColonyCreditsCredentialChoice";
 import { revalidateColonyCreditsCredentialMode } from "@/features/agents/ui/colonyCreditsEligibility";
 import { cn } from "@/shared/lib/cn";

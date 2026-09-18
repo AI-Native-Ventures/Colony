@@ -124,8 +124,15 @@ export function agentAiConfigurationModeSatisfied(
   mode: AgentAiConfigurationMode,
   pair: AgentAiConfigurationPair,
   needsProviderSelection = true,
+  /**
+   * The agent defaults have not been read yet, so the values Customize seeds
+   * from are not known. Save stays enabled: the rows render as a skeleton
+   * rather than as empty required fields, and a save in that state carries no
+   * pins at all, so there is nothing incomplete to persist.
+   */
+  inheritedPending = false,
 ) {
-  if (mode === "defaults") {
+  if (mode === "defaults" || inheritedPending) {
     return true;
   }
   const providerOk = !needsProviderSelection || pair.provider.trim().length > 0;

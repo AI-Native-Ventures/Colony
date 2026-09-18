@@ -470,7 +470,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
             Some("DATABRICKS_MODEL")
         }
         Some("anthropic") => Some("ANTHROPIC_MODEL"),
-        Some("openai") | Some("openai-compat") | Some("deepseek") => Some("OPENAI_COMPAT_MODEL"),
+        Some("openai" | "openai-compat" | "deepseek" | "google") => Some("OPENAI_COMPAT_MODEL"),
         Some("openrouter") => Some("OPENROUTER_MODEL"),
         _ => None,
     };
@@ -489,9 +489,9 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
         });
     }
 
-    // Provider-specific credential requirements.
-    // A key present with an empty value is treated as absent — matching the
-    // dialog's (envVars[key] ?? "").length === 0 emptiness check.
+    // Provider-specific credential requirements (`google` is OpenAI-compatible,
+    // so its key rides OPENAI_COMPAT_API_KEY). A key present with an empty value
+    // is absent, matching the dialog's (envVars[key] ?? "").length === 0 check.
     let env_key_missing = |key: &str| effective.env.get(key).is_none_or(|v| v.is_empty());
     match provider {
         Some("anthropic")
@@ -500,7 +500,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
                     key: "ANTHROPIC_API_KEY".to_string(),
                 });
             }
-        Some("openai") if env_key_missing("OPENAI_COMPAT_API_KEY") => {
+        Some("openai" | "google") if env_key_missing("OPENAI_COMPAT_API_KEY") => {
             missing.push(Requirement::EnvKey { key: "OPENAI_COMPAT_API_KEY".to_string() });
         }
         Some("deepseek") if env_key_missing("DEEPSEEK_API_KEY") && env_key_missing("OPENAI_COMPAT_API_KEY") => {

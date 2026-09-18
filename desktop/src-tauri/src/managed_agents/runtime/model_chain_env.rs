@@ -20,39 +20,57 @@ const CHAIN_KEY: &str = "OPENROUTER_FALLBACK_MODELS";
 /// Flag naming the relay as the chain's owner.
 const SOURCE_KEY: &str = "BUZZ_MODEL_CHAIN_SOURCE";
 
-/// Whether the layered user env carries a hand-authored chain.
+/// The hand-authored chain the layered env carries, if any.
 ///
 /// Env keys are matched without case on every platform here, because a person
 /// who typed `openrouter_fallback_models` still meant the chain, and on Windows
 /// the child process would resolve it to the same variable.
-fn chain_is_authored(spawn_env: &BTreeMap<String, String>) -> bool {
+fn authored_env_chain(spawn_env: &BTreeMap<String, String>) -> Option<String> {
     spawn_env
-        .keys()
-        .any(|key| key.eq_ignore_ascii_case(CHAIN_KEY))
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(CHAIN_KEY))
+        .map(|(_, value)| value.clone())
 }
 
 /// Write the model chain env for a spawn.
 ///
+/// `authored` is the chain the owner chose, resolved through the config tiers
+/// (`EffectiveAgentConfig::fallback_models`). `Some(list)` is theirs and is
+/// written verbatim, including `Some(vec![])`, which sets the variable to the
+/// empty string: an agent deliberately running with no fallbacks still has to
+/// say so, or an ambient value in the launching shell would speak for it. The
+/// source flag is removed in both cases, so the harness treats the chain as the
+/// person's and never replaces it on a refresh.
+///
 /// `cached` is the relay's recommendation for this community, absent on a cold
-/// cache or against a relay that does not rank.
+/// cache or against a relay that does not rank. It is consulted only when
+/// nothing was authored.
 ///
-/// Authored wins outright: the person's value is applied later by
-/// `apply_user_env`, and the flag is removed so the harness treats that chain as
-/// theirs and never overwrites it on a refresh.
+/// A legacy `OPENROUTER_FALLBACK_MODELS` in `spawn_env` is authored too. The
+/// key is config-owned now, so `apply_user_env` will not write it and this
+/// function has to: harness definitions carry env the user-env filter never
+/// sees, and a chain in one of those must keep working.
 ///
-/// Otherwise the flag is set even when nothing is cached. A cold cache is the
-/// common case for the first agents of a session, and the flag is the only
-/// thing that lets such an agent pick the chain up later: without it the agent
-/// runs its whole life on one model. The chain variable is cleared in that case
-/// rather than left alone, so an ambient value in the launching shell cannot
-/// pose as a relay chain.
+/// With nothing authored anywhere, the flag is set even when nothing is
+/// cached. A cold cache is the common case for the first agents of a session,
+/// and the flag is the only thing that lets such an agent pick the chain up
+/// later: without it the agent runs its whole life on one model. The chain
+/// variable is cleared in that case rather than left alone, for the same reason
+/// the empty authored chain is written explicitly.
 pub(crate) fn apply_model_chain_env(
     command: &mut Command,
     spawn_env: &BTreeMap<String, String>,
     cached: Option<Vec<String>>,
+    authored: Option<Vec<String>>,
 ) {
-    if chain_is_authored(spawn_env) {
+    if let Some(chain) = authored {
         command.env_remove(SOURCE_KEY);
+        command.env(CHAIN_KEY, chain.join(","));
+        return;
+    }
+    if let Some(value) = authored_env_chain(spawn_env) {
+        command.env_remove(SOURCE_KEY);
+        command.env(CHAIN_KEY, value);
         return;
     }
     command.env(SOURCE_KEY, "relay");
@@ -98,7 +116,7 @@ mod tests {
     #[test]
     fn a_cold_cache_still_names_the_relay_as_the_source() {
         let mut command = Command::new("true");
-        apply_model_chain_env(&mut command, &BTreeMap::new(), None);
+        apply_model_chain_env(&mut command, &BTreeMap::new(), None, None);
         assert_eq!(
             env_override(&command, "BUZZ_MODEL_CHAIN_SOURCE"),
             Some(Some("relay".to_string()))
@@ -119,6 +137,7 @@ mod tests {
             &mut command,
             &BTreeMap::new(),
             Some(vec!["a/one:free".to_string(), "b/two:free".to_string()]),
+            None,
         );
         assert_eq!(
             env_override(&command, "OPENROUTER_FALLBACK_MODELS"),
@@ -132,6 +151,8 @@ mod tests {
 
     /// A hand-typed chain is the person's, so no relay chain is injected over
     /// it and no flag invites the harness to replace it on the next refresh.
+    /// The key is config-owned, so `apply_user_env` no longer lands the value
+    /// and this function writes it instead.
     #[test]
     fn an_authored_chain_gets_neither_the_flag_nor_a_relay_chain() {
         let mut command = Command::new("true");
@@ -139,13 +160,16 @@ mod tests {
             &mut command,
             &authored_env(),
             Some(vec!["relay/one:free".to_string()]),
+            None,
         );
         assert_eq!(
             env_override(&command, "BUZZ_MODEL_CHAIN_SOURCE"),
             Some(None)
         );
-        // Nothing written here, so apply_user_env lands the person's own value.
-        assert_eq!(env_override(&command, "OPENROUTER_FALLBACK_MODELS"), None);
+        assert_eq!(
+            env_override(&command, "OPENROUTER_FALLBACK_MODELS"),
+            Some(Some("mine/one:free,mine/two:free".to_string()))
+        );
     }
 
     /// Same, with the key typed in another case.
@@ -157,11 +181,60 @@ mod tests {
             "mine/one:free".to_string(),
         );
         let mut command = Command::new("true");
-        apply_model_chain_env(&mut command, &env, None);
+        apply_model_chain_env(&mut command, &env, None, None);
         assert_eq!(
             env_override(&command, "BUZZ_MODEL_CHAIN_SOURCE"),
             Some(None)
         );
-        assert_eq!(env_override(&command, "OPENROUTER_FALLBACK_MODELS"), None);
+        assert_eq!(
+            env_override(&command, "OPENROUTER_FALLBACK_MODELS"),
+            Some(Some("mine/one:free".to_string()))
+        );
+    }
+
+    /// The Agent defaults chain, or a per-agent one, beats both the relay's
+    /// recommendation and a leftover env copy.
+    #[test]
+    fn an_authored_chain_beats_the_relay_and_the_env() {
+        let mut command = Command::new("true");
+        apply_model_chain_env(
+            &mut command,
+            &authored_env(),
+            Some(vec!["relay/one:free".to_string()]),
+            Some(vec![
+                "field/one:free".to_string(),
+                "field/two:free".to_string(),
+            ]),
+        );
+        assert_eq!(
+            env_override(&command, "OPENROUTER_FALLBACK_MODELS"),
+            Some(Some("field/one:free,field/two:free".to_string()))
+        );
+        assert_eq!(
+            env_override(&command, "BUZZ_MODEL_CHAIN_SOURCE"),
+            Some(None)
+        );
+    }
+
+    /// "This agent has no fallbacks" is a choice, and it has to be written as
+    /// the empty string: clearing the variable would let the relay chain take
+    /// the agent back on the harness's next refresh.
+    #[test]
+    fn an_empty_authored_chain_spawns_with_an_empty_value_and_no_flag() {
+        let mut command = Command::new("true");
+        apply_model_chain_env(
+            &mut command,
+            &BTreeMap::new(),
+            Some(vec!["relay/one:free".to_string()]),
+            Some(Vec::new()),
+        );
+        assert_eq!(
+            env_override(&command, "OPENROUTER_FALLBACK_MODELS"),
+            Some(Some(String::new()))
+        );
+        assert_eq!(
+            env_override(&command, "BUZZ_MODEL_CHAIN_SOURCE"),
+            Some(None)
+        );
     }
 }

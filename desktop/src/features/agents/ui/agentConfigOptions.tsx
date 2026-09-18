@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import type {
   AcpRuntimeCatalogEntry,
   GlobalAgentConfig,
@@ -23,6 +25,26 @@ export const BLOCK_BUILD_HIDDEN_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "databricks",
 ]);
 
+/**
+ * Provider ids to hide from the pickers on this build.
+ *
+ * On internal Block builds, BUZZ_AGENT_PROVIDER is baked in and a boot
+ * migration rewrites any persisted Databricks v1 values to v2, so offering v1
+ * for a new selection would create a regression path. OSS builds have no baked
+ * provider and hide nothing.
+ */
+export function useHiddenProviderIds(
+  bakedEnvKeys: string[] | undefined,
+): ReadonlySet<string> {
+  return React.useMemo(
+    () =>
+      (bakedEnvKeys ?? []).includes("BUZZ_AGENT_PROVIDER")
+        ? BLOCK_BUILD_HIDDEN_PROVIDER_IDS
+        : new Set<string>(),
+    [bakedEnvKeys],
+  );
+}
+
 export const PERSONA_FIELD_SHELL_CLASS =
   "rounded-xl border border-input bg-muted/40 transition-colors duration-150 ease-out hover:border-muted-foreground/40 focus-within:border-muted-foreground/50";
 export const PERSONA_FIELD_CONTROL_CLASS =
@@ -47,6 +69,7 @@ const KNOWN_LLM_PROVIDER_IDS = [
   "databricks",
   "databricks_v2",
   "deepseek",
+  "google",
   "openai",
   "openai-compat",
   "openrouter",
@@ -146,6 +169,16 @@ const PROVIDER_CREDENTIAL_CONFIG: Partial<
     requiredEnvKeys: ["DEEPSEEK_API_KEY"],
     secretEnvVar: "DEEPSEEK_API_KEY",
   },
+  google: {
+    // Google's Gemini / Gemma models are served over an OpenAI-compatible
+    // endpoint (https://generativelanguage.googleapis.com/v1beta/openai), so
+    // the credential rides the same OPENAI_COMPAT_API_KEY var the OpenAI
+    // dialect already uses. The base URL is derived from the provider id at
+    // spawn time (see buzz-agent's config.rs and isolation/launch.rs).
+    requiredEnvKeys: ["OPENAI_COMPAT_API_KEY"],
+    secretEnvVar: "OPENAI_COMPAT_API_KEY",
+    apiKeyLabel: "Google AI Studio API Key",
+  },
 };
 
 const DEFAULT_MODEL_OPTION: PersonaModelOption = {
@@ -159,6 +192,7 @@ export const PERSONA_LLM_PROVIDER_OPTIONS: readonly PersonaModelOption[] = [
   { id: "openai", label: "OpenAI" },
   { id: "openai-compat", label: "OpenAI-compatible" },
   { id: "openrouter", label: "OpenRouter" },
+  { id: "google", label: "Google (Gemini / Gemma)" },
   { id: "relay-mesh", label: "Colony shared compute" },
   { id: "databricks", label: "Databricks" },
   { id: "databricks_v2", label: "Databricks v2" },
@@ -331,6 +365,7 @@ export function providerRequiresExplicitModel(
   return (
     trimmedProvider === "anthropic" ||
     trimmedProvider === "deepseek" ||
+    trimmedProvider === "google" ||
     trimmedProvider === "openai" ||
     trimmedProvider === "openai-compat" ||
     trimmedProvider === "openrouter"
@@ -343,7 +378,9 @@ export function providerDisplayLabel(providerId: string) {
     ? "Colony shared compute"
     : trimmedProvider === "deepseek"
       ? "DeepSeek"
-      : trimmedProvider;
+      : trimmedProvider === "google"
+        ? "Google (Gemini / Gemma)"
+        : trimmedProvider;
 }
 
 export function getDefaultLlmProviderLabel(

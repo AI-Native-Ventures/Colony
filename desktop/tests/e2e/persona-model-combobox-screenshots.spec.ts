@@ -36,6 +36,8 @@ async function openNewPersonaDialog(page: import("@playwright/test").Page) {
   const dialog = page.getByTestId("persona-dialog");
   await expect(dialog).toBeVisible({ timeout: 8_000 });
   await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
+  // Customize is a row per setting; the model picker opens behind Change.
+  await dialog.getByTestId("customize-ai-change-model").click();
   return dialog;
 }
 

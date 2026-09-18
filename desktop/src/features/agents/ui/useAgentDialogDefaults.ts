@@ -12,7 +12,8 @@ export function useAgentDialogDefaults({
   inheritedEnvVars?: Record<string, string>;
   open: boolean;
 }) {
-  const { globalConfig } = useGlobalAgentConfig();
+  const { globalConfig, isLoading: isGlobalConfigLoading } =
+    useGlobalAgentConfig();
   const { data: bakedEnv } = useBakedBuildEnvQuery({ enabled: open });
   const inheritedDefaults = getInheritedAgentDefaults(globalConfig, bakedEnv);
   const effectiveInheritedEnvVars = React.useMemo(
@@ -27,6 +28,8 @@ export function useAgentDialogDefaults({
   );
   return {
     globalConfig,
+    /** True until the agent defaults have actually been read from disk. */
+    isGlobalConfigLoading,
     inheritedDefaults,
     inheritedEnvVars: effectiveInheritedEnvVars,
   };

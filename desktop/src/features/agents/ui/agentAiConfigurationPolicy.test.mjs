@@ -244,3 +244,50 @@ test("Customize pins the harness, seeding from the inherited default when blank"
     "codex",
   );
 });
+
+test("Customize saves while the agent defaults are still loading", () => {
+  // The rows render as a skeleton until the defaults resolve, so there is no
+  // empty required field to repair and Save must not be disabled. A save in
+  // that state carries no pins, which is what the dialog's storesNoPins path
+  // guarantees.
+  assert.equal(
+    agentAiConfigurationModeSatisfied(
+      "custom",
+      { provider: "", model: "" },
+      true,
+      true,
+    ),
+    true,
+  );
+  // Once they have resolved, the pair is required again.
+  assert.equal(
+    agentAiConfigurationModeSatisfied(
+      "custom",
+      { provider: "", model: "" },
+      true,
+      false,
+    ),
+    false,
+  );
+});
+
+test("switching to Customize copies the inherited harness, provider and model", () => {
+  // Every row starts on what the agent already runs with, so none of them
+  // opens as an empty required field.
+  assert.deepEqual(
+    agentAiConfigurationStateForMode({
+      current: { runtime: "", provider: "", model: "" },
+      inherited: {
+        provider: "openrouter",
+        model: "cohere/north-mini-code:free",
+        runtimeId: "buzz-agent",
+      },
+      mode: "custom",
+    }),
+    {
+      runtime: "buzz-agent",
+      provider: "openrouter",
+      model: "cohere/north-mini-code:free",
+    },
+  );
+});

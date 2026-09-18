@@ -31,6 +31,14 @@ pub struct AgentDefinition {
     /// falls back to auto-detection (e.g., goose config file or available credentials).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// OpenRouter fallback chain for agents on this definition: the models the
+    /// harness tries, in order, when the primary model refuses.
+    ///
+    /// `None` inherits `GlobalAgentConfig::fallback_models`, which itself falls
+    /// back to the relay's recommended chain. `Some(vec![])` is the deliberate
+    /// opposite: this agent has no fallbacks at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_models: Option<Vec<String>>,
     /// Pool of short, thematic names for bot instances created from this persona.
     /// When a new copy is added to a channel, a random unused name is picked from this pool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -199,6 +207,9 @@ impl ManagedAgentRecord {
             runtime: self.runtime.clone(),
             model: self.model.clone(),
             provider: self.provider.clone(),
+            // A record carries no chain of its own: a definition-less instance
+            // resolves the global chain, then the relay's.
+            fallback_models: None,
             name_pool: self.name_pool.clone(),
             is_builtin: self.is_builtin,
             is_active: self.is_active,
@@ -994,6 +1005,9 @@ mod backend_types;
 pub use backend_types::*;
 mod requests;
 pub use requests::*;
+
+#[cfg(test)]
+mod test_defaults;
 
 #[cfg(test)]
 mod tests;

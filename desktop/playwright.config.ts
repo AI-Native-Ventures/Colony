@@ -72,6 +72,7 @@ export default defineConfig({
       testMatch: [
         "**/avatar-shape.spec.ts",
         "**/smoke.spec.ts",
+        "**/model-fallback-chain.spec.ts",
         "**/inline-reply-model.spec.ts",
         "**/composer-dictation.spec.ts",
         "**/rich-document-previews.spec.ts",
@@ -255,6 +256,8 @@ export default defineConfig({
         "**/harness-management.spec.ts",
         "**/harness-catalog-screenshots.spec.ts",
         "**/inline-custom-harness.spec.ts",
+        "**/customize-ai-rows.spec.ts",
+        "**/activity-fallback-line.spec.ts",
         "**/discovery.spec.ts",
         "**/discovery-scroll.spec.ts",
         "**/discovery-lead-detail.spec.ts",

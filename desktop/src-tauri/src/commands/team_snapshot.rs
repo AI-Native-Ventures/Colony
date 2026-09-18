@@ -128,6 +128,9 @@ fn definition_from_snapshot(
         runtime: member.definition.runtime.clone(),
         model: member.definition.model.clone(),
         provider: member.definition.provider.clone(),
+        // Team snapshots do not carry a chain yet, so an imported member
+        // definition follows the global one.
+        fallback_models: None,
         name_pool: member.definition.name_pool.clone(),
         is_builtin: false,
         is_active: true,
