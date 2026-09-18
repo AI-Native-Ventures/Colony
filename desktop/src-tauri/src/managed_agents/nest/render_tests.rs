@@ -109,9 +109,6 @@ fn make_agent(name: &str, persona_id: Option<&str>) -> ManagedAgentRecord {
         definition_respond_to_allowlist: Vec::new(),
         definition_parallelism: None,
         relay_mesh: None,
-        // Fields this fixture does not vary, so a field added on either
-        // side of a develop sync cannot break it.
-        ..Default::default()
     }
 }
 
