@@ -13,6 +13,7 @@ import 'package:http/testing.dart' as http_testing;
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:nostr/nostr.dart' as nostr;
+import 'package:buzz/features/activity/compose_drafts_provider.dart';
 import 'package:buzz/features/channels/channel.dart';
 import 'package:buzz/features/channels/channel_management_provider.dart';
 import 'package:buzz/features/channels/compose_bar.dart';
@@ -2327,6 +2328,116 @@ void main() {
 
       expect(sentContent, 'hello @Helper Bot');
       expect(publishedEvents.where((event) => event['kind'] == 9000), isEmpty);
+    });
+
+    testWidgets('Return inserts a newline instead of sending', (tester) async {
+      final signer = nostr.Keys.generate();
+      var didSend = false;
+
+      await tester.pumpWidget(
+        _buildComposeBar(
+          uploadService: _testUploadService(signer.nsec),
+          currentPubkey: signer.public,
+          onSend:
+              (
+                content,
+                mentionPubkeys, {
+                mediaTags = const <List<String>>[],
+              }) async {
+                didSend = true;
+              },
+        ),
+      );
+
+      await _expandComposer(tester);
+      await tester.enterText(find.byType(TextField), 'first line');
+      await tester.pump();
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.textInputAction, TextInputAction.newline);
+      expect(field.keyboardType, TextInputType.multiline);
+
+      // The keyboard's submit action must not reach the send path; only the
+      // compose button sends.
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+
+      expect(didSend, isFalse);
+    });
+
+    testWidgets('moving the caret does not broadcast a typing indicator', (
+      tester,
+    ) async {
+      final signer = nostr.Keys.generate();
+      const relayUrl = 'http://localhost:3000';
+      final publishedEvents = <Map<String, dynamic>>[];
+
+      // Seed a saved draft so the composer mounts with text already present.
+      // Typing our own text first would open the 3s typing throttle and mask
+      // whatever the caret-move does next.
+      await _testPrefs.setString(
+        'compose_drafts_v1:$relayUrl:${signer.public}',
+        jsonEncode([
+          {
+            'key': composeDraftKey('channel-1'),
+            'channel_id': 'channel-1',
+            'text': 'restored draft',
+            'updated_at': 1,
+          },
+        ]),
+      );
+
+      await tester.pumpWidget(
+        _buildComposeBar(
+          uploadService: _testUploadService(signer.nsec),
+          currentPubkey: signer.public,
+          relayConfig: () => _SwitchableRelayConfigNotifier(
+            RelayConfig(baseUrl: relayUrl, nsec: signer.nsec),
+          ),
+          onSend:
+              (
+                content,
+                mentionPubkeys, {
+                mediaTags = const <List<String>>[],
+              }) async {},
+        ),
+      );
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(ComposeBar)),
+      );
+      final session = container.read(relaySessionProvider.notifier);
+      session.debugAttachSocketForTest(
+        _RecordingRelaySocket(
+          publishedEvents,
+          session.debugHandleSocketMessageForTest,
+        ),
+      );
+
+      await _expandComposer(tester);
+      final controller = tester
+          .widget<TextField>(find.byType(TextField))
+          .controller!;
+      expect(controller.text, 'restored draft');
+
+      int typingCount() => publishedEvents
+          .where((event) => event['kind'] == EventKind.typingIndicator)
+          .length;
+      expect(typingCount(), 0);
+
+      // Caret movement over existing text is not typing. The throttle has
+      // never fired here, so nothing but the guard can suppress this.
+      controller.selection = const TextSelection.collapsed(offset: 2);
+      await tester.pump();
+      controller.selection = const TextSelection.collapsed(offset: 5);
+      await tester.pump();
+
+      expect(typingCount(), 0);
+
+      // A real edit still announces typing.
+      await tester.enterText(find.byType(TextField), 'restored draft!');
+      await tester.pump();
+      expect(typingCount(), 1);
     });
 
     testWidgets('waits for current member data before adding an agent', (
