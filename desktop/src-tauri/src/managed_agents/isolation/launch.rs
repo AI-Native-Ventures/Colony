@@ -25,7 +25,7 @@ pub(crate) fn ensure_supported(runtime_id: Option<&str>) -> Result<(), String> {
     };
     let builtin = crate::managed_agents::discovery::known_acp_runtime_exact(id).is_some();
     let preset_ids = crate::managed_agents::discovery::preset_harness_ids();
-    let preset = preset_ids.iter().any(|pid| *pid == id);
+    let preset = preset_ids.contains(&id);
     if !(builtin || preset) {
         return Err("This Electron beta requires Colony Agent for isolated local teammates".into());
     }
