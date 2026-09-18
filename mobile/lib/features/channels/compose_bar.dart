@@ -46,6 +46,7 @@ part 'compose_bar/ios_photo_picker.dart';
 part 'compose_bar/ios_attachment_popover.dart';
 part 'compose_bar/camera_preview.dart';
 part 'compose_bar/send_button.dart';
+part 'compose_bar/dock.dart';
 part 'compose_bar/layout.dart';
 part 'compose_bar/work_context.dart';
 
@@ -232,6 +233,14 @@ class ComposeBar extends HookConsumerWidget {
     final channelsAsync = ref.watch(channelsProvider);
 
     final membersAsync = ref.watch(channelMembersProvider(channelId));
+    final sessionStatus = ref.watch(
+      relaySessionProvider.select((session) => session.status),
+    );
+    final cachedMembers = channelsAsync.asData == null
+        ? const <ChannelMember>[]
+        : ref
+              .read(channelsProvider.notifier)
+              .cachedMembersForChannel(channelId);
     final currentPubkey = ref.watch(currentPubkeyProvider);
     final userCache = ref.watch(userCacheProvider);
     final isDmChannel =
@@ -244,7 +253,11 @@ class ComposeBar extends HookConsumerWidget {
     final agentOwners = ref.watch(agentOwnersProvider).asData?.value;
     useEffect(
       () {
-        final memberList = membersAsync.asData?.value ?? <ChannelMember>[];
+        final memberList = channelMembersForAutocomplete(
+          membersAsync: membersAsync,
+          sessionStatus: sessionStatus,
+          cachedMembers: cachedMembers,
+        );
         final pubkeys = [
           ...memberList.map((m) => m.pubkey),
           ...?relayAgents?.map((a) => a.pubkey),
@@ -257,6 +270,7 @@ class ComposeBar extends HookConsumerWidget {
       },
       [
         membersAsync.asData?.value.length,
+        cachedMembers.length,
         relayAgents?.length,
         agentOwners?.length,
       ],
@@ -265,16 +279,23 @@ class ComposeBar extends HookConsumerWidget {
     // Typing indicator broadcast — throttled to one event per 3 seconds.
     final lastTypingSentMs = useRef(0);
     final isModifyingText = useRef(false);
+    final lastObservedEditingValue = useRef(controller.value);
 
     // Detect @mention query and broadcast typing on text / selection change.
     useEffect(() {
+      lastObservedEditingValue.value = controller.value;
       void listener() {
-        if (isModifyingText.value) return;
-        final text = controller.text;
-        final sel = controller.selection;
+        final editingValue = controller.value;
+        final previousValue = lastObservedEditingValue.value;
+        lastObservedEditingValue.value = editingValue;
+        if (isModifyingText.value || editingValue == previousValue) return;
+        final text = editingValue.text;
+        final sel = editingValue.selection;
+        final textChanged = text != previousValue.text;
 
-        // Broadcast typing indicator (throttled).
-        if (text.isNotEmpty) {
+        // Broadcast typing indicator (throttled). Moving the caret is not
+        // typing, so a selection-only change must not announce one.
+        if (textChanged && text.isNotEmpty) {
           final now = DateTime.now().millisecondsSinceEpoch;
           if (now - lastTypingSentMs.value > _typingThrottleMs) {
             lastTypingSentMs.value = now;
@@ -806,6 +827,9 @@ class ComposeBar extends HookConsumerWidget {
                 ? 320
                 : 250,
           );
+    final resizeDuration = reducedMotion
+        ? Duration.zero
+        : const Duration(milliseconds: 140);
     final suggestionOverlayController = useMemoized(
       OverlayPortalController.new,
     );
@@ -897,59 +921,11 @@ class ComposeBar extends HookConsumerWidget {
         right: Grid.twelve,
         bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
       ),
-      child: OverlayPortal.overlayChildLayoutBuilder(
+      child: _ComposerOverlayPortal(
         controller: suggestionOverlayController,
-        overlayChildBuilder: (context, layoutInfo) {
-          final composerOrigin = MatrixUtils.transformPoint(
-            layoutInfo.childPaintTransform,
-            Offset.zero,
-          );
-          return ValueListenableBuilder<_AttachmentSurface>(
-            valueListenable: attachmentSurface,
-            builder: (context, surface, _) {
-              final surfaceDuration = reducedMotion
-                  ? Duration.zero
-                  : Duration(
-                      milliseconds:
-                          surface == _AttachmentSurface.camera ||
-                              surface == _AttachmentSurface.photos
-                          ? 320
-                          : 250,
-                    );
-              final expandedSurfaceCoversComposer =
-                  surface == _AttachmentSurface.camera ||
-                  surface == _AttachmentSurface.photos;
-              final overlayAnchorY =
-                  composerOrigin.dy +
-                  (expandedSurfaceCoversComposer
-                      ? layoutInfo.childSize.height + Grid.twelve
-                      : 0);
-              return AnimatedPositioned(
-                duration: surfaceDuration,
-                curve:
-                    surface == _AttachmentSurface.camera ||
-                        surface == _AttachmentSurface.photos
-                    ? const Cubic(0.34, 1.25, 0.64, 1)
-                    : const Cubic(0.22, 1, 0.36, 1),
-                left: composerOrigin.dx,
-                bottom: layoutInfo.overlaySize.height - overlayAnchorY,
-                width: layoutInfo.childSize.width,
-                child: ClipRect(
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: Grid.xxs),
-                    child: surface == _AttachmentSurface.closed
-                        ? _SuggestionPanelMotion(
-                            duration: surfaceDuration,
-                            alignment: Alignment.bottomLeft,
-                            child: buildOverlayPanel(surface),
-                          )
-                        : buildOverlayPanel(surface),
-                  ),
-                ),
-              );
-            },
-          );
-        },
+        attachmentSurface: attachmentSurface,
+        reducedMotion: reducedMotion,
+        buildOverlayPanel: buildOverlayPanel,
         child: _ComposeBarLayout(
           attachments: attachments.value,
           uploadingCount: uploadingCount.value,
@@ -972,6 +948,7 @@ class ComposeBar extends HookConsumerWidget {
           formattingOpen: showFormatting.value,
           onCloseFormatting: () => showFormatting.value = false,
           motionDuration: motionDuration,
+          resizeDuration: resizeDuration,
           onFormat: applyFormat,
           onMention: () {
             attachmentSurface.value = _AttachmentSurface.closed;

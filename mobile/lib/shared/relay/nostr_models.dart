@@ -12,6 +12,17 @@ abstract final class EventKind {
   static const reaction = 7;
   static const streamMessage = 9;
   static const nip29DeleteEvent = 9005;
+
+  /// Kind:9030 event asking the relay to add a community member.
+  ///
+  /// Carries `["p", pubkey]` and `["role", member|admin]`. The relay refuses
+  /// `owner` here — promotion goes through kind:9032 instead.
+  static const relayAdminAddMember = 9030;
+
+  /// Kind:13534 event carrying the relay's current community membership.
+  ///
+  /// Relay-authored NIP-43 snapshot, tagged `["member", pubkey, role]`.
+  static const relayMembership = 13534;
   static const presenceUpdate = 20001;
   static const typingIndicator = 20002;
   static const auth = 22242;

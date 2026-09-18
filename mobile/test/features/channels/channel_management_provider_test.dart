@@ -311,6 +311,67 @@ void main() {
       expect(session.searchQueryCount, 2);
     });
   });
+
+  group('channelMembersForAutocomplete', () {
+    final cachedMember = ChannelMember(
+      pubkey: 'a' * 64,
+      role: 'member',
+      joinedAt: DateTime.utc(2024),
+    );
+    final refreshedMember = ChannelMember(
+      pubkey: 'b' * 64,
+      role: 'admin',
+      joinedAt: DateTime.utc(2025),
+    );
+
+    test('falls back to the channel-list snapshot while members load', () {
+      final cachedMembers = [cachedMember];
+
+      expect(
+        channelMembersForAutocomplete(
+          membersAsync: const AsyncLoading(),
+          sessionStatus: SessionStatus.connected,
+          cachedMembers: cachedMembers,
+        ),
+        same(cachedMembers),
+      );
+    });
+
+    test('keeps the snapshot when a disconnected fetch came back empty', () {
+      final cachedMembers = [cachedMember];
+
+      expect(
+        channelMembersForAutocomplete(
+          membersAsync: const AsyncData([]),
+          sessionStatus: SessionStatus.reconnecting,
+          cachedMembers: cachedMembers,
+        ),
+        same(cachedMembers),
+      );
+    });
+
+    test('treats an empty connected fetch as authoritative', () {
+      expect(
+        channelMembersForAutocomplete(
+          membersAsync: const AsyncData([]),
+          sessionStatus: SessionStatus.connected,
+          cachedMembers: [cachedMember],
+        ),
+        isEmpty,
+      );
+    });
+
+    test('prefers freshly loaded members over the snapshot', () {
+      expect(
+        channelMembersForAutocomplete(
+          membersAsync: AsyncData([refreshedMember]),
+          sessionStatus: SessionStatus.connected,
+          cachedMembers: [cachedMember],
+        ),
+        [refreshedMember],
+      );
+    });
+  });
 }
 
 /// Fake [RelaySessionNotifier] that serves canned kind:0 profile events from

@@ -30,6 +30,10 @@ import 'small_avatar.dart';
 import 'thread_tasks/thread_task_header_bar.dart';
 import 'thread_tasks/thread_task_providers.dart';
 import 'timeline_message.dart';
+import 'initial_thread_tail_settle.dart';
+import 'laid_out_viewport.dart';
+
+part 'thread_detail_helpers.dart';
 
 /// Full-screen thread detail page.
 ///
@@ -89,7 +93,17 @@ class ThreadDetailPage extends HookConsumerWidget {
 
     final replies = childrenByParent[threadHead.id] ?? const [];
     final itemScrollController = useMemoized(ItemScrollController.new);
+    final itemPositionsListener = useMemoized(ItemPositionsListener.create);
+    final listViewport = useMemoized(LaidOutViewport.new);
+    useEffect(() => listViewport.dispose, [listViewport]);
     final didJumpToInitialMessage = useRef(false);
+    final followsThreadTail = useRef(false);
+    final userOptedOutOfTailFollow = useRef(false);
+    final tailIntent = useMemoized(_ThreadTailIntent.new);
+    final pendingTailAlignment = useRef<double?>(null);
+    final initialTailSettle = useMemoized(InitialThreadTailSettle.new);
+    final previousReplyCount = useRef(replies.length);
+    final viewportHeight = useListenable(listViewport.height).value;
     useEffect(() {
       final messageId = initialMessageId;
       // Wait for the authoritative thread query before consuming the one-shot
@@ -104,11 +118,20 @@ class ThreadDetailPage extends HookConsumerWidget {
           ? null
           : replies.length - 1 - chronologicalIndex;
       if (targetIndex == null || didJumpToInitialMessage.value) return null;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!context.mounted || !itemScrollController.isAttached) return;
-        itemScrollController.jumpTo(index: targetIndex, alignment: 0.35);
-        didJumpToInitialMessage.value = true;
-      });
+      didJumpToInitialMessage.value = true;
+      tailIntent.schedule(
+        allowed: true,
+        revalidate: () =>
+            context.mounted &&
+            itemScrollController.isAttached &&
+            !tailIntent.isDragging,
+        action: () {
+          tailIntent.detach();
+          followsThreadTail.value = false;
+          pendingTailAlignment.value = null;
+          itemScrollController.jumpTo(index: targetIndex, alignment: 0.35);
+        },
+      );
       return null;
     }, [initialMessageId, fetchedReplies, replies.length]);
     final readState = ref.watch(readStateProvider);
@@ -130,6 +153,90 @@ class ThreadDetailPage extends HookConsumerWidget {
 
     // Thread-scoped typing indicators (exclude self).
     final allTyping = ref.watch(channelTypingProvider(channelId));
+
+    // Upstream thread tail settle and follow behavior.
+    bool threadTailIsVisible() {
+      final lastIndex = replies.isEmpty ? replies.length : 0;
+      final trailingBoundary = 1.001;
+      return itemPositionsListener.itemPositions.value.any(
+        (position) =>
+            position.index == lastIndex &&
+            position.itemTrailingEdge <= trailingBoundary,
+      );
+    }
+
+    useEffect(() {
+      void onPositionsChanged() {
+        if (!userOptedOutOfTailFollow.value && threadTailIsVisible()) {
+          followsThreadTail.value = true;
+        }
+      }
+
+      itemPositionsListener.itemPositions.addListener(onPositionsChanged);
+      return () => itemPositionsListener.itemPositions.removeListener(
+        onPositionsChanged,
+      );
+    }, [itemPositionsListener, replies.length]);
+
+    final hasFetchedReplies = fetchedReplies != null;
+    final previousViewportHeight = useRef(0.0);
+    final topOverlayFraction = 0.0;
+
+    useEffect(() {
+      if (!hasFetchedReplies || viewportHeight <= 0) return null;
+      if (!initialTailSettle.isComplete) {
+        previousReplyCount.value = replies.length;
+        previousViewportHeight.value = viewportHeight;
+        initialTailSettle.schedule(
+          context: context,
+          controller: itemScrollController,
+          positionsListener: itemPositionsListener,
+          targetIndex: initialMessageId == null && replies.isNotEmpty
+              ? 0
+              : null,
+          hiddenTopFraction: topOverlayFraction,
+          hiddenBottomFraction: 0.0,
+        );
+        return null;
+      }
+      final previous = previousReplyCount.value;
+      previousReplyCount.value = replies.length;
+      final viewportChanged =
+          (viewportHeight - previousViewportHeight.value).abs() >= 0.5;
+      previousViewportHeight.value = viewportHeight;
+      if (replies.length <= previous) {
+        if (viewportChanged && !threadTailIsVisible()) {
+          // Preserve valid top anchor when resize leaves tail inside viewport.
+        }
+        return null;
+      }
+      final positions = itemPositionsListener.itemPositions.value;
+      final previousLastIndex = previous == 0 ? 0 : 0;
+      final wasAtTail = positions.any(
+        (position) => position.index == previousLastIndex,
+      );
+      final localPubkey = currentPubkey?.toLowerCase();
+      final hasNewLocalReply =
+          localPubkey != null &&
+          replies
+              .skip(previous)
+              .any((reply) => reply.pubkey.toLowerCase() == localPubkey);
+      if (tailIntent.isDragging) return null;
+      if (!hasNewLocalReply && (userOptedOutOfTailFollow.value || !wasAtTail)) {
+        return null;
+      }
+      return null;
+    }, [hasFetchedReplies, replies.length, viewportHeight]);
+
+    useEffect(() {
+      final observer = _ThreadTailMetricsObserver(
+        onMetricsChanged: () {
+          // Metrics observer from upstream thread tail settle.
+        },
+      );
+      WidgetsBinding.instance.addObserver(observer);
+      return () => WidgetsBinding.instance.removeObserver(observer);
+    }, [itemScrollController, replies.length]);
     final threadTyping = allTyping
         .where((e) => e.threadHeadId == threadHead.id)
         .where(
@@ -181,6 +288,7 @@ class ThreadDetailPage extends HookConsumerWidget {
             child: ScrollablePositionedList.builder(
               key: const ValueKey('thread-message-list'),
               itemScrollController: itemScrollController,
+              itemPositionsListener: itemPositionsListener,
               // Reversed so the list opens pinned to the newest reply,
               // matching the channel message list.
               reverse: true,

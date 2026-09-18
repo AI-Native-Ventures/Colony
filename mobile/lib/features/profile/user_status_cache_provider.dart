@@ -17,6 +17,7 @@ class UserStatusCacheNotifier extends Notifier<Map<String, UserStatus?>> {
   final Set<String> _pending = {};
   Timer? _batchTimer;
   Timer? _refreshTimer;
+  Timer? _expirationTimer;
   void Function()? _statusUnsub;
   int _subscriptionVersion = 0;
 
@@ -26,6 +27,8 @@ class UserStatusCacheNotifier extends Notifier<Map<String, UserStatus?>> {
     final sessionState = ref.watch(relaySessionProvider);
 
     ref.onDispose(() {
+      _expirationTimer?.cancel();
+      _expirationTimer = null;
       _batchTimer?.cancel();
       _batchTimer = null;
       _refreshTimer?.cancel();
@@ -101,13 +104,21 @@ class UserStatusCacheNotifier extends Notifier<Map<String, UserStatus?>> {
     final parsed = UserStatus.fromEvent(event);
     final existing = state[pubkey];
 
-    // Staleness guard: discard if we already have a newer-or-equal event.
-    if (existing != null && existing.updatedAt >= parsed.updatedAt) return;
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // Staleness guard: discard if we already have a newer event. An equal
+    // event still needs its expiration re-evaluated, otherwise the periodic
+    // refresh keeps an expired status alive forever.
+    if (existing != null && existing.updatedAt > parsed.updatedAt) return;
+    if (existing != null &&
+        existing.updatedAt == parsed.updatedAt &&
+        !parsed.isExpiredAt(now)) {
+      return;
+    }
 
-    final status = parsed.isEmpty ? null : parsed;
+    final status = parsed.isEmpty || parsed.isExpiredAt(now) ? null : parsed;
     final updated = Map<String, UserStatus?>.from(state);
     updated[pubkey] = status;
-    state = updated;
+    _replaceState(updated);
   }
 
   /// Directly update a pubkey's cached status. Used by [UserStatusNotifier]
@@ -116,7 +127,7 @@ class UserStatusCacheNotifier extends Notifier<Map<String, UserStatus?>> {
     final pk = pubkey.toLowerCase();
     final updated = Map<String, UserStatus?>.from(state);
     updated[pk] = status;
-    state = updated;
+    _replaceState(updated);
   }
 
   Future<void> _refreshAll() async {
@@ -161,15 +172,71 @@ class UserStatusCacheNotifier extends Notifier<Map<String, UserStatus?>> {
         final pk = event.pubkey.toLowerCase();
         final parsed = UserStatus.fromEvent(event);
         final existing = updated[pk];
-        if (existing != null && existing.updatedAt >= parsed.updatedAt) {
+        final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        if (existing != null && existing.updatedAt > parsed.updatedAt) {
           continue;
         }
-        updated[pk] = parsed.isEmpty ? null : parsed;
+        if (existing != null &&
+            existing.updatedAt == parsed.updatedAt &&
+            !parsed.isExpiredAt(now)) {
+          continue;
+        }
+        updated[pk] = parsed.isEmpty || parsed.isExpiredAt(now) ? null : parsed;
       }
 
-      state = updated;
+      _replaceState(updated);
     } catch (_) {
       // Silently fail — backstop will retry.
+    }
+  }
+
+  void _replaceState(Map<String, UserStatus?> updated) {
+    state = updated;
+    _scheduleNextExpiration();
+  }
+
+  /// Arms one timer for the soonest expiry across every cached status.
+  void _scheduleNextExpiration() {
+    _expirationTimer?.cancel();
+    _expirationTimer = null;
+
+    DateTime? nextDeadline;
+    for (final status in state.values) {
+      final deadline = status?.expirationDateTime;
+      if (deadline == null) continue;
+      if (nextDeadline == null || deadline.isBefore(nextDeadline)) {
+        nextDeadline = deadline;
+      }
+    }
+    if (nextDeadline == null) return;
+
+    final remaining = nextDeadline.difference(DateTime.now());
+    _expirationTimer = Timer(
+      remaining.isNegative ? Duration.zero : remaining,
+      _expireDueStatuses,
+    );
+  }
+
+  void _expireDueStatuses() {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    var changed = false;
+    final updated = Map<String, UserStatus?>.from(state);
+    for (final entry in state.entries) {
+      final status = entry.value;
+      if (status != null && status.isExpiredAt(now)) {
+        updated[entry.key] = null;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      _replaceState(updated);
+    } else {
+      // Timer callbacks can land just before the Unix-second boundary.
+      _expirationTimer = Timer(
+        const Duration(milliseconds: 50),
+        _expireDueStatuses,
+      );
     }
   }
 }

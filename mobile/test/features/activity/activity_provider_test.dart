@@ -28,6 +28,37 @@ class _RecordingSessionNotifier extends RelaySessionNotifier {
 
 /// Channels provider that starts loading and resolves on demand, modelling a
 /// cold start where the channel list arrives after Activity's first fetch.
+/// Records batched `/query` reads and lets a test fail them on demand.
+class _BatchingSessionNotifier extends RelaySessionNotifier {
+  _BatchingSessionNotifier({this.failBatch = false});
+
+  final bool failBatch;
+  final List<List<NostrFilter>> batchedQueries = [];
+  final List<NostrFilter> fallbackQueries = [];
+
+  @override
+  SessionState build() => const SessionState(status: SessionStatus.connected);
+
+  @override
+  Future<List<NostrEvent>> queryRelay(
+    List<NostrFilter> filters, {
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    batchedQueries.add(filters);
+    if (failBatch) throw StateError('bridge unavailable');
+    return const [];
+  }
+
+  @override
+  Future<List<NostrEvent>> fetchHistory(
+    NostrFilter filter, {
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    fallbackQueries.add(filter);
+    return const [];
+  }
+}
+
 class _LateChannelsNotifier extends ChannelsNotifier {
   final Completer<List<Channel>> _completer = Completer<List<Channel>>();
 
@@ -104,5 +135,51 @@ void main() {
     await container.read(activityProvider.future);
 
     expect(session.dmQueries, isEmpty);
+  });
+
+  test('reads the whole feed in one batched query', () async {
+    final session = _BatchingSessionNotifier();
+    final channels = _LateChannelsNotifier();
+    final container = ProviderContainer(
+      overrides: [
+        relayConfigProvider.overrideWith(_FixedRelayConfigNotifier.new),
+        relaySessionProvider.overrideWith(() => session),
+        myPubkeyProvider.overrideWithValue('me'),
+        channelsProvider.overrideWith(() => channels),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    channels.resolve([_dmChannel('dm-1')]);
+    await container.read(channelsProvider.future);
+    await container.read(activityProvider.future);
+
+    // One request, not one per source.
+    expect(session.batchedQueries, isNotEmpty);
+    expect(session.batchedQueries.last, hasLength(4));
+    expect(session.fallbackQueries, isEmpty);
+  });
+
+  test('falls back to per-filter history when the batch fails', () async {
+    final session = _BatchingSessionNotifier(failBatch: true);
+    final channels = _LateChannelsNotifier();
+    final container = ProviderContainer(
+      overrides: [
+        relayConfigProvider.overrideWith(_FixedRelayConfigNotifier.new),
+        relaySessionProvider.overrideWith(() => session),
+        myPubkeyProvider.overrideWithValue('me'),
+        channelsProvider.overrideWith(() => channels),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    channels.resolve([_dmChannel('dm-1')]);
+    await container.read(channelsProvider.future);
+    await container.read(activityProvider.future);
+
+    expect(session.batchedQueries, isNotEmpty);
+    // Every filter is still read, so a bridge outage degrades rather than
+    // blanking the feed.
+    expect(session.fallbackQueries.length, session.batchedQueries.last.length);
   });
 }

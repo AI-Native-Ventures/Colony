@@ -60,13 +60,19 @@ void main() {
 class _RecordingUserStatusNotifier extends UserStatusNotifier {
   String? savedText;
   String? savedEmoji;
+  DateTime? savedExpiresAt;
 
   @override
   Future<UserStatus?> build() async => null;
 
   @override
-  Future<void> setStatus(String text, String emoji) async {
+  Future<void> setStatus(
+    String text,
+    String emoji, {
+    DateTime? expiresAt,
+  }) async {
     savedText = text;
     savedEmoji = emoji;
+    savedExpiresAt = expiresAt;
   }
 }

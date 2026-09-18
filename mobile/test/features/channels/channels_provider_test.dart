@@ -352,6 +352,36 @@ void main() {
     // And one live subscription on the resulting channel.
     expect(session.subscribeFilters, hasLength(1));
   });
+  test('retains channel-list member snapshots for immediate reuse', () async {
+    // The membership sweep already carries every member, so mention
+    // autocomplete must not wait on its own per-channel fetch to see them.
+    final session = _FakeRelaySession(
+      memberships: [
+        _membershipWithMembers(_channelA, myPk, [_memberOne, _memberTwo]),
+        _membershipWithMembers(_channelB, myPk, [_memberOne]),
+      ],
+      metadata: [
+        _meta(id: _channelA, name: 'general', createdAt: 10),
+        _meta(id: _channelB, name: 'random', createdAt: 10),
+      ],
+    );
+    final container = _buildContainer(session: session);
+    addTearDown(container.dispose);
+
+    await container.read(channelsProvider.future);
+    final notifier = container.read(channelsProvider.notifier);
+
+    expect(notifier.cachedMembersForChannel(_channelA).map((m) => m.pubkey), [
+      myPk,
+      _memberOne,
+      _memberTwo,
+    ]);
+    expect(notifier.cachedMembersForChannel(_channelB).map((m) => m.pubkey), [
+      myPk,
+      _memberOne,
+    ]);
+    expect(notifier.cachedMembersForChannel('unknown-channel'), isEmpty);
+  });
 }
 
 const _channelA = '11111111-1111-4111-8111-111111111111';
@@ -359,6 +389,31 @@ const _channelB = '22222222-2222-4222-8222-222222222222';
 const _channelD = '44444444-4444-4444-8444-444444444444';
 
 /// Build a kind:39002 membership event tagged with the channel id and member.
+const _memberOne =
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _memberTwo =
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+/// A kind:39002 membership carrying every member of [channelId], the shape the
+/// channel-list sweep actually returns.
+NostrEvent _membershipWithMembers(
+  String channelId,
+  String pubkey,
+  List<String> otherMembers,
+) => NostrEvent(
+  id: 'mem-$channelId',
+  pubkey: 'creator',
+  createdAt: 1,
+  kind: 39002,
+  tags: [
+    ['d', channelId],
+    ['p', pubkey],
+    for (final member in otherMembers) ['p', member],
+  ],
+  content: '',
+  sig: 'sig',
+);
+
 NostrEvent _membership(String channelId, String pubkey) => NostrEvent(
   id: 'mem-$channelId',
   pubkey: 'creator',

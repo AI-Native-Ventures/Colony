@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nostr/nostr.dart' as nostr;
+import 'package:buzz/features/channels/channel.dart';
+import 'package:buzz/features/channels/channel_management_provider.dart';
 import 'package:buzz/features/channels/send_message_provider.dart';
 import 'package:buzz/features/channels/thread_tasks/attach_work_context.dart';
 import 'package:buzz/shared/relay/relay.dart';
@@ -16,6 +18,32 @@ AttachWorkContext get _passthroughWorkContext =>
       required List<List<String>> outgoingTags,
       String? threadRoot,
     }) async => outgoingTags;
+
+final _senderNsec = nostr.Keys.generate().nsec;
+
+const _me = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _agentPubkey =
+    'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+
+Channel _channel({
+  required String type,
+  List<String> participants = const [],
+}) => Channel(
+  id: _channelId,
+  name: type == 'dm' ? 'DM' : 'general',
+  channelType: type,
+  visibility: 'private',
+  description: '',
+  createdBy: _me,
+  createdAt: DateTime.utc(2024),
+  memberCount: participants.length,
+  participantPubkeys: participants,
+);
+
+List<String> _pTags(NostrEvent event) => [
+  for (final tag in event.tags)
+    if (tag.length > 1 && tag[0] == 'p') tag[1],
+];
 
 void main() {
   test(
@@ -80,6 +108,100 @@ void main() {
     expect(completedIds, isEmpty);
     expect(removedIds, [localMessages.single.id]);
   });
+
+  test(
+    'addresses DM recipients with p tags without visible mentions',
+    () async {
+      final session = _PendingPublishRelaySession();
+      final send = SendMessage(
+        signedEventRelay: SignedEventRelay(session: session, nsec: _senderNsec),
+        fetchMembers: (_) async => [
+          ChannelMember(
+            pubkey: _agentPubkey,
+            role: 'member',
+            joinedAt: DateTime.utc(2024),
+          ),
+        ],
+        readUserCache: () => const {},
+        addLocalMessage: (_, _) {},
+        completeLocalMessage: (_, _) {},
+        removeLocalMessage: (_, _) {},
+        attachWorkContext: _passthroughWorkContext,
+      );
+
+      final result = send(
+        channelId: _channelId,
+        content: 'no visible mention here',
+        channel: _channel(type: 'dm'),
+      );
+      await session.published;
+      session.accept();
+      await result;
+
+      // An agent only answers messages that address it, so the p tag is what
+      // makes a mobile DM to an agent arrive at all.
+      expect(_pTags(session.event), [_agentPubkey]);
+      expect(session.event.content, 'no visible mention here');
+    },
+  );
+
+  test('leaves a non-DM channel explicit-only', () async {
+    final session = _PendingPublishRelaySession();
+    final send = SendMessage(
+      signedEventRelay: SignedEventRelay(session: session, nsec: _senderNsec),
+      fetchMembers: (_) async => [
+        ChannelMember(
+          pubkey: _agentPubkey,
+          role: 'member',
+          joinedAt: DateTime.utc(2024),
+        ),
+      ],
+      readUserCache: () => const {},
+      addLocalMessage: (_, _) {},
+      completeLocalMessage: (_, _) {},
+      removeLocalMessage: (_, _) {},
+      attachWorkContext: _passthroughWorkContext,
+    );
+
+    final result = send(
+      channelId: _channelId,
+      content: 'hello channel',
+      mentionPubkeys: const [],
+      channel: _channel(type: 'stream'),
+    );
+    await session.published;
+    session.accept();
+    await result;
+
+    expect(_pTags(session.event), isEmpty);
+  });
+
+  test(
+    'falls back to channel participants when membership is unavailable',
+    () async {
+      final session = _PendingPublishRelaySession();
+      final send = SendMessage(
+        signedEventRelay: SignedEventRelay(session: session, nsec: _senderNsec),
+        fetchMembers: (_) async => throw StateError('membership unavailable'),
+        readUserCache: () => const {},
+        addLocalMessage: (_, _) {},
+        completeLocalMessage: (_, _) {},
+        removeLocalMessage: (_, _) {},
+        attachWorkContext: _passthroughWorkContext,
+      );
+
+      final result = send(
+        channelId: _channelId,
+        content: 'still delivered',
+        channel: _channel(type: 'dm', participants: [_agentPubkey]),
+      );
+      await session.published;
+      session.accept();
+      await result;
+
+      expect(_pTags(session.event), [_agentPubkey]);
+    },
+  );
 }
 
 const _channelId = '11111111-1111-4111-8111-111111111111';

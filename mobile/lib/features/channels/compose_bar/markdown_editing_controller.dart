@@ -15,6 +15,13 @@ class _MarkdownRule {
 }
 
 class _MarkdownEditingController extends TextEditingController {
+  TextSpan? _cachedTextSpan;
+  String? _cachedText;
+  TextRange? _cachedComposingRange;
+  TextStyle? _cachedBaseStyle;
+  Color? _cachedOnSurface;
+  Color? _cachedSurface;
+
   static final _rules = [
     _MarkdownRule(
       r'```(?:\r?\n)?([\s\S]*?)(?:\r?\n)?```',
@@ -42,7 +49,19 @@ class _MarkdownEditingController extends TextEditingController {
         withComposing && value.composing.isValid && !value.composing.isCollapsed
         ? value.composing
         : TextRange.empty;
-    return TextSpan(
+    // Re-highlighting is the expensive part of a composer rebuild, and a
+    // selection-only change leaves every input here identical. Reuse the last
+    // span in that case so dragging a selection handle stays responsive.
+    final colors = context.colors;
+    if (_cachedTextSpan case final cached?
+        when _cachedText == text &&
+            _cachedComposingRange == composingRange &&
+            _cachedBaseStyle == baseStyle &&
+            _cachedOnSurface == colors.onSurface &&
+            _cachedSurface == colors.surface) {
+      return cached;
+    }
+    final span = TextSpan(
       style: baseStyle,
       children: _buildMarkdownSpans(
         context,
@@ -52,6 +71,13 @@ class _MarkdownEditingController extends TextEditingController {
         composingRange: composingRange,
       ),
     );
+    _cachedText = text;
+    _cachedComposingRange = composingRange;
+    _cachedBaseStyle = baseStyle;
+    _cachedOnSurface = colors.onSurface;
+    _cachedSurface = colors.surface;
+    _cachedTextSpan = span;
+    return span;
   }
 
   List<InlineSpan> _buildMarkdownSpans(

@@ -42,6 +42,27 @@ class ChannelMember {
   }
 }
 
+/// Picks the member list mention autocomplete should offer right now.
+///
+/// [channelMembersProvider] runs its own fetch per channel, so a composer that
+/// mounts before that fetch resolves has no members to suggest. The channel
+/// list has already read the same kind:39002 events, so its snapshot fills the
+/// gap. An empty loaded list is authoritative only once the session is
+/// connected: an empty result from a disconnected fetch means "not known yet",
+/// not "no members".
+List<ChannelMember> channelMembersForAutocomplete({
+  required AsyncValue<List<ChannelMember>> membersAsync,
+  required SessionStatus sessionStatus,
+  required List<ChannelMember> cachedMembers,
+}) {
+  final loadedMembers = membersAsync.asData?.value;
+  if (loadedMembers == null) return cachedMembers;
+  if (sessionStatus != SessionStatus.connected && loadedMembers.isEmpty) {
+    return cachedMembers;
+  }
+  return loadedMembers;
+}
+
 @immutable
 class ChannelCanvas {
   final String? content;

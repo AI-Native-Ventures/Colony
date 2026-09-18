@@ -13,6 +13,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../shared/clipboard_utils.dart';
+import '../../shared/deeplink/deep_link.dart';
+import '../../shared/deeplink/pending_deep_link_provider.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/syntax_highlight.dart';
 import '../../shared/theme/theme.dart';
@@ -20,6 +22,7 @@ import '../../shared/custom_emoji/custom_emoji.dart';
 import '../../shared/custom_emoji/custom_emoji_provider.dart';
 import '../../shared/custom_emoji/custom_emoji_render.dart';
 import 'media_viewer_page.dart';
+import 'message_content/link_normalizer.dart';
 import 'message_media.dart';
 
 part 'message_content/media_carousel.dart';
@@ -147,38 +150,13 @@ class MessageContent extends HookConsumerWidget {
     );
 
     final finalContent = useMemoized(() {
-      // Convert autolinks and bare URLs to standard markdown links,
-      // but skip content inside backticks (inline code / fenced blocks).
-      final buffer = StringBuffer();
-      final parts = markdownContent.split('`');
-      for (var i = 0; i < parts.length; i++) {
-        if (i.isOdd) {
-          // Inside backticks — preserve as-is.
-          buffer.write('`${parts[i]}`');
-        } else {
-          // 1. Angle-bracket autolinks: <https://...>
-          var segment = parts[i].replaceAllMapped(
-            RegExp(r'<(https?://[^>]+)>'),
-            (m) => '[${m[1]}](${m[1]})',
-          );
-          // 2. Bare URLs not already inside markdown link/image syntax.
-          //    Negative lookbehind avoids matching URLs preceded by ]( or =
-          //    which are already part of markdown links or imeta tags.
-          segment = segment.replaceAllMapped(
-            RegExp(r'(?<![(\]=])https?://[^\s)>\]]+'),
-            (m) {
-              final url = m[0]!;
-              // Skip if this URL is already a markdown link label that equals
-              // the URL (produced by step 1 or authored as [url](url)).
-              final start = m.start;
-              if (start >= 1 && segment[start - 1] == '[') return url;
-              return '[$url]($url)';
-            },
-          );
-          buffer.write(segment);
-        }
-      }
-      final processed = buffer.toString();
+      // Convert autolinks and bare URLs to standard markdown links, leaving
+      // inline code and fenced blocks untouched. This replaced an equivalent
+      // http(s)-only pass that split on single backticks: it now also covers
+      // `buzz://` permalinks, and it tracks fence and inline-code runs rather
+      // than assuming every backtick is a delimiter. Trailing-punctuation
+      // peeling is limited to Buzz URLs so http(s) destinations are unchanged.
+      final processed = normalizeBareLinks(markdownContent);
 
       // Replace spaces with non-breaking spaces inside known mention names
       // so the gpt_markdown combined regex can match multi-word names
@@ -288,6 +266,37 @@ class MessageContent extends HookConsumerWidget {
     });
 
     final baseStyle = fallbackStyle ?? linkStyle;
+
+    // A Buzz permalink is a ~100 character URL that reads as noise inline and,
+    // before this, did nothing when tapped: the handler below only launches
+    // http(s). Render it as a compact chip and route the tap back through the
+    // same pending-link state an OS-delivered link uses.
+    final deepLinkUri = Uri.tryParse(url);
+    final deepLink = deepLinkUri == null
+        ? null
+        : parseBuzzDeepLink(deepLinkUri);
+    if (deepLink is MessageDeepLink || deepLink is ChannelDeepLink) {
+      final channelId = switch (deepLink) {
+        MessageDeepLink(:final channelId) => channelId,
+        ChannelDeepLink(:final channelId) => channelId,
+        _ => null,
+      };
+      final channelName = channelNames.entries
+          .where((entry) => entry.value == channelId)
+          .map((entry) => entry.key)
+          .firstOrNull;
+      final label = channelName != null
+          ? '#$channelName'
+          : (deepLink is MessageDeepLink ? 'Message' : 'Channel');
+      return GestureDetector(
+        onTap: () =>
+            ref.read(pendingDeepLinkProvider.notifier).open(deepLinkUri!),
+        child: _TokenPill(
+          text: label,
+          textStyle: baseStyle.copyWith(fontWeight: FontWeight.w500),
+        ),
+      );
+    }
 
     return GestureDetector(
       onTap: () async {
