@@ -327,7 +327,7 @@ fn is_openai_compatible_provider(provider: Option<&str>) -> bool {
             .map(str::trim)
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("openai" | "openai-compat" | "deepseek")
+        Some("openai" | "openai-compat" | "deepseek" | "google")
     )
 }
 
@@ -342,16 +342,16 @@ fn openai_compatible_models_url_for_discovery(
     env: &BTreeMap<String, String>,
     provider: Option<&str>,
 ) -> String {
-    let default_base = if matches!(
-        provider
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("deepseek")
-    ) {
-        "https://api.deepseek.com/v1"
-    } else {
-        "https://api.openai.com/v1"
+    // Ids come from the live `/models` listing, so no static list is kept here.
+    // Google's default id is `gemma-4-31b-it`, fallback `gemini-3.5-flash-lite`.
+    let default_base = match provider
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("deepseek") => "https://api.deepseek.com/v1",
+        Some("google") => "https://generativelanguage.googleapis.com/v1beta/openai",
+        _ => "https://api.openai.com/v1",
     };
     let base_url = env_or_process_value(env, "OPENAI_COMPAT_BASE_URL")
         .unwrap_or_else(|| default_base.to_string());

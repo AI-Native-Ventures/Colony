@@ -18,6 +18,7 @@ fn definition(
         runtime: None,
         model: model.map(str::to_string),
         provider: provider.map(str::to_string),
+        fallback_models: None,
         name_pool: vec![],
         is_builtin: false,
         is_active: true,
@@ -986,3 +987,5 @@ fn the_reasoning_effort_comes_from_global_for_every_record_shape() {
     };
     assert_eq!(cfg.reasoning_effort.value, None);
 }
+
+mod fallback_chain_tests;

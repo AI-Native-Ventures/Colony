@@ -675,7 +675,11 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
     provider: string | null;
     model: string | null;
     preferred_runtime?: string | null;
+    /** Empty (the default) means "use Colony's recommended chain". */
+    fallback_models?: string[];
   };
+  /** Colony's recommended chain, as `get_recommended_model_chain` answers it. */
+  recommendedModelChain?: string[];
   /** Volatile Colony Credits account returned by the authenticated mock command. */
   colonyCreditsAccount?: {
     balance_nanousd: string;

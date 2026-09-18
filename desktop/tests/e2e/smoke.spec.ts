@@ -100,6 +100,8 @@ async function chooseSharedComputeProvider(
   page: import("@playwright/test").Page,
 ) {
   await page.getByRole("tab", { name: "Customize for this agent" }).click();
+  // Customize is a row per setting now; the picker opens behind Change.
+  await page.getByTestId("customize-ai-change-provider").click();
   const provider = page.locator("#persona-llm-provider");
   await expect(provider).toBeVisible({ timeout: 10_000 });
   await provider.press("Enter");
@@ -109,6 +111,7 @@ async function chooseSharedComputeProvider(
       name: "Colony shared compute",
     })
     .click();
+  await page.getByTestId("customize-ai-change-model").click();
 }
 
 test("creates a new mocked stream", async ({ page }) => {
@@ -224,19 +227,23 @@ test("create agent supports parallelism and system prompt overrides", async ({
   // The buzz-agent runtime auto-selects once the ACP runtime catalog loads;
   // Customize reveals the per-agent LLM provider and model fields.
   await page.getByRole("tab", { name: "Customize for this agent" }).click();
+  await page.getByTestId("customize-ai-change-provider").click();
   const llmProvider = page.locator("#persona-llm-provider");
   await expect(llmProvider).toBeVisible({ timeout: 10_000 });
   await llmProvider.press("Enter");
   await page
     .getByRole("menuitemradio", { exact: true, name: "Anthropic" })
     .click();
+  // Anthropic needs a key no layer supplies, so the Provider row opens its
+  // input rather than hiding it behind the note.
+  await page.getByLabel("Anthropic API Key").fill("sk-test-api-key-for-e2e");
+  await page.getByTestId("customize-ai-change-model").click();
   const model = page.locator("#persona-model");
   await model.click();
   await page
     .getByRole("button", { name: "Custom model...", exact: true })
     .click();
   await page.getByLabel("Custom model ID").fill("claude-opus-4-5");
-  await page.getByLabel("Anthropic API Key").fill("sk-test-api-key-for-e2e");
 
   const advancedToggle = page.getByRole("button", {
     name: "Advanced",

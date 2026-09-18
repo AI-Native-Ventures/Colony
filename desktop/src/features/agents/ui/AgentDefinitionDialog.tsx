@@ -3,16 +3,12 @@ import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { cn } from "@/shared/lib/cn";
-import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import { AgentIdentityFields } from "./AgentIdentityFields";
 import { AgentCreationPreview } from "./AgentCreationPreview";
-import { PersonaDropdownField } from "./PersonaDropdownField";
 import type { EnvVarsValue } from "./EnvVarsEditor";
 import { PersonaAdvancedFields } from "./PersonaAdvancedFields";
-import { PersonaModelField } from "./PersonaModelField";
 import { runtimeAvailabilityWarning } from "./runtimeAvailabilityWarning";
-import { PersonaProviderApiKeyField } from "./PersonaProviderApiKeyField";
 import {
   canSubmitPersonaDialog,
   formatPersonaNamePoolText,
@@ -29,24 +25,20 @@ import {
   ADVANCED_FIELDS_MOTION_TRANSITION,
   AUTO_MODEL_DROPDOWN_VALUE,
   AUTO_PROVIDER_DROPDOWN_VALUE,
-  BLOCK_BUILD_HIDDEN_PROVIDER_IDS,
   buildPersonaRuntimeDropdownOptions,
   CUSTOM_PROVIDER_DROPDOWN_VALUE,
-  computeLocalModeGate,
   formatRuntimeOptionLabel,
   getDefaultPersonaRuntime,
   getPersonaModelOptions,
   getPersonaProviderOptions,
-  getProviderApiKeyLabel,
   getRuntimePersonaModelOptions,
   NO_RUNTIME_DROPDOWN_VALUE,
   runtimeSupportsLlmProviderSelection,
   PERSONA_FIELD_CONTROL_CLASS,
   PERSONA_FIELD_SHELL_CLASS,
-  PERSONA_LABEL_OPTIONAL_CLASS,
   shouldClearKnownModelForSelectionScope,
+  useHiddenProviderIds,
 } from "./agentConfigOptions";
-import { RequiredFieldLabel } from "./agentConfigControls";
 import { relayMeshModelPickerState } from "./relayMeshModelPicker";
 import {
   AgentOrgPlacementSection,
@@ -65,7 +57,6 @@ import { usePersonaModelDiscovery } from "./usePersonaModelDiscovery";
 import { useBakedBuildEnvKeysQuery, useRuntimeFileConfigQuery } from "../hooks";
 import { useAgentDialogDefaults } from "./useAgentDialogDefaults";
 import { AgentDefaultsDialog } from "./AgentDefaultsDialog";
-import { AgentHarnessField } from "./AgentHarnessField";
 import {
   AgentAiConfigurationModeField,
   AgentCreateAiDefaultsSummary,
@@ -78,6 +69,11 @@ import {
 import { applyAgentAiConfigurationModeChange } from "./agentAiConfigurationModeChange";
 import { useProviderApiKeyFieldState } from "./providerApiKeyFieldState";
 import { buildRuntimeModelProviderPayload } from "./agentDefinitionSubmitPayload";
+import { useLocalModeGate } from "./useLocalModeGate";
+import { useAgentFallbackChain } from "./useAgentFallbackChain";
+import { CustomizeAiRows } from "./CustomizeAiRows";
+import { customizeAiHasOverrides } from "./customizeAiRows.lib";
+import { buildCustomizeAiRowsProps } from "./customizeAiRowsProps";
 import { AgentDefinitionDialogFooter } from "./AgentDefinitionDialogFooter";
 import { AgentDefinitionDialogShell } from "./AgentDefinitionDialogShell";
 import { AddCustomHarnessDialog } from "./AddCustomHarnessDialog";
@@ -151,6 +147,11 @@ export function AgentDefinitionDialog({
   // trigger the effect (the `runtime` dep would pass the length guard) and
   // snap the dropdown back to the default — an edit-mode regression.
   const hasSeededForOpenRef = React.useRef(false);
+  // True while the dialog is editing an agent that carried no AI pins when it
+  // opened. Such an agent may sit on Customize with every row still inherited,
+  // and that must keep saving as "no overrides" rather than freezing today's
+  // defaults onto it.
+  const openedWithoutPinsRef = React.useRef(false);
   const [showAdvancedFields, setShowAdvancedFields] = React.useState(false);
   const [isAvatarUploadPending, setIsAvatarUploadPending] =
     React.useState(false);
@@ -158,7 +159,9 @@ export function AgentDefinitionDialog({
   const [isAddHarnessOpen, setIsAddHarnessOpen] = React.useState(false);
   const {
     globalConfig,
+    isGlobalConfigLoading,
     inheritedDefaults: {
+      effort: inheritedEffortDefault,
       provider: inheritedProviderDefault,
       model: inheritedModelDefault,
     },
@@ -195,13 +198,13 @@ export function AgentDefinitionDialog({
     setModel(initialValues.model ?? "");
     setIsCustomModelEditing(false);
     setProvider(initialValues.provider ?? "");
-    setAiConfigurationMode(
-      initialAgentAiConfigurationMode({
-        provider: initialValues.provider ?? "",
-        model: initialValues.model ?? "",
-        runtime: initialValues.runtime ?? "",
-      }),
-    );
+    const initialMode = initialAgentAiConfigurationMode({
+      provider: initialValues.provider ?? "",
+      model: initialValues.model ?? "",
+      runtime: initialValues.runtime ?? "",
+    });
+    setAiConfigurationMode(initialMode);
+    openedWithoutPinsRef.current = initialMode === "defaults";
     setIsCustomProviderEditing(false);
     const nextNamePoolText =
       "namePool" in initialValues
@@ -298,6 +301,7 @@ export function AgentDefinitionDialog({
       setIsCustomModelEditing(false);
       setProvider("");
       setAiConfigurationMode("defaults");
+      fallbackChain.reset();
       setIsCustomProviderEditing(false);
       setNamePoolText("");
       setEnvVars({});
@@ -320,15 +324,22 @@ export function AgentDefinitionDialog({
     // (Enter) from bypassing a missing credential.
     if (!initialValues || !localModeSatisfied || !canSubmit) return;
 
+    // Customize with every row still inherited stores nothing: it takes the
+    // same no-pins payload path as "Use agent defaults", so opening the tab and
+    // pressing Save leaves the agent following the defaults.
+    const storesNoPins =
+      aiConfigurationMode === "defaults" ||
+      (openedWithoutPinsRef.current &&
+        !customizeAiHasOverrides(customizeRowsProps.values));
     const {
       runtime: runtimeForSubmit,
       model: modelForSubmit,
       provider: providerForSubmit,
     } = buildRuntimeModelProviderPayload({
       runtime,
-      model: aiConfigurationMode === "defaults" ? "" : model,
-      provider: aiConfigurationMode === "defaults" ? "" : provider,
-      isDefaultsMode: aiConfigurationMode === "defaults",
+      model: storesNoPins ? "" : model,
+      provider: storesNoPins ? "" : provider,
+      isDefaultsMode: storesNoPins,
       isEditMode: "id" in initialValues,
       isAutoSeeded: isRuntimeAutoSeededRef.current,
       initialPreviousRuntime: initialValues.runtime?.trim() ?? "",
@@ -354,6 +365,7 @@ export function AgentDefinitionDialog({
       model: modelForSubmit,
       provider: providerForSubmit,
       namePool: namePoolInput,
+      fallbackModels: storesNoPins ? null : fallbackChain.value,
       envVars,
       behavior: behaviorForSubmit(
         behaviorDraft,
@@ -427,34 +439,21 @@ export function AgentDefinitionDialog({
     setProvider(next.provider);
     setModel(next.model);
     setEnvVars(next.envVars);
+    // Agent defaults means inheriting everything, the chain included.
+    if (nextMode === "defaults") fallbackChain.reset();
   }
   const { data: bakedEnvKeys } = useBakedBuildEnvKeysQuery({ enabled: open });
-  const localModeGate = React.useMemo(
-    () =>
-      computeLocalModeGate({
-        bakedEnvKeys,
-        envVars,
-        globalEnvVars: globalConfig.env_vars,
-        globalProvider: inheritedProviderDefault.value,
-        globalModel: inheritedModelDefault.value,
-        isProviderMode: false,
-        model,
-        provider: trimmedProvider,
-        runtimeId: runtime,
-        runtimeFileConfig,
-      }),
-    [
-      bakedEnvKeys,
-      envVars,
-      globalConfig.env_vars,
-      inheritedModelDefault.value,
-      inheritedProviderDefault.value,
-      model,
-      trimmedProvider,
-      runtime,
-      runtimeFileConfig,
-    ],
-  );
+  const localModeGate = useLocalModeGate({
+    bakedEnvKeys,
+    envVars,
+    globalEnvVars: globalConfig.env_vars,
+    globalModel: inheritedModelDefault.value,
+    globalProvider: inheritedProviderDefault.value,
+    model,
+    provider: trimmedProvider,
+    runtimeFileConfig,
+    runtimeId: runtime,
+  });
   // requiredEnvKeys: the gate already handles baked-, global-, and file-
   // satisfied keys so no further filtering is needed.
   const { requiredEnvKeys } = localModeGate;
@@ -482,23 +481,21 @@ export function AgentDefinitionDialog({
     secretEnvVar: topLevelSecretEnvVar,
     value: apiKeyValue,
   } = apiKeyFieldState;
-  const providerIsRequired =
-    aiConfigurationMode === "custom" && runtimeCanChooseLlmProvider;
   const modelFieldVisible =
     runtime.trim().length > 0 || blankRuntimeModelProviderEditable;
   const isExplicitModelRequired = aiConfigurationMode === "custom";
-  // An untouched pair is exempt so a runtime-only definition stays editable.
-  // With no runtime there is no inherited model, so the pair stays required.
-  const customAiPairSatisfied =
-    agentAiConfigurationModeSatisfied(
-      aiConfigurationMode,
-      { provider, model },
-      runtimeCanChooseLlmProvider,
-    ) ||
-    (!isCreateMode &&
-      runtime.trim().length > 0 &&
-      provider.trim() === (initialValues?.provider ?? "").trim() &&
-      model.trim() === (initialValues?.model ?? "").trim());
+  // Gate the provider requirement on the field's actual visibility, not the raw
+  // runtime capability. Codex/Claude hide the provider picker (they drive their
+  // own provider), so Customize must not require a provider there. But a
+  // runtime-less legacy/builtin definition still exposes the picker via
+  // blankRuntimeModelProviderEditable, so it must keep requiring a provider —
+  // otherwise Save could persist `provider: undefined` despite the visible field.
+  const customAiPairSatisfied = agentAiConfigurationModeSatisfied(
+    aiConfigurationMode,
+    { provider, model },
+    runtimeCanChooseLlmProvider,
+    isGlobalConfigLoading,
+  );
   const selectedRuntimeIsAvailable =
     runtime.trim().length === 0 ||
     selectedRuntime?.availability === "available";
@@ -562,17 +559,7 @@ export function AgentDefinitionDialog({
     modelFieldVisible,
     provider: effectiveProvider,
   });
-  // On internal Block builds, BUZZ_AGENT_PROVIDER is baked in and a boot
-  // migration rewrites any persisted Databricks v1 values → v2. Hide the v1
-  // option there so it is not offered for new selections. OSS builds have no
-  // baked provider, so v1 remains visible.
-  const hideProviderIds = React.useMemo(
-    () =>
-      (bakedEnvKeys ?? []).includes("BUZZ_AGENT_PROVIDER")
-        ? BLOCK_BUILD_HIDDEN_PROVIDER_IDS
-        : new Set<string>(),
-    [bakedEnvKeys],
-  );
+  const hideProviderIds = useHiddenProviderIds(bakedEnvKeys);
   const providerOptions = getPersonaProviderOptions(
     trimmedProvider,
     runtime,
@@ -605,6 +592,16 @@ export function AgentDefinitionDialog({
     modelDiscoveryLoading && discoveredModelOptions === null,
     modelOptions,
   );
+  const fallbackChain = useAgentFallbackChain({
+    disabled: isPending,
+    globalChain: globalConfig.fallback_models ?? [],
+    initialFallbackModels: initialValues?.fallbackModels,
+    open,
+    options: discoveredModelOptions,
+    optionsLoading: modelDiscoveryLoading && discoveredModelOptions === null,
+    primaryModel: model,
+    provider: effectiveProvider,
+  });
   const previewLabel = displayName.trim() || "Agent name";
   const previewAvatarUrl = avatarUrl.trim() || null;
   const runtimeWarningText = selectedRuntime
@@ -618,6 +615,61 @@ export function AgentDefinitionDialog({
   const advancedFieldsTransition = shouldReduceMotion
     ? { duration: 0 }
     : ADVANCED_FIELDS_MOTION_TRANSITION;
+  // The model a Customize row inherits: the agent defaults when the provider
+  // picker is shown, and the harness's own config file when it is hidden --
+  // the precedence `applyAgentAiConfigurationModeChange` already seeds with.
+  const customizeRowsProps = buildCustomizeAiRowsProps({
+    apiKey: {
+      inheritedLabel: apiKeyInheritedLabel,
+      isInherited: apiKeyIsInherited,
+      isRequired: apiKeyIsRequired,
+      secretEnvVar: topLevelSecretEnvVar,
+      value: apiKeyValue,
+    },
+    blankRuntimeOptionLabel,
+    catalogStatus: runtimeCatalogStatus,
+    disabled: isPending,
+    effectiveProvider,
+    envVars,
+    fallbackChain,
+    inheritedEffort: inheritedEffortDefault.value,
+    inheritedModel: runtimeCanChooseLlmProvider
+      ? inheritedModelDefault.value
+      : (runtimeFileConfig?.model?.trim() ?? ""),
+    inheritedProvider: inheritedProviderDefault.value,
+    inheritedRuntimeId: defaultRuntime?.id,
+    isGlobalConfigLoading,
+    model,
+    modelField: {
+      isExplicitModelRequired,
+      modelDiscoveryStatus,
+      modelDropdownOptions,
+      modelSelectValue,
+      showCustomModelInput,
+      showSharedComputeAutoHint:
+        isRelayMesh && modelSelectValue === AUTO_MODEL_DROPDOWN_VALUE,
+      transition: advancedFieldsTransition,
+    },
+    modelFieldVisible,
+    onCustomModelChange: setModel,
+    onCustomProviderIdChange: setProvider,
+    onEnvVarChange: (key, value) =>
+      setEnvVars((prev) => ({ ...prev, [key]: value })),
+    onModelChange: handleModelDropdownChange,
+    onProviderChange: handleProviderDropdownChange,
+    onRuntimeChange: handleRuntimeDropdownChange,
+    provider,
+    providerFieldVisible: llmProviderFieldVisible,
+    providerOptions: providerDropdownOptions,
+    providerSelectValue,
+    runtime,
+    runtimeDropdownValue,
+    runtimeOptions: runtimeDropdownOptions,
+    runtimeSummaryLabel,
+    runtimeWarning,
+    runtimesLoading,
+    showCustomProviderInput,
+  });
 
   React.useEffect(() => {
     if (
@@ -642,6 +694,40 @@ export function AgentDefinitionDialog({
     open,
     effectiveProvider,
     runtime,
+  ]);
+
+  // The agent defaults can resolve after the dialog opened on Customize. The
+  // rows seed from them, so fill the still-empty ones when they land; without
+  // this the tab kept the empty pickers that made Save look broken on an agent
+  // that was running fine.
+  React.useEffect(() => {
+    if (
+      !open ||
+      aiConfigurationMode !== "custom" ||
+      isGlobalConfigLoading ||
+      !openedWithoutPinsRef.current
+    ) {
+      return;
+    }
+    if (
+      runtimeCanChooseLlmProvider &&
+      provider.trim().length === 0 &&
+      inheritedProviderDefault.value
+    ) {
+      setProvider(inheritedProviderDefault.value);
+    }
+    if (model.trim().length === 0 && inheritedModelDefault.value) {
+      setModel(inheritedModelDefault.value);
+    }
+  }, [
+    aiConfigurationMode,
+    inheritedModelDefault.value,
+    inheritedProviderDefault.value,
+    isGlobalConfigLoading,
+    model,
+    open,
+    provider,
+    runtimeCanChooseLlmProvider,
   ]);
 
   const selection: RuntimeModelProviderSelection = {
@@ -798,103 +884,13 @@ export function AgentDefinitionDialog({
           data-testid={`agent-${aiConfigurationMode}-configuration-section`}
         >
           {aiConfigurationMode === "custom" ? (
-            <AgentHarnessField
-              catalogStatus={runtimeCatalogStatus}
-              disabled={isPending || runtimesLoading}
-              onValueChange={handleRuntimeDropdownChange}
-              options={runtimeDropdownOptions}
-              placeholder={blankRuntimeOptionLabel}
-              value={runtimeDropdownValue}
-              warning={runtimeWarning}
-            />
+            <CustomizeAiRows {...customizeRowsProps} />
           ) : null}
-          {llmProviderFieldVisible && aiConfigurationMode === "custom" ? (
-            <div className="space-y-1.5">
-              <RequiredFieldLabel
-                htmlFor="persona-llm-provider"
-                isRequired={providerIsRequired}
-              >
-                LLM provider
-                {!providerIsRequired ? (
-                  <span className={PERSONA_LABEL_OPTIONAL_CLASS}>Optional</span>
-                ) : null}
-              </RequiredFieldLabel>
-              <PersonaDropdownField
-                disabled={isPending}
-                id="persona-llm-provider"
-                onValueChange={handleProviderDropdownChange}
-                options={providerDropdownOptions}
-                placeholder="Choose a provider"
-                value={providerSelectValue}
-              />
-              {showCustomProviderInput ? (
-                <div
-                  className={cn(
-                    "mt-2 flex min-h-11 items-center px-3",
-                    PERSONA_FIELD_SHELL_CLASS,
-                  )}
-                >
-                  <Input
-                    aria-label="Custom provider ID"
-                    autoCorrect="off"
-                    className={cn(
-                      "h-8 px-0 py-0 leading-6",
-                      PERSONA_FIELD_CONTROL_CLASS,
-                    )}
-                    disabled={isPending}
-                    id="persona-custom-provider"
-                    onChange={(event) => setProvider(event.target.value)}
-                    placeholder="Custom provider ID"
-                    value={provider}
-                  />
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {llmProviderFieldVisible &&
-          aiConfigurationMode === "custom" &&
-          topLevelSecretEnvVar ? (
-            <PersonaProviderApiKeyField
-              disabled={isPending}
-              envVarName={topLevelSecretEnvVar}
-              isInherited={apiKeyIsInherited}
-              inheritedLabel={apiKeyInheritedLabel}
-              isRequired={apiKeyIsRequired}
-              label={getProviderApiKeyLabel(effectiveProvider) ?? "API key"}
-              onValueChange={(next) => {
-                setEnvVars((prev) => ({
-                  ...prev,
-                  [topLevelSecretEnvVar]: next,
-                }));
-              }}
-              value={apiKeyValue}
-            />
-          ) : null}
-
-          <AnimatePresence initial={false}>
-            {modelFieldVisible && aiConfigurationMode === "custom" ? (
-              <PersonaModelField
-                disabled={isPending}
-                isExplicitModelRequired={isExplicitModelRequired}
-                model={model}
-                modelDiscoveryStatus={modelDiscoveryStatus}
-                modelDropdownOptions={modelDropdownOptions}
-                modelSelectValue={modelSelectValue}
-                onCustomModelChange={setModel}
-                showSharedComputeAutoHint={
-                  isRelayMesh && modelSelectValue === AUTO_MODEL_DROPDOWN_VALUE
-                }
-                onModelValueChange={handleModelDropdownChange}
-                showCustomModelInput={showCustomModelInput}
-                transition={advancedFieldsTransition}
-              />
-            ) : null}
-          </AnimatePresence>
 
           {aiConfigurationMode === "defaults" ? (
             <AgentCreateAiDefaultsSummary
               canChooseProvider={runtimeCanChooseLlmProvider}
+              fallbacks={fallbackChain.inherited}
               harness={runtimeSummaryLabel}
               inheritedModel={inheritedModelDefault}
               inheritedProvider={inheritedProviderDefault}

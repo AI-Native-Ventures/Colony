@@ -75,10 +75,18 @@ pub(crate) fn is_derived_provider_model_key(key: &str) -> bool {
 /// (the effort lives only in the global config), so
 /// [`migrate_config_owned_model_env`] leaves it alone and the spawn-time strip
 /// below is what stops a hand-set copy from overriding the picker.
+///
+/// `OPENROUTER_FALLBACK_MODELS` joined it when the fallback chain gained its own
+/// field on the global config and on `AgentDefinition`. Its structured field
+/// lives on those two, not on a record, so the record migration leaves it alone;
+/// the global config adopts a hand-typed copy on load
+/// (`global_config::migrate_env_fallback_models`) and the spawn-time strip is
+/// what stops a per-agent copy from quietly disagreeing with the picker.
 pub(crate) const CONFIG_OWNED_MODEL_ENV_KEYS: &[&str] = &[
     "BUZZ_ACP_MODEL",
     "BUZZ_ACP_PROVIDER",
     "BUZZ_ACP_REASONING_EFFORT",
+    "OPENROUTER_FALLBACK_MODELS",
 ];
 
 /// Returns `true` when `key` is one of [`CONFIG_OWNED_MODEL_ENV_KEYS`].

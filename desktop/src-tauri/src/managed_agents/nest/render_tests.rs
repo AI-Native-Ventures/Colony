@@ -34,6 +34,9 @@ fn make_persona(id: &str, display_name: &str) -> AgentDefinition {
         parallelism: None,
         created_at: String::new(),
         updated_at: String::new(),
+        // Fields this fixture does not vary, so a field added on either
+        // side of a develop sync cannot break it.
+        ..Default::default()
     }
 }
 

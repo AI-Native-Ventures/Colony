@@ -309,6 +309,9 @@ test("persona model options follow the selected LLM provider", async ({
 
   const provider = page.locator("#persona-runtime");
   await page.getByRole("tab", { name: "Customize for this agent" }).click();
+  await page.getByTestId("customize-ai-change-harness").click();
+  await page.getByTestId("customize-ai-change-provider").click();
+  await page.getByTestId("customize-ai-change-model").click();
   const llmProvider = page.locator("#persona-llm-provider");
   const model = page.locator("#persona-model");
   await expect(provider).toContainText("Oh My Pi (default)");

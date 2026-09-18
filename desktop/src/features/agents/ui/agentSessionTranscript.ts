@@ -29,6 +29,8 @@ import {
   extractPromptText,
   extractTriggeringEventIds,
   extractToolArgs,
+  findAssistantReplyForTurn,
+  formatUsageUpdateText,
   extractToolIdentity,
   extractToolResult,
   parsePromptText,
@@ -995,28 +997,26 @@ export function processTranscriptEvent(
           );
         }
       } else if (updateType === "usage_update") {
-        const used = typeof update.used === "number" ? update.used : null;
-        const size = typeof update.size === "number" ? update.size : null;
-        if (used !== null && size !== null) {
-          const costRecord = asRecord(update.cost);
-          const costAmount =
-            typeof costRecord.amount === "number" ? costRecord.amount : null;
-          const costCurrency = asString(costRecord.currency);
-          const costStr =
-            costAmount !== null && costCurrency
-              ? ` ($${costAmount.toFixed(4)} ${costCurrency})`
-              : "";
+        const usageText = formatUsageUpdateText(update);
+        if (usageText) {
           replaceLifecycleItem(
             d,
             `usage:${ch}:${turnKey}`,
             "status",
             "Usage",
-            `Tokens: ${used}/${size}${costStr}`,
+            usageText,
             event.timestamp,
             ctx,
             updateType,
           );
         }
+        // The model that served the turn rides on the same payload. It belongs
+        // on the reply, which is where the pane says a fallback answered.
+        const served = asString(update.model);
+        const reply = served
+          ? findAssistantReplyForTurn(d.items, ctx.turnId)
+          : null;
+        if (reply) replaceItem(d, reply.id, { ...reply, servedModel: served });
       } else if (updateType === "available_commands_update") {
         const cmds = Array.isArray(update.availableCommands)
           ? update.availableCommands

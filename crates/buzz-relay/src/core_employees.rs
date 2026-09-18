@@ -882,6 +882,12 @@ mod tests {
             .iter()
             .find(|entry| entry.handle == "chief-of-staff")
             .expect("the chief of staff is bundled");
+        // One Chief of Staff per community, provisioned by Colony and named
+        // Scout. The name is pinned because the desktop retires its built-in
+        // Scout wherever this one exists, and the version floor is what makes
+        // an already-seeded community adopt the rename in place.
+        assert_eq!(chief.display_name, "Scout");
+        assert!(chief.version >= 2);
         assert_eq!(chief.role_id, "chief-of-staff");
         assert_eq!(chief.tier(), Some(AgentTier::Executive));
         assert_eq!(chief.reports_to, None);

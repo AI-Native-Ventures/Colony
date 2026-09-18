@@ -212,6 +212,7 @@ macro_rules! app_invoke_handler {
             put_agent_session_config,
             get_global_agent_config,
             set_global_agent_config,
+            get_recommended_model_chain,
             get_colony_credits_account,
             reconnect_colony_credits,
             connect_openrouter,

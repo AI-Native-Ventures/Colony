@@ -270,6 +270,7 @@ mod tests {
             runtime: None,
             model: None,
             provider: None,
+            fallback_models: None,
             name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,

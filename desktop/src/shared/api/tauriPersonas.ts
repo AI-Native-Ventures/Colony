@@ -16,6 +16,8 @@ export type RawPersona = {
   runtime?: string | null;
   model?: string | null;
   provider?: string | null;
+  /** Null (or absent) inherits the global chain; [] means no fallbacks. */
+  fallback_models?: string[] | null;
   name_pool?: string[];
   is_builtin: boolean;
   is_active?: boolean;
@@ -49,6 +51,7 @@ export function fromRawPersona(persona: RawPersona): AgentPersona {
     runtime: persona.runtime ?? null,
     model: persona.model ?? null,
     provider: persona.provider ?? null,
+    fallbackModels: persona.fallback_models ?? null,
     namePool: persona.name_pool ?? [],
     isBuiltIn: persona.is_builtin,
     isActive: persona.is_active ?? true,
@@ -88,6 +91,9 @@ export async function createPersona(
         runtime: input.runtime,
         model: input.model,
         provider: input.provider,
+        // Absent means "inherit the global chain", the same contract the
+        // backend applies to an absent model.
+        fallbackModels: input.fallbackModels,
         namePool: input.namePool ?? [],
         envVars: input.envVars ?? {},
         behavior: input.behavior,
@@ -109,6 +115,8 @@ function updatePersonaPayload(input: UpdatePersonaInput) {
     runtime: input.runtime,
     model: input.model,
     provider: input.provider,
+    // Absent clears the override back to inheriting, exactly like model.
+    fallbackModels: input.fallbackModels,
     namePool: input.namePool ?? [],
     // Send envVars only when caller explicitly provided it; omitting
     // tells the backend "don't touch the stored env vars" so editing

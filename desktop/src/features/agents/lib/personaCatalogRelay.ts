@@ -457,6 +457,7 @@ function publicationToPersona(
     runtime: publication.agent.runtime,
     model: publication.agent.model,
     provider: publication.agent.provider,
+    fallbackModels: null,
     namePool: publication.agent.namePool,
     isBuiltIn: false,
     isActive: false,

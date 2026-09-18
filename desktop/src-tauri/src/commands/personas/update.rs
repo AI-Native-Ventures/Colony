@@ -7,9 +7,11 @@ use tauri::AppHandle;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        apply_persona_behavior, effective_agent_command, load_managed_agents, load_personas,
-        managed_agent_avatar_url, save_managed_agents, save_personas, try_regenerate_nest,
-        validate_agent_definition_text, AgentDefinition, ManagedAgentRecord, UpdatePersonaRequest,
+        apply_persona_behavior, effective_agent_command,
+        fallback_chain::{normalize_fallback_models, validate_fallback_models},
+        load_managed_agents, load_personas, managed_agent_avatar_url, save_managed_agents,
+        save_personas, try_regenerate_nest, validate_agent_definition_text, AgentDefinition,
+        ManagedAgentRecord, UpdatePersonaRequest,
     },
     util::now_iso,
 };
@@ -109,6 +111,16 @@ pub(super) async fn update_persona_with<R: Send + 'static>(
             let runtime = trim_optional(input.runtime);
             let model = trim_optional(input.model);
             let provider = trim_optional(input.provider);
+            // Absent means "inherit the global chain", the same clearing
+            // semantics `model` has above; an explicit empty list stays an
+            // empty list, which is this agent opting out of fallbacks.
+            let fallback_models = input
+                .fallback_models
+                .map(|models| {
+                    validate_fallback_models("fallbackModels", &models)?;
+                    Ok::<_, String>(normalize_fallback_models(&models))
+                })
+                .transpose()?;
 
             let _store_guard = state
                 .managed_agents_store_lock
@@ -146,6 +158,7 @@ pub(super) async fn update_persona_with<R: Send + 'static>(
             persona.runtime = runtime;
             persona.model = model;
             persona.provider = provider;
+            persona.fallback_models = fallback_models;
             persona.name_pool = input
                 .name_pool
                 .into_iter()

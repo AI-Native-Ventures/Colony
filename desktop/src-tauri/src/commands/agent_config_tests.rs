@@ -148,6 +148,7 @@ fn persona_with_model(model: &str) -> AgentDefinition {
         runtime: None,
         model: Some(model.to_string()),
         provider: None,
+        fallback_models: None,
         name_pool: Vec::new(),
         is_builtin: false,
         is_active: true,

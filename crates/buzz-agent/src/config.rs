@@ -949,19 +949,29 @@ impl Config {
                 OpenAiApi::Auto, // unused for Anthropic
             ),
             Provider::OpenAi => {
-                let deepseek = matches!(
-                    env("BUZZ_AGENT_PROVIDER")
-                        .as_deref()
-                        .map(str::trim)
-                        .map(str::to_ascii_lowercase)
-                        .as_deref(),
-                    Some("deepseek")
-                );
+                let requested_provider = env("BUZZ_AGENT_PROVIDER")
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_ascii_lowercase);
+                let deepseek = matches!(requested_provider.as_deref(), Some("deepseek"));
+                // Google's Gemini / Gemma models speak the OpenAI dialect at
+                // their own base URL, with Chat Completions only (there is no
+                // Responses API behind it), so pin the dialect rather than
+                // letting `auto` negotiate one the endpoint does not serve.
+                let google = matches!(requested_provider.as_deref(), Some("google"));
                 let openai_compat_default_base = if deepseek {
                     "https://api.deepseek.com/v1"
+                } else if google {
+                    "https://generativelanguage.googleapis.com/v1beta/openai"
                 } else {
                     "https://api.openai.com/v1"
                 };
+                // Google answers Chat Completions only, so it takes `chat`
+                // where every other OpenAI-compatible vendor takes `auto`. An
+                // explicit OPENAI_COMPAT_API still wins.
+                let openai_api = env("OPENAI_COMPAT_API")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| if google { "chat" } else { "auto" }.to_string());
                 (
                     if deepseek {
                         env("DEEPSEEK_API_KEY")
@@ -977,7 +987,7 @@ impl Config {
                     )
                     .ok_or_else(|| "config: OPENAI_COMPAT_MODEL required".to_string())?,
                     env_or("OPENAI_COMPAT_BASE_URL", openai_compat_default_base),
-                    parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
+                    parse_openai_api(Some(openai_api.as_str()))?,
                 )
             }
             Provider::Databricks | Provider::DatabricksV2 => (
@@ -1240,9 +1250,16 @@ fn resolve_provider(
                 "anthropic" => Err(
                     "config: ANTHROPIC_API_KEY required".into(),
                 ),
-                "openai" | "openai-compat" if present_nonempty(openai_key) => Ok(Provider::OpenAi),
+                // Google serves Gemini and Gemma over an OpenAI-compatible
+                // endpoint, so it resolves to the OpenAI dialect with Google's
+                // own base URL (see the `Provider::OpenAi` arm of `from_env`).
+                "openai" | "openai-compat" | "google" if present_nonempty(openai_key) => {
+                    Ok(Provider::OpenAi)
+                }
                 "deepseek" if present_nonempty(deepseek_key) => Ok(Provider::OpenAi),
-                "openai" | "openai-compat" => Err("config: OPENAI_COMPAT_API_KEY required".into()),
+                "openai" | "openai-compat" | "google" => {
+                    Err("config: OPENAI_COMPAT_API_KEY required".into())
+                }
                 "deepseek" if present_nonempty(openai_key) => {
                     // Legacy configs stored the DeepSeek key under
                     // OPENAI_COMPAT_API_KEY before DEEPSEEK_API_KEY existed.
@@ -3207,6 +3224,23 @@ mod tests {
     fn resolve_provider_openrouter_missing_key() {
         let err = resolve_provider(Some("openrouter"), None, None, None, None).unwrap_err();
         assert!(err.contains("OPENROUTER_API_KEY"));
+    }
+
+    /// Google's Gemini / Gemma models are served over an OpenAI-compatible
+    /// endpoint, so the provider id resolves to the OpenAI dialect and takes
+    /// its credential from OPENAI_COMPAT_API_KEY.
+    #[test]
+    fn resolve_provider_google_uses_the_openai_dialect() {
+        assert_eq!(
+            resolve_provider(Some("google"), None, Some("AIza-123"), None, None).unwrap(),
+            Provider::OpenAi
+        );
+    }
+
+    #[test]
+    fn resolve_provider_google_missing_key() {
+        let err = resolve_provider(Some("google"), None, None, None, None).unwrap_err();
+        assert!(err.contains("OPENAI_COMPAT_API_KEY"));
     }
 
     // ── pricing_authority: canonical URL → bare-host registry token ──────────

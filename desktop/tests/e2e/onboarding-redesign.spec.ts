@@ -236,6 +236,8 @@ test("legacy Credits keeps its funding choice until the owner updates the connec
     provider: "openai-compat",
     model: "legacy-credits-model",
     env_vars: {},
+    // Seeded and read back whole, so it carries the field every save now writes.
+    fallback_models: [] as string[],
   };
   await reachPower(page, { globalAgentConfig: legacyConfig });
   const power = page.getByTestId("onboarding-power");
@@ -372,6 +374,8 @@ for (const provider of ["anthropic", "openrouter"] as const) {
         [provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENROUTER_API_KEY"]:
           "synthetic-existing-credential",
       },
+      // Seeded and compared whole, so it carries the field every save now writes.
+      fallback_models: [] as string[],
     };
     await reachPower(page, {
       globalAgentConfig: config,
