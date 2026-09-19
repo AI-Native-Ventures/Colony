@@ -18,7 +18,10 @@ dependencies:
   mobile_scanner: ^7.0.0
   shared_preferences: ^2.5.5
   web_socket_channel: ^3.0.1
-  connectivity_plus: ^7.0.0
+  # Pinned at or above 7.3.1 for the iOS background-teardown eventSink guard.
+  # Note: every 7.x reads NWPath.isUltraConstrained, so building the iOS app
+  # needs an iOS 26 SDK (Xcode 26). Upstream documents that requirement.
+  connectivity_plus: ^7.3.1
   nostr: ^2.0.0
   pointycastle: ^4.0.0
   url_launcher: ^6.3.2
