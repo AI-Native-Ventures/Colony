@@ -124,6 +124,15 @@ android {
     }
 }
 
+// Name every unit test as it runs. Gradle prints only failures by default, so
+// a suite that silently stopped being compiled looks exactly like a suite that
+// passed, and the CI step that runs these exists precisely to notice that.
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("passed", "skipped", "failed")
+    }
+}
+
 dependencies {
     testImplementation(kotlin("test"))
 

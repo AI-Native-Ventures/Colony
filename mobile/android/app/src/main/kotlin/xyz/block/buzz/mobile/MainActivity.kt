@@ -11,10 +11,12 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
+import java.security.GeneralSecurityException
 import java.util.UUID
 
 internal object AndroidImageProcessor {
@@ -78,9 +80,23 @@ internal object AndroidImageProcessor {
 
 class MainActivity : FlutterActivity() {
     private var mediaUploadChannel: MethodChannel? = null
+    private var passwordKdfChannel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        passwordKdfChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            PasswordKdf.CHANNEL,
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                if (call.method == PasswordKdf.DERIVE_METHOD) {
+                    handleDeriveAuthKey(call, result)
+                } else {
+                    result.notImplemented()
+                }
+            }
+        }
 
         mediaUploadChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -104,6 +120,46 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+    }
+
+    private fun handleDeriveAuthKey(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val password = call.argument<ByteArray>("password")
+        val salt = call.argument<ByteArray>("salt")
+        val iterations = call.argument<Int>("iterations")
+        val length = call.argument<Int>("length")
+        if (password == null || salt == null || iterations == null || length == null) {
+            invalidArguments(
+                result,
+                "Expected password and salt bytes with iterations and length.",
+            )
+            return
+        }
+
+        // Hundreds of milliseconds of hashing has no business on the main
+        // thread, and the Flutter result must be delivered back on it.
+        Thread {
+            val derived = try {
+                PasswordKdf.pbkdf2HmacSha256(password, salt, iterations, length)
+            } catch (e: IllegalArgumentException) {
+                runOnUiThread {
+                    invalidArguments(result, e.message ?: "Invalid derivation request.")
+                }
+                return@Thread
+            } catch (e: GeneralSecurityException) {
+                runOnUiThread {
+                    result.error(
+                        "derivation_failed",
+                        e.message ?: "PBKDF2 derivation failed.",
+                        null,
+                    )
+                }
+                return@Thread
+            }
+            runOnUiThread { result.success(derived) }
+        }.start()
     }
 
     private fun handleSanitizeImageForUpload(

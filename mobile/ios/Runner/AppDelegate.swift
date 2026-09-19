@@ -8,6 +8,7 @@ import UserNotifications
   private var mediaUploadChannel: FlutterMethodChannel?
   private var qrScannerChannel: FlutterMethodChannel?
   private var inlinePhotoPickerSupportChannel: FlutterMethodChannel?
+  private var passwordKdfChannel: FlutterMethodChannel?
   private var nativeAttachmentPopoverCoordinator: NativeAttachmentPopoverCoordinator?
 
   override func application(
@@ -49,6 +50,14 @@ import UserNotifications
       } else {
         result(false)
       }
+    }
+
+    passwordKdfChannel = FlutterMethodChannel(
+      name: PasswordKdf.channelName,
+      binaryMessenger: messenger
+    )
+    passwordKdfChannel?.setMethodCallHandler { call, result in
+      PasswordKdf.handle(call, result: result)
     }
 
     if let inlinePhotoPickerRegistrar = engineBridge.pluginRegistry.registrar(

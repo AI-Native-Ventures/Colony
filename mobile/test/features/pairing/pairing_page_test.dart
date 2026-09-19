@@ -21,7 +21,13 @@ void main() {
 
       expect(find.byType(TappableFlappingAnt), findsOneWidget);
       expect(find.text('Welcome to Colony'), findsOneWidget);
-      expect(find.text('Scan a QR code'), findsOneWidget);
+      // Sign-in is the primary action and pairing is the secondary one: a
+      // phone user who has never owned a desktop must be able to get in.
+      expect(find.widgetWithText(FilledButton, 'Sign in'), findsOneWidget);
+      expect(
+        find.widgetWithText(TextButton, 'I already use Colony on my computer'),
+        findsOneWidget,
+      );
       expect(find.text('Use pairing code'), findsOneWidget);
       expect(find.text('Connect'), findsNothing);
       expect(find.byType(TextField), findsNothing);
@@ -35,7 +41,7 @@ void main() {
       );
 
       final scanButton = tester.getSize(
-        find.widgetWithText(FilledButton, 'Scan a QR code'),
+        find.widgetWithText(FilledButton, 'Sign in'),
       );
       final pairingCodeButton = tester.getSize(
         find.widgetWithText(TextButton, 'Use pairing code'),

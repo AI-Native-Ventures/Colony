@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { deriveLegacyAuthKey } from "./authCrypto.ts";
 import { createAuthService } from "./authService.ts";
 
 function deps(overrides = {}) {
@@ -193,6 +194,61 @@ test("signIn imports the returned blob with the password", async () => {
     blob: "ncryptsec1abc",
     password: "correct horse battery",
   });
+});
+
+test("signIn reaches an account created before signup normalised", async () => {
+  // That account's auth_hash is over the exact decomposed bytes typed at
+  // signup. The normalised key cannot open it, and refusing would lock its
+  // owner out of an account that works today.
+  const legacyKey = await deriveLegacyAuthKey(
+    "founder@example.com",
+    "cafe\u0301 battery staple",
+  );
+  const attempts = [];
+  const auth = createAuthService(
+    deps({
+      post: async (_path, body) => {
+        attempts.push(body.authKey);
+        if (body.authKey !== legacyKey) {
+          return { status: 401, body: { error: "invalid_credentials" } };
+        }
+        return {
+          status: 200,
+          body: {
+            pubkey: "b".repeat(64),
+            passwordBlob: "ncryptsec1abc",
+            kdfVersion: 1,
+          },
+        };
+      },
+    }),
+  );
+
+  await auth.signIn("founder@example.com", "cafe\u0301 battery staple");
+
+  assert.equal(attempts.length, 2, "normalised first, then the legacy key");
+  assert.equal(attempts[1], legacyKey);
+});
+
+test("an ASCII password never costs a second attempt", async () => {
+  // The retry spends another of the relay's lockout allowance, so it is
+  // guarded on the password actually changing under NFKC. For ASCII the two
+  // derivations are identical and a second attempt could not succeed.
+  const attempts = [];
+  const auth = createAuthService(
+    deps({
+      post: async (_path, body) => {
+        attempts.push(body.authKey);
+        return { status: 401, body: { error: "invalid_credentials" } };
+      },
+    }),
+  );
+
+  await assert.rejects(
+    () => auth.signIn("founder@example.com", "correct horse battery"),
+    (error) => error.kind === "invalid-credentials",
+  );
+  assert.equal(attempts.length, 1);
 });
 
 test("wrong credentials map to invalid-credentials", async () => {

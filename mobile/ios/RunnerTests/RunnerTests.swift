@@ -577,6 +577,16 @@ private func readUInt32BigEndian(_ data: Data, at offset: Int) throws -> UInt32 
   guard data.count - offset >= 4 else { throw RelayImagePolicyError.invalidPng }
   return UInt32(data[offset]) << 24 | UInt32(data[offset + 1]) << 16
     | UInt32(data[offset + 2]) << 8 | UInt32(data[offset + 3])
+}
+
+/// Native control and account-key tests.
+///
+/// These were appended to the file while `readUInt32BigEndian` above was still
+/// open, which made them local functions inside its body: legal Swift, so
+/// nothing failed, and invisible to XCTest, so none of them has ever run. The
+/// iOS CI job builds the app and not the test target, so only a parse error
+/// from a `static` member exposed it. Keep test cases inside an XCTestCase.
+class RunnerNativeControlTests: XCTestCase {
 
   func testNavigationGlassButtonExpandsToConfiguredHitTarget() {
     let button = NavigationGlassButton(frame: CGRect(x: 0, y: 0, width: 40, height: 40))
@@ -663,6 +673,74 @@ private func readUInt32BigEndian(_ data: Data, at offset: Int) throws -> UInt32 
         3
       )
     }
+  }
+
+  // MARK: - Account key derivation
+
+  /// The shared account vector, minted from desktop's own `deriveAuthKey` and
+  /// pinned identically in Dart, Kotlin and `authCrypto.test.mjs`. If this
+  /// implementation drifts from the other three, a user with the right
+  /// password gets `invalid_credentials` and no log says why.
+  private static let vectorPassword = "correct horse battery"
+  private static let vectorSalt =
+    "8af931298933fa3787812090082249cbdca8621047fa7aff922fe12acb35d9d7"
+  private static let vectorAuthKey =
+    "25e331a7de880c18d500eb562f99241e65a13f2ad5a0c664be0179d7cfc92082"
+
+  func testPasswordKdfMatchesTheSharedAccountVector() {
+    let derived = PasswordKdf.derive(
+      password: Data(Self.vectorPassword.utf8),
+      salt: Data(hex: Self.vectorSalt)!,
+      iterations: 600_000,
+      length: 32
+    )
+
+    XCTAssertEqual(derived?.hexString, Self.vectorAuthKey)
+  }
+
+  func testPasswordKdfRejectsInputsOutsideTheAlgorithm() {
+    let salt = Data(hex: Self.vectorSalt)!
+    let password = Data(Self.vectorPassword.utf8)
+
+    // Refusing is the point: a derivation that quietly substituted a default
+    // would return a usable-looking key that opens nothing.
+    XCTAssertNil(PasswordKdf.derive(password: password, salt: Data(), iterations: 1, length: 32))
+    XCTAssertNil(PasswordKdf.derive(password: password, salt: salt, iterations: 0, length: 32))
+    XCTAssertNil(PasswordKdf.derive(password: password, salt: salt, iterations: 1, length: 0))
+  }
+
+  func testPasswordKdfDoesNotReencodeItsInputs() {
+    // The channel contract is bytes in, bytes out. Two spellings of the same
+    // accented password are different bytes and must stay different keys,
+    // because desktop normalises nothing when deriving this value.
+    let composed = Data("café battery staple".utf8)
+    let decomposed = Data("cafe\u{0301} battery staple".utf8)
+    let salt = Data(hex: Self.vectorSalt)!
+
+    XCTAssertNotEqual(
+      PasswordKdf.derive(password: composed, salt: salt, iterations: 4, length: 32),
+      PasswordKdf.derive(password: decomposed, salt: salt, iterations: 4, length: 32)
+    )
+  }
+}
+
+private extension Data {
+  init?(hex: String) {
+    guard hex.count % 2 == 0 else { return nil }
+    var bytes = [UInt8]()
+    bytes.reserveCapacity(hex.count / 2)
+    var index = hex.startIndex
+    while index < hex.endIndex {
+      let next = hex.index(index, offsetBy: 2)
+      guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
+      bytes.append(byte)
+      index = next
+    }
+    self.init(bytes)
+  }
+
+  var hexString: String {
+    map { String(format: "%02x", $0) }.joined()
   }
 }
 
