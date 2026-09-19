@@ -1971,6 +1971,18 @@ jobs:
         run: cd mobile && flutter test
       - name: Build Android debug APK
         run: just mobile-build-android
+      - name: Android unit tests
+        # MUST run after the APK build. mobile/android has no gradlew checked
+        # in, only gradle/wrapper/gradle-wrapper.properties; Flutter injects
+        # the wrapper during an Android build. Reorder these two steps and
+        # this one fails with "no such file or directory".
+        #
+        # Until now nothing in CI ever ran these. PasswordKdfTest.kt pins the
+        # shared account vector that the Dart, Swift and TypeScript sides also
+        # pin, so without this step a third of that agreement was decoration.
+        # It also revives AndroidMediaSanitizerTest.kt, which has never
+        # executed once since it was written.
+        run: cd mobile/android && ./gradlew --no-daemon testDebugUnitTest
 
   mobile-ios-build:
     # Proves the iOS half of mobile actually links. The Mobile job above is
@@ -2030,6 +2042,41 @@ jobs:
         with:
           path: ~/.pub-cache
           key: pub-${{ runner.os }}-${{ hashFiles('mobile/pubspec.lock') }}
+      - name: Build for the simulator
+        # A separate build from the release one below: RunnerTests runs on a
+        # simulator, and the release build targets a device. Kept in this job
+        # rather than a sibling so one macOS runner and one warm pub cache
+        # serve both.
+        run: cd mobile && flutter build ios --simulator --debug --no-pub
+      - name: Run RunnerTests
+        # Nothing has ever executed RunnerTests.swift. `flutter build ios`
+        # builds the app target and never the test target, which is how six
+        # test cases sat nested inside a function body, invisible to XCTest,
+        # without a single job going red. Runner.xcscheme already lists
+        # RunnerTests in its TestAction, so the scheme needs no change.
+        #
+        # No signing: a simulator destination needs none, and
+        # CODE_SIGNING_ALLOWED=NO keeps it that way rather than leaving it to
+        # whatever the image's defaults are.
+        run: |
+          set -euo pipefail
+          # Newest available iPhone simulator on the image, by the same
+          # reasoning as the Xcode selection above: pinning a device name
+          # strands this job on the next image refresh.
+          device="$(xcrun simctl list devices available \
+            | awk -F'[()]' '/    iPhone/ { id = $2 } END { print id }')"
+          if [ -z "$device" ]; then
+            echo "no available iPhone simulator on this image" >&2
+            exit 1
+          fi
+          echo "Testing on simulator $device"
+          cd mobile/ios
+          xcodebuild test \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -only-testing:RunnerTests \
+            -destination "id=$device" \
+            CODE_SIGNING_ALLOWED=NO
       - name: Build unsigned iOS release
         # --no-pub because dependencies are installed and cached above.
         run: cd mobile && flutter build ios --release --no-codesign --no-pub
