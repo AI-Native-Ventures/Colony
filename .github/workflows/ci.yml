@@ -1994,21 +1994,27 @@ jobs:
         # that stopped being compiled, or a source set that moved, reports
         # NO-SOURCE and a green task, which is the same silent gate this whole
         # step exists to close.
+        #
+        # The report is located rather than assumed: android/build.gradle.kts
+        # redirects the build directory to mobile/build, so the conventional
+        # app/build/test-results path does not exist here and a hardcoded one
+        # would fail for the wrong reason.
         run: |
           set -euo pipefail
-          results=mobile/android/app/build/test-results/testDebugUnitTest
           for suite in PasswordKdfTest AndroidMediaSanitizerTest; do
-            report="$results/TEST-xyz.block.buzz.mobile.$suite.xml"
-            if [ ! -f "$report" ]; then
+            report="$(find mobile -type f \
+              -path "*/test-results/testDebugUnitTest/TEST-xyz.block.buzz.mobile.$suite.xml" \
+              -print -quit)"
+            if [ -z "$report" ]; then
               echo "$suite produced no test report: it did not run" >&2
               exit 1
             fi
             count="$(sed -n 's/.*<testsuite[^>]* tests="\([0-9]*\)".*/\1/p' "$report" | head -1)"
             if [ -z "$count" ] || [ "$count" -lt 1 ]; then
-              echo "$suite reported $count tests" >&2
+              echo "$suite reported ${count:-no} tests" >&2
               exit 1
             fi
-            echo "$suite ran $count tests"
+            echo "$suite ran $count tests ($report)"
           done
 
   mobile-ios-build:
