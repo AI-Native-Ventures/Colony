@@ -72,6 +72,9 @@ pub(crate) struct SpawnConfigInputs<'a> {
     pub system_prompt: Option<&'a str>,
     pub model: Option<&'a str>,
     pub provider: Option<&'a str>,
+    /// The resolved fallback chain, `None` when the relay's recommendation
+    /// decides. Carried so editing the chain raises the restart badge.
+    pub fallback_models: Option<Vec<String>>,
     /// Global credential source — decides how spawn pays for the runtime.
     pub credential_mode: CredentialMode,
 }
@@ -109,6 +112,14 @@ pub(crate) struct SpawnConfigSnapshot {
     pub system_prompt: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
+    /// The OpenRouter fallback chain the spawn injected, or `None` when the
+    /// agent follows the relay's recommendation.
+    ///
+    /// An array is an atomic leaf here, like `args`: the diff renders a chain
+    /// whole rather than element-wise, so a reorder reads as one change.
+    /// Relay-driven chain movement deliberately does not badge -- nobody edited
+    /// anything, and the harness refreshes such a chain on its own.
+    pub fallback_models: Option<Vec<String>>,
     /// Which credential source a spawn uses. Changes the meter seam even when
     /// the user-facing provider/model/env fields stay identical, so a running
     /// pair must badge and receive the new lease on restart.
@@ -142,6 +153,7 @@ impl SpawnConfigSnapshot {
             system_prompt,
             model,
             provider,
+            fallback_models,
             credential_mode,
         } = inputs;
         Self {
@@ -158,6 +170,7 @@ impl SpawnConfigSnapshot {
             system_prompt: system_prompt.map(str::to_string),
             model: model.map(str::to_string),
             provider: provider.map(str::to_string),
+            fallback_models,
             credential_mode,
             session_title: (!descriptor.env.contains_key(SESSION_TITLE_ENV_VAR))
                 .then(|| resolve_session_title(record.display_name.as_deref(), &record.name))
@@ -253,12 +266,16 @@ pub(crate) fn prospective_spawn_config_snapshot(
     // definition) resolves as if all three were absent: `spawn_agent_child`
     // refuses to spawn an orphan regardless, and `eligible_restart_diff`
     // suppresses the badge for one.
-    let (prompt, model, provider) = match resolve_effective_config(record, personas, global) {
-        EffectiveConfigResult::Resolved(cfg) => {
-            (cfg.system_prompt.value, cfg.model.value, cfg.provider.value)
-        }
-        EffectiveConfigResult::OrphanedInstance { .. } => (None, None, None),
-    };
+    let (prompt, model, provider, fallback_models) =
+        match resolve_effective_config(record, personas, global) {
+            EffectiveConfigResult::Resolved(cfg) => (
+                cfg.system_prompt.value,
+                cfg.model.value,
+                cfg.provider.value,
+                cfg.fallback_models.value,
+            ),
+            EffectiveConfigResult::OrphanedInstance { .. } => (None, None, None, None),
+        };
 
     SpawnConfigSnapshot::from_inputs(SpawnConfigInputs {
         record,
@@ -270,6 +287,7 @@ pub(crate) fn prospective_spawn_config_snapshot(
         system_prompt: prompt.as_deref(),
         model: model.as_deref(),
         provider: provider.as_deref(),
+        fallback_models,
         credential_mode: global.credential_mode,
     })
 }

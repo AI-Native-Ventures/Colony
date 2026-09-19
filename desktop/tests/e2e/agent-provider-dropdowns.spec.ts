@@ -175,6 +175,8 @@ test.describe("agent provider dropdown screenshots", () => {
     await expect(dialog).toBeVisible({ timeout: 10_000 });
 
     await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
+    await dialog.getByTestId("customize-ai-change-harness").click();
+    await dialog.getByTestId("customize-ai-change-model").click();
 
     // Regression: the runtime trigger must not be empty — the auto-seed effect
     // must have run and selected the app default (buzz-agent in the mock catalog).
@@ -260,6 +262,7 @@ test.describe("agent provider dropdown screenshots", () => {
     await expect(dialog.getByText(/global-databricks-model/)).toHaveCount(0);
     await expect(dialog.getByText(/Databricks/i)).toHaveCount(0);
 
+    await dialog.getByTestId("customize-ai-change-model").click();
     await expect(
       dialog.getByRole("combobox", { name: /model/i }),
     ).toBeVisible();

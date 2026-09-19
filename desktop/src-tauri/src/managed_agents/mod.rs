@@ -15,6 +15,7 @@ pub(crate) mod custom_harnesses;
 mod discovery;
 pub(crate) mod effective_config;
 mod env_vars;
+pub(crate) mod fallback_chain;
 pub(crate) mod git_bash;
 pub(crate) mod global_config;
 pub(crate) mod isolation;

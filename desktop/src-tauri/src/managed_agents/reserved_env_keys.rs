@@ -50,6 +50,18 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     "BUZZ_WORKER_PROXY",
     "BUZZ_ACP_METER_PORT",
     "BUZZ_METER_OPENAI_BASE_URL",
+    // Metering checkpoint routing and credentials. The Desktop owns where a
+    // metered call goes and which credential pays for it: `runtime/provisioned.rs`
+    // sets these for Colony Credits, and `isolation/launch.rs` derives them from
+    // the agent's configured provider. A saved value survives a provider change,
+    // so one stale upstream sent every OpenRouter call to another vendor and the
+    // agent reported "Model not found" for models that exist.
+    "BUZZ_METER_OPENAI_UPSTREAM",
+    "BUZZ_METER_OPENAI_PROVIDER",
+    "BUZZ_METER_OPENAI_KEY",
+    "BUZZ_METER_ANTHROPIC_UPSTREAM",
+    "BUZZ_METER_ANTHROPIC_PROVIDER",
+    "BUZZ_METER_ANTHROPIC_KEY",
     "COLONY_AGENT_ISOLATED",
     "BUZZ_ACP_BROWSER_MCP_COMMAND",
     "BUZZ_ACP_BROWSER_ENDPOINT",

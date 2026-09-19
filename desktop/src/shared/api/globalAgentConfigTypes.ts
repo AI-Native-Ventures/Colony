@@ -29,6 +29,17 @@ export type GlobalAgentConfig = {
    * key. Only ever a value the provider advertised for the selected model.
    */
   reasoning_effort?: string | null;
+  /**
+   * Global OpenRouter fallback chain: the models the harness tries, in order,
+   * when the primary model refuses.
+   *
+   * Empty means "use Colony's recommended chain", the relay's own hourly
+   * ranking. Non-empty is a chain the owner authored, and the harness is told
+   * not to refresh it. Mirrors the Rust `GlobalAgentConfig::fallback_models`,
+   * which normalizes it on save: trimmed, blanks and later duplicates dropped,
+   * at most five entries.
+   */
+  fallback_models: string[];
 };
 
 /**
