@@ -5,6 +5,7 @@ class _PairingWelcomeView extends StatelessWidget {
   final bool isBusy;
   final bool pairingCodeExpanded;
   final String? errorMessage;
+  final VoidCallback onSignIn;
   final VoidCallback onScan;
   final VoidCallback onTogglePairingCode;
   final VoidCallback onConnect;
@@ -14,6 +15,7 @@ class _PairingWelcomeView extends StatelessWidget {
     required this.isBusy,
     required this.pairingCodeExpanded,
     required this.errorMessage,
+    required this.onSignIn,
     required this.onScan,
     required this.onTogglePairingCode,
     required this.onConnect,
@@ -70,7 +72,7 @@ class _PairingWelcomeView extends StatelessWidget {
                 ),
                 const SizedBox(height: Grid.xxs),
                 Text(
-                  'Scan the QR code from your desktop app\nor paste a pairing code to connect.',
+                  'Sign in with your email and password.',
                   textAlign: TextAlign.center,
                   style: context.textTheme.bodyMedium?.copyWith(
                     color: _onboardingMutedInk,
@@ -83,8 +85,20 @@ class _PairingWelcomeView extends StatelessWidget {
                     width: double.infinity,
                     child: Column(
                       children: [
+                        // Sign-in is the way onto a phone. Pairing stays
+                        // for the case it actually serves: moving an identity
+                        // that already exists on a desktop, where no password
+                        // ever derived it.
                         FilledButton(
+                          key: const Key('welcome-sign-in'),
                           style: _onboardingButtonStyle,
+                          onPressed: isBusy ? null : onSignIn,
+                          child: const Text('Sign in'),
+                        ),
+                        const SizedBox(height: Grid.xxs),
+                        TextButton(
+                          key: const Key('welcome-scan'),
+                          style: _onboardingSecondaryButtonStyle,
                           onPressed: isBusy ? null : onScan,
                           child: isBusy && !pairingCodeExpanded
                               ? const SizedBox(
@@ -92,13 +106,13 @@ class _PairingWelcomeView extends StatelessWidget {
                                   height: 20,
                                   child: ColonyLoadingIndicator(
                                     size: 20,
-                                    color: _onboardingCtaLabel,
                                     semanticLabel: 'Opening scanner',
                                   ),
                                 )
-                              : const Text('Scan a QR code'),
+                              : const Text(
+                                  'I already use Colony on my computer',
+                                ),
                         ),
-                        const SizedBox(height: Grid.xxs),
                         TextButton(
                           style: _onboardingSecondaryButtonStyle,
                           onPressed: isBusy ? null : onTogglePairingCode,
