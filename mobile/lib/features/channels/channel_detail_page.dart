@@ -197,9 +197,28 @@ class ChannelDetailPage extends HookConsumerWidget {
         !resolvedChannel.isForum &&
         isConnectionInProgress &&
         !messagesNotifier.hasLoadedMessages;
-    final appBarTitleContentHeight = resolvedChannel.isDm
-        ? _dmAppBarTitleContentHeight(context)
-        : 0.0;
+    final appBarTitleContentHeight = _twoLineAppBarTitleContentHeight(
+      context,
+      isDm: resolvedChannel.isDm,
+    );
+    // One settings destination for both the header tap and the overflow
+    // button, so they cannot drift apart.
+    Future<void> openChannelSettings() async {
+      final shouldClose = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        constraints: BoxConstraints(
+          maxWidth: 640,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+        ),
+        builder: (_) => ManageChannelSheet(channel: resolvedChannel),
+      );
+      if (shouldClose == true && context.mounted) {
+        Navigator.of(context).pop();
+      }
+    }
+
     final readTimestamp = _channelReadTimestamp(
       channel: resolvedChannel,
       messagesState: messagesState,
@@ -250,37 +269,9 @@ class ChannelDetailPage extends HookConsumerWidget {
                 channel: resolvedChannel,
                 currentPubkey: currentPubkey,
               )
-            : Row(
-                children: [
-                  SizedBox.square(
-                    dimension: 22,
-                    child: Center(
-                      child: Icon(channelIcon(resolvedChannel), size: 18),
-                    ),
-                  ),
-                  const SizedBox(width: Grid.half),
-                  Expanded(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            resolveDmChannelDisplayLabel(
-                              resolvedChannel,
-                              currentPubkey: currentPubkey,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (resolvedChannel.isEphemeral) ...[
-                          const SizedBox(width: Grid.quarter),
-                          _HeaderEphemeralBadge(channel: resolvedChannel),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
+            : _ChannelAppBarTitle(
+                channel: resolvedChannel,
+                onTap: openChannelSettings,
               ),
         actions: [
           if (_showsMembersAction(resolvedChannel))
@@ -292,21 +283,7 @@ class ChannelDetailPage extends HookConsumerWidget {
           if (!resolvedChannel.isDm)
             IconButton(
               color: context.colors.primary,
-              onPressed: () async {
-                final shouldClose = await showModalBottomSheet<bool>(
-                  context: context,
-                  isScrollControlled: true,
-                  showDragHandle: true,
-                  constraints: BoxConstraints(
-                    maxWidth: 640,
-                    maxHeight: MediaQuery.sizeOf(context).height * 0.9,
-                  ),
-                  builder: (_) => ManageChannelSheet(channel: resolvedChannel),
-                );
-                if (shouldClose == true && context.mounted) {
-                  Navigator.of(context).pop();
-                }
-              },
+              onPressed: openChannelSettings,
               tooltip: 'Manage channel',
               icon: const Icon(LucideIcons.ellipsisVertical, size: 22),
             ),
