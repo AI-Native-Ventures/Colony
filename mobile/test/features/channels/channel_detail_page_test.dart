@@ -29,6 +29,7 @@ import 'package:buzz/features/profile/user_status_cache_provider.dart';
 import 'package:buzz/features/profile/user_profile.dart';
 import 'package:buzz/shared/relay/relay.dart';
 import 'package:buzz/shared/theme/theme.dart';
+import 'package:buzz/features/channels/manage_channel_sheet.dart';
 import 'package:buzz/shared/widgets/frosted_app_bar.dart';
 import 'package:buzz/shared/widgets/skeleton.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -66,6 +67,13 @@ Channel _dmChannel(List<String> participantPubkeys) => Channel(
 
 /// Seeded so the DM header never calls `userCacheProvider.preload`, which
 /// starts a 50ms batch timer that no widget test tears down.
+/// Seeded so the page's member preload never runs; it starts a 50ms batch
+/// timer no widget test tears down.
+const _headerProfiles = {
+  'self': UserProfile(pubkey: 'self', displayName: 'Self'),
+  'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+};
+
 const _dmProfiles = {
   'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
   'bob': UserProfile(pubkey: 'bob', displayName: 'Bob'),
@@ -604,6 +612,169 @@ void main() {
       expect(find.text('Owner'), findsOneWidget);
     });
 
+    testWidgets('a message-style system row aligns with a regular message', (
+      tester,
+    ) async {
+      // Colony routes membership and channel-created rows through
+      // `_MessageStyleSystemMessageContent`; upstream also routes huddle rows
+      // there, which is why this asserts on a created row rather than a huddle.
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: [
+            _textMsg(
+              id: 'regular-message',
+              pubkey: 'alice',
+              content: 'Regular message',
+              createdAt: 1000,
+            ),
+            _systemMsg(
+              id: 'sys-created',
+              payload: const {'type': 'channel_created', 'actor': 'alice'},
+              createdAt: 1010,
+            ),
+          ],
+          users: {
+            'alice': const UserProfile(pubkey: 'alice', displayName: 'Alice'),
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final regularRow = find.byKey(
+        const ValueKey('message-row-regular-message'),
+      );
+      final systemRow = find.byKey(
+        const ValueKey('system-message-row-sys-created'),
+      );
+      final regularAvatar = tester.getRect(
+        find
+            .descendant(of: regularRow, matching: find.byType(CircleAvatar))
+            .first,
+      );
+      final systemAvatar = tester.getRect(
+        find
+            .descendant(of: systemRow, matching: find.byType(CircleAvatar))
+            .first,
+      );
+      final regularAuthor = tester.getRect(
+        find.byKey(const ValueKey('message-author-regular-message')),
+      );
+      final systemAuthor = tester.getRect(
+        find.byKey(const ValueKey('system-message-author-alice')),
+      );
+      final regularBody = tester.getRect(findRichText('Regular message'));
+      final systemBody = tester.getRect(findRichText('created this channel'));
+
+      // Real padding rather than a negative transform, so the row rides the
+      // same author/body rhythm an ordinary message does.
+      expect(
+        systemAuthor.top - systemAvatar.top,
+        closeTo(regularAuthor.top - regularAvatar.top, 0.01),
+      );
+      expect(
+        systemBody.top - systemAuthor.bottom,
+        closeTo(regularBody.top - regularAuthor.bottom, 0.01),
+      );
+    });
+
+    testWidgets('channel header shows the name over its member count', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          users: _headerProfiles,
+          members: [
+            ChannelMember(
+              pubkey: 'self',
+              role: 'owner',
+              joinedAt: DateTime(2025),
+            ),
+            ChannelMember(
+              pubkey: 'alice',
+              role: 'member',
+              joinedAt: DateTime(2025),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('channel-header-name')), findsOneWidget);
+      // Member count is information the one-line header never carried.
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('channel-header-member-count')),
+            )
+            .data,
+        '2 members',
+      );
+    });
+
+    testWidgets('channel header singularises a one-member count', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          users: _headerProfiles,
+          members: [
+            ChannelMember(
+              pubkey: 'self',
+              role: 'owner',
+              joinedAt: DateTime(2025),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('channel-header-member-count')),
+            )
+            .data,
+        '1 member',
+      );
+    });
+
+    testWidgets('tapping the channel header opens channel settings', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_buildTestable(messages: const []));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ManageChannelSheet), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey('channel-header-settings-trigger')),
+      );
+      await tester.pumpAndSettle();
+
+      // The header reaches the same sheet the overflow button opens.
+      expect(find.byType(ManageChannelSheet), findsOneWidget);
+    });
+
+    testWidgets('a DM keeps its own header rather than the channel one', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          channel: _dmChannel(const ['self', 'alice']),
+          users: _dmProfiles,
+          overrides: _noTimerStatusCache,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('channel-header-settings-trigger')),
+        findsNothing,
+      );
+    });
+
     testWidgets('hides the members action in a two-person DM', (tester) async {
       await tester.pumpWidget(
         _buildTestable(
@@ -1120,13 +1291,16 @@ void main() {
           ),
           findsOneWidget,
         );
-        expect(
-          tester.getTopLeft(stickySurface).dy,
-          closeTo(
-            frostedAppBarHeight(tester.element(stickyHeader)) + Grid.twelve,
-            1,
-          ),
-        );
+        // The channel header is two lines now (name over member count), so a
+        // recomputed exact offset would just restate the implementation. What
+        // the test is named for is that the pinned day clears the bar rather
+        // than sliding under it, with a small gap below it.
+        final appBarBottom = tester
+            .getRect(find.byType(FrostedAppBar).first)
+            .bottom;
+        final stickyTop = tester.getTopLeft(stickySurface).dy;
+        expect(stickyTop, greaterThanOrEqualTo(appBarBottom));
+        expect(stickyTop - appBarBottom, lessThanOrEqualTo(Grid.twelve));
         expect(
           find.descendant(
             of: stickyHeader,

@@ -1,5 +1,8 @@
 part of '../channel_detail_page.dart';
 
+/// Avatar size for the two-line channel header.
+const _channelHeaderAvatarSize = 40.0;
+
 /// A two-person DM has no membership to manage, so the Members action is
 /// hidden there and kept for group DMs and ordinary channels.
 bool _showsMembersAction(Channel channel) {
@@ -17,16 +20,139 @@ double _scaledTextHeight(BuildContext context, TextStyle style) {
   return scaledFontSize * (style.height ?? 1);
 }
 
-double _dmAppBarTitleContentHeight(BuildContext context) {
-  const titleStyle = channelTitleTextStyle;
-  final presenceStyle = context.textTheme.bodySmall;
-  if (presenceStyle == null) {
-    return 30;
+/// Height of a two-line app-bar title: a DM's name over its presence line, or
+/// a channel's name over its member count.
+///
+/// The DM branch keeps Colony's existing type and 30dp floor unchanged; only
+/// the channel branch is new, so adding the member count does not restyle
+/// headers that already worked.
+double _twoLineAppBarTitleContentHeight(
+  BuildContext context, {
+  required bool isDm,
+}) {
+  const dmFloor = 30.0;
+  final titleStyle = isDm
+      ? channelTitleTextStyle
+      : context.textTheme.titleSmall;
+  final subtitleStyle = context.textTheme.bodySmall;
+  final floor = isDm ? dmFloor : _channelHeaderAvatarSize;
+  if (titleStyle == null || subtitleStyle == null) {
+    return floor;
   }
   final textHeight =
       _scaledTextHeight(context, titleStyle) +
-      _scaledTextHeight(context, presenceStyle);
-  return textHeight > 30 ? textHeight : 30;
+      _scaledTextHeight(context, subtitleStyle);
+  return textHeight > floor ? textHeight : floor;
+}
+
+/// Channel name over its member count, tapping through to channel settings.
+///
+/// Replaces a name-only header: the member count is information the header did
+/// not carry before, and the whole row becomes the settings affordance.
+class _ChannelAppBarTitle extends ConsumerWidget {
+  const _ChannelAppBarTitle({required this.channel, required this.onTap});
+
+  final Channel channel;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final membersAsync = ref.watch(channelMembersProvider(channel.id));
+    // Fall back to the channel's own count until the member list resolves, so
+    // the second line never flashes empty.
+    final memberCount = membersAsync.value?.length ?? channel.memberCount;
+    final memberLabel =
+        '$memberCount ${memberCount == 1 ? 'member' : 'members'}';
+
+    return Semantics(
+      button: true,
+      label: 'Open settings for ${channel.name}, $memberLabel',
+      child: Tooltip(
+        message: 'Open channel settings',
+        child: InkWell(
+          key: const ValueKey('channel-header-settings-trigger'),
+          borderRadius: BorderRadius.circular(Radii.md),
+          onTap: onTap,
+          child: Row(
+            children: [
+              Container(
+                key: const ValueKey('channel-header-avatar'),
+                width: _channelHeaderAvatarSize,
+                height: _channelHeaderAvatarSize,
+                decoration: BoxDecoration(
+                  color: context.colors.surface,
+                  shape: BoxShape.circle,
+                  border: Border.fromBorderSide(
+                    BorderSide(
+                      color: context.colors.inverseSurface.withValues(
+                        alpha: 0.07,
+                      ),
+                      strokeAlign: BorderSide.strokeAlignOutside,
+                    ),
+                  ),
+                ),
+                child: Icon(
+                  channelIcon(channel),
+                  size: 20,
+                  color: context.colors.primary,
+                ),
+              ),
+              const SizedBox(width: Grid.twelve),
+              Expanded(
+                // Floored to the avatar so the two text lines stay centred
+                // against it, and so the row does not shrink below the avatar
+                // when the label is short.
+                child: ConstrainedBox(
+                  key: const ValueKey('channel-header-text-stack'),
+                  constraints: const BoxConstraints(
+                    minHeight: _channelHeaderAvatarSize,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              channel.name,
+                              key: const ValueKey('channel-header-name'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: context.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          if (channel.isEphemeral) ...[
+                            const SizedBox(width: Grid.quarter),
+                            _HeaderEphemeralBadge(channel: channel),
+                          ],
+                        ],
+                      ),
+                      Text(
+                        memberLabel,
+                        key: const ValueKey('channel-header-member-count'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.textTheme.bodySmall?.copyWith(
+                          color: context.colors.onSurface.withValues(
+                            alpha: 0.65,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _MembersButton extends ConsumerWidget {
