@@ -1971,6 +1971,51 @@ jobs:
         run: cd mobile && flutter test
       - name: Build Android debug APK
         run: just mobile-build-android
+      - name: Android unit tests
+        # MUST run after the APK build. mobile/android has no gradlew checked
+        # in, only gradle/wrapper/gradle-wrapper.properties; Flutter injects
+        # the wrapper during an Android build. Reorder these two steps and
+        # this one fails with "no such file or directory".
+        #
+        # Until now nothing in CI ever ran these. PasswordKdfTest.kt pins the
+        # shared account vector that the Dart, Swift and TypeScript sides also
+        # pin, so without this step a third of that agreement was decoration.
+        # It also revives AndroidMediaSanitizerTest.kt, which has never
+        # executed once since it was written.
+        #
+        # The module is named explicitly. An unscoped `testDebugUnitTest` runs
+        # the test task of every module in the build, which includes each
+        # Flutter plugin's own suite: camera_android_camerax fails one of its
+        # own 172 tests, and we would be red for somebody else's bug in code we
+        # do not own and cannot fix.
+        run: cd mobile/android && ./gradlew --no-daemon :app:testDebugUnitTest
+      - name: Check the Android suites actually ran
+        # "The task succeeded" is not evidence that anything executed. A suite
+        # that stopped being compiled, or a source set that moved, reports
+        # NO-SOURCE and a green task, which is the same silent gate this whole
+        # step exists to close.
+        #
+        # The report is located rather than assumed: android/build.gradle.kts
+        # redirects the build directory to mobile/build, so the conventional
+        # app/build/test-results path does not exist here and a hardcoded one
+        # would fail for the wrong reason.
+        run: |
+          set -euo pipefail
+          for suite in PasswordKdfTest AndroidMediaSanitizerTest; do
+            report="$(find mobile -type f \
+              -path "*/test-results/testDebugUnitTest/TEST-xyz.block.buzz.mobile.$suite.xml" \
+              -print -quit)"
+            if [ -z "$report" ]; then
+              echo "$suite produced no test report: it did not run" >&2
+              exit 1
+            fi
+            count="$(sed -n 's/.*<testsuite[^>]* tests="\([0-9]*\)".*/\1/p' "$report" | head -1)"
+            if [ -z "$count" ] || [ "$count" -lt 1 ]; then
+              echo "$suite reported ${count:-no} tests" >&2
+              exit 1
+            fi
+            echo "$suite ran $count tests ($report)"
+          done
 
   mobile-ios-build:
     # Proves the iOS half of mobile actually links. The Mobile job above is
@@ -2030,6 +2075,51 @@ jobs:
         with:
           path: ~/.pub-cache
           key: pub-${{ runner.os }}-${{ hashFiles('mobile/pubspec.lock') }}
+      - name: Build for the simulator
+        # A separate build from the release one below: RunnerTests runs on a
+        # simulator, and the release build targets a device. Kept in this job
+        # rather than a sibling so one macOS runner and one warm pub cache
+        # serve both.
+        run: cd mobile && flutter build ios --simulator --debug --no-pub
+      - name: Run RunnerTests
+        # Nothing has ever executed RunnerTests.swift. `flutter build ios`
+        # builds the app target and never the test target, which is how six
+        # test cases sat nested inside a function body, invisible to XCTest,
+        # without a single job going red. Runner.xcscheme already lists
+        # RunnerTests in its TestAction, so the scheme needs no change.
+        #
+        # No signing: a simulator destination needs none, and
+        # CODE_SIGNING_ALLOWED=NO keeps it that way rather than leaving it to
+        # whatever the image's defaults are.
+        run: |
+          set -euo pipefail
+          # Newest available iPhone simulator on the image, by the same
+          # reasoning as the Xcode selection above: pinning a device name
+          # strands this job on the next image refresh.
+          #
+          # The UDID is matched by shape rather than by splitting on
+          # parentheses, because device NAMES contain them: splitting
+          # "iPhone SE (3rd generation) (UDID) (Shutdown)" yields
+          # "3rd generation" and xcodebuild then reports that it cannot find
+          # a device matching "id:3rd generation".
+          device="$(xcrun simctl list devices available \
+            | awk '/^ *iPhone/ {
+                     if (match($0, /[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}/))
+                       id = substr($0, RSTART, RLENGTH)
+                   }
+                   END { print id }')"
+          if [ -z "$device" ]; then
+            echo "no available iPhone simulator on this image" >&2
+            exit 1
+          fi
+          echo "Testing on simulator $device"
+          cd mobile/ios
+          xcodebuild test \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -only-testing:RunnerTests \
+            -destination "id=$device" \
+            CODE_SIGNING_ALLOWED=NO
       - name: Build unsigned iOS release
         # --no-pub because dependencies are installed and cached above.
         run: cd mobile && flutter build ios --release --no-codesign --no-pub

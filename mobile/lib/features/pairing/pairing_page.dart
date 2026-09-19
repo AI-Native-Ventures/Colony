@@ -11,6 +11,7 @@ import '../../shared/widgets/colony_loading_indicator.dart';
 import '../../shared/widgets/tappable_flapping_ant.dart';
 import 'pairing_provider.dart';
 import 'pairing_qr_scanner.dart';
+import 'signin_page.dart';
 
 part 'pairing_page/onboarding_background.dart';
 part 'pairing_page/pairing_welcome_view.dart';
@@ -147,6 +148,11 @@ class PairingPage extends HookConsumerWidget {
                     errorMessage: pairingState.status == PairingStatus.error
                         ? pairingState.errorMessage
                         : null,
+                    onSignIn: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const SignInPage(),
+                      ),
+                    ),
                     onScan: openScanner,
                     onTogglePairingCode: () {
                       pairingCodeExpanded.value = !pairingCodeExpanded.value;

@@ -30,16 +30,19 @@ async function sha256(text: string): Promise<ArrayBuffer> {
 }
 
 /**
- * Derive the value the relay checks against its stored hash.
+ * Canonical form of a password: NFKC, the same normalisation NIP-49 applies
+ * before its scrypt.
  *
- * The salt comes from the address rather than the server, so a second computer
- * can derive this from the password alone with no round trip before the user
- * has typed anything.
+ * Without this, a composed and a decomposed spelling of the same accented
+ * password derive different keys, so which one works depends on the keyboard
+ * that typed it. iOS and macOS routinely produce decomposed text where other
+ * sources produce composed.
  */
-export async function deriveAuthKey(
-  email: string,
-  password: string,
-): Promise<string> {
+export function normalisePassword(password: string): string {
+  return password.normalize("NFKC");
+}
+
+async function pbkdf2AuthKey(email: string, password: string): Promise<string> {
   const salt = await sha256(`colony-auth-v1:${normaliseEmail(email)}`);
   const material = await crypto.subtle.importKey(
     "raw",
@@ -54,6 +57,43 @@ export async function deriveAuthKey(
     256,
   );
   return toHex(bits);
+}
+
+/**
+ * Derive the value the relay checks against its stored hash.
+ *
+ * The salt comes from the address rather than the server, so a second computer
+ * can derive this from the password alone with no round trip before the user
+ * has typed anything.
+ *
+ * The password is normalised first, so the same typed password derives the
+ * same key whatever keyboard produced it. Accounts created before that was
+ * true are reached through {@link deriveLegacyAuthKey} instead.
+ */
+export async function deriveAuthKey(
+  email: string,
+  password: string,
+): Promise<string> {
+  return pbkdf2AuthKey(email, normalisePassword(password));
+}
+
+/**
+ * Derive the key an account created before signup normalised would have.
+ *
+ * Only for the sign-in fallback. Normalising at signup fixes new accounts, but
+ * an account created from a decomposed password already has an `auth_hash`
+ * over those exact bytes, and normalising everywhere would lock its owner out
+ * of an account that works today. Sign-in therefore tries the normalised key
+ * and falls back to this one.
+ *
+ * Removable once v2 re-keying lands; see the mobile-account-signin epic
+ * artifact for what that takes.
+ */
+export async function deriveLegacyAuthKey(
+  email: string,
+  password: string,
+): Promise<string> {
+  return pbkdf2AuthKey(email, password);
 }
 
 /** Generate a recovery code in `XXXXX-XXXXX-XXXXX-XXXXX` form. */
