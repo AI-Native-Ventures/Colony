@@ -2063,8 +2063,18 @@ jobs:
           # Newest available iPhone simulator on the image, by the same
           # reasoning as the Xcode selection above: pinning a device name
           # strands this job on the next image refresh.
+          #
+          # The UDID is matched by shape rather than by splitting on
+          # parentheses, because device NAMES contain them: splitting
+          # "iPhone SE (3rd generation) (UDID) (Shutdown)" yields
+          # "3rd generation" and xcodebuild then reports that it cannot find
+          # a device matching "id:3rd generation".
           device="$(xcrun simctl list devices available \
-            | awk -F'[()]' '/    iPhone/ { id = $2 } END { print id }')"
+            | awk '/^ *iPhone/ {
+                     if (match($0, /[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}/))
+                       id = substr($0, RSTART, RLENGTH)
+                   }
+                   END { print id }')"
           if [ -z "$device" ]; then
             echo "no available iPhone simulator on this image" >&2
             exit 1
