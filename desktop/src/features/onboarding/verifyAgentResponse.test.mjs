@@ -25,7 +25,17 @@ mock.module("@/shared/api/tauriChannels", {
   },
 });
 mock.module("@/shared/api/tauri", {
-  namedExports: { getAgentConfigSurface: async () => surface },
+  namedExports: {
+    getAgentConfigSurface: async () => surface,
+    updateManagedAgent: async (input) => {
+      lastUpdateInput = input;
+      surface.runtimeId = input.agentCommand
+        ? input.agentCommand
+        : "buzz-agent";
+      if (input.model) surface.normalized.model.value = input.model;
+      return { agent: { pubkey: "agent" }, profileSyncError: null };
+    },
+  },
 });
 mock.module("@/shared/api/tauriGlobalAgentConfig", {
   namedExports: { getGlobalAgentConfig: async () => config },
@@ -88,10 +98,14 @@ mock.module("@/shared/api/sendChannelMessage", {
     },
   },
 });
+let lastUpdateInput = null;
 const { verifyAgentResponse } = await import("./verifyAgentResponse.ts");
 function reset(next) {
   mode = next;
   cleanup = 0;
+  lastUpdateInput = null;
+  surface.runtimeId = "codex";
+  surface.normalized.model.value = "model";
   config = { preferred_runtime: "codex", model: "model" };
 }
 test("matches reply and completed turn, cleans subscriptions and invalidates config changes", async () => {
@@ -139,6 +153,38 @@ test("wrong agent cannot pass and failed turn fails even with text", async () =>
     clearTimeout(timer);
   }
 });
+test("pinned instance with a different global choice updates and passes instead of throwing", async () => {
+  reset("success");
+  surface.runtimeId = "opencode";
+  surface.normalized.model.value = "old";
+  config = { preferred_runtime: "buzz-agent", model: "new-model" };
+  const p = await verifyAgentResponse(
+    scope,
+    AbortSignal.timeout(500),
+    () => {},
+  );
+  assert.equal(p.reply, "Hello");
+  assert.equal(surface.runtimeId, "buzz-agent");
+  assert.equal(surface.normalized.model.value, "new-model");
+});
+
+test("post-update instance is unpinned (follows defaults, not pinned to runtime)", async () => {
+  reset("success");
+  surface.runtimeId = "opencode";
+  surface.normalized.model.value = "old";
+  config = { preferred_runtime: "buzz-agent", model: "new-model" };
+  const p = await verifyAgentResponse(
+    scope,
+    AbortSignal.timeout(500),
+    () => {},
+  );
+  assert.equal(p.reply, "Hello");
+  assert.equal(lastUpdateInput.agentCommand, "");
+  assert.equal(lastUpdateInput.harnessOverride, false);
+  assert.equal(lastUpdateInput.model, "new-model");
+  assert.equal(surface.runtimeId, "buzz-agent");
+});
+
 test("cancellation bounds hung native startup and cleans listeners", async () => {
   reset("startup-hangs");
   const timer = setTimeout(() => {}, 100);
