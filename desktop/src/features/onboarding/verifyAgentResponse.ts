@@ -6,7 +6,7 @@ import {
   getChannelMembers,
   updateChannel,
 } from "@/shared/api/tauriChannels";
-import { getAgentConfigSurface } from "@/shared/api/tauri";
+import { getAgentConfigSurface, updateManagedAgent } from "@/shared/api/tauri";
 import {
   getGlobalAgentConfig,
   type GlobalAgentConfigScope,
@@ -100,18 +100,52 @@ export async function verifyAgentResponse(
     } = await bounded(ensureWelcomeTeam(channel.id, scope.relayUrl));
     agentPubkey = agent.pubkey;
     await check();
-    const surface = await bounded(getAgentConfigSurface(agent.pubkey));
+    let surface = await bounded(getAgentConfigSurface(agent.pubkey));
     const selected = JSON.parse(config) as {
       preferred_runtime?: string;
       model?: string;
+      provider?: string | null;
     };
-    if (
-      surface.runtimeId !== (selected.preferred_runtime || "buzz-agent") ||
-      (selected.model && surface.normalized.model?.value !== selected.model)
-    )
-      throw new Error(
-        "Your teammate uses different settings. Update its connection and test again.",
-      );
+    const targetRuntime = selected.preferred_runtime || "buzz-agent";
+    const mismatchedRuntime = surface.runtimeId !== targetRuntime;
+    const mismatchedModel =
+      !!selected.model && surface.normalized.model?.value !== selected.model;
+    if (mismatchedRuntime || mismatchedModel) {
+      // The owner just chose this connection on this screen, so it wins over
+      // whatever the teammate carried. Only the calls can fail here; the
+      // check that they worked lives after the catch, so no error message
+      // has to be recognised by its text to be re-thrown unwrapped.
+      let updatedSurface: typeof surface;
+      try {
+        await bounded(
+          updateManagedAgent({
+            pubkey: agent.pubkey,
+            // Clear any pin so the instance resolves from current defaults
+            // rather than being pinned to a stale runtime/model.
+            agentCommand: "",
+            harnessOverride: false,
+            model: selected.model ?? null,
+            provider: selected.provider ?? null,
+          }),
+        );
+        updatedSurface = await bounded(getAgentConfigSurface(agent.pubkey));
+      } catch (updateError) {
+        throw new Error(
+          updateError instanceof Error
+            ? `Failed to update agent settings: ${updateError.message}`
+            : "Failed to update agent settings.",
+        );
+      }
+      const stillMismatchedRuntime = updatedSurface.runtimeId !== targetRuntime;
+      const stillMismatchedModel =
+        !!selected.model &&
+        updatedSurface.normalized.model?.value !== selected.model;
+      if (stillMismatchedRuntime || stillMismatchedModel)
+        throw new Error(
+          "Your teammate's settings could not be updated to match the chosen connection. Check the agent and try again.",
+        );
+      surface = updatedSurface;
+    }
     const values = (config: typeof surface.normalized) =>
       JSON.stringify({
         model: config.model?.value,
