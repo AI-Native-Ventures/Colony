@@ -1982,7 +1982,34 @@ jobs:
         # pin, so without this step a third of that agreement was decoration.
         # It also revives AndroidMediaSanitizerTest.kt, which has never
         # executed once since it was written.
-        run: cd mobile/android && ./gradlew --no-daemon testDebugUnitTest
+        #
+        # The module is named explicitly. An unscoped `testDebugUnitTest` runs
+        # the test task of every module in the build, which includes each
+        # Flutter plugin's own suite: camera_android_camerax fails one of its
+        # own 172 tests, and we would be red for somebody else's bug in code we
+        # do not own and cannot fix.
+        run: cd mobile/android && ./gradlew --no-daemon :app:testDebugUnitTest
+      - name: Check the Android suites actually ran
+        # "The task succeeded" is not evidence that anything executed. A suite
+        # that stopped being compiled, or a source set that moved, reports
+        # NO-SOURCE and a green task, which is the same silent gate this whole
+        # step exists to close.
+        run: |
+          set -euo pipefail
+          results=mobile/android/app/build/test-results/testDebugUnitTest
+          for suite in PasswordKdfTest AndroidMediaSanitizerTest; do
+            report="$results/TEST-xyz.block.buzz.mobile.$suite.xml"
+            if [ ! -f "$report" ]; then
+              echo "$suite produced no test report: it did not run" >&2
+              exit 1
+            fi
+            count="$(sed -n 's/.*<testsuite[^>]* tests="\([0-9]*\)".*/\1/p' "$report" | head -1)"
+            if [ -z "$count" ] || [ "$count" -lt 1 ]; then
+              echo "$suite reported $count tests" >&2
+              exit 1
+            fi
+            echo "$suite ran $count tests"
+          done
 
   mobile-ios-build:
     # Proves the iOS half of mobile actually links. The Mobile job above is
