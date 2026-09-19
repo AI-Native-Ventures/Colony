@@ -685,7 +685,7 @@ class RunnerNativeControlTests: XCTestCase {
   private static let vectorSalt =
     "8af931298933fa3787812090082249cbdca8621047fa7aff922fe12acb35d9d7"
   private static let vectorAuthKey =
-    "25e331a7de880c18d500eb562f99241e65a13f2ad5a0c664be0179d7cfc92082"
+    "25e331a7de880c18d500eb562f99241e65a13f2ad5a0c664be0179d7cfc92083"
 
   func testPasswordKdfMatchesTheSharedAccountVector() {
     let derived = PasswordKdf.derive(

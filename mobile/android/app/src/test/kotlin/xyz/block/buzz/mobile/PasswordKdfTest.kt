@@ -18,7 +18,7 @@ class PasswordKdfTest {
     private val salt =
         "8af931298933fa3787812090082249cbdca8621047fa7aff922fe12acb35d9d7".hexToBytes()
     private val authKey =
-        "25e331a7de880c18d500eb562f99241e65a13f2ad5a0c664be0179d7cfc92082"
+        "25e331a7de880c18d500eb562f99241e65a13f2ad5a0c664be0179d7cfc92083"
 
     @Test
     fun `matches the shared account vector`() {
