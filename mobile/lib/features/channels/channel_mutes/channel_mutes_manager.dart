@@ -100,6 +100,9 @@ class ChannelMutesManager {
     );
     _store = ChannelMuteStore(channels: {..._store.channels, channelId: entry});
     _persist();
+    // Notify before the debounced publish so the control reflects the new
+    // state immediately rather than after the relay round trip.
+    _onChanged();
     markDirty();
   }
 
@@ -111,6 +114,9 @@ class ChannelMutesManager {
     );
     _store = ChannelMuteStore(channels: {..._store.channels, channelId: entry});
     _persist();
+    // Notify before the debounced publish so the control reflects the new
+    // state immediately rather than after the relay round trip.
+    _onChanged();
     markDirty();
   }
 
