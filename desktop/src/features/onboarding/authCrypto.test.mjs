@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   CROCKFORD_ALPHABET,
   deriveAuthKey,
+  deriveLegacyAuthKey,
   generateRecoveryCode,
   hashRecoveryCode,
   normaliseEmail,
@@ -48,17 +49,34 @@ test("agrees with the mobile client", async () => {
   );
 });
 
-test("does not normalise the password", async () => {
-  // Deliberate, and the opposite of NIP-49, which NFKC-normalises before its
-  // scrypt. Recorded here because it looks like an oversight: mobile must
-  // match this rather than match NIP-49, or every user with an accented
-  // password would be refused at sign-in while the backup still opened.
+test("normalises the password, so the keyboard cannot change the key", async () => {
+  // Which spelling a keyboard emits is not something a user chooses, and
+  // NIP-49 already normalises before its scrypt, so an unnormalised auth key
+  // meant the backup opened while the relay refused the same password.
   const composed = "caf\u00e9 battery staple";
   const decomposed = "cafe\u0301 battery staple";
   assert.notEqual(composed, decomposed);
-  assert.notEqual(
+  assert.equal(
     await deriveAuthKey("founder@example.com", composed),
     await deriveAuthKey("founder@example.com", decomposed),
+  );
+});
+
+test("the legacy derivation still reaches pre-normalisation accounts", async () => {
+  // An account created from a decomposed password has its auth_hash over
+  // those exact bytes. Normalising everywhere would lock its owner out of an
+  // account that works today, so sign-in falls back to this derivation.
+  const composed = "caf\u00e9 battery staple";
+  const decomposed = "cafe\u0301 battery staple";
+  assert.notEqual(
+    await deriveLegacyAuthKey("founder@example.com", composed),
+    await deriveLegacyAuthKey("founder@example.com", decomposed),
+  );
+  // ASCII passwords are unaffected by either, which is why the fallback is
+  // guarded on the password actually changing under NFKC.
+  assert.equal(
+    await deriveLegacyAuthKey("founder@example.com", "correct horse battery"),
+    await deriveAuthKey("founder@example.com", "correct horse battery"),
   );
 });
 

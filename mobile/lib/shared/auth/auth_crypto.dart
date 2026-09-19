@@ -15,6 +15,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pointycastle/export.dart';
+import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
 import 'password_kdf.dart';
 
@@ -56,23 +57,30 @@ Uint8List authKeySalt(String email) {
   return digest.process(Uint8List.fromList(input));
 }
 
+/// Canonical form of a password: NFKC, the same normalisation NIP-49 applies
+/// before its scrypt.
+///
+/// Which spelling a keyboard emits is not something a user chooses. iOS and
+/// macOS routinely produce decomposed text where other sources produce
+/// composed, and without this the same typed password derives a different key
+/// depending on where it was typed.
+String normalisePassword(String password) => unorm.nfkc(password);
+
 /// Derive the value the relay checks against its stored hash.
 ///
-/// The password is used as its raw UTF-8 bytes, with **no** Unicode
-/// normalisation. That is not an oversight and must not be "fixed": desktop
-/// encodes the password with `new TextEncoder()` and normalises nothing, so a
-/// composed and a decomposed spelling of the same accented password derive
-/// different keys there. NIP-49, which opens the returned backup, does the
-/// opposite and NFKC-normalises. Matching desktop is the requirement; matching
-/// NIP-49 here would lock every user with an accented password out of their
-/// own account.
+/// The password is normalised first, matching desktop's `deriveAuthKey` and
+/// NIP-49's own handling. Accounts created before that was true are reached
+/// through [deriveLegacyAuthKey] instead.
 Future<AuthKeyDerivation> deriveAuthKey({
   required String email,
   required String password,
   PasswordKdf kdf = const PlatformPasswordKdf(),
+  bool normalise = true,
 }) async {
   final result = await kdf.pbkdf2HmacSha256(
-    password: Uint8List.fromList(utf8.encode(password)),
+    password: Uint8List.fromList(
+      utf8.encode(normalise ? normalisePassword(password) : password),
+    ),
     salt: authKeySalt(email),
     iterations: authKeyIterations,
     length: authKeyLength,
@@ -90,3 +98,19 @@ String _toHex(Uint8List bytes) {
   }
   return buffer.toString();
 }
+
+/// Derive the key an account created before signup normalised would have.
+///
+/// Only for the sign-in fallback. Normalising at signup fixes new accounts,
+/// but an account created from a decomposed password already has an
+/// `auth_hash` over those exact bytes, and normalising everywhere would lock
+/// its owner out of an account that works today.
+///
+/// Removable once v2 re-keying lands; see the `account-key-normalisation-v2`
+/// epic artifact for what that takes.
+Future<AuthKeyDerivation> deriveLegacyAuthKey({
+  required String email,
+  required String password,
+  PasswordKdf kdf = const PlatformPasswordKdf(),
+}) =>
+    deriveAuthKey(email: email, password: password, kdf: kdf, normalise: false);

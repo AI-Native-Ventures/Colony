@@ -81,26 +81,49 @@ Future<SignedInAccount> signInWithPassword({
   Uri? apiOrigin,
   PasswordKdf kdf = const PlatformPasswordKdf(),
 }) async {
-  final derivation = await deriveAuthKey(
+  final origin = (apiOrigin ?? accountApiOrigin()).replace(
+    path: '/api/accounts/signin',
+  );
+
+  Future<http.Response> post(String authKey) async {
+    try {
+      return await client.post(
+        origin,
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': normaliseEmail(email), 'authKey': authKey}),
+      );
+    } catch (_) {
+      // Anything that stopped the request reaching an answer is the one
+      // bucket that means "retry, nothing has changed".
+      throw const SigninException(SigninFailure.unreachable);
+    }
+  }
+
+  var derivation = await deriveAuthKey(
     email: email,
     password: password,
     kdf: kdf,
   );
+  var response = await post(derivation.authKey);
 
-  final http.Response response;
-  try {
-    response = await client.post(
-      (apiOrigin ?? accountApiOrigin()).replace(path: '/api/accounts/signin'),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': normaliseEmail(email),
-        'authKey': derivation.authKey,
-      }),
+  // An account created before signup normalised has its `auth_hash` over the
+  // exact bytes that were typed, so the normalised key will not open it.
+  // Retry those with the pre-normalisation derivation rather than telling
+  // someone their correct password is wrong.
+  //
+  // Guarded on the password actually changing under NFKC: for an ASCII
+  // password the two derivations are identical, and a second attempt would
+  // only burn another of the relay's lockout allowance (LOCK_THRESHOLD in
+  // crates/buzz-relay/src/api/accounts.rs) on a path that cannot succeed.
+  if (response.statusCode == 401 &&
+      _decodeBody(response.body)['error'] == 'invalid_credentials' &&
+      normalisePassword(password) != password) {
+    derivation = await deriveLegacyAuthKey(
+      email: email,
+      password: password,
+      kdf: kdf,
     );
-  } catch (_) {
-    // Anything that stopped the request reaching an answer is the one bucket
-    // that means "retry, nothing has changed".
-    throw const SigninException(SigninFailure.unreachable);
+    response = await post(derivation.authKey);
   }
 
   final body = _decodeBody(response.body);

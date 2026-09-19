@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:buzz/shared/auth/account_relay.dart';
 import 'package:buzz/shared/auth/account_signin.dart';
+import 'package:buzz/shared/auth/auth_crypto.dart';
 import 'package:buzz/shared/auth/password_kdf.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -15,16 +16,21 @@ import 'ncryptsec_test.dart' show specNcryptsec, specPassword, specSecretKey;
 /// `auth_crypto_test.dart` covers the real parameters against the shared
 /// vector; what matters here is what gets posted and what comes back.
 class _StubKdf implements PasswordKdf {
+  /// Cheap, but still a function OF the password bytes, so a test can tell
+  /// the normalised derivation from the legacy one.
   @override
   Future<PasswordKdfResult> pbkdf2HmacSha256({
     required Uint8List password,
     required Uint8List salt,
     required int iterations,
     required int length,
-  }) async => PasswordKdfResult(
-    key: Uint8List.fromList(List<int>.filled(length, 0x2a)),
-    servedBy: PasswordKdfBackend.platform,
-  );
+  }) async {
+    final key = Uint8List(length);
+    for (var i = 0; i < length; i++) {
+      key[i] = (password.isEmpty ? 0 : password[i % password.length]) ^ i;
+    }
+    return PasswordKdfResult(key: key, servedBy: PasswordKdfBackend.platform);
+  }
 }
 
 final _apiOrigin = Uri.parse('https://relay.example.com');
@@ -127,6 +133,86 @@ void main() {
       ),
       _fails(SigninFailure.damagedBackup),
     );
+  });
+
+  test(
+    'retries with the pre-normalisation key for an accented password',
+    () async {
+      // An account created before signup normalised has its auth_hash over the
+      // exact decomposed bytes typed at signup, so the normalised key cannot
+      // open it. Refusing would lock its owner out of an account that works.
+      //
+      // This stops at the two requests deliberately. The only NIP-49 blob with
+      // a published password is the spec vector's, and its password is ASCII,
+      // which by design triggers no retry at all; minting a blob for an
+      // accented password would mean writing an encryptor this code does not
+      // have. So the assertion is on which keys were sent, and the decryption
+      // that follows is covered by the tests above.
+      final legacy = await deriveLegacyAuthKey(
+        email: 'founder@example.com',
+        password: 'cafe\u0301 battery staple',
+        kdf: _StubKdf(),
+      );
+      final normalised = await deriveAuthKey(
+        email: 'founder@example.com',
+        password: 'cafe\u0301 battery staple',
+        kdf: _StubKdf(),
+      );
+      expect(
+        legacy.authKey,
+        isNot(normalised.authKey),
+        reason: 'the two derivations must differ or this proves nothing',
+      );
+      final sent = <http.Request>[];
+
+      await expectLater(
+        _signIn(
+          sent: sent,
+          password: 'cafe\u0301 battery staple',
+          handler: (request) async {
+            final key =
+                (jsonDecode(request.body) as Map<String, dynamic>)['authKey'];
+            if (key != legacy.authKey) {
+              return http.Response(
+                jsonEncode({'error': 'invalid_credentials'}),
+                401,
+              );
+            }
+            return _ok({
+              'pubkey': nostr.Keys(specSecretKey).public,
+              'passwordBlob': specNcryptsec,
+              'kdfVersion': 1,
+            });
+          },
+        ),
+        // The relay accepted the legacy key; the spec blob simply is not this
+        // password's blob.
+        _fails(SigninFailure.damagedBackup),
+      );
+
+      expect(sent, hasLength(2), reason: 'normalised first, then legacy');
+      expect(jsonDecode(sent.first.body)['authKey'], normalised.authKey);
+      expect(jsonDecode(sent.last.body)['authKey'], legacy.authKey);
+    },
+  );
+
+  test('an ASCII password never costs a second attempt', () async {
+    // The retry spends another of the relay's lockout allowance, so it is
+    // guarded on the password actually changing under NFKC. For ASCII the two
+    // derivations are identical and a second attempt could not succeed.
+    final sent = <http.Request>[];
+
+    await expectLater(
+      _signIn(
+        sent: sent,
+        password: 'correct horse battery',
+        handler: (_) async =>
+            http.Response(jsonEncode({'error': 'invalid_credentials'}), 401),
+      ),
+      _fails(SigninFailure.invalidCredentials),
+    );
+
+    expect(sent, hasLength(1));
   });
 
   test('maps the relay failures it is meant to distinguish', () async {

@@ -110,26 +110,70 @@ void main() {
       expect(kdf.password, utf8.encode(vectorPassword));
     });
 
-    test('does NOT normalise the password', () async {
-      // Deliberate, and the opposite of NIP-49. Desktop encodes the password
-      // with TextEncoder and normalises nothing, so a composed and a
-      // decomposed spelling derive different keys there. Normalising here
-      // would lock every user with an accented password out of their account
-      // while every other test still passed.
-      final composed = _RecordingKdf();
-      final decomposed = _RecordingKdf();
+    test(
+      'normalises the password, so the keyboard cannot change the key',
+      () async {
+        // Which spelling a keyboard emits is not something a user chooses, and
+        // NIP-49 already normalises before its scrypt, so an unnormalised auth
+        // key meant the backup opened while the relay refused the same password.
+        final composed = _RecordingKdf();
+        final decomposed = _RecordingKdf();
+        await deriveAuthKey(
+          email: vectorEmail,
+          password: 'caf\u00e9 battery staple',
+          kdf: composed,
+        );
+        await deriveAuthKey(
+          email: vectorEmail,
+          password: 'cafe\u0301 battery staple',
+          kdf: decomposed,
+        );
+
+        expect(composed.password, decomposed.password);
+      },
+    );
+
+    test(
+      'the legacy derivation still reaches pre-normalisation accounts',
+      () async {
+        // An account created from a decomposed password has its auth_hash over
+        // those exact bytes. Normalising everywhere would lock its owner out of
+        // an account that works today.
+        final composed = _RecordingKdf();
+        final decomposed = _RecordingKdf();
+        await deriveLegacyAuthKey(
+          email: vectorEmail,
+          password: 'caf\u00e9 battery staple',
+          kdf: composed,
+        );
+        await deriveLegacyAuthKey(
+          email: vectorEmail,
+          password: 'cafe\u0301 battery staple',
+          kdf: decomposed,
+        );
+
+        expect(composed.password, isNot(decomposed.password));
+      },
+    );
+
+    test('an ASCII password is identical under both derivations', () async {
+      // Which is why the sign-in retry is guarded on the password actually
+      // changing under NFKC: for ASCII a second attempt cannot succeed and
+      // would only spend another of the relay's lockout allowance.
+      final normalised = _RecordingKdf();
+      final legacy = _RecordingKdf();
       await deriveAuthKey(
         email: vectorEmail,
-        password: 'caf\u00e9 battery staple',
-        kdf: composed,
+        password: vectorPassword,
+        kdf: normalised,
       );
-      await deriveAuthKey(
+      await deriveLegacyAuthKey(
         email: vectorEmail,
-        password: 'cafe\u0301 battery staple',
-        kdf: decomposed,
+        password: vectorPassword,
+        kdf: legacy,
       );
 
-      expect(composed.password, isNot(decomposed.password));
+      expect(normalised.password, legacy.password);
     });
 
     test('reports which implementation served the call', () async {

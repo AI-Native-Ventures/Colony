@@ -10,7 +10,13 @@
  * See docs/superpowers/specs/2026-08-22-auth-accounts-design.md.
  */
 
-import { deriveAuthKey, hashRecoveryCode, normaliseEmail } from "./authCrypto";
+import {
+  deriveAuthKey,
+  deriveLegacyAuthKey,
+  hashRecoveryCode,
+  normaliseEmail,
+  normalisePassword,
+} from "./authCrypto";
 import type { OnboardingServices, PendingSignup } from "./contracts";
 
 /**
@@ -244,11 +250,29 @@ export function createAuthService(deps: AuthDeps): OnboardingServices["auth"] {
       }),
     signIn: (email, password) =>
       guard(async () => {
-        const authKey = await deriveAuthKey(email, password);
-        const response = await deps.post("/api/accounts/signin", {
-          email: normaliseEmail(email),
-          authKey,
-        });
+        const post = (authKey: string) =>
+          deps.post("/api/accounts/signin", {
+            email: normaliseEmail(email),
+            authKey,
+          });
+        let response = await post(await deriveAuthKey(email, password));
+        // An account created before signup normalised has its `auth_hash`
+        // over the exact bytes that were typed, so the normalised key will
+        // not open it. Retry those with the pre-normalisation derivation
+        // rather than telling someone their correct password is wrong.
+        //
+        // Guarded on the password actually changing under NFKC: for an ASCII
+        // password the two derivations are identical, and a second attempt
+        // would only burn another of the relay's lockout allowance
+        // (LOCK_THRESHOLD in crates/buzz-relay/src/api/accounts.rs) on a path
+        // that cannot succeed.
+        if (
+          response.status === 401 &&
+          readString(response.body, "error") === "invalid_credentials" &&
+          normalisePassword(password) !== password
+        ) {
+          response = await post(await deriveLegacyAuthKey(email, password));
+        }
         if (!isOk(response.status)) {
           throw failureFromResponse(response.body);
         }
