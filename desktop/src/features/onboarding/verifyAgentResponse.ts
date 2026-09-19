@@ -111,6 +111,11 @@ export async function verifyAgentResponse(
     const mismatchedModel =
       !!selected.model && surface.normalized.model?.value !== selected.model;
     if (mismatchedRuntime || mismatchedModel) {
+      // The owner just chose this connection on this screen, so it wins over
+      // whatever the teammate carried. Only the calls can fail here; the
+      // check that they worked lives after the catch, so no error message
+      // has to be recognised by its text to be re-thrown unwrapped.
+      let updatedSurface: typeof surface;
       try {
         await bounded(
           updateManagedAgent({
@@ -123,34 +128,23 @@ export async function verifyAgentResponse(
             provider: selected.provider ?? null,
           }),
         );
-        const updatedSurface = await bounded(
-          getAgentConfigSurface(agent.pubkey),
-        );
-        const stillMismatchedRuntime =
-          updatedSurface.runtimeId !== targetRuntime;
-        const stillMismatchedModel =
-          !!selected.model &&
-          updatedSurface.normalized.model?.value !== selected.model;
-        if (stillMismatchedRuntime || stillMismatchedModel)
-          throw new Error(
-            "Your teammate's settings could not be updated to match the chosen connection. Check the agent and try again.",
-          );
-        surface = updatedSurface;
+        updatedSurface = await bounded(getAgentConfigSurface(agent.pubkey));
       } catch (updateError) {
-        // Only wrap the underlying update error; let our own validation
-        // error pass through untouched.
-        if (
-          updateError instanceof Error &&
-          updateError.message.includes("could not be updated")
-        ) {
-          throw updateError;
-        }
         throw new Error(
           updateError instanceof Error
             ? `Failed to update agent settings: ${updateError.message}`
             : "Failed to update agent settings.",
         );
       }
+      const stillMismatchedRuntime = updatedSurface.runtimeId !== targetRuntime;
+      const stillMismatchedModel =
+        !!selected.model &&
+        updatedSurface.normalized.model?.value !== selected.model;
+      if (stillMismatchedRuntime || stillMismatchedModel)
+        throw new Error(
+          "Your teammate's settings could not be updated to match the chosen connection. Check the agent and try again.",
+        );
+      surface = updatedSurface;
     }
     const values = (config: typeof surface.normalized) =>
       JSON.stringify({
