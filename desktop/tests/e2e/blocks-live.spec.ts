@@ -969,6 +969,190 @@ test.describe("Blocks live Gate C", () => {
     ).toHaveCount(0);
     await screenshot(page, evidence, "05-proposals-resolved.png");
 
+    // Exercise the new preview through the real CLI/relay, not seeded Block events.
+    const previewEvents: string[] = [];
+    for (const version of [1, 2]) {
+      const html = `<h1>Persisted preview ${version}</h1><p>Relay-backed revision.</p>`;
+      const source = path.join(evidence, `preview-${version}.html`);
+      await writeFile(source, html);
+      const uploaded = await runCli(
+        cli,
+        relayHttpUrl,
+        ["upload", "file", "--file", source],
+        "charlie",
+      );
+      if (typeof uploaded.url !== "string") {
+        throw new Error("preview source upload did not return a URL");
+      }
+      const filename = `preview-${version}.json`;
+      await writeEvidence(evidence, filename, {
+        title: `Persisted preview ${version}`,
+        description: "Static relay persistence check",
+        url: uploaded.url,
+        alt: "Saved HTML source",
+        status: "ready-for-review",
+        revision: version,
+        preview_html: html,
+        ...(version === 2 ? { previous_artifact: previewEvents[0] } : {}),
+      });
+      const result = await runCli(
+        cli,
+        relayHttpUrl,
+        [
+          "blocks",
+          "invoke",
+          "--channel",
+          channelId,
+          "--handle",
+          "artifact",
+          "--data",
+          path.join(evidence, filename),
+          "--processor",
+          TEST_IDENTITIES.charlie.pubkey,
+          ...(version === 2 ? ["--reply-to", previewEvents[0]] : []),
+        ],
+        "charlie",
+      );
+      if (
+        typeof result.event_id !== "string" ||
+        !/^[0-9a-f]{64}$/.test(result.event_id)
+      ) {
+        throw new Error("preview invoke did not return a signed event ID");
+      }
+      previewEvents.push(result.event_id);
+    }
+    await page.getByText(name, { exact: true }).click();
+    await page.reload();
+    const previewSummary = page.locator(
+      `[data-testid="message-thread-summary"][data-thread-head-id="${previewEvents[0]}"]`,
+    );
+    await expect(previewSummary).toBeVisible({ timeout: 30_000 });
+    await previewSummary.evaluate((element) =>
+      element.scrollIntoView({ block: "center" }),
+    );
+    await page.mouse.move(0, 0);
+    await waitForAnimations(page);
+    await previewSummary.click();
+    const previewPanel = page.getByTestId("message-thread-panel");
+    for (const version of [1, 2]) {
+      const region = previewPanel
+        .getByRole("region", { name: "Website preview", exact: true })
+        .filter({ hasText: `Version ${version}` });
+      await expect(
+        region.frameLocator("iframe").getByRole("heading", {
+          name: `Persisted preview ${version}`,
+        }),
+      ).toBeVisible();
+    }
+    await writeEvidence(evidence, "persisted-preview-events.json", {
+      channelId,
+      eventIds: previewEvents,
+      transport: "real CLI and relay",
+      provider: "none",
+    });
+    await screenshot(page, evidence, "06-persisted-preview-revisions.png");
+
+    // Real relay authorization only: rendering and bytes are proven separately.
+    const websiteDataPath = path.join(evidence, "website-review.json");
+    await writeEvidence(evidence, "website-review.json", {
+      title: "Owner-bound website review",
+      description: "Deterministic authorization fixture; no model request",
+      url: "https://example.com/source.zip",
+      alt: "Source archive fixture",
+      status: "ready-for-review",
+      revision: 1,
+      website_bundle: {
+        url: "https://example.com/manifest.json",
+        sha256: "a".repeat(64),
+      },
+    });
+    const website = await runCli(
+      cli,
+      relayHttpUrl,
+      [
+        "blocks",
+        "invoke",
+        "--channel",
+        channelId,
+        "--handle",
+        "artifact",
+        "--data",
+        websiteDataPath,
+        "--processor",
+        TEST_IDENTITIES.charlie.pubkey,
+      ],
+      "charlie",
+    );
+    if (typeof website.event_id !== "string") {
+      throw new Error("Website review did not persist");
+    }
+    const websiteInputPath = path.join(evidence, "website-decision.json");
+    const websiteActionArgs = [
+      "blocks",
+      "act",
+      "--channel",
+      channelId,
+      "--instance",
+      website.event_id,
+      "--action",
+      "artifact.approve-design",
+      "--input",
+      websiteInputPath,
+    ];
+    const exactDecision = {
+      scope: "design-only",
+      revision: 1,
+      manifest_sha256: "a".repeat(64),
+    };
+    const refused: Array<{ label: string; error: string }> = [];
+    for (const attempt of [
+      { label: "worker", identity: "charlie" as const, input: exactDecision },
+      {
+        label: "wrong-revision",
+        identity: "tyler" as const,
+        input: { ...exactDecision, revision: 2 },
+      },
+      {
+        label: "wrong-digest",
+        identity: "tyler" as const,
+        input: { ...exactDecision, manifest_sha256: "b".repeat(64) },
+      },
+    ]) {
+      await writeEvidence(evidence, "website-decision.json", attempt.input);
+      let rejection: unknown;
+      try {
+        const result = await runCli(
+          cli,
+          relayHttpUrl,
+          websiteActionArgs,
+          attempt.identity,
+        );
+        if (result.accepted === false) rejection = result;
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection, `${attempt.label} must be rejected`).toBeTruthy();
+      const reason = String(
+        rejection instanceof Error
+          ? rejection.message
+          : JSON.stringify(rejection),
+      );
+      expect(reason).toMatch(
+        /decision maker|Design approval must match this exact website version/i,
+      );
+      refused.push({ label: attempt.label, error: reason });
+    }
+    await writeEvidence(evidence, "website-decision.json", exactDecision);
+    const approved = await runCli(cli, relayHttpUrl, websiteActionArgs);
+    expect(approved.accepted).toBe(true);
+    await writeEvidence(evidence, "website-approval-authority.json", {
+      instanceEventId: website.event_id,
+      approved,
+      refused,
+      transport: "real CLI and relay",
+      provider: "none",
+    });
+
     test.info().annotations.push(
       { type: "gate-c-evidence", description: evidence },
       {

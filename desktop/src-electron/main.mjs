@@ -4,7 +4,11 @@ import { createHash } from "node:crypto";
 import { SignInImport } from "./browser-import/manager.mjs";
 import {
   app,
+  dialog,
   BrowserWindow,
+  WebContentsView,
+  View,
+  session,
   ipcMain,
   nativeTheme,
   protocol,
@@ -25,6 +29,11 @@ import { shellCommand } from "./shell-commands.mjs";
 import { ManagedBrowser, normalizeRelay } from "./browser/managed-workers.mjs";
 import { runtimePaths } from "./runtime-paths.mjs";
 import { DesktopDeepLinks } from "./deep-links.mjs";
+
+import { createWebsitePreviewHost, resolveProductionClipStrategy } from "./website-preview/host.mjs";
+import { createHandoverSaver } from "./website-preview/save.mjs";
+import { PreviewController } from "./website-preview/controller.mjs";
+import { PREVIEW_SCHEME_DESCRIPTOR } from "./website-preview/scheme.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const packageMetadata = JSON.parse(
@@ -56,6 +65,7 @@ app.on("second-instance", (_event, argv) => {
 });
 for (const value of process.argv) deepLinks.enqueue(value);
 protocol.registerSchemesAsPrivileged([
+  PREVIEW_SCHEME_DESCRIPTOR,
   {
     scheme: "colony",
     privileges: {
@@ -189,6 +199,15 @@ async function boot() {
   let imports = createImports();
   const socketPath = path.join(runtime, "browser.sock");
   let businessContext = null;
+  const previewHost = createWebsitePreviewHost({
+    WebContentsView, View, session,
+    clipStrategy: resolveProductionClipStrategy(),
+  });
+  const previews = new PreviewController({
+    host: previewHost, window, context: () => businessContext,
+    saveHandover: createHandoverSaver(window, dialog),
+  });
+  resources.add(() => previewHost.closeAll());
   const managedBrowser = new ManagedBrowser({
     root: runtime,
     socketPath,
@@ -249,6 +268,7 @@ async function boot() {
       // Revocation is synchronous; cleanup fences new native calls until all
       // resources from the previous renderer have been retired.
       businessContext = null;
+      void previews.reset();
       views.setBusiness(null);
       const resetting = rendererHost.reset();
       imports = createImports();
@@ -278,6 +298,7 @@ async function boot() {
       ["import_identity", "sign_out"].includes(payload.command)
     ) {
       businessContext = null;
+      void previews.reset();
       views.setBusiness(null);
     }
     // The owner's approved outreach email never reaches the native host: the
@@ -303,12 +324,15 @@ async function boot() {
         businessContext?.id !== payload.id ||
         businessContext?.relay !== relay
       ) {
+        void previews.reset();
         views.setBusiness(null);
         businessContext = payload.id ? { id: payload.id, relay } : null;
       }
       views.setBusiness(payload.id);
       return;
     }
+    if (typeof type === "string" && type.startsWith("preview:"))
+      return previews.request(type.slice("preview:".length), payload);
     if (type === "import:discover") return imports.discoverProfiles();
     if (type === "import:sites") return imports.list(payload);
     if (type === "import:run") return imports.import(payload);
