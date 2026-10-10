@@ -26,6 +26,11 @@ test("ant colors run white, then employee color, then violet", () => {
   assert.equal(antColor(2, 1, 1), "rgb(137 90 246)");
 });
 
+test("uniting into violet flashes bright instead of passing through mud", () => {
+  const [r, g, b] = antColor(1, 1, 0.5).slice(4, -1).split(" ").map(Number);
+  assert.ok(Math.min(r, g, b) >= 200, `mid-unite color rgb(${r} ${g} ${b})`);
+});
+
 test("no unseeded randomness anywhere in the launch film", () => {
   const dir = new URL(".", import.meta.url);
   for (const name of readdirSync(dir)) {

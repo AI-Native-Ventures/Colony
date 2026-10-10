@@ -37,8 +37,8 @@ export type AntState = {
   alpha: number;
   /** 0 = white (still a letter), 1 = its employee color. */
   toGroup: number;
-  /** 0 = employee color, 1 = Colony violet (part of the logo). */
-  toViolet: number;
+  /** 0 = flying, 1 = settled into its place in the logo. */
+  landed: number;
 };
 
 export type SwarmOptions = {
@@ -83,10 +83,18 @@ export function bezierTangent(
   };
 }
 
+function byX(points: Point[]): number[] {
+  return points
+    .map((_, i) => i)
+    .sort((a, b) => points[a].x - points[b].x || points[a].y - points[b].y);
+}
+
 /**
- * Pairs each letter point with a logo point and gives it a river. Ants are
- * split evenly across lanes; inside a lane, starts and ends are both sorted
- * by x and paired in order, so a river flows instead of tangling.
+ * Pairs each letter point with a logo point and gives it a river. Lane `g`
+ * takes the g-th vertical slice of the letters (left to right) and flies it
+ * to the g-th vertical slice of the logo, so each employee color builds its
+ * own part of the mark instead of the four colors mixing into mud. Inside a
+ * slice, starts and ends are paired top to bottom.
  */
 export function createAnts(
   starts: Point[],
@@ -101,26 +109,24 @@ export function createAnts(
   }
   if (lanes.length === 0) throw new Error("createAnts: no lanes");
   const rand = mulberry32(opts.seed);
-  const order = starts.map((_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
-  const groups: number[][] = lanes.map(() => []);
-  order.forEach((index, rank) => {
-    groups[rank % lanes.length].push(index);
-  });
+  const startOrder = byX(starts);
+  const endOrder = byX(ends);
   const ants: Ant[] = [];
-  groups.forEach((members, group) => {
-    const lane = lanes[group];
+  lanes.forEach((lane, group) => {
+    const lo = Math.floor((group * starts.length) / lanes.length);
+    const hi = Math.floor(((group + 1) * starts.length) / lanes.length);
+    const sliceStarts = startOrder
+      .slice(lo, hi)
+      .sort((a, b) => starts[a].y - starts[b].y);
+    const sliceEnds = endOrder
+      .slice(lo, hi)
+      .sort((a, b) => ends[a].y - ends[b].y);
     const jitter = () => (rand() - 0.5) * 2 * lane.spread;
-    const byStart = [...members].sort((a, b) => starts[a].x - starts[b].x);
-    const byEnd = [...members].sort((a, b) => ends[a].x - ends[b].x);
-    byStart.forEach((startIndex, k) => {
+    sliceStarts.forEach((startIndex, k) => {
       const start = starts[startIndex];
       ants.push({
         start,
-        end: ends[byEnd[k]],
+        end: ends[sliceEnds[k]],
         group,
         c1: { x: lane.c1.x + jitter(), y: lane.c1.y + jitter() },
         c2: { x: lane.c2.x + jitter(), y: lane.c2.y + jitter() },
@@ -132,7 +138,7 @@ export function createAnts(
         duration: 1.45 + rand() * 0.4,
         wobbleAmp: 10 + rand() * 22,
         wobblePhase: rand() * Math.PI * 2,
-        size: 12 + rand() * 5,
+        size: 18 + rand() * 7,
       });
     });
   });
@@ -158,6 +164,6 @@ export function antState(ant: Ant, t: number): AntState {
     size: ant.size * (0.62 + 0.38 * leaving) * (1 + 0.2 * landing),
     alpha: smoothstep(ant.appear, ant.appear + 0.15, t),
     toGroup: smoothstep(0, 0.25, u),
-    toViolet: landing,
+    landed: landing,
   };
 }

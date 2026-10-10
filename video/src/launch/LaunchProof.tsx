@@ -41,23 +41,26 @@ const WordsLayer: React.FC<{ t: number }> = ({ t }) => {
   );
 };
 
-/** The single glowing ant the film opens on; the words burst out around it. */
+/** The single glowing ant the film opens on; the first word slams in over it. */
 const SoloAnt: React.FC<{ t: number }> = ({ t }) => {
-  const fade = 1 - smoothstep(0.3, 0.7, t);
+  const fade = 1 - smoothstep(0.06, 0.3, t);
   if (fade <= 0) return null;
-  const breathe = 1 + 0.06 * Math.sin(t * 6);
+  const breathe = 1 + 0.05 * Math.sin(t * 9);
+  const width = 240;
+  const height = width * (309 / 466);
   return (
     <div
       style={{
         position: "absolute",
-        left: FRAME_W / 2 - 48,
-        top: FRAME_H / 2 - 32,
-        width: 96,
-        height: 64,
+        left: FRAME_W / 2 - width / 2,
+        top: FRAME_H / 2 - height / 2,
+        width,
+        height,
         color: "#f4f3f8",
         opacity: fade,
-        transform: `scale(${breathe.toFixed(4)})`,
-        filter: "drop-shadow(0 0 18px hsl(258 90% 76% / 0.9))",
+        transform: `scale(${(breathe * (1 + 0.25 * (1 - fade))).toFixed(4)})`,
+        filter:
+          "drop-shadow(0 0 22px hsl(258 90% 76% / 0.95)) drop-shadow(0 0 60px hsl(258 90% 66% / 0.6))",
       }}
     >
       <AntMark />

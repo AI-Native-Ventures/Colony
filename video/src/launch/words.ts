@@ -1,23 +1,28 @@
 import { easeOutExpo, progress, smoothstep } from "./math.ts";
 import { fitFontSize } from "./points.ts";
+import { stackY } from "./stack.ts";
 import { FRAME_W, T_RELEASE, T_TREMBLE, TEXT_MAX_WIDTH } from "./timeline.ts";
 
-export type JobWord = { text: string; at: number };
+export type JobWord = { text: string; at: number; size: number };
 
-/** The owner's to-do list. Not promises: only four of these are Colony employees. */
+/**
+ * The owner's to-do list, landing faster and faster into a tower. Not
+ * promises: only four of these are Colony employees.
+ */
 export const JOB_WORDS: JobWord[] = [
-  { text: "Find customers", at: 0.08 },
-  { text: "Post on Instagram", at: 0.34 },
-  { text: "Reply to emails", at: 0.58 },
-  { text: "Update the website", at: 0.8 },
-  { text: "Send quotes", at: 1.0 },
-  { text: "Chase invoices", at: 1.18 },
+  { text: "Find customers", at: 0.08, size: 150 },
+  { text: "Post on Instagram", at: 0.28, size: 132 },
+  { text: "Reply to emails", at: 0.46, size: 162 },
+  { text: "Update the website", at: 0.62, size: 126 },
+  { text: "Send quotes", at: 0.76, size: 158 },
+  { text: "Chase invoices", at: 0.88, size: 140 },
+  { text: "Do the books", at: 0.98, size: 160 },
+  { text: "Answer the phone", at: 1.07, size: 134 },
+  { text: "Write the newsletter", at: 1.15, size: 128 },
 ];
 
-const DESIRED_SIZE = 116;
-const LINE_STEP = 132;
-const STACK_CENTER_Y = 960;
-const TRACKING = -0.035;
+const STACK = { centerY: 960, leading: 0.94, pushSeconds: 0.22 };
+const TRACKING = -0.04;
 const INK = "#f4f3f8";
 
 function fontAt(family: string, size: number): string {
@@ -25,8 +30,8 @@ function fontAt(family: string, size: number): string {
 }
 
 /**
- * Draws the job words at time `t`. "rest" draws every word fully landed,
- * sharp and opaque: the exact shapes the ants are sampled from.
+ * Draws the job words at time `t`. "rest" draws the tower exactly as it
+ * stands at T_RELEASE, sharp and opaque: the shapes the ants are sampled from.
  */
 export function drawWords(
   ctx: CanvasRenderingContext2D,
@@ -34,51 +39,59 @@ export function drawWords(
   t: number,
   mode: "film" | "rest",
 ): void {
+  const film = mode === "film";
+  const at = film ? t : T_RELEASE;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = INK;
-  const top = STACK_CENTER_Y - ((JOB_WORDS.length - 1) * LINE_STEP) / 2;
-  const film = mode === "film";
-  const fadeOut = film ? progress(t, T_RELEASE, 0.25) : 0;
-  const tremble = film
-    ? smoothstep(T_TREMBLE, T_TREMBLE + 0.25, t) *
-      (1 - smoothstep(T_RELEASE - 0.12, T_RELEASE, t))
-    : 0;
-  JOB_WORDS.forEach((word, index) => {
-    const size = fitFontSize(
+  const sizes = JOB_WORDS.map((word) =>
+    fitFontSize(
       (s) => {
         ctx.font = fontAt(family, s);
         ctx.letterSpacing = `${TRACKING * s}px`;
         return ctx.measureText(word.text).width;
       },
-      DESIRED_SIZE,
+      word.size,
       TEXT_MAX_WIDTH,
-    );
-    const enter = film ? easeOutExpo(progress(t, word.at, 0.42)) : 1;
+    ),
+  );
+  const ys = stackY(
+    sizes,
+    JOB_WORDS.map((w) => w.at),
+    at,
+    STACK,
+  );
+  const fadeOut = film ? progress(t, T_RELEASE, 0.35) : 0;
+  const tremble = film
+    ? smoothstep(T_TREMBLE, T_TREMBLE + 0.2, t) *
+      (1 - smoothstep(T_RELEASE - 0.1, T_RELEASE, t))
+    : 0;
+  JOB_WORDS.forEach((word, index) => {
+    const enter = easeOutExpo(progress(at, word.at, 0.38));
     if (enter <= 0) return;
-    const newer = film
-      ? JOB_WORDS.filter((w) => w.at > word.at && w.at + 0.2 <= t).length
-      : 0;
+    const newer = JOB_WORDS.filter(
+      (w) => w.at > word.at && w.at + 0.15 <= at,
+    ).length;
     const alpha = film
-      ? enter * Math.max(0.42, 1 - 0.12 * newer) * (1 - fadeOut)
+      ? enter * Math.max(0.38, 1 - 0.1 * newer) * (1 - fadeOut)
       : 1;
     if (alpha <= 0) return;
-    const blur = film ? (1 - enter) * 18 + fadeOut * 6 : 0;
-    const scale = 1 + (1 - enter) * 0.08 + fadeOut * 0.04;
-    const x = FRAME_W / 2 + tremble * 2.4 * Math.sin(t * 61 + index * 1.7);
+    // Each word slams down into its own slot: big and soft to sharp, barely any travel, so it never lands on its neighbour.
+    const blur = film ? (1 - enter) * 16 + fadeOut * 8 : 0;
+    const scale = 1 + (1 - enter) * 0.22 + fadeOut * 0.05;
+    const x = FRAME_W / 2 + tremble * 3 * Math.sin(t * 61 + index * 1.7);
     const y =
-      top +
-      index * LINE_STEP +
-      (1 - enter) * 40 +
-      tremble * 2.4 * Math.cos(t * 53 + index * 2.3);
+      ys[index] +
+      (1 - enter) * 18 +
+      tremble * 3 * Math.cos(t * 53 + index * 2.3);
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.filter = blur > 0.05 ? `blur(${blur.toFixed(2)}px)` : "none";
     ctx.translate(x, y);
     ctx.scale(scale, scale);
-    ctx.font = fontAt(family, size);
-    ctx.letterSpacing = `${TRACKING * size}px`;
+    ctx.font = fontAt(family, sizes[index]);
+    ctx.letterSpacing = `${TRACKING * sizes[index]}px`;
     ctx.fillText(word.text, 0, 0);
     ctx.restore();
   });

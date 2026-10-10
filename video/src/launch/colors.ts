@@ -2,12 +2,16 @@ import { hslToRgb, lerp } from "./math.ts";
 
 type Rgb = [number, number, number];
 
-/** The four employees, in group order: finds customers, posts, emails, website. */
+/**
+ * The four employees in slice order, left to right across the screen:
+ * blue finds customers, amber emails, green updates the website, pink posts.
+ * Must match the order of LANES in timeline.ts.
+ */
 const GROUP_RGB: Rgb[] = [
   hslToRgb(217, 91, 60),
-  hslToRgb(330, 81, 60),
   hslToRgb(38, 92, 50),
   hslToRgb(160, 60, 45),
+  hslToRgb(330, 81, 60),
 ];
 const VIOLET_RGB: Rgb = hslToRgb(258, 90, 66);
 const WHITE_RGB: Rgb = [244, 243, 248];
@@ -20,13 +24,16 @@ function mix(a: Rgb, b: Rgb, t: number): Rgb {
   ];
 }
 
-/** White while the ant is still a letter, its employee color in flight, violet once it is part of the logo. */
+/** White while the ant is still a letter, its employee color in flight, violet once the four colors unite into the logo. */
 export function antColor(
   group: number,
   toGroup: number,
   toViolet: number,
 ): string {
   const own = GROUP_RGB[group % GROUP_RGB.length];
-  const [r, g, b] = mix(mix(WHITE_RGB, own, toGroup), VIOLET_RGB, toViolet);
+  const united = mix(mix(WHITE_RGB, own, toGroup), VIOLET_RGB, toViolet);
+  // Half way to violet the mix of two hues turns muddy, so pass through a white flash instead.
+  const flash = 0.75 * Math.sin(Math.PI * toViolet);
+  const [r, g, b] = mix(united, WHITE_RGB, flash);
   return `rgb(${r} ${g} ${b})`;
 }

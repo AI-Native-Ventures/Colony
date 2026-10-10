@@ -57,7 +57,7 @@ export const Grain: React.FC<{ t: number }> = ({ t }) => {
         top: 0,
         width: FRAME_W,
         height: FRAME_H,
-        opacity: 0.075,
+        opacity: 0.06,
         mixBlendMode: "overlay",
       }}
     />

@@ -5,9 +5,9 @@ export const FRAME_W = 1080;
 export const FRAME_H = 1920;
 export const PROOF_SECONDS = 6;
 export const SEED = 20261010;
-export const ANT_COUNT = 1400;
+export const ANT_COUNT = 900;
 
-export const T_TREMBLE = 1.55;
+export const T_TREMBLE = 1.6;
 export const T_RELEASE = 2.0;
 /** Seconds from the first ant leaving (left edge) to the last (right edge). */
 export const RELEASE_SWEEP = 0.45;
@@ -26,12 +26,15 @@ export const LOGO_RECT = {
 /** Words stay inside x 140..940, clear of the TikTok and Reels buttons. */
 export const TEXT_MAX_WIDTH = 800;
 
-/** Four rivers, one per employee color: out towards the edges, then back into the logo. */
+/**
+ * Four rivers, one per employee color, in slice order left to right (see
+ * colors.ts): out towards the edges, then back into their part of the logo.
+ */
 export const LANES: Lane[] = [
   { c1: { x: -180, y: 1150 }, c2: { x: 60, y: 260 }, spread: 110 },
-  { c1: { x: 1260, y: 1250 }, c2: { x: 1020, y: 300 }, spread: 110 },
   { c1: { x: 160, y: 1900 }, c2: { x: -120, y: 700 }, spread: 120 },
   { c1: { x: 920, y: 1900 }, c2: { x: 1200, y: 760 }, spread: 120 },
+  { c1: { x: 1260, y: 1250 }, c2: { x: 1020, y: 300 }, spread: 110 },
 ];
 
 export const timeAt = (frame: number, fps: number): number => frame / fps;

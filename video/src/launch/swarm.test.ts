@@ -59,8 +59,27 @@ test("an ant sits on its letter before release and on the logo after landing", (
     const after = antState(ant, ant.release + ant.duration + 0.5);
     assert.ok(Math.abs(after.x - ant.end.x) < 1e-6);
     assert.ok(Math.abs(after.y - ant.end.y) < 1e-6);
-    assert.equal(after.toViolet, 1);
+    assert.equal(after.landed, 1);
     assert.ok(Math.abs(after.angle) < 1e-9);
+  }
+});
+
+test("each river takes one vertical slice of the letters and of the logo", () => {
+  const ants = createAnts(starts, ends, lanes, opts);
+  for (let g = 0; g < lanes.length - 1; g++) {
+    const here = ants.filter((a) => a.group === g);
+    const next = ants.filter((a) => a.group === g + 1);
+    assert.equal(here.length, 100);
+    assert.ok(
+      Math.max(...here.map((a) => a.start.x)) <=
+        Math.min(...next.map((a) => a.start.x)),
+      "letter slices overlap",
+    );
+    assert.ok(
+      Math.max(...here.map((a) => a.end.x)) <=
+        Math.min(...next.map((a) => a.end.x)),
+      "logo slices overlap",
+    );
   }
 });
 

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { antShapes, drawAnt } from "./antShape";
 import { antColor } from "./colors.ts";
-import { progress } from "./math.ts";
+import { progress, smoothstep } from "./math.ts";
 import { type Ant, antState } from "./swarm.ts";
 import { FRAME_H, FRAME_W, T_LOGO_IN } from "./timeline.ts";
 
@@ -34,6 +34,8 @@ export const SwarmLayer: React.FC<{ ants: Ant[]; t: number }> = ({
     sharp.clearRect(0, 0, FRAME_W, FRAME_H);
     // Once the crisp logo arrives, the swarm fades to a faint halo under it.
     const settle = 1 - 0.85 * progress(t, T_LOGO_IN, 0.45);
+    // The four colors build their own parts of the mark, then unite into violet together.
+    const unite = smoothstep(T_LOGO_IN - 0.2, T_LOGO_IN + 0.15, t);
     for (let k = TRAIL_ALPHA.length - 1; k >= 0; k--) {
       const tk = t - k * TRAIL_DT;
       for (const ant of ants) {
@@ -48,7 +50,7 @@ export const SwarmLayer: React.FC<{ ants: Ant[]; t: number }> = ({
           s.y,
           s.angle,
           s.size * (1 - 0.12 * k),
-          antColor(ant.group, s.toGroup, s.toViolet),
+          antColor(ant.group, s.toGroup, unite),
           alpha,
         );
       }
