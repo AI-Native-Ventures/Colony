@@ -8,6 +8,7 @@ import {
 } from "remotion";
 import { loadFont } from "@remotion/google-fonts/Inter";
 import { AntMark } from "./brand/AntMark";
+import { LaunchProof } from "./launch/LaunchProof";
 import { t1Schema, type T1Props } from "./t1/schema";
 
 const fontHandle = delayRender("Loading Inter font");
@@ -599,6 +600,22 @@ export const Root = () => {
           },
         }}
         schema={t1Schema}
+      />
+      <Composition
+        id="LaunchProof"
+        component={LaunchProof}
+        durationInFrames={180}
+        fps={30}
+        width={1080}
+        height={1920}
+      />
+      <Composition
+        id="LaunchProof60"
+        component={LaunchProof}
+        durationInFrames={360}
+        fps={60}
+        width={1080}
+        height={1920}
       />
     </>
   );
