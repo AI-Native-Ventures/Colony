@@ -1,0 +1,7 @@
+# Makes video/ its own workspace root. pnpm 11 no longer reads
+# `ignore-workspace` from .npmrc, so without this file an install here
+# resolves the repo-root workspace instead of this standalone package.
+allowBuilds:
+  # esbuild's postinstall only verifies its platform binary; the root
+  # workspace allows it too.
+  esbuild: true
