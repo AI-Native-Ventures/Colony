@@ -14,7 +14,7 @@ import {
   timeAt,
 } from "./timeline.ts";
 import { useAnts } from "./useAnts";
-import { drawWords } from "./words";
+import { drawWords, JOB_WORDS } from "./words";
 
 const WordsLayer: React.FC<{ t: number }> = ({ t }) => {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -43,7 +43,8 @@ const WordsLayer: React.FC<{ t: number }> = ({ t }) => {
 
 /** The single glowing ant the film opens on; the first word slams in over it. */
 const SoloAnt: React.FC<{ t: number }> = ({ t }) => {
-  const fade = 1 - smoothstep(0.06, 0.3, t);
+  const firstWord = JOB_WORDS[0].at;
+  const fade = 1 - smoothstep(firstWord - 0.08, firstWord + 0.15, t);
   if (fade <= 0) return null;
   const breathe = 1 + 0.05 * Math.sin(t * 9);
   const width = 240;
