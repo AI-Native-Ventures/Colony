@@ -51,7 +51,5 @@ export function fitFontSize(
   maxWidth: number,
 ): number {
   const width = measureAtSize(desired);
-  return width <= maxWidth
-    ? desired
-    : Math.floor(desired * (maxWidth / width));
+  return width <= maxWidth ? desired : Math.floor(desired * (maxWidth / width));
 }

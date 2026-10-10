@@ -24,10 +24,7 @@ test("samples only opaque cells on the grid", () => {
 
 test("respects the alpha threshold", () => {
   assert.equal(sampleAlphaPoints(block(10, 10, 100), 10, 10, 1).length, 0);
-  assert.equal(
-    sampleAlphaPoints(block(10, 10, 100), 10, 10, 1, 90).length,
-    9,
-  );
+  assert.equal(sampleAlphaPoints(block(10, 10, 100), 10, 10, 1, 90).length, 9);
 });
 
 test("pickPoints returns exactly n, deterministically, cycling a small pool", () => {
