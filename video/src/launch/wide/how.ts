@@ -89,7 +89,7 @@ export type TeamRow = { who: EmployeeId; job: string };
 /** The team Colony hires from the website, in the order the film meets them. */
 export const TEAM_ROWS: TeamRow[] = [
   { who: "blue", job: "Finds customers" },
-  { who: "amber", job: "Writes your emails" },
+  { who: "amber", job: "Sells for you" },
   { who: "pink", job: "Makes your posts" },
   { who: "green", job: "Keeps your site fresh" },
 ];
