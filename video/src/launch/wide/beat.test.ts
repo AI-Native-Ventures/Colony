@@ -4,6 +4,7 @@ import {
   BEAT,
   BEAT_SECONDS,
   BEAT_VOICE,
+  cameraScale,
   carryPath,
   foundCount,
   LEADS,
@@ -41,4 +42,18 @@ test("voice lines fit the beat and never overlap", () => {
     assert.ok(line.speech[0] >= 0 && line.speech[1] <= BEAT_SECONDS);
   }
   assert.ok(BEAT_VOICE[1].speech[0] >= BEAT_VOICE[0].speech[1]);
+});
+
+test("the camera starts and ends wide and moves smoothly", () => {
+  assert.equal(cameraScale(0), 1);
+  assert.equal(cameraScale(BEAT_SECONDS), 1);
+  let prev = cameraScale(0);
+  let most = 1;
+  for (let f = 1; f <= BEAT_SECONDS * 30; f++) {
+    const s = cameraScale(f / 30);
+    assert.ok(Math.abs(s - prev) <= 0.02, `camera jumps at frame ${f}`);
+    most = Math.max(most, s);
+    prev = s;
+  }
+  assert.ok(most >= 1.2 && most <= 1.3, `closest framing ${most}`);
 });

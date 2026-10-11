@@ -12,6 +12,8 @@ import { FILM_SECONDS } from "./launch/film.ts";
 import { LaunchFilm } from "./launch/LaunchFilm";
 import { LaunchProof } from "./launch/LaunchProof";
 import { PROOF_SECONDS } from "./launch/timeline.ts";
+import { BEAT_SECONDS } from "./launch/wide/beat.ts";
+import { TeamBeatProof } from "./launch/wide/TeamBeatProof";
 import { t1Schema, type T1Props } from "./t1/schema";
 
 const fontHandle = delayRender("Loading Inter font");
@@ -619,6 +621,14 @@ export const Root = () => {
         fps={60}
         width={1080}
         height={1920}
+      />
+      <Composition
+        id="TeamBeatProof"
+        component={TeamBeatProof}
+        durationInFrames={Math.round(BEAT_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
       />
       <Composition
         id="LaunchFilm"

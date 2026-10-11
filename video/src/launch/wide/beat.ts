@@ -9,13 +9,13 @@ export const WIDE_H = 1080;
 /** The "finds customers" proof beat, in seconds. */
 export const BEAT_SECONDS = 15;
 export const BEAT = {
-  riverFrom: 0.1,
+  riverFrom: -0.2,
   brightFrom: 1.7,
   brightTo: 2.7,
   avatarAt: 2.3,
   boardIn: 3.6,
-  carryFrom: 4.6,
-  carryEvery: 0.65,
+  carryFrom: 5.2,
+  carryEvery: 0.58,
   carryDuration: 1.7,
   countRushFrom: 10.3,
   countRush: 1.3,
@@ -47,7 +47,7 @@ export const BEAT_VOICE: BeatLine[] = [
 ];
 
 /** Where the employee's avatar sits in the bright world. */
-export const AVATAR = { x: 200, y: 330, r: 58 };
+export const AVATAR = { x: 200, y: 292, r: 58 };
 
 /** The big flat Leads card. */
 export const BOARD = {
@@ -87,7 +87,7 @@ export function carryPath(i: number): Path {
   return [
     { x: 760 + i * 26, y: 1160 },
     { x: 780 + i * 10, y: 1010 },
-    { x: BOARD.x - 40, y: end.y + 110 },
+    { x: BOARD.x - 70, y: end.y + 40 },
     end,
   ];
 }
@@ -106,4 +106,25 @@ export function foundCount(t: number): number {
   if (landed < LEADS.length) return landed;
   const rush = easeInOutCubic(progress(t, BEAT.countRushFrom, BEAT.countRush));
   return landed + Math.round((20 - LEADS.length) * rush);
+}
+
+/** Camera: wide for the intro, close on the rows while the ants deliver, wide again for "20 found". */
+export const CAMERA = {
+  focusX: BOARD.x + 140,
+  focusY: 560,
+  close: 1.26,
+  inFrom: 4.9,
+  inTo: 6.4,
+  outFrom: 9.9,
+  outTo: 11.4,
+};
+
+export function cameraScale(t: number): number {
+  const zoomIn = easeInOutCubic(
+    progress(t, CAMERA.inFrom, CAMERA.inTo - CAMERA.inFrom),
+  );
+  const zoomOut = easeInOutCubic(
+    progress(t, CAMERA.outFrom, CAMERA.outTo - CAMERA.outFrom),
+  );
+  return 1 + (CAMERA.close - 1) * (zoomIn - zoomOut);
 }

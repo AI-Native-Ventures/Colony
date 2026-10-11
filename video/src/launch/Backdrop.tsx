@@ -2,9 +2,6 @@ import { useLayoutEffect, useRef } from "react";
 import { mulberry32 } from "./math.ts";
 import { FRAME_H, FRAME_W } from "./timeline.ts";
 
-const GRAIN_W = 540;
-const GRAIN_H = 960;
-
 /** Near black with a hint of violet, never flat black. */
 export const Backdrop: React.FC = () => (
   <div
@@ -28,14 +25,21 @@ export const Vignette: React.FC = () => (
   />
 );
 
-/** Film grain that changes 24 times a second whatever the frame rate. */
-export const Grain: React.FC<{ t: number }> = ({ t }) => {
+/** Film grain that changes 24 times a second whatever the frame rate; drawn at half size and stretched. */
+export const Grain: React.FC<{
+  t: number;
+  width?: number;
+  height?: number;
+  opacity?: number;
+}> = ({ t, width = FRAME_W, height = FRAME_H, opacity = 0.06 }) => {
   const ref = useRef<HTMLCanvasElement>(null);
   const tick = Math.floor(t * 24);
+  const gw = Math.round(width / 2);
+  const gh = Math.round(height / 2);
   useLayoutEffect(() => {
     const ctx = ref.current?.getContext("2d");
     if (!ctx) return;
-    const img = ctx.createImageData(GRAIN_W, GRAIN_H);
+    const img = ctx.createImageData(gw, gh);
     const rand = mulberry32(9001 + tick);
     for (let i = 0; i < img.data.length; i += 4) {
       const v = Math.floor(rand() * 256);
@@ -45,19 +49,19 @@ export const Grain: React.FC<{ t: number }> = ({ t }) => {
       img.data[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
-  }, [tick]);
+  }, [tick, gw, gh]);
   return (
     <canvas
       ref={ref}
-      width={GRAIN_W}
-      height={GRAIN_H}
+      width={gw}
+      height={gh}
       style={{
         position: "absolute",
         left: 0,
         top: 0,
-        width: FRAME_W,
-        height: FRAME_H,
-        opacity: 0.06,
+        width,
+        height,
+        opacity,
         mixBlendMode: "overlay",
       }}
     />
