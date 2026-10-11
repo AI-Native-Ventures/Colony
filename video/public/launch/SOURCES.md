@@ -128,3 +128,6 @@ plucks and marimba. The 90 s music is decided in milestone C.
 - Episode 1 (Mahlangu Builders, "Meet Scout"): one 32.4 s read, cut at the
   measured pauses (cut points in `video/src/explainers/ep01.ts`); the eight
   clips joined read back in order (`gemini-2.5-flash-lite`).
+- Episode 2 (Studio Nala, "Your team in a minute"): one 31.7 s read, cut at
+  the measured pauses (cut points in `video/src/explainers/ep02.ts`); the
+  eight clips joined read back in order (`gemini-2.5-flash-lite`).
