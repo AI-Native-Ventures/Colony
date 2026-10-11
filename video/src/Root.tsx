@@ -8,6 +8,14 @@ import {
 } from "remotion";
 import { loadFont } from "@remotion/google-fonts/Inter";
 import { AntMark } from "./brand/AntMark";
+import { FILM_SECONDS } from "./launch/film.ts";
+import { LaunchFilm } from "./launch/LaunchFilm";
+import { LaunchProof } from "./launch/LaunchProof";
+import { PROOF_SECONDS } from "./launch/timeline.ts";
+import { BEAT_SECONDS } from "./launch/wide/beat.ts";
+import { Film90 } from "./launch/wide/LaunchFilm90";
+import { FILM90_SECONDS } from "./launch/wide/film90.ts";
+import { TeamBeatProof } from "./launch/wide/TeamBeatProof";
 import { t1Schema, type T1Props } from "./t1/schema";
 
 const fontHandle = delayRender("Loading Inter font");
@@ -599,6 +607,46 @@ export const Root = () => {
           },
         }}
         schema={t1Schema}
+      />
+      <Composition
+        id="LaunchProof"
+        component={LaunchProof}
+        durationInFrames={Math.round(PROOF_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
+      />
+      <Composition
+        id="LaunchProof60"
+        component={LaunchProof}
+        durationInFrames={Math.round(PROOF_SECONDS * 60)}
+        fps={60}
+        width={1080}
+        height={1920}
+      />
+      <Composition
+        id="TeamBeatProof"
+        component={TeamBeatProof}
+        durationInFrames={Math.round(BEAT_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Film90"
+        component={Film90}
+        durationInFrames={Math.round(FILM90_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="LaunchFilm"
+        component={LaunchFilm}
+        durationInFrames={Math.round(FILM_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
       />
     </>
   );

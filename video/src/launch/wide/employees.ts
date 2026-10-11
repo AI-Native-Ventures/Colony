@@ -1,0 +1,86 @@
+import { hslToRgb } from "../math.ts";
+
+/** The four AI employees, in the order the film meets them. */
+export const TEAM = ["blue", "amber", "pink", "green"] as const;
+export type EmployeeId = (typeof TEAM)[number];
+
+export type Tone = {
+  /** The employee's hue, e.g. "hsl(217 91% 60%)". */
+  color: string;
+  /** A darker shade for small text on a tint of the hue. */
+  deep: string;
+  /** The hue as rgb() for canvas drawing. */
+  rgb: string;
+};
+
+function tone(h: number, s: number, l: number, deep: string): Tone {
+  const [r, g, b] = hslToRgb(h, s, l);
+  return { color: `hsl(${h} ${s}% ${l}%)`, deep, rgb: `rgb(${r} ${g} ${b})` };
+}
+
+export const TONES: Record<EmployeeId, Tone> = {
+  blue: tone(217, 91, 60, "hsl(217 80% 44%)"),
+  amber: tone(38, 92, 50, "hsl(30 90% 32%)"),
+  pink: tone(330, 81, 60, "hsl(330 70% 40%)"),
+  green: tone(160, 60, 45, "hsl(160 64% 26%)"),
+};
+
+export type HeroLook = Tone & {
+  title: readonly [string, string];
+  subline: string;
+  /** The pill beside the avatar. Default "AI employee". */
+  badge?: string;
+  /** What sits in the avatar circle. Default the ant mark. */
+  avatar?: "ant" | "person";
+};
+
+/** What each employee is called on screen: the job in two big lines, one plain sentence. */
+export const LOOKS: Record<EmployeeId, HeroLook> = {
+  blue: {
+    ...TONES.blue,
+    title: ["Finds", "customers."],
+    subline: "Finds businesses near you that need what you sell.",
+  },
+  amber: {
+    ...TONES.amber,
+    title: ["Sells", "for you."],
+    subline: "Emails and calls new customers, in your words.",
+  },
+  pink: {
+    ...TONES.pink,
+    title: ["Makes", "your posts."],
+    subline: "Makes Instagram posts that look like your business.",
+  },
+  green: {
+    ...TONES.green,
+    title: ["Keeps your", "site fresh."],
+    subline: "Updates your website whenever your business changes.",
+  },
+};
+
+/** The owner: the person every piece of work waits for. */
+export const OWNER: HeroLook = {
+  ...tone(258, 90, 66, "hsl(258 70% 46%)"),
+  title: ["You", "decide."],
+  subline: "Every email, post and change waits for your OK.",
+  badge: "Owner",
+  avatar: "person",
+};
+
+/** Getting started: the owner pastes a website and Colony hires the team. */
+export const GETTING_STARTED: HeroLook = {
+  ...tone(258, 90, 66, "hsl(258 70% 46%)"),
+  title: ["Paste your", "website."],
+  subline: "Colony reads it and hires your team.",
+  badge: "Getting started",
+  avatar: "person",
+};
+
+/** Scout, the chief of staff: plans the work, hands it out, checks it. */
+export const SCOUT_LOOK: HeroLook = {
+  ...tone(258, 90, 66, "hsl(258 70% 46%)"),
+  title: ["Scout leads", "the team."],
+  subline: "Your chief of staff. Plans the work, hands it out, checks it.",
+  badge: "Chief of staff",
+  avatar: "ant",
+};

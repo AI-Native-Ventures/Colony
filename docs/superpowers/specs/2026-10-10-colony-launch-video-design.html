@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colony Launch Video</title>
+<style>
+:root {
+  --bg: #f7f6fb;
+  --panel: #ffffff;
+  --ink: #17151f;
+  --muted: #5d5a6b;
+  --line: #e3e0ec;
+  --chip: #efecf8;
+  --note-bg: #fff6e5;
+  --note-ink: #6b4300;
+  --violet: hsl(258 90% 66%);
+  --blue: hsl(217 91% 60%);
+  --pink: hsl(330 81% 60%);
+  --amber: hsl(38 92% 50%);
+  --green: hsl(160 60% 45%);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f0e14;
+    --panel: #17161f;
+    --ink: #ecebf3;
+    --muted: #a19eb2;
+    --line: #2a2836;
+    --chip: #221f2e;
+    --note-bg: #2b2213;
+    --note-ink: #f3c56b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f0e14;
+  --panel: #17161f;
+  --ink: #ecebf3;
+  --muted: #a19eb2;
+  --line: #2a2836;
+  --chip: #221f2e;
+  --note-bg: #2b2213;
+  --note-ink: #f3c56b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 900px; margin: 0 auto; padding: 32px 16px 80px; }
+h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; margin: 44px 0 12px; letter-spacing: -0.01em; }
+h3 { font-size: 1rem; margin: 18px 0 6px; }
+p { margin: 8px 0; }
+ul, ol { margin: 8px 0; padding-left: 22px; }
+li { margin: 4px 0; }
+code { font: 0.86em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--chip); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.meta { color: var(--muted); font-size: 0.92rem; }
+.status { display: inline-block; background: var(--chip); border-radius: 999px; padding: 3px 12px; font-size: 0.85rem; font-weight: 600; margin-top: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+.short li { font-size: 1.05rem; }
+.note { background: var(--note-bg); color: var(--note-ink); border-radius: 12px; padding: 14px 18px; }
+.note ul { margin: 6px 0 0; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 640px) { .two { grid-template-columns: 1fr; } }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+td.t { white-space: nowrap; font-weight: 600; }
+.say { font-weight: 600; }
+.vo { font-style: italic; }
+.cast { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.who { display: flex; gap: 10px; align-items: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.dot { flex: none; width: 18px; height: 18px; border-radius: 50%; margin-top: 3px; }
+.who small { display: block; color: var(--muted); }
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps li { counter-increment: s; position: relative; padding: 12px 14px 12px 52px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin: 10px 0; }
+.steps li::before { content: counter(s); position: absolute; left: 14px; top: 12px; width: 26px; height: 26px; border-radius: 50%; background: var(--violet); color: #fff; font-weight: 700; display: grid; place-items: center; font-size: 0.9rem; }
+.steps .check { color: var(--muted); display: block; margin-top: 4px; }
+.diagram { color: var(--ink); }
+.diagram svg { width: 100%; height: auto; display: block; }
+details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+summary { cursor: pointer; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>Colony launch video</h1>
+  <div class="meta">Design page. 10 October 2026. Made from our chat. Direction: "The Swarm".</div>
+  <div class="status">Waiting for your OK on this page. No code written yet.</div>
+</header>
+
+<h2>In short</h2>
+<div class="card short">
+  <ul>
+    <li><strong>What:</strong> a 30 second launch video for Colony. Tall, for phones (TikTok, Reels, Shorts, X).</li>
+    <li><strong>Bar:</strong> it should look like a company that just raised $10M made it.</li>
+    <li><strong>Story:</strong> a screen full of jobs turns into a swarm of tiny colored ants. The swarm becomes the Colony logo, then your team inside the real app. You click Approve. "Early access is open."</li>
+    <li><strong>Made with:</strong> motion graphics in code only. No AI video. No cartoon characters. A pro AI voice and custom music.</li>
+    <li><strong>Cost:</strong> about $1, for voice and music.</li>
+  </ul>
+</div>
+
+<h2>What changed since the first draft</h2>
+<div class="note">
+  <ul>
+    <li><strong>No AI video, no cartoon ants.</strong> The ants are now a moving pattern: hundreds of tiny Colony logo ants, like a flock of birds. Code is great at this and bad at cute characters.</li>
+    <li><strong>Voice: yes.</strong> A pro narrator voice from OpenRouter, picked by your ear.</li>
+    <li><strong>The app shows as a window floating in space</strong>, not inside a phone. The real setup and Approve screens are in the Mac app, so a phone would be fake.</li>
+  </ul>
+</div>
+
+<h2>What you asked for</h2>
+<div class="two">
+  <div class="card">
+    <h3>You said</h3>
+    <ul>
+      <li>A launch video for Colony.</li>
+      <li>Phone feeds first: tall, 20 to 30 seconds.</li>
+      <li>Motion graphics only. No AI video.</li>
+      <li>$10M launch quality.</li>
+      <li>A voice, from OpenRouter.</li>
+      <li>"The Swarm" direction.</li>
+      <li>It must work as a launch: a big "Introducing Colony" moment, the real app, "open now" at the end.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>My guesses (fix me if wrong)</h3>
+    <ul>
+      <li>Custom music made by Google's music AI is fine. Only AI video is out.</li>
+      <li>Words on screen too, so it works with sound off.</li>
+      <li>The end says "Early access is open" and shows colony.ainative.ventures. Your site says "Early access" today.</li>
+      <li>Success: a stranger who never heard of Colony gets it in one watch, and you are proud to post it.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>How the swarm works</h2>
+<p>One idea runs the whole video: everything turns into everything else. No hard cuts.</p>
+<div class="card diagram">
+  <svg viewBox="0 0 640 150" role="img" aria-label="Flow: job words break into a swarm of tiny ants, the swarm splits into four colored rivers, the rivers become the Colony logo and then the four employees in the app, and their work flows into one inbox you approve.">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor" opacity="0.6"/>
+      </marker>
+    </defs>
+    <g font-family="Inter, -apple-system, sans-serif" font-size="12" text-anchor="middle">
+      <rect x="6" y="40" width="108" height="64" rx="10" fill="none" stroke="currentColor" stroke-opacity="0.35"/>
+      <text x="60" y="68" fill="currentColor" font-weight="700">Job words</text>
+      <text x="60" y="86" fill="currentColor" opacity="0.7" font-size="11">pile up fast</text>
+
+      <rect x="136" y="40" width="108" height="64" rx="10" fill="none" stroke="currentColor" stroke-opacity="0.35"/>
+      <text x="190" y="68" fill="currentColor" font-weight="700">Swarm</text>
+      <text x="190" y="86" fill="currentColor" opacity="0.7" font-size="11">hundreds of tiny ants</text>
+
+      <rect x="266" y="40" width="108" height="64" rx="10" fill="none" stroke="currentColor" stroke-opacity="0.35"/>
+      <text x="320" y="62" fill="currentColor" font-weight="700">4 rivers</text>
+      <g>
+        <circle cx="296" cy="82" r="5" fill="hsl(217 91% 60%)"/>
+        <circle cx="312" cy="82" r="5" fill="hsl(330 81% 60%)"/>
+        <circle cx="328" cy="82" r="5" fill="hsl(38 92% 50%)"/>
+        <circle cx="344" cy="82" r="5" fill="hsl(160 60% 45%)"/>
+      </g>
+
+      <rect x="396" y="40" width="108" height="64" rx="10" fill="hsl(258 90% 66%)" fill-opacity="0.16" stroke="hsl(258 90% 66%)" stroke-opacity="0.7"/>
+      <text x="450" y="68" fill="currentColor" font-weight="700">Colony logo</text>
+      <text x="450" y="86" fill="currentColor" opacity="0.7" font-size="11">"Introducing Colony"</text>
+
+      <rect x="526" y="40" width="108" height="64" rx="10" fill="none" stroke="currentColor" stroke-opacity="0.35"/>
+      <text x="580" y="62" fill="currentColor" font-weight="700">Your team</text>
+      <text x="580" y="80" fill="currentColor" opacity="0.7" font-size="11">in the real app,</text>
+      <text x="580" y="94" fill="currentColor" opacity="0.7" font-size="11">work to Approve</text>
+
+      <g stroke="currentColor" stroke-opacity="0.6" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+        <line x1="116" y1="72" x2="133" y2="72"/>
+        <line x1="246" y1="72" x2="263" y2="72"/>
+        <line x1="376" y1="72" x2="393" y2="72"/>
+        <line x1="506" y1="72" x2="523" y2="72"/>
+      </g>
+      <text x="320" y="134" fill="currentColor" opacity="0.65" font-size="11">Each color is one employee, the whole way through.</text>
+    </g>
+  </svg>
+</div>
+
+<h2>Timeline</h2>
+<div class="card diagram">
+  <svg viewBox="0 0 600 132" role="img" aria-label="Timeline: every job 0 to 7 seconds, Introducing Colony 7 to 11, the real app 11 to 25, end card 25 to 30. Music builds, drops at about 7.5 seconds, stays full, a ding at about 22 seconds, resolves at the end.">
+    <g font-family="Inter, -apple-system, sans-serif" font-size="11">
+      <text x="20" y="14" fill="currentColor" opacity="0.7">Music</text>
+      <path d="M20 58 C70 56 120 50 152 40 L160 20 C230 22 330 24 420 22 L432 16 L446 22 C500 24 545 30 565 34 L575 20 L580 24" fill="none" stroke="hsl(258 90% 66%)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="166" y="16" fill="currentColor" opacity="0.8" font-weight="700">drop</text>
+      <text x="420" y="12" fill="currentColor" opacity="0.8">ding</text>
+      <rect x="20" y="70" width="131" height="26" rx="5" fill="hsl(38 92% 50%)" opacity="0.28"/>
+      <rect x="151" y="70" width="74" height="26" rx="5" fill="hsl(258 90% 66%)" opacity="0.45"/>
+      <rect x="225" y="70" width="262" height="26" rx="5" fill="hsl(217 91% 60%)" opacity="0.28"/>
+      <rect x="487" y="70" width="93" height="26" rx="5" fill="hsl(160 60% 45%)" opacity="0.3"/>
+      <text x="28" y="87" fill="currentColor" font-weight="700">Every job</text>
+      <text x="158" y="87" fill="currentColor" font-weight="700">Introducing</text>
+      <text x="233" y="87" fill="currentColor" font-weight="700">Real app: website, team, your yes</text>
+      <text x="495" y="87" fill="currentColor" font-weight="700">End</text>
+      <g fill="currentColor" opacity="0.65" text-anchor="middle">
+        <text x="20" y="118">0s</text>
+        <text x="113" y="118">5s</text>
+        <text x="207" y="118">10s</text>
+        <text x="300" y="118">15s</text>
+        <text x="393" y="118">20s</text>
+        <text x="487" y="118">25s</text>
+        <text x="580" y="118">30s</text>
+      </g>
+      <g stroke="currentColor" opacity="0.3">
+        <line x1="20" y1="100" x2="20" y2="106"/><line x1="113" y1="100" x2="113" y2="106"/><line x1="207" y1="100" x2="207" y2="106"/><line x1="300" y1="100" x2="300" y2="106"/><line x1="393" y1="100" x2="393" y2="106"/><line x1="487" y1="100" x2="487" y2="106"/><line x1="580" y1="100" x2="580" y2="106"/>
+      </g>
+    </g>
+  </svg>
+</div>
+
+<h2>Beat by beat</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th>Time</th><th>What you see</th><th>Words on screen</th><th>Voice</th></tr></thead>
+  <tbody>
+    <tr><td class="t">0 to 7s</td><td>Near black. One tiny glowing ant logo in the middle. Job names burst out around it, faster and faster: Find customers. Post on Instagram. Reply to emails. Update the website. Send quotes. Chase invoices. They pile up until the screen is crammed and trembling. Then everything freezes for a breath.</td><td class="say">Running a business means doing every job.<br>What if you had a team?</td><td class="vo">"Running a business means doing every job yourself." ... "What if you had a team?"</td></tr>
+    <tr><td class="t">7 to 11s</td><td><strong>Launch moment.</strong> The music drops. Every word breaks into hundreds of tiny ants. They pour into four colored rivers that sweep across the screen and lock into the Colony logo, which lands with a bright pulse.</td><td class="say">Introducing Colony.</td><td class="vo">"Introducing Colony."</td></tr>
+    <tr><td class="t">11 to 19s</td><td>The logo opens into the real Colony app, floating in space and slightly tilted, with soft light moving across it. A website address is typed and "Read website" runs. The four rivers flow in and become four employee cards, each with its color and its job.</td><td class="say">Paste your website.<br>Meet your AI employees. Software that does office work for you.</td><td class="vo">"Paste your website, and meet your AI employees: software that does office work for you."</td></tr>
+    <tr><td class="t">19 to 25s</td><td>Finished work flows along the rivers into one inbox: a list of customers, an Instagram post, emails, a website change. The cursor clicks the real "Approve" button. A ripple of light, and the work goes out.</td><td class="say">Nothing goes out without your yes.</td><td class="vo">"They do the work. Nothing goes out without your yes."</td></tr>
+    <tr><td class="t">25 to 30s</td><td>The swarm gathers back into the logo. Tagline, then the early access button and the web address.</td><td class="say">Colony. Your business. Your AI employees.<br>Early access is open.<br>colony.ainative.ventures</td><td class="vo">"Colony. Your business. Your AI employees. Early access is open."</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Words on screen</h2>
+<p>Every line must make sense to a stranger who never heard of Colony.</p>
+<div class="scroll">
+<table>
+  <thead><tr><th>Line</th><th>On screen</th><th>Stranger test</th></tr></thead>
+  <tbody>
+    <tr><td class="say">Running a business means doing every job.</td><td>0.5 to 4.5s</td><td>Pass. No names, plain words.</td></tr>
+    <tr><td class="say">What if you had a team?</td><td>4.5 to 7s</td><td>Pass.</td></tr>
+    <tr><td class="say">Introducing Colony.</td><td>8 to 11s</td><td>Name only on purpose. The next lines explain it.</td></tr>
+    <tr><td class="say">Paste your website.</td><td>11.5 to 14s</td><td>Pass. Matches the real screen.</td></tr>
+    <tr><td class="say">Meet your AI employees. Software that does office work for you.</td><td>14 to 19s</td><td>Pass. "AI employees" is explained the moment it appears.</td></tr>
+    <tr><td class="say">Nothing goes out without your yes.</td><td>20 to 25s</td><td>Pass.</td></tr>
+    <tr><td class="say">Colony. Your business. Your AI employees. Early access is open.</td><td>25.5 to 30s</td><td>Pass. Matches your site today.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="meta">Never on screen: agent, workspace, model, channel, relay, token. One real app headline says "Building your workspace", so that part of the screen is never shown. The flying job names at the start are the owner's to-do list, not promises: only the four jobs in the app are things Colony does.</p>
+
+<h2>Colors mean people</h2>
+<div class="cast">
+  <div class="who"><span class="dot" style="background:hsl(217 91% 60%)"></span><div><strong>Blue: finds customers</strong><small>Real role: Lead Specialist</small></div></div>
+  <div class="who"><span class="dot" style="background:hsl(330 81% 60%)"></span><div><strong>Pink: posts on Instagram</strong><small>Real role: Content and Campaign Specialist</small></div></div>
+  <div class="who"><span class="dot" style="background:hsl(38 92% 50%)"></span><div><strong>Amber: emails new customers</strong><small>Real role: Outreach and Closing Specialist</small></div></div>
+  <div class="who"><span class="dot" style="background:hsl(160 60% 45%)"></span><div><strong>Green: updates your website</strong><small>Real role: Website Agent (internal name, never on screen)</small></div></div>
+  <div class="who"><span class="dot" style="background:hsl(258 90% 66%)"></span><div><strong>Violet: Colony itself</strong><small>The logo and the Approve button.</small></div></div>
+</div>
+<p class="meta">Roles checked in <code>crates/buzz-core/src/company_roster.rs</code>. The video only shows jobs Colony really does.</p>
+
+<h2>The look</h2>
+<ul>
+  <li><strong>Base:</strong> near black with a hint of violet, never flat black.</li>
+  <li><strong>The swarm:</strong> hundreds of tiny ants, each the real Colony logo shape, moving like a flock of birds. Your brand guide planned an ant swarm and ant trails; this video is where they debut.</li>
+  <li><strong>Words:</strong> one bold typeface (Inter, the brand font), very big, tight spacing. Each word arrives on the beat, with a quick blur that snaps sharp.</li>
+  <li><strong>The app:</strong> the real Colony screens rebuilt sharp, floating like glass in 3D, slightly tilted, with soft shadows and light sweeping across.</li>
+  <li><strong>Light and texture:</strong> colored glow around the swarm, soft depth blur behind, fine film grain.</li>
+  <li><strong>Camera:</strong> always gently moving. Every change is one thing turning into the next.</li>
+</ul>
+
+<h2>Sound</h2>
+<ul>
+  <li><strong>Voice:</strong> a warm, confident narrator. I make 3 short samples from OpenRouter voices (ElevenLabs v4, Google Gemini 3.8, Microsoft MAI Voice 2.1) and you pick by ear.</li>
+  <li><strong>Music:</strong> a custom track from Google's music AI (Lyria 3 Pro) through OpenRouter. It builds for 7 seconds, drops on "Introducing Colony", and resolves on the logo. If Google still blocks it, you pick a stock track instead.</li>
+  <li><strong>Sound effects</strong> on every move: a rising whoosh as the words pile up, a soft rain of ticks for the swarm, a deep hit on the logo, clean clicks in the app, a ding on Approve.</li>
+  <li><strong>Mix:</strong> the voice sits on top, the music dips under it, everything as loud as other videos on social apps.</li>
+</ul>
+
+<h2>How we build it</h2>
+<p>Four steps. You look after each one. Nothing moves on without your OK.</p>
+<ol class="steps">
+  <li><strong>Look proof.</strong> One finished still frame and 5 seconds of motion: the words breaking into the swarm and forming the logo. Silent.<span class="check">You check: does it look like a $10M launch? If not, we stop and rethink before building more.</span></li>
+  <li><strong>Voice and music tryout.</strong> Three voices reading the first line, and the music draft.<span class="check">You check: pick a voice and say yes or no to the music.</span></li>
+  <li><strong>Rough cut.</strong> The full 30 seconds with voice and music, every scene in place, motion not yet polished.<span class="check">You check: the story and the timing.</span></li>
+  <li><strong>Final.</strong> Polished motion, every sound effect, the mix, an MP4 for phones (1080 by 1920).<span class="check">You check: ready to post?</span></li>
+</ol>
+
+<h2>Checks before you see anything</h2>
+<ul>
+  <li>No black or empty frames. A frame brightness check runs on every render, because Promo1 once opened on black.</li>
+  <li>Words stay inside the phone safe area, away from the TikTok and Reels buttons at the bottom and right edge.</li>
+  <li>Each line stays on screen long enough to read, and the voice and the words never disagree.</li>
+  <li>The stranger test and the banned word list on every line. No long dashes.</li>
+  <li>Every app shot matches a real screenshot of the Colony app.</li>
+  <li>The logo keeps its true shape. No gradients or outlines on it.</li>
+  <li>The sound never clips.</li>
+</ul>
+
+<h2>Cost and time</h2>
+<ul>
+  <li><strong>Money:</strong> about $1 for voice and music. The visuals are free.</li>
+  <li><strong>Look proof:</strong> the same day we start.</li>
+  <li><strong>Full video:</strong> about 2 to 3 days, mostly waiting for your reviews. Rough guess.</li>
+</ul>
+
+<h2>Not in this video (maybe later)</h2>
+<ul>
+  <li>A wide 16:9 version for X, LinkedIn and YouTube. Same code, new layout.</li>
+  <li>Other languages.</li>
+  <li>AI video or cartoon characters: ruled out.</li>
+</ul>
+
+<h2>Still open</h2>
+<ol>
+  <li><strong>OpenRouter key:</strong> needed for voice and music (step 2), not for the look proof. It is no longer in my shell, so you add it once to <code>~/.zshrc</code>.</li>
+  <li><strong>Music source:</strong> Google's music AI first. If it is blocked, you pick a stock track.</li>
+  <li><strong>Who builds it:</strong> decided in the next step, the build plan.</li>
+</ol>
+
+<h2>For the builder</h2>
+<details>
+  <summary>Technical notes</summary>
+  <ul>
+    <li>Code lives in <code>video/</code>: a standalone Remotion 4.0.522 package with its own lockfile. Never touch the workspace <code>pnpm-lock.yaml</code>.</li>
+    <li>New composition <code>LaunchIntro</code>: 1080 by 1920, 30 fps, 900 frames, in <code>video/src/launch/</code>. Add a <code>render:launch</code> script. Try 60 fps in the look proof; keep it only if it renders in reasonable time and looks clearly smoother.</li>
+    <li>All words, colors, voice lines and timings live in a job file, <code>video/jobs/launch-intro.json</code>, so a wording change needs no code.</li>
+    <li><strong>Every frame must be a pure function of the frame number.</strong> Remotion renders frames in parallel and out of order, so the swarm cannot be a running simulation. Use seeded noise and closed-form paths: each ant interpolates between target point sets (glyph points of the words, river paths, logo points, card positions) with its own delay and a noise offset.</li>
+    <li>Target point sets: sample text glyphs from a canvas rasterisation of Inter, sample the logo from the brand mark geometry in <code>desktop/src/shared/ui/colony-logo/</code> (<code>docs/BRAND.md</code> is the source of truth, 466:309 ratio).</li>
+    <li>Draw the swarm on a canvas each frame (a cached <code>Path2D</code> of the ant mark, rotated to its heading), not as hundreds of DOM nodes. Glow via a blurred copy of the same layer.</li>
+    <li>App screens are vector rebuilds of real desktop screens: "Your business" (<code>desktop/src/features/onboarding/ui/new/screens/CompanyScreen.tsx</code>), the team screen (pick from real screenshots), and the drafts with "Approve" (<code>desktop/src/features/discovery/ui/CampaignOutreachTab.tsx</code>). Check against <code>just desktop-screenshot</code> captures. 3D tilt with CSS perspective.</li>
+    <li>Voice via <code>POST /api/v1/audio/speech</code> on OpenRouter. Speech models list: <code>GET /api/v1/models?output_modalities=speech</code>. Music via <code>google/lyria-3-pro-preview</code> (chat completions, <code>stream: true</code>, <code>modalities: ["audio"]</code>).</li>
+    <li>Audio files go in <code>video/public/launch/</code> with a <code>SOURCES.md</code> listing where each file came from and its license. Target loudness about -14 LUFS.</li>
+    <li>Brightness gate: <code>ffmpeg</code> frame sample scaled to 64 by 64 gray, mean above a threshold on every sampled frame except intended dark moments (the opening is meant to be near black, so gate on the glow area there).</li>
+    <li>Safe area: keep words roughly inside 90 to 940 px across and 150 to 1500 px down. Check against TikTok and Reels overlay templates before the final.</li>
+    <li>Promo1 code (grain, vignette, captions) exists only on this Mac, in the old spike worktree: 2 commits not on GitHub. Save them before reusing anything.</li>
+  </ul>
+</details>
+
+</main>
+</body>
+</html>
