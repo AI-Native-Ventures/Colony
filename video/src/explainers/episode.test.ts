@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type Beats, line, timelineProblems } from "./episode.ts";
+import { type Beats, captionUntil, line, timelineProblems } from "./episode.ts";
 
 const beats: Beats = {
   hook: { start: 0, end: 3 },
@@ -104,4 +104,59 @@ test("a caption too short to read is a problem", () => {
     ),
   ];
   assert.match(timelineProblems(beats, rushed, 36).join("\n"), /y1.*read/);
+});
+
+test("a fast line is fine when its caption holds until the next line", () => {
+  const fast = [
+    good[0],
+    line(
+      "ep",
+      "m1",
+      "meet",
+      "This one makes your posts for you, too.",
+      [2, 4],
+      [2.1, 3.9],
+      4.0,
+    ),
+    good[2],
+  ];
+  assert.deepEqual(timelineProblems(beats, fast, 36), []);
+  assert.equal(captionUntil(fast, 1), 4.0 + 1.8 + 1.5);
+  assert.equal(captionUntil(fast, 2), 28.5 + 1.8 + 0.7);
+});
+
+test("a caption holds only until just before the next line", () => {
+  const close = [
+    good[0],
+    line(
+      "ep",
+      "m1",
+      "meet",
+      "This one makes your posts.",
+      [2, 4],
+      [2.1, 3.9],
+      4.0,
+    ),
+    line("ep", "m2", "meet", "Every week.", [5, 6], [5.1, 5.8], 6.3),
+    good[2],
+  ];
+  assert.equal(captionUntil(close, 1), 6.25);
+});
+
+test("a line shown on screen as big type has no caption to read", () => {
+  const shown = [
+    ...good.slice(0, 2),
+    line(
+      "ep",
+      "e1",
+      "end",
+      "Colony. AI employees for your business.",
+      [8, 9],
+      [8.0, 8.4],
+      33.0,
+      false,
+    ),
+  ];
+  assert.deepEqual(timelineProblems(beats, shown, 36), []);
+  assert.equal(shown[2].captioned, false);
 });

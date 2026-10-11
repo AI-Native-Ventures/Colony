@@ -17,11 +17,14 @@ export type EpisodeLine = BeatLine & {
   beat: BeatId;
   /** Seconds in the source read this file was cut from. */
   cut: readonly [number, number];
+  /** False when the words are already on screen as big type: no subtitle. */
+  captioned: boolean;
 };
 
 /**
  * A voice line cut from one Aoede read. `cut` and `spoken` are seconds in the
- * read; `startsAt` is the film second the words start.
+ * read; `startsAt` is the film second the words start. `caption` is what the
+ * subtitle shows when it differs from the words, or false for no subtitle.
  */
 export function line(
   episode: string,
@@ -31,19 +34,37 @@ export function line(
   cut: readonly [number, number],
   spoken: readonly [number, number],
   startsAt: number,
-  caption?: string,
+  caption?: string | false,
 ): EpisodeLine {
   const lead = spoken[0] - cut[0];
   return {
     id,
     beat,
     text,
-    caption,
+    caption: typeof caption === "string" ? caption : undefined,
+    captioned: caption !== false,
     cut,
     file: `explainers/${episode}-${id}.mp3`,
     at: startsAt - lead,
     speech: [startsAt, startsAt + (spoken[1] - spoken[0])],
   };
+}
+
+/** Longest a caption lingers after its words, when no line follows soon. */
+const HOLD = 1.5;
+/** How long the last caption stays after its words. */
+const LAST_HOLD = 0.7;
+
+/**
+ * When line `i`'s caption leaves: it stays until just before the next line
+ * starts, up to HOLD seconds after its own words, so a fast voice still
+ * leaves time to read.
+ */
+export function captionUntil(lines: readonly EpisodeLine[], i: number): number {
+  const own = lines[i].speech[1];
+  const next = lines[i + 1];
+  if (!next) return own + LAST_HOLD;
+  return Math.min(next.speech[0] - 0.05, own + HOLD);
 }
 
 /** Everything wrong with an episode's timeline, in plain words; empty when it is sound. */
@@ -77,7 +98,7 @@ export function timelineProblems(
     }
     if (l.at < 0) out.push(`${l.id} file starts before the film`);
     const words = (l.caption ?? l.text).split(/\s+/).length;
-    if (l.speech[1] - l.speech[0] + 0.7 < words / 3 + 0.5) {
+    if (l.captioned && captionUntil(lines, i) - l.speech[0] < words / 3 + 0.5) {
       out.push(`${l.id} is up too briefly to read`);
     }
     const next = lines[i + 1];
