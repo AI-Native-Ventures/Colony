@@ -97,3 +97,64 @@ Episode data:
 - [ ] **Step 1:** Re-run the film and pilot hash gates; full tests; typecheck; lint.
 - [ ] **Step 2:** Self-review of the whole branch (no subagents); ledger rulings and deferred minors appended to this plan.
 - [ ] **Step 3:** Open one PR into develop for the season (`gh pr create --repo AI-Native-Ventures/Colony --base develop`), arm auto-merge, bind it to the session.
+
+---
+
+## Execution record (2026-10-12)
+
+All eight episodes are built, rendered and on the watch page; the film is unchanged.
+
+**Gates at the end of the run.** Film90 frames 1080, 1150, 1320, 1545, 1560, 1635, 1830, 1935, 2025, 2085, 2220, 2345, 2385 and 2430, and TeamBeatProof 200 and 330, are byte-identical to the frames rendered before any card changed. Explainer05 0, 405 and 840 are byte-identical to the pilot. Each episode's three frames are byte-identical to the frames rendered when it was finished, except Explainer06 frame 460, which differs only in one line of the old page (a 254 by 15 px box) because "all makes and models" was reworded after that frame was taken. Suite 235/235, typecheck and lint clean.
+
+| Episode | Length | Loudness | True peak | Darkest frame |
+|---|---|---|---|---|
+| 1 Meet Scout | 37.5 s | -16.5 LUFS | -2.0 dBFS | 205 |
+| 2 Your team in a minute | 36.7 s | -16.1 LUFS | -3.0 dBFS | 199 |
+| 3 Finds customers | 33.3 s | -16.2 LUFS | -1.6 dBFS | 200 |
+| 4 Sells for you | 33.2 s | -16.5 LUFS | -2.3 dBFS | 193 |
+| 6 Keeps your website fresh | 33.0 s | -16.5 LUFS | -1.8 dBFS | 179 |
+| 7 Nothing goes out without your yes | 37.0 s | -16.4 LUFS | -1.5 dBFS | 205 |
+| 8 Talk to your team | 33.3 s | -16.1 LUFS | -1.7 dBFS | 198 |
+
+**Rulings, in the order they were made** (each with what it costs if wrong, from the ledger):
+
+1. Shared checks take plain episode data, not the shell config, because Node's test runner cannot import JSX. Cost: config and test data can drift; each test names the same values.
+2. Each film card gets its data options in the episode that first needs it, with the film frame check each time. Cost: none.
+3. Caption hold cap 1.5 s to 1.8 s, so nine words said in 1.92 s can be read. Cost: captions linger up to 0.3 s longer; the pilot's delivered video predates it.
+4. Episode 1: the request line shows from the work beat, not when the card enters. Cost: none.
+5. Episode 2: the hero is titled with the episode ("Your team in a minute.") instead of "Paste your website.". Cost: one title.
+6. Episode 2: Scout arrives as a "Leads the team" badge, not a fifth row, because five rows and the yes button do not fit. Cost: Scout reads as apart from the four.
+7. Episode 2: the card turns to the team on "your team" by itself and the yes is a separate "Hire my team" button clicked on "yes". Cost: none.
+8. Episode 2: chips turn Ready to Working 0.12 s apart, so the end card moved 0.2 s later.
+9. Episode 3: the yes beat hands the stage from the blue employee to the amber one (the shell's hero takes an optional `until`). Cost: one more hero on screen.
+10. Episode 3: Approve is not clicked; the pointer rests on it, per the plan. Cost: none.
+11. Episode 3: leads are made-up office parks on real Sandton street names, with neutral reasons.
+12. Episode 3: rows show company and reason, not area and score.
+13. Episode 4: the read is 22.4 s, so the call gets reading time to reach 33.2 s instead of a slower re-read. Cost: about 2 s of music-only moments.
+14. Episode 4: "When one replies," and "it calls and books the meeting." are cut into two clips. Cost: none.
+15. Episode 4: the email badge turns to Sent and the reply says "the next day", so a reply does not contradict "Every email waits for your yes". Cost: one label.
+16. Episode 4: the call timer stops at the booking in the explainer only.
+17. Episode 4: the camera hook shape gets the icon's lens dot.
+18. Episode 6: the work breathes (repaint, a look at Before, time on the new page) to reach 33.0 s. Cost: a slower middle.
+19. Episode 6: Before, After and Approve sit in the website card's browser bar, so the address pill is narrower there.
+20. Episode 6: the owner's line is typed in a card under the employee.
+21. Episode 6: the caption shows R1,450 where the voice says "fourteen fifty".
+22. Episode 7: one caption reads "who wants a quote" where the voice says "who asked for a quote", so it is up long enough to read under the 1.8 s hold. Cost: one word differs.
+23. Episode 7: a new review card rather than the film's inbox card, because the story is one email changed and approved.
+24. Episode 7: the email leaves as a paper plane on "it goes".
+25. Episode 8: messages come from Scout, the team's lead. Cost: a different colour in the thread.
+26. Episode 8: the new menu arrives as a new message and the thread scrolls to it.
+27. Episode 8: the read hit the Gemini free tier's 10 reads a day; the chat card was built during the wait and the timing written after the read.
+28. Episode 8: "Want a change?" stays as captioned; transcribers hear "wanna change", how it sounds said fast.
+
+**Final review: self-review (no subagent tool; the owner does not use subagents).** No critical or important findings.
+
+**Deferred minors:**
+
+- Each episode's shell config repeats the end card and music mapping; a small helper could share it.
+- Some secondary text is under the spec's 28 px phone size (menu dishes 19 px, the menu's tag 14 px, episode 7's Before column 20 px, the browser bar controls 20 px); captions carry the story.
+- The episode 4 and 6 tests mirror card layout with numbers (email body lines, the address pill's end), so a film card layout change would not fail them.
+- `tickKeys` assumes ticks at least 0.14 s apart; closer clicks would give the pointer keys out of order.
+- The pilot's delivered video predates the 1.8 s caption hold; a fresh render holds one caption up to 2 frames longer at 21.2 s.
+
+**Declined to judge:** whether the example business names (from the approved spec) match real businesses elsewhere; the music, which stays the stand-in by the owner's choice.
