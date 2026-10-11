@@ -49,3 +49,19 @@ Style instructions must not be sent with the text: Gemini TTS reads them aloud.
 Generated audio, owned by AI Native Ventures under the providers' output terms
 as offered through OpenRouter. No third-party samples were used. Check each
 provider's current terms before paid advertising.
+
+## 90 second film voice: `f90-*.mp3` (2026-10-11)
+
+- Model `google/gemini-3.8-flash-tts`, voice `Aoede`: one 48.2 s read of the
+  full script (in `video/src/launch/wide/film90.ts`, one line per `LINES`
+  entry), normalised to -16 LUFS and cut at measured pauses; the cut points
+  are the `cut` values in `film90.ts`.
+- `f90-l04.mp3` ("Introducing: Colony.") is a separate take: in the full
+  read the name transcribed as "Holiday" or "Collie" on its own, while the
+  colon take transcribed as "Colony" in two of two runs.
+- Every pause-separated piece was transcribed with `google/gemini-2.5-flash`
+  and matched the script, except that "Sandton" comes back as "Santa" or
+  "Santon" (check by ear).
+- `vo-blue-1.mp3` and `vo-blue-2.mp3` are the proof beat's separate read.
+- `sfx-pop.mp3` and `sfx-whoosh.mp3` are synthesised with ffmpeg
+  (`aevalsrc` sine chirp; pink `anoisesrc` band-passed); no third-party audio.
