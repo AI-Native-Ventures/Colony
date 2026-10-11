@@ -20,6 +20,8 @@
     "render:film90": "remotion render src/index.ts Film90 out/film90.mp4 --jpeg-quality=95 --crf=16",
     "render:film90:team": "remotion render src/index.ts Film90 out/film90-team.mp4 --frames=747-1625 --jpeg-quality=95 --crf=16",
     "master:film90:team": "ffmpeg -hide_banner -loglevel error -y -i out/film90-team.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/film90-team-master.mp4",
+    "render:film90:yes": "remotion render src/index.ts Film90 out/film90-yes.mp4 --frames=1605-2384 --jpeg-quality=95 --crf=16",
+    "master:film90:yes": "ffmpeg -hide_banner -loglevel error -y -i out/film90-yes.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/film90-yes-master.mp4",
     "master:film90": "ffmpeg -hide_banner -loglevel error -y -i out/film90.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/film90-master.mp4"
   },
   "dependencies": {

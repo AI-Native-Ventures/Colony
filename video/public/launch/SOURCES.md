@@ -79,3 +79,6 @@ film 25.4 s so its lift at 7 s lands on "20 found" (32.4 s). Two Seed Audio
 90 s tries on 2026-10-11 came back (piano and strings with the lift at 69 s;
 synth with the groove at 16 s and the peak at 66 s) and neither has draft B's
 plucks and marimba. The 90 s music is decided in milestone C.
+- `sfx-click.mp3` (0.22 s, the Approve press) is synthesised with ffmpeg
+  `aevalsrc` (2.3 kHz and 4.6 kHz ticks over a 150 Hz thump, fast decay),
+  normalised to -20 LUFS. No third-party audio.

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { foundCount } from "./beat.ts";
 import { EMAIL } from "./email.ts";
-import { type EmployeeId, TEAM } from "./employees.ts";
+import { TEAM } from "./employees.ts";
 import {
   ACT_ORDER,
   ACTS,
@@ -12,7 +12,11 @@ import {
   CLICK90,
   FILM90_SECONDS,
   GREEN90,
+  ACT_PANEL,
   LINES,
+  PANEL_DONE,
+  PANEL_ORDER,
+  PANEL_START,
   PANS,
   PINK90,
   panelX,
@@ -96,35 +100,35 @@ test("the film's blue beat has found all 20 before amber speaks", () => {
   assert.equal(foundCount(ACTS.blue.start, BLUE90), 0);
 });
 
-test("the camera holds still on each employee while they speak", () => {
+test("the camera holds still on each panel while its lines are spoken", () => {
   for (const line of LINES) {
-    if (!(TEAM as readonly string[]).includes(line.act)) continue;
-    const x = panelX(line.act as EmployeeId);
+    const panel = ACT_PANEL[line.act];
+    if (!panel) continue;
     for (const t of [line.speech[0], (line.speech[0] + line.speech[1]) / 2]) {
-      assert.equal(panX(t), x, `${line.id} at ${t}`);
+      assert.equal(panX(t), panelX(panel), `${line.id} at ${t}`);
     }
   }
 });
 
 test("the camera only ever moves forward", () => {
   let prev = panX(24);
-  for (let t = 24; t <= 56; t += 1 / 30) {
+  for (let t = 24; t <= 80; t += 1 / 30) {
     assert.ok(panX(t) >= prev, `moved back at ${t}`);
     prev = panX(t);
   }
-  assert.equal(panX(56), panelX("green"));
+  assert.equal(panX(80), panelX("day"));
 });
 
-test("each glide ends before the next employee appears", () => {
+test("each glide ends before the next panel's first thing appears", () => {
   for (const pan of PANS) {
-    assert.ok(pan.end <= TIMING90[pan.to].avatarAt, `${pan.to} pops mid glide`);
+    assert.ok(pan.end <= PANEL_START[pan.to], `${pan.to} starts mid glide`);
   }
 });
 
-test("the camera stays on an employee until its work is done", () => {
+test("the camera stays on a panel until its work is done", () => {
   for (const pan of PANS) {
-    const before = TEAM[TEAM.indexOf(pan.to) - 1];
-    assert.ok(pan.start >= BEAT_DONE[before], `left ${before} too soon`);
+    const before = PANEL_ORDER[PANEL_ORDER.indexOf(pan.to) - 1];
+    assert.ok(pan.start >= PANEL_DONE[before], `left ${before} too soon`);
   }
 });
 

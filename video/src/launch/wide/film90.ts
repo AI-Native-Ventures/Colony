@@ -9,6 +9,7 @@ import {
 } from "./beat.ts";
 import { type EmployeeId, TEAM, TONES } from "./employees.ts";
 import type { RiverSpec } from "./riverAnts.ts";
+import { approvedAt, YES_CARD, YES_ROWS, yesRowY } from "./yes.ts";
 
 /**
  * The 90 second wide launch film, in film seconds. Voice: one Aoede read of
@@ -303,17 +304,77 @@ export const BEAT_DONE: Record<EmployeeId, number> = {
   green: GREEN90.chipAt + 0.6,
 };
 
-/** Each employee has a panel on one long bright canvas, a frame width apart. */
-export function panelX(id: EmployeeId): number {
-  return TEAM.indexOf(id) * WIDE_W;
+/** The owner's inbox: everything waits here for a yes. */
+export const YES90 = {
+  avatarAt: 55.05,
+  headlineAt: 55.25,
+  sublineAt: 55.75,
+  focusFrom: 59.0,
+  cardIn: 55.3,
+  carryFrom: 55.5,
+  carryEvery: 0.35,
+  carryDuration: 1.1,
+  cursorFrom: 59.3,
+  click: CLICK90,
+  cascadeEvery: 0.14,
+  burst: 1.3,
+  outcomesAt: 63.2,
+};
+
+/** The owner's day on a running clock. */
+export const DAY90 = {
+  titleAt: 66.9,
+  clockFrom: 67.4,
+  clockTo: 77.4,
+  summaryAt: 77.7,
+};
+
+/** One long bright canvas: a panel per employee, then the inbox, then the day. */
+export const PANEL_ORDER = [...TEAM, "yes", "day"] as const;
+export type PanelId = (typeof PANEL_ORDER)[number];
+
+export function panelX(id: PanelId): number {
+  return PANEL_ORDER.indexOf(id) * WIDE_W;
 }
 
-/** The camera glides from one employee to the next. */
-export const PANS: readonly { to: EmployeeId; start: number; end: number }[] = [
+/** Which panel each act happens on. */
+export const ACT_PANEL: Partial<Record<ActId, PanelId>> = {
+  blue: "blue",
+  amber: "amber",
+  pink: "pink",
+  green: "green",
+  yes: "yes",
+  dayBack: "day",
+};
+
+/** The camera glides from one panel to the next. */
+export const PANS: readonly { to: PanelId; start: number; end: number }[] = [
   { to: "amber", start: 34.1, end: 35.0 },
   { to: "pink", start: 40.6, end: 41.45 },
   { to: "green", start: 46.7, end: 47.55 },
+  { to: "yes", start: 54.1, end: 54.95 },
+  { to: "day", start: 65.9, end: 66.75 },
 ];
+
+/** When each panel's first thing appears. */
+export const PANEL_START: Record<PanelId, number> = {
+  blue: BLUE90.avatarAt,
+  amber: AMBER90.avatarAt,
+  pink: PINK90.avatarAt,
+  green: GREEN90.avatarAt,
+  yes: YES90.avatarAt,
+  day: DAY90.titleAt,
+};
+
+/** When each panel's work on screen is finished. */
+export const PANEL_DONE: Record<PanelId, number> = {
+  ...BEAT_DONE,
+  yes: Math.max(
+    YES90.click + 0.1 + 3 * YES90.cascadeEvery + YES90.burst,
+    YES90.outcomesAt + 3 * 0.15 + 0.6,
+  ),
+  day: DAY90.summaryAt + 1,
+};
 
 /** How far along the long canvas the camera is at film time `t`, in px. */
 export function panX(t: number): number {
@@ -384,3 +445,31 @@ function employeeRiver(
     flight: { min: 0.9, spread: 0.3 },
   };
 }
+
+/** On Approve, each card's work streams out to the right as a burst of its employee's ants. */
+export const BURSTS90: RiverSpec[] = YES_ROWS.map((row, i) => {
+  const x = panelX("yes");
+  const y = yesRowY(i);
+  const start = approvedAt(i, YES90) + 0.02;
+  return {
+    color: TONES[row.who].rgb,
+    seed: 7901 + i * 17,
+    count: 56,
+    from: {
+      x0: x + YES_CARD.x + 110,
+      x1: x + YES_CARD.x + 700,
+      y0: y + 14,
+      y1: y + 78,
+    },
+    lane: {
+      c1: { x: x + 1560, y: y - 140 },
+      c2: { x: x + 2060, y: y - 60 },
+      spread: 110,
+    },
+    target: { x: x + 2400, y: y - 110 },
+    startAt: start,
+    landAt: start + 1.05,
+    sweep: 0,
+    flight: { min: 0.75, spread: 0.35 },
+  };
+});

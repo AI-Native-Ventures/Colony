@@ -20,22 +20,38 @@ import {
   WIDE_W,
 } from "./beat.ts";
 import { BrightStage } from "./BrightStage";
+import { DayPanel } from "./DayPanel";
+import { chipShowsAt, TEAM_CHIPS } from "./day.ts";
 import { EmailCard, PenAnt } from "./EmailCard";
 import { EmployeeHero } from "./EmployeeHero";
 import { emailTypedAt } from "./email.ts";
-import { type EmployeeId, LOOKS, TEAM, TONES } from "./employees.ts";
 import {
+  type EmployeeId,
+  LOOKS,
+  OWNER,
+  TEAM,
+  type Tone,
+  TONES,
+} from "./employees.ts";
+import {
+  ACT_PANEL,
   AMBER90,
   BLUE90,
   BLUE90_CAMERA,
+  BURSTS90,
+  DAY90,
   GREEN90,
   LINES,
+  PANEL_ORDER,
+  type PanelId,
   PANS,
   PINK90,
   panelX,
   panX,
   RIVERS90,
+  YES90,
 } from "./film90.ts";
+import { InboxCard, InboxCarriers, InboxCursor } from "./InboxCard";
 import { Carriers, LeadsBoard } from "./LeadsBoard";
 import { PanelBlooms } from "./PanelBlooms";
 import { PostCarriers, PostsGrid } from "./PostsGrid";
@@ -43,16 +59,26 @@ import { POSTS, postLandsAt } from "./posts.ts";
 import { River } from "./River";
 import { type Highlight, Subtitles } from "./Subtitles";
 import { Painter, WebsiteCard } from "./WebsiteCard";
+import { approvedAt, YES_ROWS, yesLandsAt } from "./yes.ts";
 
-/** Music draft B stands in until the 90 s track: it starts here so its lift lands on "20 found". */
-const MUSIC_FROM = 25.4;
+/**
+ * Music draft B stands in until the 90 s track. It plays twice: from 25.4 s
+ * so its lift lands on "20 found", and from 54.0 s so its lift lands on the
+ * Approve click.
+ */
+const MUSIC_CUES = [25.4, 54.0];
 const MUSIC_SECONDS = 30.04;
 const DUCK = { base: 0.5, ducked: 0.18, attack: 0.25, release: 0.4 };
 const WINDOWS = LINES.map((line) => line.speech);
 
-const TEAM_LINES = LINES.filter((line) =>
-  (TEAM as readonly string[]).includes(line.act),
-);
+/** Subtitles run for every line spoken in the bright world. */
+const SHOWN_LINES = LINES.filter((line) => ACT_PANEL[line.act] !== undefined);
+
+function toneOf(panel: PanelId): Tone {
+  return (TEAM as readonly string[]).includes(panel)
+    ? TONES[panel as EmployeeId]
+    : OWNER;
+}
 
 const KEYWORDS: Record<string, ReadonlySet<string>> = {
   l08: new Set(["finds", "customers."]),
@@ -60,11 +86,14 @@ const KEYWORDS: Record<string, ReadonlySet<string>> = {
   l10: new Set(["writes", "your", "words."]),
   l11: new Set(["posts.", "Three,", "Instagram."]),
   l12: new Set(["keeps", "website"]),
+  l13: new Set(["first."]),
+  l14: new Set(["yes."]),
+  l15: new Set(["love,", "team", "moving."]),
 };
 
 const HIGHLIGHTS: Record<string, Highlight> = Object.fromEntries(
-  TEAM_LINES.map((line) => {
-    const tone = TONES[line.act as EmployeeId];
+  SHOWN_LINES.map((line) => {
+    const tone = toneOf(ACT_PANEL[line.act] as PanelId);
     return [
       line.id,
       { bg: tone.color.replace(")", " / 0.16)"), fg: tone.deep },
@@ -79,7 +108,12 @@ const POPS = [
   ...POSTS.map((_, i) => postLandsAt(i, PINK90)),
   PINK90.readyAt,
   GREEN90.chipAt,
+  ...YES_ROWS.map((_, i) => yesLandsAt(i, YES90)),
+  ...YES_ROWS.map((_, i) => approvedAt(i, YES90)),
+  DAY90.summaryAt + 0.1,
 ];
+/** The team's wins pop softly as the day runs. */
+const SOFT_POPS = TEAM_CHIPS.map((chip) => chipShowsAt(chip, DAY90));
 const WHOOSHES = [BLUE90.riverFrom, ...PANS.map((pan) => pan.start)];
 
 /** Px per frame the camera is gliding at `t`, for a matching horizontal blur. */
@@ -87,7 +121,7 @@ function glideSpeed(t: number, fps: number): number {
   return Math.abs(panX(t + 0.5 / fps) - panX(t - 0.5 / fps));
 }
 
-const Panel: React.FC<{ id: EmployeeId; children: React.ReactNode }> = ({
+const Panel: React.FC<{ id: PanelId; children: React.ReactNode }> = ({
   id,
   children,
 }) => (
@@ -100,12 +134,25 @@ const Panel: React.FC<{ id: EmployeeId; children: React.ReactNode }> = ({
       height: WIDE_H,
     }}
   >
-    <PanelBlooms tone={TONES[id]} />
+    <PanelBlooms tone={toneOf(id)} />
     {children}
   </div>
 );
 
-function panelContent(id: EmployeeId, t: number): React.ReactNode {
+function panelContent(id: PanelId, t: number): React.ReactNode {
+  if (id === "yes") {
+    return (
+      <>
+        <EmployeeHero t={t} look={OWNER} timing={YES90} />
+        <InboxCard t={t} timing={YES90} />
+        <InboxCarriers t={t} timing={YES90} />
+        <InboxCursor t={t} timing={YES90} />
+      </>
+    );
+  }
+  if (id === "day") {
+    return <DayPanel t={t} timing={DAY90} />;
+  }
   if (id === "blue") {
     return (
       <>
@@ -147,7 +194,7 @@ function panelContent(id: EmployeeId, t: number): React.ReactNode {
   );
 }
 
-/** The 90 second wide launch film. Built so far: meet the team (blue, amber, pink, green). */
+/** The 90 second wide launch film. Built so far: meet the team, your yes, your day back. */
 export const Film90: React.FC = () => {
   useFontsReady();
   const frame = useCurrentFrame();
@@ -159,7 +206,9 @@ export const Film90: React.FC = () => {
   const zoom = cameraScale(t, BLUE90_CAMERA);
   const camX = panX(t);
   const blur = Math.min(36, glideSpeed(t, fps) * 0.32);
-  const shown = TEAM.filter((id) => Math.abs(panelX(id) - camX) < WIDE_W);
+  const shown = PANEL_ORDER.filter(
+    (id) => Math.abs(panelX(id) - camX) < WIDE_W,
+  );
   return (
     <AbsoluteFill style={{ backgroundColor: "#060509" }}>
       <svg
@@ -195,7 +244,7 @@ export const Film90: React.FC = () => {
               position: "absolute",
               left: 0,
               top: 0,
-              width: WIDE_W * TEAM.length,
+              width: WIDE_W * PANEL_ORDER.length,
               height: WIDE_H,
               transform: `translateX(${(-camX).toFixed(2)}px)`,
               filter: blur > 0.4 ? "url(#glide-blur)" : undefined,
@@ -211,11 +260,14 @@ export const Film90: React.FC = () => {
         {TEAM.map((id) => (
           <River key={id} t={t} spec={RIVERS90[id]} offsetX={camX} />
         ))}
+        {BURSTS90.map((spec) => (
+          <River key={spec.seed} t={t} spec={spec} offsetX={camX} />
+        ))}
       </AbsoluteFill>
       <div style={{ position: "absolute", inset: 0, opacity: reveal }}>
         <Subtitles
           t={t}
-          lines={TEAM_LINES}
+          lines={SHOWN_LINES}
           keywords={KEYWORDS}
           highlights={HIGHLIGHTS}
           holdLast={false}
@@ -227,23 +279,29 @@ export const Film90: React.FC = () => {
         height={WIDE_H}
         opacity={0.06 - 0.03 * reveal}
       />
-      <Sequence from={Math.round(MUSIC_FROM * fps)} layout="none">
-        <Audio
-          src={staticFile("launch/music-b.mp3")}
-          volume={(f) => {
-            const s = MUSIC_FROM + f / fps;
-            return (
-              musicVolume(s, WINDOWS, DUCK) *
-              (1 -
-                smoothstep(
-                  MUSIC_FROM + MUSIC_SECONDS - 1.5,
-                  MUSIC_FROM + MUSIC_SECONDS,
-                  s,
-                ))
-            );
-          }}
-        />
-      </Sequence>
+      {MUSIC_CUES.map((from) => (
+        <Sequence
+          key={`music-${from}`}
+          from={Math.round(from * fps)}
+          layout="none"
+        >
+          <Audio
+            src={staticFile("launch/music-b.mp3")}
+            volume={(f) => {
+              const s = from + f / fps;
+              return (
+                musicVolume(s, WINDOWS, DUCK) *
+                (1 -
+                  smoothstep(
+                    from + MUSIC_SECONDS - 1.5,
+                    from + MUSIC_SECONDS,
+                    s,
+                  ))
+              );
+            }}
+          />
+        </Sequence>
+      ))}
       {WHOOSHES.map((at) => (
         <Sequence
           key={`whoosh-${at}`}
@@ -266,6 +324,17 @@ export const Film90: React.FC = () => {
         layout="none"
       >
         <Audio src={staticFile("launch/sfx-scribble.mp3")} volume={0.3} />
+      </Sequence>
+      {SOFT_POPS.map((at) => (
+        <Sequence key={`soft-${at}`} from={Math.round(at * fps)} layout="none">
+          <Audio src={staticFile("launch/sfx-pop.mp3")} volume={0.28} />
+        </Sequence>
+      ))}
+      <Sequence from={Math.round(YES90.click * fps)} layout="none">
+        <Audio src={staticFile("launch/sfx-click.mp3")} volume={0.8} />
+      </Sequence>
+      <Sequence from={Math.round(approvedAt(0, YES90) * fps)} layout="none">
+        <Audio src={staticFile("launch/sfx-whoosh.mp3")} volume={0.6} />
       </Sequence>
       <Sequence from={Math.round(GREEN90.paintFrom * fps)} layout="none">
         <Audio src={staticFile("launch/sfx-shimmer.mp3")} volume={0.32} />

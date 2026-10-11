@@ -31,6 +31,14 @@ function wordIn(t: number, at: number): React.CSSProperties {
   };
 }
 
+/** A simple head and shoulders, for the owner's avatar. */
+export const PersonGlyph: React.FC<{ size?: number }> = ({ size = 60 }) => (
+  <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24">
+    <circle cx={12} cy={8.2} r={4.2} fill="#ffffff" />
+    <path d="M4 20.5c0-4.4 3.6-7.3 8-7.3s8 2.9 8 7.3z" fill="#ffffff" />
+  </svg>
+);
+
 function tint(color: string, alpha: number): string {
   return color.replace(")", ` / ${alpha})`);
 }
@@ -92,9 +100,13 @@ export const EmployeeHero: React.FC<{
           transform: `scale(${scale.toFixed(4)})`,
         }}
       >
-        <div style={{ width: 76, height: 50 }}>
-          <AntMark />
-        </div>
+        {look.avatar === "person" ? (
+          <PersonGlyph />
+        ) : (
+          <div style={{ width: 76, height: 50 }}>
+            <AntMark />
+          </div>
+        )}
       </div>
       <div
         style={{
@@ -122,7 +134,7 @@ export const EmployeeHero: React.FC<{
             background: look.color,
           }}
         />
-        AI employee
+        {look.badge ?? "AI employee"}
       </div>
       <div
         style={{

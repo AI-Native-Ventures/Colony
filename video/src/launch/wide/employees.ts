@@ -28,6 +28,10 @@ export const TONES: Record<EmployeeId, Tone> = {
 export type HeroLook = Tone & {
   title: readonly [string, string];
   subline: string;
+  /** The pill beside the avatar. Default "AI employee". */
+  badge?: string;
+  /** What sits in the avatar circle. Default the ant mark. */
+  avatar?: "ant" | "person";
 };
 
 /** What each employee is called on screen: the job in two big lines, one plain sentence. */
@@ -52,4 +56,13 @@ export const LOOKS: Record<EmployeeId, HeroLook> = {
     title: ["Keeps your", "site fresh."],
     subline: "Updates your website whenever your business changes.",
   },
+};
+
+/** The owner: the person every piece of work waits for. */
+export const OWNER: HeroLook = {
+  ...tone(258, 90, 66, "hsl(258 70% 46%)"),
+  title: ["You", "decide."],
+  subline: "Every email, post and change waits for your OK.",
+  badge: "Owner",
+  avatar: "person",
 };
