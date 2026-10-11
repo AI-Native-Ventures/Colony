@@ -125,3 +125,6 @@ plucks and marimba. The 90 s music is decided in milestone C.
 - Checked by transcribing the eight clips joined with a second of silence
   between them (`gemini-2.5-flash`): every line in order; the market line
   checked on its own reads "New sourdough and the Saturday market."
+- Episode 1 (Mahlangu Builders, "Meet Scout"): one 32.4 s read, cut at the
+  measured pauses (cut points in `video/src/explainers/ep01.ts`); the eight
+  clips joined read back in order (`gemini-2.5-flash-lite`).

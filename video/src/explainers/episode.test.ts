@@ -121,7 +121,7 @@ test("a fast line is fine when its caption holds until the next line", () => {
     good[2],
   ];
   assert.deepEqual(timelineProblems(beats, fast, 36), []);
-  assert.equal(captionUntil(fast, 1), 4.0 + 1.8 + 1.5);
+  assert.equal(captionUntil(fast, 1), 4.0 + 1.8 + 1.8);
   assert.equal(captionUntil(fast, 2), 28.5 + 1.8 + 0.7);
 });
 

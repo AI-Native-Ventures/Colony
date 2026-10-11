@@ -50,8 +50,8 @@ export function line(
   };
 }
 
-/** Longest a caption lingers after its words, when no line follows soon. */
-const HOLD = 1.5;
+/** Longest a caption lingers after its words, when no line follows soon (1.8 s: Aoede reads a nine-word line in under 2 s). */
+const HOLD = 1.8;
 /** How long the last caption stays after its words. */
 const LAST_HOLD = 0.7;
 
