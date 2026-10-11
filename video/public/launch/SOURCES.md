@@ -131,3 +131,6 @@ plucks and marimba. The 90 s music is decided in milestone C.
 - Episode 2 (Studio Nala, "Your team in a minute"): one 31.7 s read, cut at
   the measured pauses (cut points in `video/src/explainers/ep02.ts`); the
   eight clips joined read back in order (`gemini-2.5-flash-lite`).
+- Episode 3 (Bright Plumbing, "Finds customers"): one 28.9 s read, cut at
+  the measured pauses (cut points in `video/src/explainers/ep03.ts`); the
+  nine clips joined read back in order (`gemini-2.5-flash-lite`).
