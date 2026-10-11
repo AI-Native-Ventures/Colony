@@ -31,7 +31,8 @@ export type ShellConfig = {
   tone: Tone;
   world: PaletteStop[];
   hook: HookConfig;
-  hero: { look: HeroLook; timing: HeroTiming };
+  /** The episode's employee; `until` hands the stage to another employee, fading this one out. */
+  hero: { look: HeroLook; timing: HeroTiming; until?: number };
   /** The end card, in the launch film's close keys; `dimFrom` to `dark` closes the stage. */
   close: typeof CLOSE90;
   /** Music draft B cues: film seconds, and where in the track each starts. */
@@ -94,11 +95,28 @@ export const ExplainerShell: React.FC<{
         transition="fade"
       >
         <PanelBlooms tone={tone} />
-        <EmployeeHero
-          t={t}
-          look={config.hero.look}
-          timing={config.hero.timing}
-        />
+        {config.hero.until === undefined ? (
+          <EmployeeHero
+            t={t}
+            look={config.hero.look}
+            timing={config.hero.timing}
+          />
+        ) : t < config.hero.until + 0.35 ? (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              opacity:
+                1 - smoothstep(config.hero.until, config.hero.until + 0.35, t),
+            }}
+          >
+            <EmployeeHero
+              t={t}
+              look={config.hero.look}
+              timing={config.hero.timing}
+            />
+          </div>
+        ) : null}
         {children(t)}
       </BrightStage>
       <CloseScene t={t} timing={close} ants={null} plain />
