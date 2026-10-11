@@ -5,7 +5,10 @@ import { easeOutExpo, progress, smoothstep } from "./math.ts";
 
 const LOGO = { cx: 540, cy: 760, width: 520 };
 const LOGO_H = LOGO.width * (309 / 466);
-const LOGO_AT = SCENES.end.start + 0.5;
+/** The logo arrives while the app leaves, so the frame never goes dark. */
+const LOGO_AT = SCENES.end.start + 0.2;
+/** When the last voice line says each part (vo-l6 placed at 24.7 s). */
+const SAYS = { colony: 24.95, tagline: 25.75, access: 28.15, url: 28.45 };
 
 function reveal(t: number, at: number): React.CSSProperties {
   const e = easeOutExpo(progress(t, at, 0.7));
@@ -66,7 +69,7 @@ export const EndCard: React.FC<{ t: number }> = ({ t }) => {
           fontWeight: 800,
           letterSpacing: "-0.045em",
           lineHeight: 1.05,
-          ...reveal(t, SCENES.end.start + 1.0),
+          ...reveal(t, SAYS.colony),
         }}
       >
         Colony.
@@ -82,7 +85,7 @@ export const EndCard: React.FC<{ t: number }> = ({ t }) => {
           fontSize: 46,
           fontWeight: 600,
           letterSpacing: "-0.01em",
-          ...reveal(t, SCENES.end.start + 1.5),
+          ...reveal(t, SAYS.tagline),
         }}
       >
         Your business. Your AI employees.
@@ -95,7 +98,7 @@ export const EndCard: React.FC<{ t: number }> = ({ t }) => {
           top: 1278,
           display: "flex",
           justifyContent: "center",
-          ...reveal(t, 27.6),
+          ...reveal(t, SAYS.access),
         }}
       >
         <div
@@ -122,7 +125,7 @@ export const EndCard: React.FC<{ t: number }> = ({ t }) => {
           color: "rgb(236 235 243 / 0.65)",
           fontSize: 34,
           fontWeight: 600,
-          ...reveal(t, 27.9),
+          ...reveal(t, SAYS.url),
         }}
       >
         colony.ainative.ventures

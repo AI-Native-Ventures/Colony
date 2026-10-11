@@ -113,9 +113,9 @@ export const TeamChart: React.FC<{ t: number; opacity: number }> = ({
             style={{
               position: "absolute",
               left: 32,
-              top: 172,
+              top: 164,
               width: 340,
-              fontSize: 33,
+              fontSize: 31,
               fontWeight: 700,
               lineHeight: 1.15,
               letterSpacing: "-0.01em",
@@ -127,7 +127,7 @@ export const TeamChart: React.FC<{ t: number; opacity: number }> = ({
             style={{
               position: "absolute",
               left: 32,
-              top: 240,
+              top: 254,
               display: "flex",
               alignItems: "center",
               gap: 10,
