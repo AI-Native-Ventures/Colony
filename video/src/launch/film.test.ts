@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import { bannedWord } from "./banned.ts";
+import { copyProblems } from "./copy-scan.test.ts";
 import {
   CAPTIONS,
   CLICK_AT,
@@ -64,30 +65,11 @@ test("every caption stays up long enough to read", () => {
   }
 });
 
-/**
- * Words a stranger should never meet in the film. "AI agents" is allowed: on
- * 2026-10-11 the owner asked for AI employees to be defined as AI agents.
- */
-function bannedWord(src: string): string | undefined {
-  return src
-    .replace(/\bAI agents\b/g, "")
-    .match(
-      /\b(agents?|workspaces?|models?|channels?|relays?|tokens?|nostr)\b/i,
-    )?.[0];
-}
-
 test("the banned-word check allows 'AI agents' and still catches a bare agent", () => {
   assert.equal(bannedWord("AI employees are AI agents."), undefined);
   assert.equal(bannedWord("your agent writes emails"), "agent");
 });
 
 test("no banned marketing word anywhere in the film's source", () => {
-  const dir = new URL(".", import.meta.url);
-  const names = readdirSync(dir, { recursive: true }) as string[];
-  for (const name of names) {
-    if (!/\.(ts|tsx)$/.test(name) || name.endsWith(".test.ts")) continue;
-    const src = readFileSync(new URL(name, dir), "utf8");
-    const hit = bannedWord(src);
-    assert.ok(!hit, `${name} contains "${hit}"`);
-  }
+  assert.deepEqual(copyProblems(new URL(".", import.meta.url)), []);
 });
