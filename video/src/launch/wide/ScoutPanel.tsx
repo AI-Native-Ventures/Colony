@@ -8,6 +8,7 @@ import {
   employeeNode,
   SCOUT_CARD,
   SCOUT_TASKS,
+  type ScoutTask,
   scoutNode,
   TASK_CARD_W,
   type TaskTiming,
@@ -58,10 +59,24 @@ function Avatar({ color, size }: { color: string; size: number }) {
   );
 }
 
+/** Each employee's job, as the plan card labels its task. */
+const JOB_OF = Object.fromEntries(TEAM_ROWS.map((row) => [row.who, row.job]));
+
 /** Today's plan: Scout deals each employee its task, then checks the work. */
-export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
+export const PlanCard: React.FC<{
+  t: number;
+  timing: PlanTiming;
+  /** Defaults are the launch film's plan for the plumber. */
+  tasks?: readonly ScoutTask[];
+  title?: string;
+  /** Empty to leave the line free for the owner's request. */
+  subtitle?: string;
+}> = ({
   t,
   timing,
+  tasks = SCOUT_TASKS,
+  title = "Today's plan.",
+  subtitle = "Scout splits the work and hands it out.",
 }) => {
   const enter = easeOutExpo(progress(t, timing.cardIn, 0.9));
   if (enter <= 0) return null;
@@ -97,7 +112,7 @@ export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
           letterSpacing: "-0.03em",
         }}
       >
-        Today's plan.
+        {title}
       </div>
       <div
         style={{
@@ -108,7 +123,7 @@ export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
           color: MUTED,
         }}
       >
-        Scout splits the work and hands it out.
+        {subtitle}
       </div>
       <div
         style={{
@@ -135,8 +150,8 @@ export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
         </div>
       </div>
       {/* Drawn last row first, so a card being dealt passes under the rows already in place. */}
-      {[...SCOUT_TASKS.keys()].reverse().map((i) => {
-        const task = SCOUT_TASKS[i];
+      {[...tasks.keys()].reverse().map((i) => {
+        const task = tasks[i];
         const node = local(employeeNode(i));
         const tone = TONES[task.who];
         const lands = taskLandsAt(i, timing);
@@ -192,7 +207,7 @@ export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
                     color: tone.deep,
                   }}
                 >
-                  {TEAM_ROWS[i].job}
+                  {JOB_OF[task.who]}
                 </div>
                 <div
                   style={{
