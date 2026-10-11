@@ -184,3 +184,58 @@ export const RestPointer: React.FC<{
     />
   );
 };
+
+/** A plain card under the employee: what waits for the owner, beside the button that says yes. */
+export const NoteCard: React.FC<{
+  t: number;
+  at: number;
+  tone: Tone;
+  title: string;
+  subtitle: string;
+}> = ({ t, at, tone, title, subtitle }) => {
+  const enter = easeOutExpo(progress(t, at, 0.6));
+  if (enter <= 0) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: HANDOFF_CARD.x,
+        top: HANDOFF_CARD.y,
+        width: HANDOFF_CARD.w,
+        height: HANDOFF_CARD.h,
+        borderRadius: 28,
+        background: "#ffffff",
+        border: `1.5px solid ${LINE}`,
+        boxShadow: `0 40px 80px -44px ${tint(tone.color, 0.55)}`,
+        fontFamily: INTER,
+        color: INK,
+        opacity: enter,
+        transform: `translateY(${((1 - enter) * 30).toFixed(2)}px)`,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          left: 28,
+          top: 30,
+          fontSize: 30,
+          fontWeight: 750,
+          letterSpacing: "-0.015em",
+        }}
+      >
+        {title}
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          left: 28,
+          top: 76,
+          fontSize: 22,
+          color: "#6a6780",
+        }}
+      >
+        {subtitle}
+      </div>
+    </div>
+  );
+};

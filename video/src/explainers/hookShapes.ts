@@ -162,6 +162,12 @@ export function drawHookShape(
   if (icon) {
     enterBox(ctx, cx, cy, width, 24, 24);
     ctx.fill(new Path2D(icon));
+    if (id === "camera") {
+      // The icon's lens, inside the ring: without it the camera reads as a frame.
+      ctx.beginPath();
+      ctx.arc(12, 12, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
   } else if (id === "hardHat") {
     enterBox(ctx, cx, cy, width, 200, 120);
     hardHat(ctx);

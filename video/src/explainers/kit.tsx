@@ -149,7 +149,9 @@ export const ApprovePointer: React.FC<{
   t: number;
   rect: Rect;
   timing: { cursorFrom: number; click: number };
-}> = ({ t, rect, timing }) => {
+  /** Where the pointer comes in from; the lower right by default. */
+  from?: { x: number; y: number };
+}> = ({ t, rect, timing, from }) => {
   if (t < timing.cursorFrom) return null;
   const opacity =
     smoothstep(timing.cursorFrom, timing.cursorFrom + 0.3, t) *
@@ -158,7 +160,7 @@ export const ApprovePointer: React.FC<{
   return (
     <Cursor
       t={t}
-      keys={approveKeys(rect, timing)}
+      keys={approveKeys(rect, timing, from)}
       clicks={[timing.click]}
       opacity={opacity}
     />
