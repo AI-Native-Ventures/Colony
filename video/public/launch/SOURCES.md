@@ -139,3 +139,9 @@ plucks and marimba. The 90 s music is decided in milestone C.
   one replies," and "it calls and books the meeting." cut apart at their
   0.16 s pause); the eight clips joined read back in order
   (`gemini-2.5-flash-lite`).
+- Episode 6 (Mo's Auto Repairs, "Keeps your website fresh"): one 23.4 s read,
+  cut at the measured pauses (cut points in `video/src/explainers/ep06.ts`);
+  the seven clips joined read back in order (`gemini-2.5-flash-lite`). Mo's
+  new page follows car repair sites on Pinterest (2026-10-12), logged out,
+  looked at only: a charcoal page with one red, tall condensed capitals, a
+  call strip, and big price and hours tiles. Drawn in code; no pins used.
