@@ -15,12 +15,14 @@ import { Explainer03 } from "./explainers/Explainer03";
 import { Explainer04 } from "./explainers/Explainer04";
 import { Explainer05 } from "./explainers/Explainer05";
 import { Explainer06 } from "./explainers/Explainer06";
+import { Explainer07 } from "./explainers/Explainer07";
 import { EP01_SECONDS } from "./explainers/ep01.ts";
 import { EP02_SECONDS } from "./explainers/ep02.ts";
 import { EP03_SECONDS } from "./explainers/ep03.ts";
 import { EP04_SECONDS } from "./explainers/ep04.ts";
 import { EP05_SECONDS } from "./explainers/ep05.ts";
 import { EP06_SECONDS } from "./explainers/ep06.ts";
+import { EP07_SECONDS } from "./explainers/ep07.ts";
 import { LaunchFilm } from "./launch/LaunchFilm";
 import { LaunchProof } from "./launch/LaunchProof";
 import { PROOF_SECONDS } from "./launch/timeline.ts";
@@ -696,6 +698,14 @@ export const Root = () => {
         id="Explainer06"
         component={Explainer06}
         durationInFrames={Math.round(EP06_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer07"
+        component={Explainer07}
+        durationInFrames={Math.round(EP07_SECONDS * 30)}
         fps={30}
         width={1920}
         height={1080}

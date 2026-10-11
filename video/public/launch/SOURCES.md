@@ -145,3 +145,7 @@ plucks and marimba. The 90 s music is decided in milestone C.
   new page follows car repair sites on Pinterest (2026-10-12), logged out,
   looked at only: a charcoal page with one red, tall condensed capitals, a
   call strip, and big price and hours tiles. Drawn in code; no pins used.
+- Episode 7 (Sparkle Cleaning, "Nothing goes out without your yes"): one
+  29.5 s read, cut at the measured pauses (cut points in
+  `video/src/explainers/ep07.ts`); the nine clips joined read back in order
+  (`gemini-2.5-flash-lite`).
