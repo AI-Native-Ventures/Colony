@@ -87,15 +87,24 @@ export const VO_LINES: VoLine[] = [
   },
 ];
 
-export type Caption = { text: string; from: number; to: number };
+/** `line` 0 is the big headline, 1 the smaller line under it. */
+export type Caption = { text: string; from: number; to: number; line: 0 | 1 };
 
 /** Words on screen for the app scenes; the opening and end card draw their own. */
 export const CAPTIONS: Caption[] = [
-  { text: "Paste your website.", from: 9.6, to: 13.2 },
-  { text: "Meet your AI employees.", from: 13.5, to: 17.8 },
-  { text: "Software that does office work for you.", from: 14.6, to: 17.8 },
-  { text: "Nothing goes out without your yes.", from: 19.0, to: 24.3 },
+  { text: "Paste your website.", from: 9.6, to: 13.2, line: 0 },
+  { text: "Meet your AI employees.", from: 13.5, to: 17.8, line: 0 },
+  {
+    text: "Software that does office work for you.",
+    from: 14.6,
+    to: 17.8,
+    line: 1,
+  },
+  { text: "Nothing goes out without your yes.", from: 19.0, to: 24.3, line: 0 },
 ];
+
+/** Approve presses after the first one, which lands on CLICK_AT. */
+export const MORE_CLICKS = [21.4, 21.9] as const;
 
 /** The cursor presses the first Approve on the word "yes". */
 export const CLICK_AT = 20.75;

@@ -33,8 +33,9 @@ test("uniting into violet flashes bright instead of passing through mud", () => 
 
 test("no unseeded randomness anywhere in the launch film", () => {
   const dir = new URL(".", import.meta.url);
-  for (const name of readdirSync(dir)) {
-    if (name.endsWith(".test.ts")) continue;
+  const names = readdirSync(dir, { recursive: true }) as string[];
+  for (const name of names) {
+    if (!/\.(ts|tsx)$/.test(name) || name.endsWith(".test.ts")) continue;
     const src = readFileSync(new URL(name, dir), "utf8");
     assert.ok(!src.includes("Math.random"), `${name} uses Math.random`);
   }
