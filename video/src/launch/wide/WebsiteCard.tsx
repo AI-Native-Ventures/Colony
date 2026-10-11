@@ -68,10 +68,28 @@ function painted(t: number, timing: SiteTiming): number {
   return clamp01((painter(t, timing).x + LEAD - SITE_CARD.x) / SITE_CARD.w);
 }
 
+const FILM_PAGES = { Old: OldPage, New: NewPage };
+
 /** The website card: the old page repainted by a green ant walking across it. */
-export const WebsiteCard: React.FC<{ t: number; timing: SiteTiming }> = ({
+export const WebsiteCard: React.FC<{
+  t: number;
+  timing: SiteTiming;
+  /** Defaults are the launch film's Bright Plumbing pages and address. */
+  pages?: { Old: React.FC; New: React.FC };
+  domain?: string;
+  domainWidth?: number;
+  /** Takes the place of the Updated chip at the right of the browser bar. */
+  barEnd?: React.ReactNode;
+  /** The old page shows again in this window: the owner looking at before. */
+  before?: { from: number; until: number };
+}> = ({
   t,
   timing,
+  pages = FILM_PAGES,
+  domain = BRIGHT.domain,
+  domainWidth = 420,
+  barEnd,
+  before,
 }) => {
   const enter = easeOutExpo(progress(t, timing.siteIn, 0.9));
   if (enter <= 0) return null;
@@ -81,6 +99,11 @@ export const WebsiteCard: React.FC<{ t: number; timing: SiteTiming }> = ({
       ? 1 - smoothstep(SITE_CARD.w - 40, SITE_CARD.w, wipe)
       : 0;
   const chip = easeOutExpo(progress(t, timing.chipAt, 0.5));
+  const shown = before
+    ? 1 -
+      smoothstep(before.from, before.from + 0.2, t) +
+      smoothstep(before.until, before.until + 0.2, t)
+    : 1;
   return (
     <div
       style={{
@@ -131,7 +154,7 @@ export const WebsiteCard: React.FC<{ t: number; timing: SiteTiming }> = ({
           style={{
             marginLeft: 120,
             height: 40,
-            width: 420,
+            width: domainWidth,
             borderRadius: 999,
             background: "#f4f3f8",
             color: MUTED,
@@ -141,37 +164,41 @@ export const WebsiteCard: React.FC<{ t: number; timing: SiteTiming }> = ({
             justifyContent: "center",
           }}
         >
-          {BRIGHT.domain}
+          {domain}
         </span>
         <span style={{ flex: 1 }} />
-        <span
-          style={{
-            height: 40,
-            padding: "0 16px",
-            borderRadius: 999,
-            background: tint(0.14),
-            color: GREEN.deep,
-            fontSize: 21,
-            fontWeight: 700,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            opacity: chip,
-            transform: `scale(${(0.8 + 0.2 * chip).toFixed(4)})`,
-          }}
-        >
-          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24">
-            <path
-              d="M5 12.5l4.2 4.2L19 7"
-              fill="none"
-              stroke={GREEN.deep}
-              strokeWidth={3}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          Updated
-        </span>
+        {barEnd !== undefined ? (
+          barEnd
+        ) : (
+          <span
+            style={{
+              height: 40,
+              padding: "0 16px",
+              borderRadius: 999,
+              background: tint(0.14),
+              color: GREEN.deep,
+              fontSize: 21,
+              fontWeight: 700,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              opacity: chip,
+              transform: `scale(${(0.8 + 0.2 * chip).toFixed(4)})`,
+            }}
+          >
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24">
+              <path
+                d="M5 12.5l4.2 4.2L19 7"
+                fill="none"
+                stroke={GREEN.deep}
+                strokeWidth={3}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Updated
+          </span>
+        )}
       </div>
       <div
         style={{
@@ -183,16 +210,17 @@ export const WebsiteCard: React.FC<{ t: number; timing: SiteTiming }> = ({
           overflow: "hidden",
         }}
       >
-        <OldPage />
-        {wipe > 0 ? (
+        <pages.Old />
+        {wipe > 0 && shown > 0 ? (
           <div
             style={{
               position: "absolute",
               inset: 0,
               clipPath: `inset(0 ${(SITE_CARD.w - wipe).toFixed(2)}px 0 0)`,
+              opacity: shown < 1 ? shown : undefined,
             }}
           >
-            <NewPage />
+            <pages.New />
           </div>
         ) : null}
         {edge > 0 ? (

@@ -2,14 +2,16 @@ import { INTER } from "../fonts";
 import { easeOutExpo, lerpAngle, progress, smoothstep } from "../math.ts";
 import {
   BEAT,
-  type BlueTiming,
+  type BoardTiming,
   BOARD,
   carryPath,
   carryStart,
   foundCount,
   LEADS,
+  type Lead,
   landsAt,
   rowY,
+  TICK_BOX,
 } from "./beat.ts";
 import { walkState } from "./walk.ts";
 import { WorkerAnt } from "./WorkerAnt";
@@ -22,19 +24,99 @@ const COLS = {
   company: BOARD.x + 110,
   area: BOARD.x + 520,
   score: BOARD.x + 790,
+  why: BOARD.x + 470,
 };
+const SUBTITLE = "Find and manage the businesses your company can serve.";
+
+function Placeholder({ left, width }: { left: number; width: number }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top: 27,
+        width,
+        height: 20,
+        borderRadius: 10,
+        background: "#f3f1f8",
+      }}
+    />
+  );
+}
+
+/** The owner's tick on a row: an empty box, then blue with a tick from `at`. */
+function TickBox({ t, at }: { t: number; at: number }) {
+  const on = t >= at;
+  const bump = on ? 1 - progress(t, at, 0.3) : 0;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: TICK_BOX.left,
+        top: TICK_BOX.top,
+        width: TICK_BOX.size,
+        height: TICK_BOX.size,
+        borderRadius: 10,
+        boxSizing: "border-box",
+        border: on ? "none" : "2px solid #d4d0e2",
+        background: on ? BLUE : "#ffffff",
+        display: "grid",
+        placeItems: "center",
+        transform: `scale(${(1 + 0.18 * bump).toFixed(4)})`,
+      }}
+    >
+      {on ? (
+        <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24">
+          <path
+            d="M5 12.5l4.2 4.2L19 7"
+            fill="none"
+            stroke="#ffffff"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : null}
+    </div>
+  );
+}
 
 /** The real Leads screen as one big flat card, its rows filling as carriers land. */
-export const LeadsBoard: React.FC<{ t: number; timing?: BlueTiming }> = ({
+export const LeadsBoard: React.FC<{
+  t: number;
+  timing?: BoardTiming;
+  /** Defaults are the launch film's Sandton leads. */
+  leads?: readonly Lead[];
+  /** "" leaves room for the owner's request under the title. */
+  subtitle?: string;
+  /** Rows show why each lead fits instead of area and score, revealed from `at`, one row every `every` seconds. */
+  reasons?: { at: number; every: number };
+  /** Rows the owner ticks, and when; their boxes show once the reasons do. */
+  picks?: readonly { row: number; at: number }[];
+}> = ({
   t,
   timing = BEAT,
+  leads = LEADS,
+  subtitle = SUBTITLE,
+  reasons,
+  picks,
 }) => {
   const enter = easeOutExpo(progress(t, timing.boardIn, 0.9));
   if (enter <= 0) return null;
-  const count = foundCount(t, timing);
+  const count = foundCount(t, timing, leads.length);
+  const columns = reasons
+    ? [
+        { label: "Company", x: COLS.company },
+        { label: "Why it fits", x: COLS.why },
+      ]
+    : [
+        { label: "Company", x: COLS.company },
+        { label: "Area", x: COLS.area },
+        { label: "Score", x: COLS.score },
+      ];
   const bump = Math.max(
     0,
-    ...LEADS.map((_, i) =>
+    ...leads.map((_, i) =>
       t >= landsAt(i, timing) ? 1 - progress(t, landsAt(i, timing), 0.28) : 0,
     ),
   );
@@ -70,17 +152,19 @@ export const LeadsBoard: React.FC<{ t: number; timing?: BlueTiming }> = ({
       >
         Leads.
       </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 52,
-          top: 116,
-          fontSize: 24,
-          color: MUTED,
-        }}
-      >
-        Find and manage the businesses your company can serve.
-      </div>
+      {subtitle ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 52,
+            top: 116,
+            fontSize: 24,
+            color: MUTED,
+          }}
+        >
+          {subtitle}
+        </div>
+      ) : null}
       <div
         style={{
           position: "absolute",
@@ -101,11 +185,7 @@ export const LeadsBoard: React.FC<{ t: number; timing?: BlueTiming }> = ({
       >
         {count} found
       </div>
-      {[
-        { label: "Company", x: COLS.company },
-        { label: "Area", x: COLS.area },
-        { label: "Score", x: COLS.score },
-      ].map((col) => (
+      {columns.map((col) => (
         <div
           key={col.label}
           style={{
@@ -122,9 +202,13 @@ export const LeadsBoard: React.FC<{ t: number; timing?: BlueTiming }> = ({
           {col.label}
         </div>
       ))}
-      {LEADS.map((lead, i) => {
+      {leads.map((lead, i) => {
         const top = rowY(i) - BOARD.y;
         const e = easeOutExpo(progress(t, landsAt(i, timing), 0.45));
+        const why = reasons
+          ? easeOutExpo(progress(t, reasons.at + i * reasons.every, 0.4))
+          : 0;
+        const pick = picks?.find((p) => p.row === i);
         return (
           <div
             key={lead.name}
@@ -156,9 +240,9 @@ export const LeadsBoard: React.FC<{ t: number; timing?: BlueTiming }> = ({
                 <div
                   style={{
                     position: "absolute",
-                    left: COLS.area - BOARD.x,
+                    left: (reasons ? COLS.why : COLS.area) - BOARD.x,
                     top: 27,
-                    width: 150,
+                    width: reasons ? 240 : 150,
                     height: 20,
                     borderRadius: 10,
                     background: "#f3f1f8",
@@ -185,36 +269,68 @@ export const LeadsBoard: React.FC<{ t: number; timing?: BlueTiming }> = ({
                 >
                   {lead.name}
                 </div>
-                <div
-                  style={{
-                    position: "absolute",
-                    left: COLS.area - BOARD.x,
-                    top: 22,
-                    fontSize: 25,
-                    color: MUTED,
-                  }}
-                >
-                  {lead.area}
-                </div>
-                <div
-                  style={{
-                    position: "absolute",
-                    left: COLS.score - BOARD.x,
-                    top: 16,
-                    height: 42,
-                    padding: "0 16px",
-                    borderRadius: 999,
-                    background: "hsl(160 60% 45% / 0.14)",
-                    color: "hsl(160 60% 30%)",
-                    fontSize: 24,
-                    fontWeight: 700,
-                    display: "flex",
-                    alignItems: "center",
-                    fontVariantNumeric: "tabular-nums",
-                  }}
-                >
-                  {lead.score}
-                </div>
+                {reasons ? (
+                  <>
+                    {why <= 0 ? (
+                      <Placeholder left={COLS.why - BOARD.x} width={240} />
+                    ) : (
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: COLS.why - BOARD.x,
+                          top: 22,
+                          fontSize: 25,
+                          color: MUTED,
+                          opacity: why,
+                          transform: `translateY(${((1 - why) * 10).toFixed(2)}px)`,
+                        }}
+                      >
+                        {lead.why}
+                      </div>
+                    )}
+                    {picks && why > 0 ? (
+                      <div style={{ opacity: why }}>
+                        <TickBox
+                          t={t}
+                          at={pick ? pick.at : Number.POSITIVE_INFINITY}
+                        />
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: COLS.area - BOARD.x,
+                        top: 22,
+                        fontSize: 25,
+                        color: MUTED,
+                      }}
+                    >
+                      {lead.area}
+                    </div>
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: COLS.score - BOARD.x,
+                        top: 16,
+                        height: 42,
+                        padding: "0 16px",
+                        borderRadius: 999,
+                        background: "hsl(160 60% 45% / 0.14)",
+                        color: "hsl(160 60% 30%)",
+                        fontSize: 24,
+                        fontWeight: 700,
+                        display: "flex",
+                        alignItems: "center",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {lead.score}
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -225,12 +341,13 @@ export const LeadsBoard: React.FC<{ t: number; timing?: BlueTiming }> = ({
 };
 
 /** Blue ants carrying each lead in like leaf-cutters, then settling as the row's owner. */
-export const Carriers: React.FC<{ t: number; timing?: BlueTiming }> = ({
-  t,
-  timing = BEAT,
-}) => (
+export const Carriers: React.FC<{
+  t: number;
+  timing?: BoardTiming;
+  leads?: readonly Lead[];
+}> = ({ t, timing = BEAT, leads = LEADS }) => (
   <>
-    {LEADS.map((lead, i) => {
+    {leads.map((lead, i) => {
       const start = carryStart(i, timing);
       if (t < start) return null;
       const s = walkState(carryPath(i), t, start, timing.carryDuration);

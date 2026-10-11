@@ -27,6 +27,17 @@ export const BEAT = {
 /** Timing of a "finds customers" beat; the film uses its own (film90.ts BLUE90). */
 export type BlueTiming = typeof BEAT;
 
+/** What the Leads card and its carriers need from a beat's timing. */
+export type BoardTiming = Pick<
+  BlueTiming,
+  | "boardIn"
+  | "carryFrom"
+  | "carryEvery"
+  | "carryDuration"
+  | "countRushFrom"
+  | "countRush"
+>;
+
 export type BeatLine = {
   id: string;
   file: string;
@@ -67,7 +78,13 @@ export const BOARD = {
   rowStep: 76,
 };
 
-export type Lead = { name: string; area: string; score: number };
+export type Lead = {
+  name: string;
+  area: string;
+  score: number;
+  /** Why this business fits, for an explainer that shows reasons. */
+  why?: string;
+};
 
 /**
  * Example businesses near Sandton, Johannesburg, that could sign a plumbing
@@ -87,6 +104,24 @@ export function rowY(i: number): number {
   return BOARD.rowTop + i * BOARD.rowStep;
 }
 
+/** The owner's tick box at the right of a row, in row pixels. */
+export const TICK_BOX = { left: BOARD.w - 52 - 36, top: 20, size: 36 };
+
+/** Row `i`'s tick box, panel pixels. */
+export function tickRect(i: number): {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+} {
+  return {
+    x: BOARD.x + TICK_BOX.left,
+    y: rowY(i) + TICK_BOX.top,
+    w: TICK_BOX.size,
+    h: TICK_BOX.size,
+  };
+}
+
 /** Where a carrier ant settles: the owner spot at the left of its row. */
 export function ownerSlot(i: number): Point {
   return { x: BOARD.x + 52, y: rowY(i) + 38 };
@@ -103,22 +138,27 @@ export function carryPath(i: number): Path {
   ];
 }
 
-export function carryStart(i: number, timing: BlueTiming = BEAT): number {
+export function carryStart(i: number, timing: BoardTiming = BEAT): number {
   return timing.carryFrom + i * timing.carryEvery;
 }
 
-export function landsAt(i: number, timing: BlueTiming = BEAT): number {
+export function landsAt(i: number, timing: BoardTiming = BEAT): number {
   return carryStart(i, timing) + timing.carryDuration;
 }
 
 /** Leads found so far: one per landed carrier, then a quick count up to 20. */
-export function foundCount(t: number, timing: BlueTiming = BEAT): number {
-  const landed = LEADS.filter((_, i) => t >= landsAt(i, timing)).length;
-  if (landed < LEADS.length) return landed;
+export function foundCount(
+  t: number,
+  timing: BoardTiming = BEAT,
+  rows: number = LEADS.length,
+): number {
+  let landed = 0;
+  for (let i = 0; i < rows; i++) if (t >= landsAt(i, timing)) landed++;
+  if (landed < rows) return landed;
   const rush = easeInOutCubic(
     progress(t, timing.countRushFrom, timing.countRush),
   );
-  return landed + Math.round((20 - LEADS.length) * rush);
+  return landed + Math.round((20 - rows) * rush);
 }
 
 /** Camera: wide for the intro, close on the rows while the ants deliver, wide again for "20 found". */

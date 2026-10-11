@@ -1,3 +1,11 @@
+/** A call the sales employee makes, as the call card shows it. */
+export type Call = {
+  name: string;
+  company: string;
+  lines: readonly { who: "us" | "them"; text: string }[];
+  booked: string;
+};
+
 /** The sales employee's call, an example for Bright Plumbing: ongoing work for a builder. */
 export const CALL = {
   name: "Lindiwe",

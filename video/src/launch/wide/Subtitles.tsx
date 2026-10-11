@@ -33,12 +33,24 @@ export const Subtitles: React.FC<{
   /** Text color per line id, for lines over the dark world. */
   inks?: Readonly<Record<string, string>>;
   holdLast?: boolean;
-}> = ({ t, lines, keywords, highlights, inks, holdLast = true }) => (
+  /** When each line's caption leaves, by id; default 0.7 s after its words. */
+  until?: Readonly<Record<string, number>>;
+}> = ({
+  t,
+  lines,
+  keywords,
+  highlights,
+  inks,
+  holdLast = true,
+  until: leaves,
+}) => (
   <>
     {lines.map((line, index) => {
       const last = index === lines.length - 1;
       const until =
-        last && holdLast ? Number.POSITIVE_INFINITY : line.speech[1] + 0.7;
+        last && holdLast
+          ? Number.POSITIVE_INFINITY
+          : (leaves?.[line.id] ?? line.speech[1] + 0.7);
       if (t < line.speech[0] - 0.05 || t > until) return null;
       const out = Number.isFinite(until)
         ? 1 - smoothstep(until - 0.25, until, t)

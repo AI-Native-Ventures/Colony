@@ -9,6 +9,22 @@ import {
 import { loadFont } from "@remotion/google-fonts/Inter";
 import { AntMark } from "./brand/AntMark";
 import { FILM_SECONDS } from "./launch/film.ts";
+import { Explainer01 } from "./explainers/Explainer01";
+import { Explainer02 } from "./explainers/Explainer02";
+import { Explainer03 } from "./explainers/Explainer03";
+import { Explainer04 } from "./explainers/Explainer04";
+import { Explainer05 } from "./explainers/Explainer05";
+import { Explainer06 } from "./explainers/Explainer06";
+import { Explainer07 } from "./explainers/Explainer07";
+import { Explainer08 } from "./explainers/Explainer08";
+import { EP01_SECONDS } from "./explainers/ep01.ts";
+import { EP02_SECONDS } from "./explainers/ep02.ts";
+import { EP03_SECONDS } from "./explainers/ep03.ts";
+import { EP04_SECONDS } from "./explainers/ep04.ts";
+import { EP05_SECONDS } from "./explainers/ep05.ts";
+import { EP06_SECONDS } from "./explainers/ep06.ts";
+import { EP07_SECONDS } from "./explainers/ep07.ts";
+import { EP08_SECONDS } from "./explainers/ep08.ts";
 import { LaunchFilm } from "./launch/LaunchFilm";
 import { LaunchProof } from "./launch/LaunchProof";
 import { PROOF_SECONDS } from "./launch/timeline.ts";
@@ -636,6 +652,70 @@ export const Root = () => {
         id="Film90"
         component={Film90}
         durationInFrames={Math.round(FILM90_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer01"
+        component={Explainer01}
+        durationInFrames={Math.round(EP01_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer02"
+        component={Explainer02}
+        durationInFrames={Math.round(EP02_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer03"
+        component={Explainer03}
+        durationInFrames={Math.round(EP03_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer04"
+        component={Explainer04}
+        durationInFrames={Math.round(EP04_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer05"
+        component={Explainer05}
+        durationInFrames={Math.round(EP05_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer06"
+        component={Explainer06}
+        durationInFrames={Math.round(EP06_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer07"
+        component={Explainer07}
+        durationInFrames={Math.round(EP07_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer08"
+        component={Explainer08}
+        durationInFrames={Math.round(EP08_SECONDS * 30)}
         fps={30}
         width={1920}
         height={1080}

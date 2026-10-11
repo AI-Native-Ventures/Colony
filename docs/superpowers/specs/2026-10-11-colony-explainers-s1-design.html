@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colony Explainers Season 1</title>
+<style>
+:root {
+  --bg: #f7f6fb; --panel: #ffffff; --ink: #17151f; --muted: #5d5a6b; --line: #e3e0ec; --chip: #efecf8;
+  --violet: hsl(258 90% 66%); --blue: hsl(217 91% 60%); --amber: hsl(38 92% 50%); --green: hsl(160 60% 45%); --pink: hsl(330 81% 60%);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0f0e14; --panel: #17161f; --ink: #ecebf3; --muted: #a19eb2; --line: #2a2836; --chip: #221f2e; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #0f0e14; --panel: #17161f; --ink: #ecebf3; --muted: #a19eb2; --line: #2a2836; --chip: #221f2e; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; }
+main { max-width: 900px; margin: 0 auto; padding: 32px 16px 80px; }
+h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; margin: 40px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 6px; }
+.meta { color: var(--muted); font-size: 0.92rem; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+.stack { display: grid; gap: 14px; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+td.t { white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
+.vo { font-style: italic; }
+.tag { display: inline-block; font-size: 0.8rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+ul { padding-left: 22px; } li { margin: 4px 0; }
+code { font: 0.86em ui-monospace, Menlo, monospace; background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Colony explainers, season 1</h1>
+<div class="meta">Design page, version 1. 11 October 2026. Follows the owner's review of 15 older Codex explainers (review page: https://claude.ai/artifact/NJHTfSJQ4hKHVYAb72GD7A) and the launch film he approved the same day.</div>
+
+<h2>What we are making and why</h2>
+<div class="card">
+  <p>Eight short videos that each teach one thing about Colony, for people who have never heard of it: owners of small service businesses and people starting one. Each one stands on its own when posted, so each says what Colony is in one line before it teaches its idea.</p>
+  <p>The older explainers failed on craft, not topic: whole app windows shrunk until unreadable, a 3D mascot in a side column, "design concept" on every frame, slow openings, agent names nobody knows, five different looks. These videos use the world of the launch film instead.</p>
+</div>
+
+<h2>Owner decisions</h2>
+<div class="card">
+  <ul>
+    <li><b>Wide 16:9 first</b> (1920 by 1080, 30 fps). Tall 9:16 versions may follow later from the same scenes.</li>
+    <li><b>A different trade in each video</b>, so each owner sees their own kind of business.</li>
+    <li><b>Pilot first:</b> episode 5, "Makes your posts", for a bakery, built end to end and reviewed before the other seven.</li>
+    <li>Motion graphics only, drawn in code. No AI video, no mascot, no photos.</li>
+    <li>Voice: Gemini "Aoede". Definition line: AI employees are AI agents that do office work for you.</li>
+    <li>A customer's own work (posts, website, emails) is drawn in that trade's style, taken from Pinterest references for that trade.</li>
+    <li>Website in every end card: colony.global. No em dashes anywhere in the copy.</li>
+  </ul>
+</div>
+
+<h2>The season</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th>#</th><th>Video</th><th>Business</th><th>Employee</th><th>One idea</th></tr></thead>
+  <tbody>
+    <tr><td class="t">1</td><td>Meet Scout</td><td>Mahlangu Builders, Pretoria</td><td>Scout, chief of staff</td><td>One sentence from you becomes a plan; Scout hands out the jobs and checks them.</td></tr>
+    <tr><td class="t">2</td><td>Your team in a minute</td><td>Studio Nala hair salon, Rosebank</td><td>The whole team</td><td>Paste your website; Colony reads it and hires your team.</td></tr>
+    <tr><td class="t">3</td><td>Finds customers</td><td>Bright Plumbing, Sandton</td><td>Finds customers (blue)</td><td>Twenty businesses that fit, each with the reason.</td></tr>
+    <tr><td class="t">4</td><td>Sells for you</td><td>Golden Hour Photography, Cape Town</td><td>Sells for you (amber)</td><td>Writes to wedding venues, then calls and books the meeting.</td></tr>
+    <tr><td class="t">5</td><td>Makes your posts</td><td>Rise Bakery, Melville</td><td>Makes your posts (pink)</td><td>A week of posts in the bakery's own style, scheduled.</td></tr>
+    <tr><td class="t">6</td><td>Keeps your website fresh</td><td>Mo's Auto Repairs, Soweto</td><td>Keeps your site fresh (green)</td><td>Tell it what changed; the site updates; you see before and after.</td></tr>
+    <tr><td class="t">7</td><td>Nothing goes out without your yes</td><td>Sparkle Cleaning, Fourways</td><td>Any employee</td><td>Everything comes to you first; change it in plain words; say yes.</td></tr>
+    <tr><td class="t">8</td><td>Talk to your team</td><td>Thandi's Kitchen catering, Durban</td><td>Any employee</td><td>A chat for each topic; reply right on the thing you want changed.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Every video, same shape</h2>
+<div class="card">
+  <ul>
+    <li><b>Hook, 0 to 3 s.</b> A question or a pain the owner knows, in big words, voiced from the first second. Behind it, the ants swarm into that trade's tool (croissant, scissors, camera, spanner).</li>
+    <li><b>Meet them, 3 to 8 s.</b> What Colony is in one line, then the employee: colour, badge, what it does.</li>
+    <li><b>The work, 8 to about 28 s.</b> One card at a time, big and flat, with the work happening live: typing, ants carrying results in, a before and after.</li>
+    <li><b>Your yes, about 5 s.</b> The owner approves. Nothing in Colony goes out without it.</li>
+    <li><b>End, about 4 s.</b> Black ant logo, "Colony. AI employees for your business.", "Early access at colony.global".</li>
+  </ul>
+  <p>Target 33 to 42 seconds. Rules carried from the launch film: never a whole app window; readable on a phone (body text at least 28 px on the 1920 frame); words on screen stay long enough to read; nothing new appears while the camera moves; no dark frames.</p>
+</div>
+
+<h2>Scripts</h2>
+<p class="meta">Voice in italics. Every line must pass the stranger test: a baker who has never heard of Colony follows it with no context.</p>
+<div class="stack">
+  <div class="card">
+    <h3>1 · Meet Scout <span class="tag">Builder</span></h3>
+    <div class="scroll"><table>
+      <tr><td class="t">Hook</td><td class="vo">You're on site all day. Who's running the office?</td><td>A hard hat, a phone with 9 missed calls.</td></tr>
+      <tr><td class="t">Meet</td><td class="vo">Colony gives your business AI employees: AI agents that do the office work. Scout leads them. Scout is your chief of staff.</td><td>Scout's purple badge, "Chief of staff".</td></tr>
+      <tr><td class="t">Work</td><td class="vo">Tell Scout what you want in one sentence: more work from property developers this month. Scout makes the plan and gives each employee their job. When the work comes back, Scout checks it.</td><td>The owner's sentence; a plan card; tasks dealt to blue, amber and pink; tick marks.</td></tr>
+      <tr><td class="t">Yes</td><td class="vo">Then it comes to you, and you say yes.</td><td>Approve.</td></tr>
+      <tr><td class="t">End</td><td class="vo">Colony. AI employees for your business.</td><td>End card.</td></tr>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>2 · Your team in a minute <span class="tag">Hair salon</span></h3>
+    <div class="scroll"><table>
+      <tr><td class="t">Hook</td><td class="vo">Hiring takes weeks. This takes a minute.</td><td>A timer.</td></tr>
+      <tr><td class="t">Meet</td><td class="vo">Colony is an app that gives your business a team of AI employees.</td><td>Colony name.</td></tr>
+      <tr><td class="t">Work</td><td class="vo">Paste your website. Colony reads it: a hair salon in Rosebank, cuts, colour and braids, open six days. Then it hires your team: one to find customers, one to sell, one for your posts, one for your website, and Scout to lead them.</td><td>The website field; facts as chips; four employees and Scout arrive.</td></tr>
+      <tr><td class="t">Yes</td><td class="vo">Nothing starts until you say yes.</td><td>"Hire my team".</td></tr>
+      <tr><td class="t">End</td><td class="vo">Colony. AI employees for your business.</td><td>End card.</td></tr>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>3 · Finds customers <span class="tag">Plumber</span></h3>
+    <div class="scroll"><table>
+      <tr><td class="t">Hook</td><td class="vo">You fix pipes all day. Who's finding your next customer?</td><td>A spanner; an empty diary.</td></tr>
+      <tr><td class="t">Meet</td><td class="vo">In Colony, an AI employee finds customers for you.</td><td>Blue badge, "Finds customers".</td></tr>
+      <tr><td class="t">Work</td><td class="vo">Tell it who you want: office parks in Sandton. It searches, checks each one, and brings you twenty, with why each one fits. You pick the ones you like.</td><td>The request typed; lead cards carried in by ants with reasons ("120 offices", "no plumber on contract"); five ticked.</td></tr>
+      <tr><td class="t">Yes</td><td class="vo">Your sales employee writes to them next. Nothing goes out without your yes.</td><td>The five slide to the amber employee; Approve waits.</td></tr>
+      <tr><td class="t">End</td><td class="vo">Colony. AI employees for your business.</td><td>End card.</td></tr>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>4 · Sells for you <span class="tag">Photographer</span></h3>
+    <div class="scroll"><table>
+      <tr><td class="t">Hook</td><td class="vo">The best clients won't find you. So go to them.</td><td>A camera.</td></tr>
+      <tr><td class="t">Meet</td><td class="vo">In Colony, this AI employee sells for you.</td><td>Amber badge, "Sells for you".</td></tr>
+      <tr><td class="t">Work</td><td class="vo">It writes to wedding venues, offering to be their go-to photographer. When one replies, it calls and books the meeting.</td><td>The email typed live; a reply; a call; "Meeting booked: Fri 11:00".</td></tr>
+      <tr><td class="t">Yes</td><td class="vo">Every email waits for your yes.</td><td>Approve.</td></tr>
+      <tr><td class="t">End</td><td class="vo">Colony. AI employees for your business.</td><td>End card.</td></tr>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>5 · Makes your posts <span class="tag">Bakery</span> <span class="tag">Pilot</span></h3>
+    <div class="scroll"><table>
+      <tr><td class="t">Hook</td><td class="vo">When did you last post? Be honest.</td><td>"Last post: 14 weeks ago"; a croissant made of ants.</td></tr>
+      <tr><td class="t">Meet</td><td class="vo">Colony gives your business AI employees. This one makes your posts.</td><td>Pink badge, "Makes your posts".</td></tr>
+      <tr><td class="t">Work</td><td class="vo">Tell it what's happening this week: new sourdough, and the Saturday market. It writes the words and makes the pictures, in your bakery's style. Then it picks the best times to post.</td><td>The owner's line; three posts in the bakery's Pinterest style carried in; times: Tue 7:00, Thu 12:30, Sat 6:30.</td></tr>
+      <tr><td class="t">Yes</td><td class="vo">You check them, and say yes.</td><td>Approve; "3 posts scheduled".</td></tr>
+      <tr><td class="t">End</td><td class="vo">Colony. AI employees for your business.</td><td>End card.</td></tr>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>6 · Keeps your website fresh <span class="tag">Car repairs</span></h3>
+    <div class="scroll"><table>
+      <tr><td class="t">Hook</td><td class="vo">Your prices went up. Your website didn't.</td><td>An old price crossed out.</td></tr>
+      <tr><td class="t">Meet</td><td class="vo">In Colony, this AI employee looks after your website.</td><td>Green badge, "Keeps your site fresh".</td></tr>
+      <tr><td class="t">Work</td><td class="vo">Tell it what changed: a full service is now fourteen fifty, and you're open on Saturdays. It updates the page and shows you before and after.</td><td>The owner's line; the old page repainted by a green ant; before and after.</td></tr>
+      <tr><td class="t">Yes</td><td class="vo">Say yes, and it's live.</td><td>Approve; "Live".</td></tr>
+      <tr><td class="t">End</td><td class="vo">Colony. AI employees for your business.</td><td>End card.</td></tr>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>7 · Nothing goes out without your yes <span class="tag">Cleaning service</span></h3>
+    <div class="scroll"><table>
+      <tr><td class="t">Hook</td><td class="vo">An AI that emails your customers? Only if you say yes.</td><td>A send button, locked.</td></tr>
+      <tr><td class="t">Meet</td><td class="vo">In Colony, your AI employees do the work, but everything comes to you first.</td><td>Work cards queue up for you.</td></tr>
+      <tr><td class="t">Work</td><td class="vo">Here's a reply to a customer who asked for a quote. Not quite right? Just say so: shorter, and mention we bring our own supplies. It rewrites it in seconds.</td><td>The draft; the owner's note; before and after.</td></tr>
+      <tr><td class="t">Yes</td><td class="vo">When it's right, you say yes. Then, and only then, it goes.</td><td>Approve; "Sent".</td></tr>
+      <tr><td class="t">End</td><td class="vo">Colony. AI employees for your business.</td><td>End card.</td></tr>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>8 · Talk to your team <span class="tag">Caterer</span></h3>
+    <div class="scroll"><table>
+      <tr><td class="t">Hook</td><td class="vo">No settings. No prompts. Just tell them.</td><td>A plain message box.</td></tr>
+      <tr><td class="t">Meet</td><td class="vo">In Colony, you talk to your AI employees the way you'd talk to people.</td><td>The team.</td></tr>
+      <tr><td class="t">Work</td><td class="vo">Each topic gets its own chat: weddings, office lunches, the website. Want a change? Reply right on it: make the wedding menu vegetarian-friendly. The new menu comes back in the same place.</td><td>Three chats; a reply on the menu card; the updated menu.</td></tr>
+      <tr><td class="t">Yes</td><td class="vo">You say yes, and it's done.</td><td>Approve.</td></tr>
+      <tr><td class="t">End</td><td class="vo">Colony. AI employees for your business.</td><td>End card.</td></tr>
+    </table></div>
+  </div>
+</div>
+<p class="meta">Every end card also shows "Early access at colony.global"; the voice says it in the pilot and we decide from there whether every video says it.</p>
+
+<h2>Look</h2>
+<div class="card">
+  <ul>
+    <li>The launch film's light world: soft pastel gradients sampled from the owner's posts, black Inter type, the black ant logo in the corner.</li>
+    <li>Employee colours as in the film: Scout violet, finds customers blue, sells amber, posts pink, website green. Small worker ants in that colour carry the work in.</li>
+    <li>The hook's ants swarm into the trade's tool, then scatter into the scene: the ants as pattern, never a character.</li>
+    <li>Colony's own screens are cards in Colony's style (Inter, white, rounded). The customer's work uses that trade's look from Pinterest, its own fonts and colours, so it reads as their business, not ours.</li>
+    <li>Captions light up word by word with the employee's colour on key words, as in the film.</li>
+  </ul>
+</div>
+
+<h2>Sound</h2>
+<div class="card">
+  <ul>
+    <li>One Aoede read per video through the Gemini API, read together so the lines flow, normalised to -16 LUFS and cut at measured pauses. Transcribed back to check every word.</li>
+    <li>Music: the launch film's draft B stand-in, re-cut per video, until real music credit is added.</li>
+    <li>Sound effects from the film: pops when cards land, a soft whoosh on moves, a click on Approve.</li>
+  </ul>
+</div>
+
+<h2>How we build it</h2>
+<div class="card">
+  <ul>
+    <li>A shared kit in <code>video/src/explainers/</code>: the five beats as a timeline, the shell (light world, corner logo, hook swarm, employee badge, approve beat, end card, captions, voice and music), and test helpers. Each video adds only its script, its timings and its work scene.</li>
+    <li>Reuse the launch film's parts from <code>video/src/launch/wide/</code> rather than copy them: light world, worker ants, captions, Scout's plan, the website field and team, leads, email and call, posts, website repaint.</li>
+    <li>Each trade gets a small brand kit (name, colours, fonts, mark) in the style of its Pinterest references.</li>
+    <li>Compositions <code>Explainer01</code> to <code>Explainer08</code>, 1920 by 1080, 30 fps.</li>
+  </ul>
+</div>
+
+<h2>Checks</h2>
+<div class="card">
+  <ul>
+    <li>Tests per video, written before the code: every line inside its beat, lines never overlap, the hook voiced within the first second, captions up long enough to read, the definition and banned-word rules, nothing appearing during a camera move.</li>
+    <li>After each render: loudness -16 LUFS, no dark frames, the same frame renders the same twice, the voice track transcribes in script order, a contact sheet looked at frame by frame.</li>
+    <li>Each finished video goes on one watch page and to the Desktop folder. One pull request into develop when all eight are done.</li>
+  </ul>
+</div>
+
+<h2>Not in this season</h2>
+<div class="card">
+  <ul>
+    <li>Tall 9:16 versions.</li>
+    <li>Real music (needs paid credit).</li>
+    <li>Goals, the business map and the software builder from the older chapters; a later season if wanted.</li>
+  </ul>
+</div>
+</main>
+</body>
+</html>

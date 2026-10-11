@@ -115,3 +115,44 @@ plucks and marimba. The 90 s music is decided in milestone C.
   call to action, tall capitals, a phone number and a booking button.
 - Fonts: Poppins, Anton and Caveat from Google Fonts (SIL Open Font License),
   loaded with `@remotion/google-fonts`.
+
+## Explainer voices: `public/explainers/ep05-*.mp3` (2026-10-11)
+
+- Episode 5 (Rise Bakery, "Makes your posts"): one read of the eight lines on
+  `gemini-3.8-flash-tts`, voice `Aoede`, through the Gemini API; 25.9 s,
+  normalised to -16 LUFS, cut at the measured pauses (cut points are the
+  `cut` values in `video/src/explainers/ep05.ts`), 40 ms fade in, 60 ms out.
+- Checked by transcribing the eight clips joined with a second of silence
+  between them (`gemini-2.5-flash`): every line in order; the market line
+  checked on its own reads "New sourdough and the Saturday market."
+- Episode 1 (Mahlangu Builders, "Meet Scout"): one 32.4 s read, cut at the
+  measured pauses (cut points in `video/src/explainers/ep01.ts`); the eight
+  clips joined read back in order (`gemini-2.5-flash-lite`).
+- Episode 2 (Studio Nala, "Your team in a minute"): one 31.7 s read, cut at
+  the measured pauses (cut points in `video/src/explainers/ep02.ts`); the
+  eight clips joined read back in order (`gemini-2.5-flash-lite`).
+- Episode 3 (Bright Plumbing, "Finds customers"): one 28.9 s read, cut at
+  the measured pauses (cut points in `video/src/explainers/ep03.ts`); the
+  nine clips joined read back in order (`gemini-2.5-flash-lite`).
+- Episode 4 (Golden Hour Photography, "Sells for you"): one 22.4 s read, cut
+  at the measured pauses (cut points in `video/src/explainers/ep04.ts`; "When
+  one replies," and "it calls and books the meeting." cut apart at their
+  0.16 s pause); the eight clips joined read back in order
+  (`gemini-2.5-flash-lite`).
+- Episode 6 (Mo's Auto Repairs, "Keeps your website fresh"): one 23.4 s read,
+  cut at the measured pauses (cut points in `video/src/explainers/ep06.ts`);
+  the seven clips joined read back in order (`gemini-2.5-flash-lite`). Mo's
+  new page follows car repair sites on Pinterest (2026-10-12), logged out,
+  looked at only: a charcoal page with one red, tall condensed capitals, a
+  call strip, and big price and hours tiles. Drawn in code; no pins used.
+- Episode 7 (Sparkle Cleaning, "Nothing goes out without your yes"): one
+  29.5 s read, cut at the measured pauses (cut points in
+  `video/src/explainers/ep07.ts`); the nine clips joined read back in order
+  (`gemini-2.5-flash-lite`).
+- Episode 8 (Thandi's Kitchen, "Talk to your team"): one 28.7 s read, cut at
+  the measured pauses (cut points in `video/src/explainers/ep08.ts`); the
+  eight clips joined read back in order (`gemini-2.5-flash-lite`; "Want a
+  change?" is heard as "wanna change", how it sounds said quickly). The
+  wedding menu follows menu cards on Pinterest (2026-10-12), logged out,
+  looked at only: an ivory card, a gold script "Menu", a sage sprig, spaced
+  capitals per course. Drawn in code; no pins used.

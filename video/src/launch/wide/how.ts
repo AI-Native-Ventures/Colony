@@ -90,6 +90,9 @@ export const TEAM_ROWS: TeamRow[] = [
   { who: "green", job: "Keeps your site fresh" },
 ];
 
+/** Seconds between one team chip turning to Working and the next, top to bottom. */
+export const WORKING_EVERY = 0.12;
+
 export function teamRowAt(i: number, timing: HowTiming): number {
   return timing.teamAt + i * timing.teamEvery;
 }

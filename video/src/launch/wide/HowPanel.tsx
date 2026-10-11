@@ -2,7 +2,7 @@ import { AntMark } from "../../brand/AntMark";
 import { Cursor } from "../app/Cursor";
 import { INTER } from "../fonts";
 import { easeOutExpo, progress, smoothstep } from "../math.ts";
-import { GETTING_STARTED, TONES } from "./employees.ts";
+import { GETTING_STARTED, SCOUT_LOOK, TONES } from "./employees.ts";
 import {
   BUSINESS_CARD,
   CONTINUE_BUTTON,
@@ -12,10 +12,12 @@ import {
   howCursorKeys,
   READ_BUTTON,
   TEAM_ROWS,
+  type TeamRow,
   teamRowAt,
   teamRowY,
   WEBSITE,
   WEBSITE_FIELD,
+  WORKING_EVERY,
 } from "./how.ts";
 
 const INK = "#17151f";
@@ -37,10 +39,103 @@ function local(r: { x: number; y: number; w: number; h: number }) {
   };
 }
 
+/** Rows of the hired team, card pixels: the film's spacing unless an explainer needs room below. */
+const TEAM_LAYOUT = { top: 200, step: 132 };
+
+/** Scout joins the hired team at the top of the card, as the one who leads it. */
+const ScoutBadge: React.FC<{ t: number; at: number }> = ({ t, at }) => {
+  const e = easeOutExpo(progress(t, at, 0.5));
+  const pulse = progress(t, at, 0.9);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 52,
+        top: 28,
+        height: 82,
+        padding: "0 28px 0 11px",
+        borderRadius: 999,
+        background: tint(SCOUT_LOOK.color, 0.12),
+        display: "flex",
+        alignItems: "center",
+        gap: 16,
+        opacity: e,
+        transform: `scale(${(0.85 + 0.15 * e).toFixed(4)})`,
+      }}
+    >
+      <span
+        style={{
+          width: 60,
+          height: 60,
+          borderRadius: 30,
+          background: SCOUT_LOOK.color,
+          display: "grid",
+          placeItems: "center",
+          boxShadow:
+            pulse < 1
+              ? `0 0 0 ${(16 * pulse).toFixed(2)}px ${tint(SCOUT_LOOK.color, 0.35 * (1 - pulse))}`
+              : undefined,
+        }}
+      >
+        <span
+          style={{ display: "flex", width: 38, height: 25, color: "#ffffff" }}
+        >
+          <AntMark />
+        </span>
+      </span>
+      <span style={{ display: "grid" }}>
+        <span
+          style={{
+            fontSize: 30,
+            fontWeight: 800,
+            letterSpacing: "-0.02em",
+            lineHeight: 1.1,
+          }}
+        >
+          Scout
+        </span>
+        <span
+          style={{
+            fontSize: 22,
+            fontWeight: 650,
+            lineHeight: 1.25,
+            color: SCOUT_LOOK.deep,
+          }}
+        >
+          Leads the team
+        </span>
+      </span>
+    </div>
+  );
+};
+
 /** Paste the website into one big field, see what Colony read, then the team it hired. */
-export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
+export const BusinessCard: React.FC<{
+  t: number;
+  timing: HowTiming;
+  /** Defaults are the launch film's plumber. */
+  website?: string;
+  facts?: readonly string[];
+  rows?: readonly TeamRow[];
+  teamSubtitle?: string;
+  teamLayout?: { top: number; step: number };
+  /** When Scout's "leads the team" badge appears; none in the film. */
+  scoutAt?: number;
+  /** When the team's chips turn from Ready to Working; never in the film. */
+  workingAt?: number;
+  /** False when the card turns to the team on its own, with the owner's yes later. */
+  hireButton?: boolean;
+}> = ({
   t,
   timing,
+  website = WEBSITE,
+  facts = FACTS,
+  rows = TEAM_ROWS,
+  teamSubtitle = "Hired from your website, ready to start.",
+  teamLayout = TEAM_LAYOUT,
+  scoutAt,
+  workingAt,
+  hireButton = true,
 }) => {
   const enter = easeOutExpo(progress(t, timing.cardIn, 0.9));
   if (enter <= 0) return null;
@@ -51,7 +146,7 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
   );
   const pasted = t >= timing.pasteAt;
   const flash = pasted ? 1 - progress(t, timing.pasteAt, 0.7) : 0;
-  const lastFact = factAt(FACTS.length - 1, timing);
+  const lastFact = factAt(facts.length - 1, timing);
   const reading = t >= timing.readClick && t < lastFact + 0.3;
   const readDone = t >= lastFact + 0.3;
   const scan = progress(t, timing.readClick, lastFact + 0.3 - timing.readClick);
@@ -151,7 +246,7 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
                 padding: "0 4px",
               }}
             >
-              {pasted ? WEBSITE : "yourbusiness.com"}
+              {pasted ? website : "yourbusiness.com"}
             </span>
           </div>
           <div
@@ -237,7 +332,7 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
               gap: 16,
             }}
           >
-            {FACTS.map((fact, i) => {
+            {facts.map((fact, i) => {
               const e = easeOutExpo(progress(t, factAt(i, timing), 0.45));
               return (
                 <span
@@ -278,24 +373,26 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
               );
             })}
           </div>
-          <div
-            style={{
-              position: "absolute",
-              ...local(CONTINUE_BUTTON),
-              borderRadius: 999,
-              background: VIOLET,
-              color: "#ffffff",
-              fontSize: 26,
-              fontWeight: 750,
-              display: "grid",
-              placeItems: "center",
-              boxShadow: `0 18px 36px -16px ${tint(VIOLET, 0.8)}`,
-              transform: `scale(${pressContinue ? 0.95 : 1})`,
-              opacity: smoothstep(lastFact, lastFact + 0.3, t),
-            }}
-          >
-            Hire my team
-          </div>
+          {hireButton ? (
+            <div
+              style={{
+                position: "absolute",
+                ...local(CONTINUE_BUTTON),
+                borderRadius: 999,
+                background: VIOLET,
+                color: "#ffffff",
+                fontSize: 26,
+                fontWeight: 750,
+                display: "grid",
+                placeItems: "center",
+                boxShadow: `0 18px 36px -16px ${tint(VIOLET, 0.8)}`,
+                transform: `scale(${pressContinue ? 0.95 : 1})`,
+                opacity: smoothstep(lastFact, lastFact + 0.3, t),
+              }}
+            >
+              Hire my team
+            </div>
+          ) : null}
         </div>
       ) : null}
       {toTeam > 0 ? (
@@ -321,13 +418,19 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
               color: MUTED,
             }}
           >
-            Hired from your website, ready to start.
+            {teamSubtitle}
           </div>
-          {TEAM_ROWS.map((row, i) => {
+          {scoutAt !== undefined && t >= scoutAt - 0.05 ? (
+            <ScoutBadge t={t} at={scoutAt} />
+          ) : null}
+          {rows.map((row, i) => {
             const e = easeOutExpo(progress(t, teamRowAt(i, timing), 0.5));
             if (e <= 0) return null;
             const tone = TONES[row.who];
-            const top = teamRowY(i) - BUSINESS_CARD.y;
+            const top =
+              teamLayout === TEAM_LAYOUT
+                ? teamRowY(i) - BUSINESS_CARD.y
+                : teamLayout.top + i * teamLayout.step;
             return (
               <div
                 key={row.who}
@@ -406,7 +509,9 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
                     alignItems: "center",
                   }}
                 >
-                  Ready
+                  {workingAt !== undefined && t >= workingAt + i * WORKING_EVERY
+                    ? "Working"
+                    : "Ready"}
                 </div>
               </div>
             );

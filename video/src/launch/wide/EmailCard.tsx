@@ -14,6 +14,7 @@ import {
   draftsReady,
   EMAIL,
   EMAIL_CARD,
+  type Email,
   emailTypedAt,
 } from "./email.ts";
 import { TONES } from "./employees.ts";
@@ -70,7 +71,7 @@ function options(timing: EmailTiming) {
 }
 
 /** Where the pen ant is: walking in, writing along a line, or hopping back for the next one. */
-function penState(t: number, timing: EmailTiming) {
+function penState(t: number, timing: EmailTiming, lines: readonly string[]) {
   const left = EMAIL_CARD.x + BODY.x;
   const lineY = (i: number) => EMAIL_CARD.y + bodyLineTop(i) + PEN_DROP;
   const startX = left - PEN_REACH;
@@ -91,7 +92,7 @@ function penState(t: number, timing: EmailTiming) {
     const settle = smoothstep(timing.typeFrom - 0.3, timing.typeFrom, t);
     return { ...s, angle: lerpAngle(s.angle, 0, settle), writing: false };
   }
-  const state = typewriterAt([...EMAIL.lines], t, options(timing));
+  const state = typewriterAt([...lines], t, options(timing));
   const i = state.line;
   const endX = left + bodyWidth(state.typed[i]) - PEN_REACH;
   const phase = (t - timing.typeFrom) * 5;
@@ -144,18 +145,21 @@ function Badge({
   );
 }
 
-/** The real Outreach screen as one big flat card: Thabo's draft writes itself. */
-export const EmailCard: React.FC<{ t: number; timing: EmailTiming }> = ({
-  t,
-  timing,
-}) => {
+/** The real Outreach screen as one big flat card: the draft writes itself (Thabo's in the film). */
+export const EmailCard: React.FC<{
+  t: number;
+  timing: EmailTiming;
+  email?: Email;
+  /** When the draft's badge turns to Sent; never in the film. */
+  sentAt?: number;
+}> = ({ t, timing, email = EMAIL, sentAt }) => {
   const enter = easeOutExpo(progress(t, timing.cardIn, 0.9));
   const handOver = smoothstep(timing.callIn - 0.05, timing.callIn + 0.35, t);
   if (enter <= 0 || handOver >= 1) return null;
-  const state = typewriterAt([...EMAIL.lines], t, options(timing));
+  const state = typewriterAt([...email.lines], t, options(timing));
   const typing = t >= timing.typeFrom && !state.done;
-  const ready = draftsReady(t, timing);
-  const firstAt = emailTypedAt(timing) + 0.1;
+  const ready = draftsReady(t, timing, email.lines);
+  const firstAt = emailTypedAt(timing, email.lines) + 0.1;
   const rushEnd = timing.countRushFrom + timing.countRush;
   const bump = Math.max(
     t >= firstAt ? 1 - progress(t, firstAt, 0.28) : 0,
@@ -252,13 +256,15 @@ export const EmailCard: React.FC<{ t: number; timing: EmailTiming }> = ({
             placeItems: "center",
           }}
         >
-          {EMAIL.to[0]}
+          {email.to[0]}
         </span>
-        <span style={{ fontSize: 30, fontWeight: 650 }}>{EMAIL.to}</span>
-        <span style={{ fontSize: 26, color: MUTED }}>at {EMAIL.company}</span>
+        <span style={{ fontSize: 30, fontWeight: 650 }}>{email.to}</span>
+        <span style={{ fontSize: 26, color: MUTED }}>at {email.company}</span>
         <span style={{ flex: 1 }} />
         <Badge tone="outline">Email</Badge>
-        <Badge tone="amber">Draft</Badge>
+        <Badge tone="amber">
+          {sentAt !== undefined && t >= sentAt ? "Sent" : "Draft"}
+        </Badge>
       </div>
       <div
         style={{
@@ -280,12 +286,12 @@ export const EmailCard: React.FC<{ t: number; timing: EmailTiming }> = ({
           letterSpacing: "-0.015em",
         }}
       >
-        {EMAIL.subject}
+        {email.subject}
       </div>
       {state.typed.map((text, i) =>
         text.length === 0 ? null : (
           <div
-            key={EMAIL.lines[i]}
+            key={email.lines[i]}
             style={{
               position: "absolute",
               left: BODY.x,
@@ -320,13 +326,14 @@ export const EmailCard: React.FC<{ t: number; timing: EmailTiming }> = ({
 };
 
 /** The amber ant that writes the email, walking under each line like a pen. */
-export const PenAnt: React.FC<{ t: number; timing: EmailTiming }> = ({
-  t,
-  timing,
-}) => {
+export const PenAnt: React.FC<{
+  t: number;
+  timing: EmailTiming;
+  email?: Email;
+}> = ({ t, timing, email = EMAIL }) => {
   const leave = smoothstep(timing.callIn - 0.1, timing.callIn + 0.25, t);
   if (t < timing.walkFrom || leave >= 1) return null;
-  const s = penState(t, timing);
+  const s = penState(t, timing, email.lines);
   return (
     <WorkerAnt
       x={s.x}
