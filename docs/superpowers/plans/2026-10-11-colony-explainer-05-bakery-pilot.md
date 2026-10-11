@@ -361,3 +361,35 @@ test("swarm ants start just outside the frame, on every side", () => {
 - [ ] **Step 2:** Gates: `ebur128` integrated -16 plus or minus 1 LUFS and true peak at most -1 dBFS; darkest frame `YAVG` above 150 at 2 fps; frames at the hook, mid-carry and the end card render byte-identical twice; the 16 kHz voice track transcribes in script order; a 16-frame contact sheet looked at frame by frame.
 - [ ] **Step 3:** Publish a new watch page "Colony Explainers" with a 16:9 player for episode 5 and a what changed / checked / not checked list; open it. Copy the master to `~/Desktop/Colony video tests/21 explainer 05 - makes your posts (bakery pilot).mp4`.
 - [ ] **Step 4:** Push `claude/colony-explainers-s1`; ledger line in `.superpowers/sdd/2026-10-11-colony-explainer-05-bakery-pilot/progress.md`.
+
+---
+
+## Execution record (2026-10-11)
+
+All seven tasks complete; final review was a self-review (the owner forbids subagents), no Critical or Important findings.
+
+### Rulings made during execution
+
+- Pre-flight: Task 6 consumes CloseScene timing typeof CLOSE90 {dimFrom, dark, logoIn, name, tagline, earlyAt, urlAt}; EP05 names them closeFrom/closeDark. Ruling: map EP05 to CLOSE90 keys at the call site in Explainer05 (keeps CloseScene's type unchanged for the film; cost if wrong: one mapping object.)
+- Ruling: plan steps for visual components (Tasks 5, 6) give specs, not full code (the art is iterated against rendered stills, writing it twice would double the work; cost if wrong: less reviewable plan text, covered by stills and tests.)
+- Task 1: Ruling: RISE_COLORS are cream, paper, butter, crust, cocoa, blue, red (not cream, crust, cocoa, berry, butter, ink) (the chosen references are cream and royal blue with a red pop-up, no berry; cost if wrong: renamed keys only)
+- Task 2: Ruling: plan test data h1 spoken [0.1,1.5] fails its own read-time rule (5 words need 2.17 s up); used [0.1,1.6] (the rule is right, the sample was short; cost if wrong: none, test data only)
+- Task 2: Ruling: file scan copyProblems lives in src/launch/copy-scan.test.ts, not banned.ts (tsc has no Node types and excludes *.test.ts; cost if wrong: one odd filename)
+- Task 2: Ruling: the film's source scan now also fails on em dashes (none exist) (owner rule bans them everywhere; cost if wrong: a future comment with an em dash fails the suite)
+- Task 3: Ruling: transcribed the 8 clips joined (one request) plus the market line alone, not 8 requests (free tier allows 5 a minute and a join still exposes any clipped word; cost if wrong: a subtle clip edge could hide in the join)
+- Task 4: Ruling: captions hold until 0.05 s before the next line, at most 1.5 s after their words (captionUntil; Subtitles gets an optional until map, film unchanged) (Aoede reads about 3.5 words a second, so speech + 0.7 s failed the read rule for most lines; cost if wrong: captions linger a little longer)
+- Task 4: Ruling: e1 and e2 are not captioned (line(..., false)); the plan's test asserted e2.caption, now asserts e2.captioned === false (the end card shows the same words in big type, as in the launch film; cost if wrong: no caption on the last two lines)
+- Task 4: Ruling: added EP05.approveIn (button appears at the yes beat) separate from readyAt ('3 ready' chip) (the plan had the button appear at readyAt, 6 s before it is used; cost if wrong: one key)
+- Task 5: Ruling: built a minimal Explainer05 (stage, hero, card) and registered it in Task 5 instead of Task 6 (the plan's still check needs a composition to render; cost if wrong: none, Task 6 completes it)
+- Task 5: Ruling: status chip hidden until carryFrom, then Making, n of 3 ready, 3 ready, Approve and schedule, 3 posts scheduled ('Making 0 of 3' while the owner still typed read wrong; cost if wrong: copy only)
+- Task 6: Ruling: hookWordsAt -0.3 and swarmFrom -0.5 so frame 0 already shows the question and ants entering (Review Focus 1, a still first frame loses a scroller; cost if wrong: none, both tests allow it)
+- Task 6: Ruling: h1 not captioned (its words are the hook's big type, the film's rule; cost if wrong: no subtitle for 2.3 s)
+- Task 6: Ruling: croissant segments reshaped (fatter middle, horns curling down) with ridge gaps for the ant silhouette; the posts' croissant drawing uses the same shape (the first shape read as a rainbow; cost if wrong: one shape)
+- Task 6: Ruling: CloseScene gets plain (no drop shadow, glow only during the flash) instead of a new end card (reuse, and the owner's cut 4 note; cost if wrong: one prop)
+- Task 7: Ruling: transcribed with gemini-2.5-flash-lite (2.5-flash hit its free daily limit; cost if wrong: a weaker model could miss a clipped word; the clips were already checked on 2.5-flash)
+
+### Deferred minors
+
+- the status pill grows wider than APPROVE_BUTTON.w once it reads 'Approve and schedule'; the pointer still lands inside it
+- every render now loads seven Google font families from the CDN, the launch film too; one render timed out on a slow CDN ( bundling the font files locally would remove that
+- the file-scan helper lives in copy-scan.test.ts only to dodge the typecheck's missing Node types
