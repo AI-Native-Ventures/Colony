@@ -9,6 +9,8 @@ import {
 import { loadFont } from "@remotion/google-fonts/Inter";
 import { AntMark } from "./brand/AntMark";
 import { FILM_SECONDS } from "./launch/film.ts";
+import { Explainer05 } from "./explainers/Explainer05";
+import { EP05_SECONDS } from "./explainers/ep05.ts";
 import { LaunchFilm } from "./launch/LaunchFilm";
 import { LaunchProof } from "./launch/LaunchProof";
 import { PROOF_SECONDS } from "./launch/timeline.ts";
@@ -636,6 +638,14 @@ export const Root = () => {
         id="Film90"
         component={Film90}
         durationInFrames={Math.round(FILM90_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Explainer05"
+        component={Explainer05}
+        durationInFrames={Math.round(EP05_SECONDS * 30)}
         fps={30}
         width={1920}
         height={1080}
