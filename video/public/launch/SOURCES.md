@@ -65,3 +65,17 @@ provider's current terms before paid advertising.
 - `vo-blue-1.mp3` and `vo-blue-2.mp3` are the proof beat's separate read.
 - `sfx-pop.mp3` and `sfx-whoosh.mp3` are synthesised with ffmpeg
   (`aevalsrc` sine chirp; pink `anoisesrc` band-passed); no third-party audio.
+- `sfx-scribble.mp3` (4 s, the amber email writing itself) and
+  `sfx-shimmer.mp3` (2.4 s, the green website repaint) are synthesised with
+  ffmpeg on 2026-10-11: band-passed white `anoisesrc` with two `tremolo`
+  stages for the scribble; a rising `aevalsrc` sine pair over high-passed pink
+  noise for the shimmer; both loudness normalised to -22 LUFS. No third-party
+  audio.
+
+## 90 second film music (milestone A stand-in)
+
+The "meet the team" preview (frames 747 to 1625) plays `music-b.mp3` from
+film 25.4 s so its lift at 7 s lands on "20 found" (32.4 s). Two Seed Audio
+90 s tries on 2026-10-11 came back (piano and strings with the lift at 69 s;
+synth with the groove at 16 s and the peak at 66 s) and neither has draft B's
+plucks and marimba. The 90 s music is decided in milestone C.

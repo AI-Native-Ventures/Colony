@@ -1,4 +1,5 @@
 import { legAngles } from "./gait.ts";
+import { antPose } from "./pose.ts";
 
 const W = 466;
 const H = 309;
@@ -39,6 +40,7 @@ export const WorkerAnt: React.FC<{
   opacity = 1,
 }) => {
   const { a, b, bob } = legAngles(phase);
+  const pose = antPose(angle);
   const height = size * (H / W);
   const leg = (deg: number): React.CSSProperties => ({
     ...layer,
@@ -59,7 +61,7 @@ export const WorkerAnt: React.FC<{
         width: size,
         height,
         opacity,
-        transform: `rotate(${((angle * 180) / Math.PI).toFixed(3)}deg)`,
+        transform: `rotate(${pose.rotate.toFixed(3)}deg)${pose.mirrored ? " scaleX(-1)" : ""}`,
       }}
     >
       <svg aria-hidden="true" viewBox={`0 0 ${W} ${H}`} style={leg(a)}>

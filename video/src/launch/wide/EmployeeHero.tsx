@@ -1,7 +1,8 @@
 import { AntMark } from "../../brand/AntMark";
 import { INTER } from "../fonts";
 import { easeOutExpo, progress, smoothstep } from "../math.ts";
-import { AVATAR, type CameraTiming, CAMERA, cameraScale } from "./beat.ts";
+import { AVATAR, CAMERA, type CameraTiming, cameraScale } from "./beat.ts";
+import type { HeroLook } from "./employees.ts";
 
 const INK = "#17151f";
 const MUTED = "#5d5a6b";
@@ -12,15 +13,6 @@ export type HeroTiming = {
   sublineAt: number;
   /** When attention moves to the work card; the hero softens. */
   focusFrom?: number;
-};
-
-export type HeroLook = {
-  /** The employee's brand hue, e.g. "hsl(217 91% 60%)". */
-  color: string;
-  /** A darker shade of it for small text on a tint. */
-  deep: string;
-  title: readonly [string, string];
-  subline: string;
 };
 
 function easeOutBack(x: number): number {
@@ -158,6 +150,7 @@ export const EmployeeHero: React.FC<{
           fontWeight: 500,
           lineHeight: 1.3,
           color: MUTED,
+          textWrap: "balance",
           ...wordIn(t, timing.sublineAt),
         }}
       >

@@ -1,15 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { foundCount } from "./beat.ts";
+import { EMAIL } from "./email.ts";
+import { type EmployeeId, TEAM } from "./employees.ts";
 import {
   ACT_ORDER,
   ACTS,
+  AMBER90,
   BEAT_DONE,
   BLUE90,
   CLICK90,
   FILM90_SECONDS,
+  GREEN90,
   LINES,
+  PANS,
+  PINK90,
+  panelX,
+  panX,
+  RIVERS90,
+  TIMING90,
 } from "./film90.ts";
+import { postLandsAt } from "./posts.ts";
+import { riverAnts } from "./riverAnts.ts";
+import { typewriterEnd } from "./typewriter.ts";
 
 test("acts run back to back from 0 to 90 s", () => {
   assert.equal(ACTS[ACT_ORDER[0]].start, 0);
@@ -81,4 +94,66 @@ test("each employee finishes its work before the next one speaks", () => {
 test("the film's blue beat has found all 20 before amber speaks", () => {
   assert.equal(foundCount(ACTS.amber.start, BLUE90), 20);
   assert.equal(foundCount(ACTS.blue.start, BLUE90), 0);
+});
+
+test("the camera holds still on each employee while they speak", () => {
+  for (const line of LINES) {
+    if (!(TEAM as readonly string[]).includes(line.act)) continue;
+    const x = panelX(line.act as EmployeeId);
+    for (const t of [line.speech[0], (line.speech[0] + line.speech[1]) / 2]) {
+      assert.equal(panX(t), x, `${line.id} at ${t}`);
+    }
+  }
+});
+
+test("the camera only ever moves forward", () => {
+  let prev = panX(24);
+  for (let t = 24; t <= 56; t += 1 / 30) {
+    assert.ok(panX(t) >= prev, `moved back at ${t}`);
+    prev = panX(t);
+  }
+  assert.equal(panX(56), panelX("green"));
+});
+
+test("each glide ends before the next employee appears", () => {
+  for (const pan of PANS) {
+    assert.ok(pan.end <= TIMING90[pan.to].avatarAt, `${pan.to} pops mid glide`);
+  }
+});
+
+test("the camera stays on an employee until its work is done", () => {
+  for (const pan of PANS) {
+    const before = TEAM[TEAM.indexOf(pan.to) - 1];
+    assert.ok(pan.start >= BEAT_DONE[before], `left ${before} too soon`);
+  }
+});
+
+test("each employee's river lands as its avatar appears", () => {
+  for (const id of TEAM) {
+    const river = RIVERS90[id];
+    assert.equal(river.landAt, TIMING90[id].avatarAt);
+    for (const ant of riverAnts(river)) {
+      const lands = ant.release + ant.duration;
+      assert.ok(lands >= river.landAt - 0.5, `${id} ant lands at ${lands}`);
+      assert.ok(lands <= river.landAt + 0.45, `${id} ant lands at ${lands}`);
+    }
+  }
+});
+
+test("the email is typed before the drafts count up", () => {
+  const end = typewriterEnd(EMAIL.lines, {
+    start: AMBER90.typeFrom,
+    cps: AMBER90.typeCps,
+    returnSeconds: AMBER90.returnSeconds,
+  });
+  assert.ok(AMBER90.typeFrom >= AMBER90.cardIn + 0.5, "types before the card");
+  assert.ok(end + 0.1 <= AMBER90.countRushFrom, `typing ends at ${end}`);
+});
+
+test("all three posts land before '3 ready'", () => {
+  assert.ok(postLandsAt(2, PINK90) + 0.2 <= PINK90.readyAt);
+});
+
+test("the website is repainted before 'Updated'", () => {
+  assert.ok(GREEN90.paintFrom + GREEN90.paintDuration <= GREEN90.chipAt);
 });

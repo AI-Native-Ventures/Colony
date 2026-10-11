@@ -106,3 +106,13 @@ test("no ant teleports between neighbouring moments", () => {
     }
   }
 });
+
+test("the flight option sets how long each ant flies", () => {
+  const quick = { ...opts, flight: { min: 0.9, spread: 0.3 } };
+  for (const ant of createAnts(starts, ends, lanes, quick)) {
+    assert.ok(
+      ant.duration >= 0.9 && ant.duration <= 1.2,
+      `flew ${ant.duration}`,
+    );
+  }
+});

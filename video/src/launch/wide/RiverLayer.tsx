@@ -1,5 +1,6 @@
 import { AVATAR, BEAT } from "./beat.ts";
-import { River, type RiverSpec } from "./River";
+import { River } from "./River";
+import type { RiverSpec } from "./riverAnts.ts";
 
 /** The proof beat's blue river, from off the left edge into the avatar. */
 export const BLUE_PROOF_RIVER: RiverSpec = {

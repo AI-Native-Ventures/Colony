@@ -16,7 +16,11 @@
     "still:film": "remotion still src/index.ts LaunchFilm out/launch-film-still.png --frame=600",
     "render:beat": "remotion render src/index.ts TeamBeatProof out/team-beat.mp4 --jpeg-quality=95 --crf=16",
     "master:beat": "ffmpeg -hide_banner -loglevel error -y -i out/team-beat.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/team-beat-master.mp4",
-    "master:film": "ffmpeg -hide_banner -loglevel error -y -i out/launch-film.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/launch-film-master.mp4"
+    "master:film": "ffmpeg -hide_banner -loglevel error -y -i out/launch-film.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/launch-film-master.mp4",
+    "render:film90": "remotion render src/index.ts Film90 out/film90.mp4 --jpeg-quality=95 --crf=16",
+    "render:film90:team": "remotion render src/index.ts Film90 out/film90-team.mp4 --frames=747-1625 --jpeg-quality=95 --crf=16",
+    "master:film90:team": "ffmpeg -hide_banner -loglevel error -y -i out/film90-team.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/film90-team-master.mp4",
+    "master:film90": "ffmpeg -hide_banner -loglevel error -y -i out/film90.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/film90-master.mp4"
   },
   "dependencies": {
     "@remotion/cli": "4.0.522",

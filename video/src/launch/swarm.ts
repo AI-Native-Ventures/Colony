@@ -46,6 +46,8 @@ export type SwarmOptions = {
   releaseAt: number;
   sweep: number;
   frameWidth: number;
+  /** Seconds of flight: `min` plus up to `spread` more. Default 1.45 + 0.4. */
+  flight?: { min: number; spread: number };
 };
 
 export function bezier(
@@ -109,6 +111,8 @@ export function createAnts(
   }
   if (lanes.length === 0) throw new Error("createAnts: no lanes");
   const rand = mulberry32(opts.seed);
+  const flightMin = opts.flight?.min ?? 1.45;
+  const flightSpread = opts.flight?.spread ?? 0.4;
   const startOrder = byX(starts);
   const endOrder = byX(ends);
   const ants: Ant[] = [];
@@ -135,7 +139,7 @@ export function createAnts(
           opts.releaseAt +
           (start.x / opts.frameWidth) * opts.sweep +
           rand() * 0.12,
-        duration: 1.45 + rand() * 0.4,
+        duration: flightMin + rand() * flightSpread,
         wobbleAmp: 10 + rand() * 22,
         wobblePhase: rand() * Math.PI * 2,
         size: 18 + rand() * 7,
