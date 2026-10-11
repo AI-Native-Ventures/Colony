@@ -5,8 +5,11 @@ import {
   chipShowsAt,
   clockHours,
   clockLabel,
+  DAY_CHIP_H,
   DAY_END,
+  DAY_LANE_TOP,
   DAY_START,
+  dayLaneY,
   type DayTiming,
   hourX,
   RULER,
@@ -26,9 +29,7 @@ const VIOLET = OWNER.color;
 const RULER_Y = 330;
 const YOU_Y = 386;
 const YOU_H = 84;
-const LANE_TOP = 556;
-const LANE_STEP = 80;
-const CHIP_H = 58;
+const CHIP_H = DAY_CHIP_H;
 const CHIP_FONT = 22;
 
 let measureCtx: CanvasRenderingContext2D | null = null;
@@ -42,9 +43,7 @@ function textWidth(text: string): number {
   return measureCtx.measureText(text).width;
 }
 
-function laneY(k: number): number {
-  return LANE_TOP + k * LANE_STEP;
-}
+const laneY = dayLaneY;
 
 function easeOutBack(x: number): number {
   const c1 = 1.70158;
@@ -265,7 +264,7 @@ export const DayPanel: React.FC<{ t: number; timing: DayPanelTiming }> = ({
           style={{
             position: "absolute",
             left: 60,
-            top: LANE_TOP - 4,
+            top: DAY_LANE_TOP - 4,
             fontSize: 28,
             fontWeight: 750,
             lineHeight: 1.15,

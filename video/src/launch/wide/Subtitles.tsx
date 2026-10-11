@@ -30,8 +30,10 @@ export const Subtitles: React.FC<{
   lines: readonly BeatLine[];
   keywords: Keywords;
   highlights?: Readonly<Record<string, Highlight>>;
+  /** Text color per line id, for lines over the dark world. */
+  inks?: Readonly<Record<string, string>>;
   holdLast?: boolean;
-}> = ({ t, lines, keywords, highlights, holdLast = true }) => (
+}> = ({ t, lines, keywords, highlights, inks, holdLast = true }) => (
   <>
     {lines.map((line, index) => {
       const last = index === lines.length - 1;
@@ -41,13 +43,14 @@ export const Subtitles: React.FC<{
       const out = Number.isFinite(until)
         ? 1 - smoothstep(until - 0.25, until, t)
         : 1;
-      const shown = wordsShown(line.text, line.speech, t);
+      const text = line.caption ?? line.text;
+      const shown = wordsShown(text, line.speech, t);
       const hotWords = isOneSet(keywords)
         ? keywords
         : (keywords[line.id] ?? NONE);
       const tone = highlights?.[line.id] ?? BLUE_HIGHLIGHT;
       let offset = 0;
-      const words = line.text.split(" ").map((word, i) => {
+      const words = text.split(" ").map((word, i) => {
         const at = offset;
         offset += word.length + 1;
         return { word, at, i };
@@ -64,7 +67,7 @@ export const Subtitles: React.FC<{
             fontFamily: INTER,
             fontSize: 36,
             fontWeight: 600,
-            color: "#17151f",
+            color: inks?.[line.id] ?? "#17151f",
             opacity: out,
           }}
         >

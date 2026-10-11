@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { foundCount } from "./beat.ts";
+import { HOW } from "./how.ts";
+import { INTRO, TOWER_WORDS, TRADE_WORDS } from "./intro.ts";
 import { EMAIL } from "./email.ts";
 import { TEAM } from "./employees.ts";
 import {
@@ -10,6 +12,8 @@ import {
   BEAT_DONE,
   BLUE90,
   CLICK90,
+  CLOSE90,
+  DAY90,
   FILM90_SECONDS,
   GREEN90,
   ACT_PANEL,
@@ -25,6 +29,7 @@ import {
   TIMING90,
 } from "./film90.ts";
 import { postLandsAt } from "./posts.ts";
+import { teamRowAt } from "./how.ts";
 import { riverAnts } from "./riverAnts.ts";
 import { typewriterEnd } from "./typewriter.ts";
 
@@ -111,12 +116,12 @@ test("the camera holds still on each panel while its lines are spoken", () => {
 });
 
 test("the camera only ever moves forward", () => {
-  let prev = panX(24);
-  for (let t = 24; t <= 80; t += 1 / 30) {
+  let prev = panX(30);
+  for (let t = 30; t <= 100; t += 1 / 30) {
     assert.ok(panX(t) >= prev, `moved back at ${t}`);
     prev = panX(t);
   }
-  assert.equal(panX(80), panelX("day"));
+  assert.equal(panX(100), panelX("day"));
 });
 
 test("each glide ends before the next panel's first thing appears", () => {
@@ -160,4 +165,57 @@ test("all three posts land before '3 ready'", () => {
 
 test("the website is repainted before 'Updated'", () => {
   assert.ok(GREEN90.paintFrom + GREEN90.paintDuration <= GREEN90.chipAt);
+});
+
+function spoken(id: string): readonly [number, number] {
+  const found = LINES.find((l) => l.id === id);
+  assert.ok(found, `no line ${id}`);
+  return found.speech;
+}
+
+test("trades show while 'the work you love' is said", () => {
+  assert.ok(TRADE_WORDS[0].at >= spoken("n01")[0]);
+  assert.ok(TRADE_WORDS[TRADE_WORDS.length - 1].at <= spoken("n01")[1]);
+});
+
+test("the jobs pile up while 'everything else' is said", () => {
+  assert.ok(TOWER_WORDS[0].at >= spoken("n02")[0] + 0.8);
+  assert.ok(TOWER_WORDS[3].at <= spoken("n02")[1] + 0.2);
+});
+
+test("the logo lands just before 'Introducing: Colony.'", () => {
+  const [start] = spoken("l04");
+  assert.ok(INTRO.logoIn <= start && start <= INTRO.logoIn + 0.6);
+});
+
+test("the tagline appears while Colony is explained", () => {
+  const [start, end] = spoken("n05");
+  assert.ok(INTRO.tagline >= start && INTRO.tagline <= end);
+});
+
+test("'AI employee' is defined on screen as it is said", () => {
+  const [start] = spoken("n06");
+  assert.ok(INTRO.defineFrom <= start && start <= INTRO.defineFrom + 0.5);
+  assert.ok(INTRO.brightFrom >= spoken("n06")[1] + 0.8, "bright too soon");
+});
+
+test("the bright app world is open before 'Paste your website'", () => {
+  assert.ok(INTRO.brightTo <= spoken("n07")[0]);
+  const [start, end] = spoken("n07");
+  assert.ok(HOW.pasteAt >= start && HOW.pasteAt <= end);
+});
+
+test("the whole team is in before 'Meet your team.'", () => {
+  assert.ok(teamRowAt(TEAM.length - 1, HOW) + 0.3 <= spoken("n08")[0]);
+});
+
+test("the logo is back before 'Colony.' and the address shows as it is said", () => {
+  assert.ok(CLOSE90.logoIn <= spoken("c01")[0]);
+  const [start, end] = spoken("c02");
+  assert.ok(CLOSE90.urlAt >= start && CLOSE90.urlAt <= end);
+  assert.ok(end + 2 <= FILM90_SECONDS, "address not held long enough");
+});
+
+test("the close starts after the day's summary has been seen", () => {
+  assert.ok(CLOSE90.dimFrom >= DAY90.summaryAt + 1.5);
 });

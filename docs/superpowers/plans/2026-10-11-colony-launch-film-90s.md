@@ -59,3 +59,23 @@
 - [ ] Opening layers parametrized by frame size (tall stays as is); wide words tower, swarm, logo, "Introducing Colony." on the lift; four rivers leave the logo after "Meet yours".
 - [ ] Close: bright to dark, the four ants return into the logo, end lockup timed to the voice.
 - [ ] Music (Seed Audio or the draft B stand-in), ducking, sound effects, master; full gates; publish the 90 s film; Desktop copy; push.
+
+## Restructure (owner, 2026-10-11): a stranger must know what this is
+
+After watching the "meet the team" middle he said viewers are lost: they do not know what this is, who it is for, what it is called or what the point is, and the film may run 1 to 2 minutes or more. Approved outline (question answered "2-min film, clear intro"):
+
+| Time | Act | On screen | Voice |
+|---|---|---|---|
+| 0:00 | Who it is for | trades (Plumbing, Baking, Haircuts, Building, Photography), then the pile of jobs | "You started a business to do the work you love." "Then came everything else. Finding customers, emails, posts, the website." "And there is never enough of you." |
+| 0:15 | Colony | swarm builds the logo; "Introducing Colony."; "AI employees for your business." | "Introducing: Colony." "Colony is an app that gives your business a team of AI employees." |
+| 0:26 | What an AI employee is | "AI employee: software that does office work for you, like a person on your team." four ants walk in | "An AI employee is software that does office work for you, like a person on your team." |
+| 0:33 | How it works (bright) | real "Your business" screen: paste brightplumbing.co.za, Read website, summary, Continue, "Your team." with four employees | "Paste your website. Colony reads it, and hires your team." "Meet your team." |
+| 0:43 | Meet the team, your yes, your day back | as built, 17 s later | as recorded |
+| 1:37 | Close | ants fly home and build the logo; "Colony. AI employees for your business." "Early access is open" colony.ainative.ventures | "Colony. AI employees for your business." "Early access is open at colony dot AI native dot ventures." |
+
+Plus a small Colony lockup in the top left corner across the bright world. Film length 109 s.
+
+- [x] Intro, how it works, close and corner logo built and tested (`intro.ts`, `how.ts`, `closeSwarm.ts`, `WideOpening.tsx`, `HowPanel.tsx`, `CloseScene.tsx`).
+- [ ] New voice lines (n01, n02, n05 to n08, c01, c02): blocked on OpenRouter credits ($0.58 left on 2026-10-11; every TTS call returns 402). Timed from estimates until recorded (`pendingLine` in `film90.ts`).
+- [ ] Full-length music: Seed Audio (credits), else draft B stand-in at 10, 41 and 71 s.
+- [ ] Full render, gates, publish, Desktop copy, push.

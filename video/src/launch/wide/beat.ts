@@ -33,6 +33,8 @@ export type BeatLine = {
   at: number;
   speech: readonly [number, number];
   text: string;
+  /** What the subtitle shows, when it differs from what is said. */
+  caption?: string;
 };
 
 export const BEAT_VOICE: BeatLine[] = [

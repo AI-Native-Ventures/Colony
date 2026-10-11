@@ -8,6 +8,21 @@ export const DAY_END = 18;
 /** The time ruler, panel pixels. */
 export const RULER = { x0: 260, x1: 1800 };
 
+/** The team's four lanes, one per employee, panel pixels. */
+export const DAY_LANE_TOP = 556;
+export const DAY_LANE_STEP = 80;
+export const DAY_CHIP_H = 58;
+
+/** Top of lane `k` (team order). */
+export function dayLaneY(k: number): number {
+  return DAY_LANE_TOP + k * DAY_LANE_STEP;
+}
+
+/** Where lane `k`'s ant walks, just ahead of the clock line at `hour`. */
+export function dayAntSpot(k: number, hour: number): { x: number; y: number } {
+  return { x: hourX(hour) + 36, y: dayLaneY(k) + DAY_CHIP_H / 2 };
+}
+
 export type DayTiming = {
   clockFrom: number;
   clockTo: number;

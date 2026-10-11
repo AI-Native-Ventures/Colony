@@ -66,3 +66,12 @@ export const OWNER: HeroLook = {
   badge: "Owner",
   avatar: "person",
 };
+
+/** Getting started: the owner pastes a website and Colony hires the team. */
+export const GETTING_STARTED: HeroLook = {
+  ...tone(258, 90, 66, "hsl(258 70% 46%)"),
+  title: ["Paste your", "website."],
+  subline: "Colony reads it and hires your team.",
+  badge: "Getting started",
+  avatar: "person",
+};
