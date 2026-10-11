@@ -166,3 +166,88 @@ export const ApprovePointer: React.FC<{
     />
   );
 };
+
+/** The owner's request in its own card, typed as it is said; wraps to a second line. Rect in panel pixels. */
+export const RequestCard: React.FC<{
+  t: number;
+  rect: Rect;
+  text: string;
+  from: number;
+  cps: number;
+  /** When the empty card (chip and caret) arrives. */
+  showFrom: number;
+  tone: Tone;
+  label?: string;
+}> = ({ t, rect, text, from, cps, showFrom, tone, label = "You asked" }) => {
+  const enter = easeOutExpo(progress(t, showFrom, 0.6));
+  if (enter <= 0) return null;
+  const typed = Math.max(
+    0,
+    Math.min(text.length, Math.floor((t - from) * cps)),
+  );
+  const caret = typed < text.length;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: rect.x,
+        top: rect.y,
+        width: rect.w,
+        height: rect.h,
+        borderRadius: 28,
+        background: "#ffffff",
+        border: "1.5px solid #ece9f4",
+        boxShadow: `0 40px 80px -44px ${tint(tone.color, 0.55)}`,
+        fontFamily: INTER,
+        color: INK,
+        opacity: enter,
+        transform: `translateY(${((1 - enter) * 30).toFixed(2)}px)`,
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          left: 28,
+          top: 22,
+          height: 40,
+          padding: "0 16px",
+          borderRadius: 999,
+          background: "#f4f3f8",
+          color: MUTED,
+          fontSize: 20,
+          fontWeight: 700,
+          display: "flex",
+          alignItems: "center",
+        }}
+      >
+        {label}
+      </span>
+      <div
+        style={{
+          position: "absolute",
+          left: 28,
+          right: 28,
+          top: 76,
+          fontSize: 28,
+          fontWeight: 600,
+          lineHeight: 1.35,
+          letterSpacing: "-0.01em",
+        }}
+      >
+        {text.slice(0, typed)}
+        {caret ? (
+          <span
+            style={{
+              display: "inline-block",
+              width: 3,
+              height: 32,
+              marginLeft: 2,
+              verticalAlign: "-5px",
+              background: tone.color,
+            }}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+};
