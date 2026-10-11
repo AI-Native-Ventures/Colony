@@ -223,8 +223,28 @@ test("the sales employee emails while 'it emails each of them' is said", () => {
   assert.ok(AMBER90.typeFrom <= end, "typing starts after the line");
 });
 
-test("the call starts as 'and calls to book a meeting' is said", () => {
-  const [start] = spoken("a02");
+test("the voice explains the email while it is still being written", () => {
+  const [start] = spoken("a03");
+  const typed = typewriterEnd(EMAIL.lines, {
+    start: AMBER90.typeFrom,
+    cps: AMBER90.typeCps,
+    returnSeconds: AMBER90.returnSeconds,
+  });
+  assert.ok(start <= typed, "the email is finished before it is explained");
+});
+
+test("no silence longer than 1.5 s while the sales employee works", () => {
+  const sales = LINES.filter((l) => l.act === "amber").sort(
+    (a, b) => a.speech[0] - b.speech[0],
+  );
+  for (let i = 1; i < sales.length; i++) {
+    const gap = sales[i].speech[0] - sales[i - 1].speech[1];
+    assert.ok(gap <= 1.5, `${gap.toFixed(2)} s quiet before ${sales[i].id}`);
+  }
+});
+
+test("the call starts as 'Then it calls' is said", () => {
+  const [start] = spoken("a04");
   assert.ok(AMBER90.callIn <= start && start <= AMBER90.callIn + 0.6);
   assert.ok(AMBER90.callIn >= AMBER90.countRushFrom + AMBER90.countRush + 0.3);
   assert.ok(AMBER90.connectAt < AMBER90.bubble1At);

@@ -58,12 +58,12 @@ export const TOWER_STACK: StackOptions = {
 };
 export const TOWER_MAX_WIDTH = 1300;
 
-/** Where the logo lands: centred in the top half, 470 px wide. */
+/** Where the logo lands: centred in the top half, 400 px wide. */
 export const WIDE_LOGO_RECT = {
   cx: 960,
-  cy: 360,
-  width: 470,
-  height: 470 * (309 / 466),
+  cy: 380,
+  width: 400,
+  height: 400 * (309 / 466),
 };
 
 export const WIDE_ANT_COUNT = 900;

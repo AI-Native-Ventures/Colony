@@ -7,7 +7,7 @@ import { INTRO, TOWER_MAX_WIDTH, TOWER_STACK, TOWER_WORDS } from "./intro.ts";
 /** Seconds a job takes to slam from big and soft to sharp in its slot. */
 const ENTER_SECONDS = 0.38;
 const TRACKING = -0.04;
-const INK = "#f4f3f8";
+const INK = "#17151f";
 
 function fontAt(family: string, size: number): string {
   return `800 ${size}px "${family}"`;

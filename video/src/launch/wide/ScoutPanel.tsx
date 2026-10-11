@@ -3,11 +3,13 @@ import { INTER } from "../fonts";
 import { easeInOutCubic, easeOutExpo, progress, smoothstep } from "../math.ts";
 import { bezier } from "../swarm.ts";
 import { SCOUT_LOOK, TONES } from "./employees.ts";
+import { TEAM_ROWS } from "./how.ts";
 import {
   employeeNode,
   SCOUT_CARD,
   SCOUT_TASKS,
   scoutNode,
+  TASK_CARD_W,
   type TaskTiming,
   taskLandsAt,
   taskPath,
@@ -56,14 +58,14 @@ function Avatar({ color, size }: { color: string; size: number }) {
   );
 }
 
-/** Today's plan: Scout sends each employee its task down a trail, then checks the work. */
+/** Today's plan: Scout deals each employee its task, then checks the work. */
 export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
   t,
   timing,
 }) => {
   const enter = easeOutExpo(progress(t, timing.cardIn, 0.9));
   if (enter <= 0) return null;
-  const scout = local(scoutNode());
+  const badge = local(scoutNode());
   const checks = smoothstep(timing.checkAt, timing.checkAt + 0.4, t);
   return (
     <div
@@ -108,62 +110,41 @@ export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
       >
         Scout splits the work and hands it out.
       </div>
-      <svg
-        aria-hidden="true"
-        width={SCOUT_CARD.w}
-        height={SCOUT_CARD.h}
-        style={{ position: "absolute", left: 0, top: 0 }}
-      >
-        {SCOUT_TASKS.map((task, i) => {
-          const draw = easeInOutCubic(
-            progress(t, taskStartsAt(i, timing), timing.taskDuration),
-          );
-          if (draw <= 0) return null;
-          const [p0, p1, p2, p3] = taskPath(i).map(local);
-          return (
-            <path
-              key={task.who}
-              d={`M${p0.x} ${p0.y} C${p1.x} ${p1.y} ${p2.x} ${p2.y} ${p3.x} ${p3.y}`}
-              fill="none"
-              stroke={tint(TONES[task.who].color, 0.55)}
-              strokeWidth={3}
-              strokeDasharray="2 10"
-              strokeLinecap="round"
-              style={{
-                clipPath: `inset(0 ${((1 - draw) * 100).toFixed(2)}% 0 0)`,
-              }}
-            />
-          );
-        })}
-      </svg>
       <div
         style={{
           position: "absolute",
-          left: scout.x - 56,
-          top: scout.y - 56,
-          display: "grid",
-          justifyItems: "center",
-          gap: 10,
-          width: 112,
+          left: badge.x - 140,
+          top: badge.y - 38,
+          width: 280,
+          height: 76,
+          borderRadius: 999,
+          background: tint(VIOLET, 0.1),
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          padding: "0 14px",
+          boxSizing: "border-box",
         }}
       >
-        <Avatar color={VIOLET} size={112} />
-        <div style={{ fontSize: 28, fontWeight: 750 }}>Scout</div>
-        <div style={{ fontSize: 20, color: MUTED, whiteSpace: "nowrap" }}>
-          Chief of staff
+        <Avatar color={VIOLET} size={52} />
+        <div style={{ display: "grid", gap: 2 }}>
+          <span style={{ fontSize: 24, fontWeight: 750 }}>Scout</span>
+          <span style={{ fontSize: 20, color: SCOUT_LOOK.deep }}>
+            Chief of staff
+          </span>
         </div>
       </div>
-      {SCOUT_TASKS.map((task, i) => {
+      {/* Drawn last row first, so a card being dealt passes under the rows already in place. */}
+      {[...SCOUT_TASKS.keys()].reverse().map((i) => {
+        const task = SCOUT_TASKS[i];
         const node = local(employeeNode(i));
         const tone = TONES[task.who];
-        const nodeIn = easeOutExpo(
-          progress(t, timing.cardIn + 0.3 + i * 0.1, 0.5),
-        );
+        const lands = taskLandsAt(i, timing);
+        const nodeIn = easeOutExpo(progress(t, lands - 0.25, 0.5));
         const u = progress(t, taskStartsAt(i, timing), timing.taskDuration);
         const e = easeInOutCubic(u);
         const [p0, p1, p2, p3] = taskPath(i).map(local);
         const at = bezier(p0, p1, p2, p3, e);
-        const landed = t >= taskLandsAt(i, timing);
         const check = smoothstep(
           timing.checkAt + i * 0.12,
           timing.checkAt + i * 0.12 + 0.3,
@@ -171,61 +152,80 @@ export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
         );
         return (
           <div key={task.who}>
-            <div
-              style={{
-                position: "absolute",
-                left: node.x - 36,
-                top: node.y - 36,
-                opacity: nodeIn,
-                transform: `scale(${(0.6 + 0.4 * nodeIn).toFixed(4)})`,
-              }}
-            >
-              <Avatar color={tone.color} size={72} />
-            </div>
+            {nodeIn > 0 ? (
+              <div
+                style={{
+                  position: "absolute",
+                  left: node.x - 34,
+                  top: node.y - 34,
+                  opacity: nodeIn,
+                  transform: `scale(${(0.6 + 0.4 * nodeIn).toFixed(4)})`,
+                }}
+              >
+                <Avatar color={tone.color} size={68} />
+              </div>
+            ) : null}
             {u > 0 ? (
               <div
                 style={{
                   position: "absolute",
-                  left: at.x,
-                  top: at.y,
-                  transform: `translate(-100%, -50%) scale(${(0.45 + 0.55 * e).toFixed(4)})`,
-                  transformOrigin: "100% 50%",
-                  height: 58,
-                  padding: "0 20px",
-                  borderRadius: 999,
+                  left: at.x - TASK_CARD_W / 2,
+                  top: at.y - 48,
+                  width: TASK_CARD_W,
+                  height: 96,
+                  borderRadius: 22,
                   background: "#ffffff",
-                  border: `1.5px solid ${landed ? tint(tone.color, 0.5) : LINE}`,
-                  boxShadow: `0 16px 30px -18px ${tint(tone.color, 0.8)}`,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  whiteSpace: "nowrap",
-                  fontSize: 23,
-                  fontWeight: 650,
+                  border: `1.5px solid ${check > 0 ? tint(VIOLET, 0.35) : LINE}`,
+                  boxShadow: `0 18px 34px -20px ${tint(tone.color, 0.85)}`,
+                  opacity: Math.min(1, u * 4),
+                  transform: `rotate(${(-7 * (1 - e)).toFixed(3)}deg) scale(${(0.5 + 0.5 * e).toFixed(4)})`,
+                  transformOrigin: "50% 50%",
                 }}
               >
-                <span
+                <div
                   style={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: 6,
-                    background: tone.color,
+                    position: "absolute",
+                    left: 26,
+                    top: 12,
+                    fontSize: 20,
+                    fontWeight: 600,
+                    color: tone.deep,
                   }}
-                />
-                {task.text}
-                {check > 0 ? (
-                  <span
-                    style={{
-                      width: 30,
-                      height: 30,
-                      borderRadius: 15,
-                      background: tint(VIOLET, 0.16),
-                      display: "grid",
-                      placeItems: "center",
-                      opacity: check,
-                      transform: `scale(${(0.5 + 0.5 * check).toFixed(3)})`,
-                    }}
-                  >
+                >
+                  {TEAM_ROWS[i].job}
+                </div>
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 26,
+                    top: 42,
+                    fontSize: 30,
+                    fontWeight: 700,
+                    letterSpacing: "-0.015em",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {task.text}
+                </div>
+                <div
+                  style={{
+                    position: "absolute",
+                    right: 20,
+                    top: 26,
+                    height: 44,
+                    padding: "0 16px",
+                    borderRadius: 999,
+                    background:
+                      check > 0 ? tint(VIOLET, 0.14) : tint(tone.color, 0.14),
+                    color: check > 0 ? SCOUT_LOOK.deep : tone.deep,
+                    fontSize: 21,
+                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  {check > 0 ? (
                     <svg
                       aria-hidden="true"
                       width="18"
@@ -241,8 +241,9 @@ export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
                         strokeLinejoin="round"
                       />
                     </svg>
-                  </span>
-                ) : null}
+                  ) : null}
+                  {check > 0 ? "Checked" : "Assigned"}
+                </div>
               </div>
             ) : null}
           </div>
@@ -252,7 +253,7 @@ export const PlanCard: React.FC<{ t: number; timing: PlanTiming }> = ({
         style={{
           position: "absolute",
           left: 52,
-          bottom: 40,
+          bottom: 36,
           fontSize: 22,
           fontWeight: 600,
           color: SCOUT_LOOK.deep,

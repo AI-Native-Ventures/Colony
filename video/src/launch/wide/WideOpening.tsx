@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { AntMark } from "../../brand/AntMark";
 import { antShapes, drawAnt } from "../antShape";
-import { antColor } from "../colors.ts";
+import { antColorOnLight } from "../colors.ts";
 import { INTER } from "../fonts";
 import { easeInOutCubic, easeOutExpo, progress, smoothstep } from "../math.ts";
 import { type Ant, antState } from "../swarm.ts";
@@ -11,7 +11,7 @@ import { INTRO, TOWER_WORDS, TRADE_WORDS, WIDE_LOGO_RECT } from "./intro.ts";
 import { drawTower } from "./towerDraw.ts";
 import { WorkerAnt } from "./WorkerAnt";
 
-const VIOLET = "hsl(258 90% 66%)";
+const INK = "#17151f";
 const TRAIL_DT = 0.022;
 const TRAIL_ALPHA = [1, 0.42, 0.22, 0.1];
 
@@ -48,11 +48,10 @@ const SoloAnt: React.FC<{ t: number }> = ({ t }) => {
         top: WIDE_H / 2 - height / 2,
         width,
         height,
-        color: "#f4f3f8",
+        color: INK,
         opacity: fade * smoothstep(0, 0.4, t),
         transform: `scale(${(breathe * (1 + 0.25 * (1 - fade))).toFixed(4)})`,
-        filter:
-          "drop-shadow(0 0 22px hsl(258 90% 76% / 0.95)) drop-shadow(0 0 60px hsl(258 90% 66% / 0.6))",
+        filter: "drop-shadow(0 10px 22px rgb(23 21 31 / 0.18))",
       }}
     >
       <AntMark />
@@ -82,7 +81,7 @@ const TradeWords: React.FC<{ t: number }> = ({ t }) => (
             fontSize: 168,
             fontWeight: 800,
             letterSpacing: "-0.045em",
-            color: "#f4f3f8",
+            color: INK,
             opacity: enter * (1 - leave),
             transform: `scale(${(1 + (1 - enter) * 0.18 - 0.04 * leave).toFixed(4)})`,
             filter: `blur(${((1 - enter) * 14 + leave * 8).toFixed(2)}px)`,
@@ -111,20 +110,15 @@ const TowerLayer: React.FC<{ t: number }> = ({ t }) => {
 /** The jobs break into four rivers of ants that build the logo, then fade as the name takes over. */
 const WideSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
   const sharpRef = useRef<HTMLCanvasElement>(null);
-  const glowRef = useRef<HTMLCanvasElement>(null);
   const shapes = useMemo(() => antShapes(), []);
   const active = t >= INTRO.release - 0.2 && t <= INTRO.defineFrom + 0.2;
   useLayoutEffect(() => {
     const sharpCanvas = sharpRef.current;
     const sharp = sharpCanvas?.getContext("2d");
-    const glow = glowRef.current?.getContext("2d");
-    if (!sharpCanvas || !sharp || !glow) return;
+    if (!sharpCanvas || !sharp) return;
     sharp.setTransform(1, 0, 0, 1, 0, 0);
     sharp.globalAlpha = 1;
     sharp.clearRect(0, 0, WIDE_W, WIDE_H);
-    glow.setTransform(1, 0, 0, 1, 0, 0);
-    glow.globalAlpha = 1;
-    glow.clearRect(0, 0, WIDE_W, WIDE_H);
     if (!active) return;
     const settle =
       (1 - 0.85 * progress(t, INTRO.logoIn, 0.45)) *
@@ -144,29 +138,13 @@ const WideSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
           s.y,
           s.angle,
           s.size * (1 - 0.12 * k),
-          antColor(ant.group, s.toGroup, unite),
+          antColorOnLight(ant.group, s.toGroup, unite),
           alpha,
         );
       }
     }
-    glow.drawImage(sharpCanvas, 0, 0);
   }, [active, ants, shapes, t]);
-  return (
-    <>
-      <canvas
-        ref={glowRef}
-        width={WIDE_W}
-        height={WIDE_H}
-        style={{
-          ...layer,
-          filter: "blur(18px) saturate(1.5)",
-          opacity: 0.9,
-          mixBlendMode: "screen",
-        }}
-      />
-      <canvas ref={sharpRef} width={WIDE_W} height={WIDE_H} style={layer} />
-    </>
-  );
+  return <canvas ref={sharpRef} width={WIDE_W} height={WIDE_H} style={layer} />;
 };
 
 /** The logo lands, "Introducing Colony.", what it is; then it steps back so "AI employee" can be defined. */
@@ -196,7 +174,7 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
           height: 920,
           borderRadius: "50%",
           background:
-            "radial-gradient(circle, hsl(258 90% 66% / 0.5) 0%, hsl(258 90% 66% / 0.1) 38%, transparent 70%)",
+            "radial-gradient(circle, rgb(255 255 255 / 0.6) 0%, rgb(255 255 255 / 0.18) 40%, transparent 70%)",
           opacity: glow * (1 - 0.6 * step),
           transform: `translateY(${logoShift.toFixed(2)}px) scale(${((0.7 + 0.35 * ring) * logoScale).toFixed(4)})`,
         }}
@@ -209,7 +187,7 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
           width: 460,
           height: 460,
           borderRadius: "50%",
-          border: `3px solid hsl(258 90% 76% / ${ringAlpha.toFixed(3)})`,
+          border: `3px solid rgb(23 21 31 / ${(ringAlpha * 0.5).toFixed(3)})`,
           transform: `scale(${(0.6 + 1.1 * ring).toFixed(4)})`,
         }}
       />
@@ -220,10 +198,10 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
           top: L.cy - L.height / 2,
           width: L.width,
           height: L.height,
-          color: VIOLET,
+          color: INK,
           opacity: logoIn,
           transform: `translateY(${logoShift.toFixed(2)}px) scale(${logoScale.toFixed(4)})`,
-          filter: `drop-shadow(0 0 ${(24 * logoIn).toFixed(1)}px hsl(258 90% 66% / 0.6))`,
+          filter: `drop-shadow(0 18px 30px rgb(23 21 31 / ${(0.18 * logoIn).toFixed(3)}))`,
         }}
       >
         <AntMark />
@@ -243,7 +221,7 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
           style={{
             fontSize: 40,
             fontWeight: 600,
-            color: "rgb(236 235 243 / 0.72)",
+            color: "rgb(23 21 31 / 0.62)",
             ...rise(t, INTRO.introducing),
           }}
         >
@@ -253,7 +231,7 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
           style={{
             fontSize: 132,
             fontWeight: 800,
-            color: "#ffffff",
+            color: INK,
             letterSpacing: "-0.045em",
             lineHeight: 1.05,
             marginTop: 4,
@@ -266,7 +244,7 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
           style={{
             fontSize: 46,
             fontWeight: 600,
-            color: "rgb(236 235 243 / 0.82)",
+            color: "rgb(23 21 31 / 0.78)",
             marginTop: 18,
             ...rise(t, INTRO.tagline),
           }}
@@ -301,7 +279,7 @@ const Definition: React.FC<{ t: number }> = ({ t }) => {
             fontSize: 112,
             fontWeight: 800,
             letterSpacing: "-0.045em",
-            color: "#ffffff",
+            color: INK,
             ...rise(t, INTRO.defineFrom + 0.25),
           }}
         >
@@ -314,7 +292,7 @@ const Definition: React.FC<{ t: number }> = ({ t }) => {
             fontSize: 48,
             fontWeight: 600,
             lineHeight: 1.3,
-            color: "rgb(236 235 243 / 0.85)",
+            color: "rgb(23 21 31 / 0.75)",
             textWrap: "balance",
             ...rise(t, INTRO.defineFrom + 0.55),
           }}

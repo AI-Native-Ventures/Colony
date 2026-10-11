@@ -3,8 +3,11 @@ import { test } from "node:test";
 import { TEAM } from "./employees.ts";
 import {
   employeeNode,
+  SCOUT_CARD,
   SCOUT_TASKS,
   scoutNode,
+  TASK_CARD_W,
+  taskCenter,
   taskLandsAt,
   taskPath,
   taskSpot,
@@ -31,12 +34,24 @@ test("tasks land one after another", () => {
   }
 });
 
-test("each task travels from Scout to a spot beside its own employee", () => {
+test("Scout deals each task into its own row, beside its employee", () => {
   SCOUT_TASKS.forEach((_, i) => {
     const path = taskPath(i);
     assert.deepEqual(path[0], scoutNode());
-    assert.deepEqual(path[3], taskSpot(i));
-    assert.ok(taskSpot(i).x < employeeNode(i).x, "lands on its employee");
+    assert.deepEqual(path[3], taskCenter(i));
+    assert.equal(taskCenter(i).x, taskSpot(i).x + TASK_CARD_W / 2);
     assert.equal(taskSpot(i).y, employeeNode(i).y);
+    assert.ok(
+      taskSpot(i).x > employeeNode(i).x,
+      "task sits right of its avatar",
+    );
   });
+});
+
+test("rows are big and never overlap, and the plan fits the card", () => {
+  for (let i = 1; i < SCOUT_TASKS.length; i++) {
+    assert.ok(employeeNode(i).y - employeeNode(i - 1).y >= 110);
+  }
+  const last = employeeNode(SCOUT_TASKS.length - 1);
+  assert.ok(last.y + 50 <= SCOUT_CARD.y + SCOUT_CARD.h - 80);
 });

@@ -5,12 +5,14 @@ export const BrightStage: React.FC<{
   cy: number;
   /** Off when the scene paints its own color blooms. */
   blooms?: boolean;
+  /** "mask" grows a circle from (cx, cy); "fade" crossfades, for a light world behind. */
+  transition?: "mask" | "fade";
   children?: React.ReactNode;
-}> = ({ reveal, cx, cy, blooms = true, children }) => {
+}> = ({ reveal, cx, cy, blooms = true, transition = "mask", children }) => {
   if (reveal <= 0) return null;
   const radius = reveal * 2600 - 300;
   const mask =
-    reveal >= 1
+    reveal >= 1 || transition === "fade"
       ? undefined
       : `radial-gradient(circle at ${cx}px ${cy}px, #000 ${Math.max(0, radius).toFixed(1)}px, transparent ${(Math.max(0, radius) + 420).toFixed(1)}px)`;
   return (
@@ -20,6 +22,7 @@ export const BrightStage: React.FC<{
         inset: 0,
         overflow: "hidden",
         background: "#fbfaff",
+        opacity: transition === "fade" ? reveal : 1,
         maskImage: mask,
         WebkitMaskImage: mask,
       }}

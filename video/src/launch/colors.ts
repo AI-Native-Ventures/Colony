@@ -37,3 +37,19 @@ export function antColor(
   const [r, g, b] = mix(united, WHITE_RGB, flash);
   return `rgb(${r} ${g} ${b})`;
 }
+
+const INK_RGB: Rgb = [23, 21, 31];
+
+/**
+ * For the light world: ink while the ant is still a letter, its employee
+ * color in flight, ink again once the colors unite into the logo.
+ */
+export function antColorOnLight(
+  group: number,
+  toGroup: number,
+  toInk: number,
+): string {
+  const own = GROUP_RGB[group % GROUP_RGB.length];
+  const [r, g, b] = mix(mix(INK_RGB, own, toGroup), INK_RGB, toInk);
+  return `rgb(${r} ${g} ${b})`;
+}

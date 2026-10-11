@@ -1,7 +1,6 @@
 import type { CursorKey } from "../app/cursorPath.ts";
 import type { Point } from "../points.ts";
 import type { EmployeeId } from "./employees.ts";
-import { typewriterEnd } from "./typewriter.ts";
 
 /** How it works, in film seconds: paste a website, Colony reads it, the team is hired. */
 export const HOW = {
@@ -13,56 +12,53 @@ export const HOW = {
   cursorFrom: 33.3,
   pasteAt: 34.2,
   readClick: 34.9,
-  /** Seconds "Reading your website…" shows before the summary starts. */
-  readFor: 1.0,
-  summaryCps: 70,
-  continueClick: 37.25,
-  teamAt: 37.55,
+  factFrom: 35.3,
+  factEvery: 0.3,
+  continueClick: 36.6,
+  teamAt: 36.9,
   teamEvery: 0.28,
 };
 
 export type HowTiming = typeof HOW;
 
 export const WEBSITE = "brightplumbing.co.za";
-export const SUMMARY_TEXT =
-  "We fix leaks, blocked drains and geysers in Sandton and Rosebank, the same day.";
+
+/** What Colony reads off the website, shown as it finds it. */
+export const FACTS = [
+  "Plumbing",
+  "Sandton and Rosebank",
+  "Leaks, drains, geysers",
+  "Same-day call-outs",
+];
 
 /** The real "Your business" screen as one big flat card, in panel pixels. */
 export const BUSINESS_CARD = { x: 860, y: 150, w: 940, h: 760 };
 
 type Rect = { x: number; y: number; w: number; h: number };
 
-/** The website field and the two buttons, in panel pixels. */
+/** One big website field, the Read website button under it, Continue at the bottom. */
 export const WEBSITE_FIELD: Rect = {
   x: BUSINESS_CARD.x + 52,
-  y: BUSINESS_CARD.y + 330,
-  w: 600,
-  h: 76,
+  y: BUSINESS_CARD.y + 176,
+  w: BUSINESS_CARD.w - 104,
+  h: 116,
 };
 export const READ_BUTTON: Rect = {
-  x: WEBSITE_FIELD.x + WEBSITE_FIELD.w + 20,
-  y: WEBSITE_FIELD.y,
-  w:
-    BUSINESS_CARD.x +
-    BUSINESS_CARD.w -
-    52 -
-    (WEBSITE_FIELD.x + WEBSITE_FIELD.w + 20),
-  h: 76,
+  x: WEBSITE_FIELD.x,
+  y: WEBSITE_FIELD.y + WEBSITE_FIELD.h + 24,
+  w: 300,
+  h: 80,
 };
 export const CONTINUE_BUTTON: Rect = {
   x: BUSINESS_CARD.x + BUSINESS_CARD.w - 52 - 260,
-  y: BUSINESS_CARD.y + 650,
+  y: BUSINESS_CARD.y + BUSINESS_CARD.h - 52 - 76,
   w: 260,
   h: 76,
 };
 
-/** When the summary, read from the website, is fully written. */
-export function summaryTypedAt(timing: HowTiming): number {
-  return typewriterEnd([SUMMARY_TEXT], {
-    start: timing.readClick + timing.readFor,
-    cps: timing.summaryCps,
-    returnSeconds: 0,
-  });
+/** When fact `i` appears. */
+export function factAt(i: number, timing: HowTiming): number {
+  return timing.factFrom + i * timing.factEvery;
 }
 
 /** The owner's pointer: to Read website, then to Continue. */
@@ -98,8 +94,8 @@ export function teamRowAt(i: number, timing: HowTiming): number {
   return timing.teamAt + i * timing.teamEvery;
 }
 
-const TEAM_TOP = 210;
-const TEAM_STEP = 118;
+const TEAM_TOP = 200;
+const TEAM_STEP = 132;
 
 /** Top of team row `i`, panel pixels. */
 export function teamRowY(i: number): number {

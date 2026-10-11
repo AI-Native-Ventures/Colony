@@ -1,6 +1,8 @@
 import { INTER } from "../fonts";
 import { easeOutExpo, lerp, lerpAngle, progress, smoothstep } from "../math.ts";
 import { TONES } from "./employees.ts";
+import { MeshGradient } from "./MeshGradient";
+import { PALETTES, type PaletteId } from "./mesh.ts";
 import {
   POST_SIZE,
   POSTS,
@@ -22,11 +24,6 @@ const INK = "#17151f";
 const MUTED = "#6a6780";
 const LINE = "#ece9f4";
 
-/** Bright Plumbing's own look: the posts are theirs, not Colony's. */
-const NAVY = "#13284a";
-const AQUA = "hsl(190 85% 52%)";
-const SUN = "hsl(45 95% 55%)";
-
 /** How small a post rides on its ant's back. */
 const CARRIED = 0.27;
 const CARRY_LIFT = 74;
@@ -35,7 +32,8 @@ function tint(alpha: number): string {
   return PINK.color.replace(")", ` / ${alpha})`);
 }
 
-function Drop({ size, color }: { size: number; color: string }) {
+/** Bright Plumbing's mark: a small water drop, the way the posts carry Colony's ant. */
+function Drop({ size }: { size: number }) {
   return (
     <svg
       aria-hidden="true"
@@ -45,200 +43,94 @@ function Drop({ size, color }: { size: number; color: string }) {
     >
       <path
         d="M20 2 C20 2 4 22 4 33 a16 16 0 0 0 32 0 C36 22 20 2 20 2 Z"
-        fill={color}
-      />
-      <path
-        d="M12 34 a8 8 0 0 0 8 8"
-        fill="none"
-        stroke="#ffffff"
-        strokeOpacity={0.7}
-        strokeWidth={3}
-        strokeLinecap="round"
+        fill={INK}
       />
     </svg>
   );
 }
 
-function Star({ size }: { size: number }) {
-  return (
-    <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24">
-      <path
-        d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3l-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8z"
-        fill={SUN}
-      />
-    </svg>
-  );
-}
-
-function Thermo() {
-  return (
-    <svg aria-hidden="true" width={44} height={78} viewBox="0 0 44 78">
-      <rect x={14} y={4} width={16} height={50} rx={8} fill={NAVY} />
-      <circle cx={22} cy={60} r={14} fill={NAVY} />
-      <rect x={19} y={22} width={6} height={34} rx={3} fill={SUN} />
-      <circle cx={22} cy={60} r={8} fill={SUN} />
-    </svg>
-  );
-}
-
-const square: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  borderRadius: 24,
-  overflow: "hidden",
-  fontFamily: INTER,
+type PostLook = {
+  palette: PaletteId;
+  lines: readonly [string, string];
+  note?: string;
 };
 
-/** One example Instagram post for Bright Plumbing, drawn in code at full size. */
+/** Three example posts for Bright Plumbing, in the soft gradient style of Colony's own posts. */
+const POST_LOOKS: Record<string, PostLook> = {
+  leak: { palette: "sea", lines: ["Leaks fixed", "the same day."] },
+  geyser: {
+    palette: "sunset",
+    lines: ["Geyser check", "before winter."],
+    note: "From R450",
+  },
+  review: {
+    palette: "lilac",
+    lines: ["\u201cFast, clean", "and friendly.\u201d"],
+    note: "Lerato, Rosebank",
+  },
+};
+
+/** One example Instagram post, drawn in code at full size. */
 export const PostArt: React.FC<{ id: string }> = ({ id }) => {
-  if (id === "leak") {
-    return (
-      <div
-        style={{
-          ...square,
-          background: `linear-gradient(160deg, ${NAVY}, #1f4580)`,
-        }}
-      >
-        <div style={{ position: "absolute", left: 26, top: 24 }}>
-          <Drop size={44} color={AQUA} />
-        </div>
-        <div
-          style={{
-            position: "absolute",
-            left: 26,
-            top: 104,
-            fontSize: 48,
-            fontWeight: 800,
-            letterSpacing: "-0.03em",
-            lineHeight: 1.02,
-            color: AQUA,
-          }}
-        >
-          Leak?
-          <div style={{ color: "#ffffff", fontSize: 40 }}>Fixed today.</div>
-        </div>
-        <div
-          style={{
-            position: "absolute",
-            left: 26,
-            bottom: 22,
-            fontSize: 20,
-            fontWeight: 600,
-            color: "rgba(255,255,255,0.72)",
-          }}
-        >
-          Same day in Sandton
-        </div>
-      </div>
-    );
-  }
-  if (id === "geyser") {
-    return (
-      <div
-        style={{
-          ...square,
-          background: `linear-gradient(160deg, hsl(190 85% 60%), hsl(200 80% 50%))`,
-        }}
-      >
-        <div style={{ position: "absolute", right: 24, bottom: 20 }}>
-          <Thermo />
-        </div>
-        <div
-          style={{
-            position: "absolute",
-            left: 26,
-            top: 28,
-            fontSize: 34,
-            fontWeight: 800,
-            letterSpacing: "-0.03em",
-            lineHeight: 1.05,
-            color: NAVY,
-          }}
-        >
-          Geyser
-          <br />
-          check before
-          <br />
-          winter.
-        </div>
-        <div
-          style={{
-            position: "absolute",
-            left: 26,
-            bottom: 24,
-            height: 46,
-            padding: "0 18px",
-            borderRadius: 999,
-            background: NAVY,
-            color: "#ffffff",
-            fontSize: 24,
-            fontWeight: 800,
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          R450
-        </div>
-      </div>
-    );
-  }
+  const look = POST_LOOKS[id];
   return (
     <div
       style={{
-        ...square,
-        background: "#ffffff",
-        boxShadow: `inset 0 0 0 3px hsl(190 70% 88%)`,
+        position: "absolute",
+        inset: 0,
+        borderRadius: 24,
+        overflow: "hidden",
+        fontFamily: INTER,
       }}
     >
-      <div style={{ position: "absolute", left: 24, top: 26, display: "flex" }}>
-        {[0, 1, 2, 3, 4].map((k) => (
-          <Star key={k} size={30} />
-        ))}
-      </div>
+      <MeshGradient
+        palette={PALETTES[look.palette]}
+        t={0}
+        width={POST_SIZE}
+        height={POST_SIZE}
+      />
       <div
         style={{
           position: "absolute",
-          left: 26,
-          right: 22,
-          top: 78,
-          fontSize: 31,
-          fontWeight: 750,
-          letterSpacing: "-0.02em",
-          lineHeight: 1.12,
-          color: NAVY,
+          left: 14,
+          right: 14,
+          top: look.note ? 78 : 92,
+          textAlign: "center",
+          fontSize: 27,
+          fontWeight: 800,
+          letterSpacing: "-0.04em",
+          lineHeight: 1.06,
+          color: INK,
         }}
       >
-        "Fast, clean and so friendly."
+        {look.lines[0]}
+        <br />
+        {look.lines[1]}
+        {look.note ? (
+          <div
+            style={{
+              marginTop: 12,
+              fontSize: 20,
+              fontWeight: 600,
+              letterSpacing: "-0.01em",
+              color: "rgb(23 21 31 / 0.72)",
+            }}
+          >
+            {look.note}
+          </div>
+        ) : null}
       </div>
       <div
         style={{
           position: "absolute",
-          left: 26,
-          bottom: 24,
+          left: 0,
+          right: 0,
+          bottom: 18,
           display: "flex",
-          alignItems: "center",
-          gap: 10,
-          fontSize: 20,
-          fontWeight: 600,
-          color: MUTED,
+          justifyContent: "center",
         }}
       >
-        <span
-          style={{
-            width: 30,
-            height: 30,
-            borderRadius: 15,
-            background: AQUA,
-            color: "#ffffff",
-            fontSize: 16,
-            fontWeight: 800,
-            display: "grid",
-            placeItems: "center",
-          }}
-        >
-          L
-        </span>
-        Lerato, Rosebank
+        <Drop size={15} />
       </div>
     </div>
   );

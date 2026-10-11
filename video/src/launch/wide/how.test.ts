@@ -4,13 +4,14 @@ import { cursorAt } from "../app/cursorPath.ts";
 import { TEAM } from "./employees.ts";
 import {
   CONTINUE_BUTTON,
+  FACTS,
+  factAt,
   HOW,
   howCursorKeys,
   READ_BUTTON,
-  SUMMARY_TEXT,
-  summaryTypedAt,
   TEAM_ROWS,
   teamRowAt,
+  WEBSITE_FIELD,
 } from "./how.ts";
 
 function inside(p: { x: number; y: number }, r: typeof READ_BUTTON): boolean {
@@ -36,9 +37,18 @@ test("the website is pasted before Read website is pressed", () => {
   assert.ok(HOW.pasteAt + 0.4 <= HOW.readClick);
 });
 
-test("the summary is written from the website before Continue is pressed", () => {
-  assert.ok(summaryTypedAt(HOW) + 0.2 <= HOW.continueClick);
-  assert.ok(SUMMARY_TEXT.length <= 90, "summary too long for the card");
+test("Colony shows what it read on the website before Continue is pressed", () => {
+  assert.equal(FACTS.length, 4);
+  assert.ok(factAt(0, HOW) > HOW.readClick, "facts before reading");
+  assert.ok(factAt(FACTS.length - 1, HOW) + 0.3 <= HOW.continueClick);
+  for (const fact of FACTS) {
+    assert.ok(fact.length <= 26, `"${fact}" is too long for its chip`);
+  }
+});
+
+test("the website field is big enough to read across a room", () => {
+  assert.ok(WEBSITE_FIELD.h >= 100);
+  assert.ok(WEBSITE_FIELD.w >= 800);
 });
 
 test("the team appears in the order the film meets them", () => {

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { AntMark } from "../../brand/AntMark";
 import { antShapes, drawAnt } from "../antShape";
-import { antColor } from "../colors.ts";
+import { antColorOnLight } from "../colors.ts";
 import { INTER } from "../fonts";
 import { easeOutExpo, progress, smoothstep } from "../math.ts";
 import { type Ant, antState } from "../swarm.ts";
@@ -26,20 +26,15 @@ const CloseSwarm: React.FC<{
   timing: typeof CLOSE90;
 }> = ({ ants, t, timing }) => {
   const sharpRef = useRef<HTMLCanvasElement>(null);
-  const glowRef = useRef<HTMLCanvasElement>(null);
   const shapes = useMemo(() => antShapes(), []);
   const active = t >= timing.dimFrom && t <= timing.logoIn + 1.2;
   useLayoutEffect(() => {
     const sharpCanvas = sharpRef.current;
     const sharp = sharpCanvas?.getContext("2d");
-    const glow = glowRef.current?.getContext("2d");
-    if (!sharpCanvas || !sharp || !glow) return;
+    if (!sharpCanvas || !sharp) return;
     sharp.setTransform(1, 0, 0, 1, 0, 0);
     sharp.globalAlpha = 1;
     sharp.clearRect(0, 0, WIDE_W, WIDE_H);
-    glow.setTransform(1, 0, 0, 1, 0, 0);
-    glow.globalAlpha = 1;
-    glow.clearRect(0, 0, WIDE_W, WIDE_H);
     if (!active) return;
     const settle = 1 - progress(t, timing.logoIn, 0.6);
     const unite = smoothstep(timing.logoIn - 0.2, timing.logoIn + 0.15, t);
@@ -57,32 +52,16 @@ const CloseSwarm: React.FC<{
           s.y,
           s.angle,
           s.size * (1 - 0.12 * k),
-          antColor(ant.group, 1, unite),
+          antColorOnLight(ant.group, 1, unite),
           alpha,
         );
       }
     }
-    glow.drawImage(sharpCanvas, 0, 0);
   }, [active, ants, shapes, t, timing]);
-  return (
-    <>
-      <canvas
-        ref={glowRef}
-        width={WIDE_W}
-        height={WIDE_H}
-        style={{
-          ...layer,
-          filter: "blur(18px) saturate(1.5)",
-          opacity: 0.9,
-          mixBlendMode: "screen",
-        }}
-      />
-      <canvas ref={sharpRef} width={WIDE_W} height={WIDE_H} style={layer} />
-    </>
-  );
+  return <canvas ref={sharpRef} width={WIDE_W} height={WIDE_H} style={layer} />;
 };
 
-const VIOLET = "hsl(258 90% 66%)";
+const INK = "#17151f";
 
 function rise(t: number, at: number, seconds = 0.7): React.CSSProperties {
   const e = easeOutExpo(progress(t, at, seconds));
@@ -121,7 +100,7 @@ export const CloseScene: React.FC<{
           height: 840,
           borderRadius: "50%",
           background:
-            "radial-gradient(circle, hsl(258 90% 66% / 0.5) 0%, hsl(258 90% 66% / 0.1) 38%, transparent 70%)",
+            "radial-gradient(circle, rgb(255 255 255 / 0.6) 0%, rgb(255 255 255 / 0.18) 40%, transparent 70%)",
           opacity: glow,
           transform: `scale(${(0.7 + 0.35 * ring).toFixed(4)})`,
         }}
@@ -133,9 +112,9 @@ export const CloseScene: React.FC<{
           top: L.cy - L.height / 2,
           width: L.width,
           height: L.height,
-          color: VIOLET,
+          color: INK,
           opacity: logoIn,
-          filter: `drop-shadow(0 0 ${(24 * logoIn).toFixed(1)}px hsl(258 90% 66% / 0.6))`,
+          filter: `drop-shadow(0 18px 30px rgb(23 21 31 / ${(0.18 * logoIn).toFixed(3)}))`,
         }}
       >
         <AntMark />
@@ -154,7 +133,7 @@ export const CloseScene: React.FC<{
           style={{
             fontSize: 140,
             fontWeight: 800,
-            color: "#ffffff",
+            color: INK,
             letterSpacing: "-0.045em",
             lineHeight: 1.05,
             ...rise(t, timing.name),
@@ -166,7 +145,7 @@ export const CloseScene: React.FC<{
           style={{
             fontSize: 50,
             fontWeight: 600,
-            color: "rgb(236 235 243 / 0.85)",
+            color: "rgb(23 21 31 / 0.78)",
             marginTop: 14,
             ...rise(t, timing.tagline),
           }}
@@ -177,7 +156,7 @@ export const CloseScene: React.FC<{
           style={{
             fontSize: 32,
             fontWeight: 600,
-            color: "rgb(236 235 243 / 0.62)",
+            color: "rgb(23 21 31 / 0.6)",
             marginTop: 54,
             ...rise(t, timing.earlyAt),
           }}
@@ -192,12 +171,12 @@ export const CloseScene: React.FC<{
             padding: "0 40px",
             marginTop: 18,
             borderRadius: 999,
-            background: VIOLET,
+            background: INK,
             color: "#ffffff",
             fontSize: 44,
             fontWeight: 750,
             letterSpacing: "-0.01em",
-            boxShadow: "0 24px 60px -24px hsl(258 90% 60% / 0.9)",
+            boxShadow: "0 24px 60px -24px rgb(23 21 31 / 0.55)",
             ...rise(t, timing.urlAt),
           }}
         >

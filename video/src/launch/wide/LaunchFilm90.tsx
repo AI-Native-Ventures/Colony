@@ -6,7 +6,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
-import { Backdrop, Grain, Vignette } from "../Backdrop";
+import { Grain } from "../Backdrop";
 import { musicVolume } from "../duck.ts";
 import { easeInOutCubic, progress, smoothstep } from "../math.ts";
 import { useFontsReady } from "../useFontsReady";
@@ -53,6 +53,7 @@ import {
 import { BusinessCard, HowCursor } from "./HowPanel";
 import { HOW, TEAM_ROWS, teamRowAt } from "./how.ts";
 import { InboxCard, InboxCarriers, InboxCursor } from "./InboxCard";
+import { LightWorld } from "./MeshGradient";
 import { INTRO } from "./intro.ts";
 import { Carriers, LeadsBoard } from "./LeadsBoard";
 import { PanelBlooms } from "./PanelBlooms";
@@ -70,14 +71,14 @@ import { approvedAt, YES_ROWS, yesLandsAt } from "./yes.ts";
 /**
  * Music draft B stands in until a full-length track can be made. Four cuts of
  * it, each lifting at its 7 s mark on a big moment: the logo (17 s), Scout
- * handing out work (44.5 s), the posts (73 s) and the Approve click (89 s).
+ * handing out work (44.5 s), the posts (73.9 s) and the Approve click (89.9 s).
  * Each fades out as the next one starts.
  */
 const MUSIC_CUES = [
   { from: 10.0, until: 40.0 },
   { from: 37.5, until: 67.5 },
-  { from: 66.0, until: 83.5 },
-  { from: 82.0, until: 112.0 },
+  { from: 66.9, until: 84.4 },
+  { from: 82.9, until: 112.9 },
 ];
 const DUCK = { base: 0.5, ducked: 0.18, attack: 0.25, release: 0.4 };
 const WINDOWS = LINES.map((line) => line.speech);
@@ -85,19 +86,12 @@ const WINDOWS = LINES.map((line) => line.speech);
 /** Lines whose words are already on screen as big type get no subtitle. */
 const CAPTION_OFF = new Set(["n04", "n06", "c01", "c02"]);
 const SHOWN_LINES = LINES.filter((line) => !CAPTION_OFF.has(line.id));
-/** Lines said over the dark world get light subtitles. */
-const DARK_ACTS = new Set(["weight", "colony", "close"]);
-const LIGHT_INK = "#f4f3f8";
-const LIGHT_HIGHLIGHT: Highlight = {
-  bg: "hsl(258 90% 76% / 0.22)",
-  fg: "hsl(258 100% 88%)",
+/** Lines said over the gradient world: key words in the brand violet. */
+const GRADIENT_ACTS = new Set(["weight", "colony", "close"]);
+const BRAND_HIGHLIGHT: Highlight = {
+  bg: "hsl(258 90% 66% / 0.18)",
+  fg: "hsl(258 70% 40%)",
 };
-const INKS: Record<string, string> = Object.fromEntries(
-  SHOWN_LINES.filter((line) => DARK_ACTS.has(line.act)).map((line) => [
-    line.id,
-    LIGHT_INK,
-  ]),
-);
 
 function toneOf(panel: PanelId): Tone {
   return (TEAM as readonly string[]).includes(panel)
@@ -113,7 +107,8 @@ const KEYWORDS: Record<string, ReadonlySet<string>> = {
   n07: new Set(["Paste", "website.", "hires"]),
   s01: new Set(["Scout,", "chief", "staff."]),
   a01: new Set(["sells", "emails"]),
-  a02: new Set(["calls", "meeting."]),
+  a03: new Set(["office", "park", "on-call", "plumber."]),
+  a04: new Set(["calls,", "meeting."]),
   l08: new Set(["finds", "customers."]),
   l09: new Set(["Twenty", "offices", "plumber,", "first", "coffee."]),
   l11: new Set(["posts.", "Three,", "Instagram."]),
@@ -125,7 +120,7 @@ const KEYWORDS: Record<string, ReadonlySet<string>> = {
 
 const HIGHLIGHTS: Record<string, Highlight> = Object.fromEntries(
   SHOWN_LINES.map((line) => {
-    if (DARK_ACTS.has(line.act)) return [line.id, LIGHT_HIGHLIGHT];
+    if (GRADIENT_ACTS.has(line.act)) return [line.id, BRAND_HIGHLIGHT];
     const tone = toneOf(ACT_PANEL[line.act] as PanelId);
     return [
       line.id,
@@ -277,7 +272,7 @@ export const Film90: React.FC = () => {
     (id) => Math.abs(panelX(id) - camX) < WIDE_W,
   );
   return (
-    <AbsoluteFill style={{ backgroundColor: "#060509" }}>
+    <AbsoluteFill style={{ backgroundColor: "#ece4f4" }}>
       <svg
         aria-hidden="true"
         width="0"
@@ -295,10 +290,7 @@ export const Film90: React.FC = () => {
           <feGaussianBlur stdDeviation={`${blur.toFixed(2)} 0`} />
         </filter>
       </svg>
-      <Backdrop />
-      <div style={{ position: "absolute", inset: 0, opacity: 1 - reveal }}>
-        <Vignette />
-      </div>
+      {reveal < 1 ? <LightWorld t={t} /> : null}
       <WideOpening t={t} ants={ants?.opening ?? null} />
       <AbsoluteFill
         style={{
@@ -311,6 +303,7 @@ export const Film90: React.FC = () => {
           cx={WIDE_W / 2}
           cy={WIDE_H / 2}
           blooms={false}
+          transition="fade"
         >
           <div
             style={{
@@ -344,15 +337,9 @@ export const Film90: React.FC = () => {
         lines={SHOWN_LINES}
         keywords={KEYWORDS}
         highlights={HIGHLIGHTS}
-        inks={INKS}
         holdLast={false}
       />
-      <Grain
-        t={t}
-        width={WIDE_W}
-        height={WIDE_H}
-        opacity={0.06 - 0.03 * reveal}
-      />
+      <Grain t={t} width={WIDE_W} height={WIDE_H} opacity={0.05} />
       {MUSIC_CUES.map((cue) => (
         <Sequence
           key={`music-${cue.from}`}

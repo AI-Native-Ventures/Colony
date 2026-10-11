@@ -20,7 +20,7 @@ import { approvedAt, YES_CARD, YES_ROWS, yesRowY } from "./yes.ts";
  * reads (`launch/f90-*.mp3` and, once recorded, `launch/f120-*.mp3`; cut
  * points in SOURCES.md).
  */
-export const FILM90_SECONDS = 118;
+export const FILM90_SECONDS = 119;
 
 export const ACT_ORDER = [
   "weight",
@@ -43,12 +43,12 @@ export const ACTS: Record<ActId, Span> = {
   how: { start: 31.5, end: 40.0 },
   scout: { start: 40.0, end: 48.0 },
   blue: { start: 48.0, end: 56.6 },
-  amber: { start: 56.6, end: 69.2 },
-  pink: { start: 69.2, end: 75.6 },
-  green: { start: 75.6, end: 82.2 },
-  yes: { start: 82.2, end: 95.0 },
-  dayBack: { start: 95.0, end: 107.5 },
-  close: { start: 107.5, end: 118 },
+  amber: { start: 56.6, end: 70.1 },
+  pink: { start: 70.1, end: 76.5 },
+  green: { start: 76.5, end: 83.1 },
+  yes: { start: 83.1, end: 95.9 },
+  dayBack: { start: 95.9, end: 108.4 },
+  close: { start: 108.4, end: 119 },
 };
 
 export type Line90 = {
@@ -74,7 +74,7 @@ function line(
   cut: readonly [number, number],
   spoken: readonly [number, number],
   startsAt: number,
-  read: "f90" | "f130" = "f90",
+  read: "f90" | "f130" | "f140" = "f90",
   caption?: string,
 ): Line90 {
   const lead = spoken[0] - cut[0];
@@ -187,20 +187,29 @@ export const LINES: Line90[] = [
   line(
     "a01",
     "amber",
-    "This one sells for you. It emails each of them,",
-    [29.95, 32.26],
-    [30.051, 32.217],
+    "This one sells for you. It emails each of them, like this one,",
+    [0.1, 4.9],
+    [0.233, 4.84],
     57.35,
-    "f130",
+    "f140",
   ),
   line(
-    "a02",
+    "a03",
     "amber",
-    "and calls to book a meeting.",
-    [32.26, 33.55],
-    [32.308, 33.417],
-    64.6,
-    "f130",
+    "asking an office park to make you their on-call plumber.",
+    [4.9, 8.2],
+    [4.987, 7.932],
+    62.2,
+    "f140",
+  ),
+  line(
+    "a04",
+    "amber",
+    "Then it calls, and books the meeting.",
+    [8.3, 11.45],
+    [8.501, 10.99],
+    65.75,
+    "f140",
   ),
   line(
     "l11",
@@ -208,7 +217,7 @@ export const LINES: Line90[] = [
     "This one makes your posts. Three, ready for Instagram.",
     [27.17, 30.7],
     [27.303, 30.545],
-    69.7,
+    70.6,
   ),
   line(
     "l12",
@@ -216,7 +225,7 @@ export const LINES: Line90[] = [
     "And this one keeps your website up to date.",
     [31.18, 33.86],
     [31.311, 33.711],
-    76.2,
+    77.1,
   ),
   line(
     "l13",
@@ -224,7 +233,7 @@ export const LINES: Line90[] = [
     "Everything they make comes to you first.",
     [34.28, 36.28],
     [34.409, 36.133],
-    83.0,
+    83.9,
   ),
   line(
     "l14",
@@ -232,7 +241,7 @@ export const LINES: Line90[] = [
     "Nothing goes out without your yes.",
     [36.47, 38.47],
     [36.6, 38.319],
-    87.6,
+    88.5,
   ),
   line(
     "l15",
@@ -240,7 +249,7 @@ export const LINES: Line90[] = [
     "So while you're out doing the work you love, your team keeps the business moving.",
     [38.65, 42.62],
     [38.782, 42.464],
-    96.0,
+    96.9,
   ),
   line(
     "c01",
@@ -248,7 +257,7 @@ export const LINES: Line90[] = [
     "Colony. AI employees for your business.",
     [33.95, 36.7],
     [34.05, 36.518],
-    109.6,
+    110.5,
     "f130",
   ),
   line(
@@ -257,14 +266,14 @@ export const LINES: Line90[] = [
     "Early access is open at colony dot global.",
     [36.85, 39.5],
     [36.975, 39.327],
-    113.0,
+    113.9,
     "f130",
     "Early access is open at colony.global.",
   ),
 ];
 
 /** The cursor presses Approve as "yes" is said. */
-export const CLICK90 = 89.0;
+export const CLICK90 = 89.9;
 
 /** Blue beat timing in film seconds (same fields as the proof beat's BEAT). */
 export const BLUE90: BlueTiming = {
@@ -300,42 +309,42 @@ export const AMBER90 = {
   focusFrom: 58.2,
   walkFrom: 57.7,
   typeFrom: 58.3,
-  typeCps: 60,
+  typeCps: 45,
   returnSeconds: 0.32,
-  countRushFrom: 63.0,
+  countRushFrom: 64.1,
   countRush: 0.6,
-  callIn: 64.4,
-  connectAt: 65.2,
-  bubble1At: 65.5,
-  bubble2At: 66.9,
-  bookedAt: 67.9,
+  callIn: 65.55,
+  connectAt: 66.25,
+  bubble1At: 66.55,
+  bubble2At: 67.95,
+  bookedAt: 68.95,
 };
 
 /** Pink's ants carry three posts into the grid. */
 export const PINK90 = {
-  riverFrom: 68.65,
-  avatarAt: 69.55,
-  headlineAt: 69.75,
-  sublineAt: 70.25,
-  gridIn: 70.0,
-  focusFrom: 70.6,
-  carryFrom: 70.5,
+  riverFrom: 69.55,
+  avatarAt: 70.45,
+  headlineAt: 70.65,
+  sublineAt: 71.15,
+  gridIn: 70.9,
+  focusFrom: 71.5,
+  carryFrom: 71.4,
   carryEvery: 0.5,
   carryDuration: 1.2,
-  readyAt: 72.95,
+  readyAt: 73.85,
 };
 
 /** Green's ant walks across the website and repaints it. */
 export const GREEN90 = {
-  riverFrom: 74.75,
-  avatarAt: 75.65,
-  headlineAt: 76.25,
-  sublineAt: 76.75,
-  siteIn: 76.5,
-  focusFrom: 77.2,
-  paintFrom: 77.4,
+  riverFrom: 75.65,
+  avatarAt: 76.55,
+  headlineAt: 77.15,
+  sublineAt: 77.65,
+  siteIn: 77.4,
+  focusFrom: 78.1,
+  paintFrom: 78.3,
   paintDuration: 2.2,
-  chipAt: 79.8,
+  chipAt: 80.7,
 };
 
 /** The hero timing every employee shares. */
@@ -364,38 +373,38 @@ export const BEAT_DONE: Record<EmployeeId, number> = {
 
 /** The owner's inbox: everything waits here for a yes. */
 export const YES90 = {
-  avatarAt: 83.05,
-  headlineAt: 83.25,
-  sublineAt: 83.75,
-  focusFrom: 87.0,
-  cardIn: 83.3,
-  carryFrom: 83.5,
+  avatarAt: 83.95,
+  headlineAt: 84.15,
+  sublineAt: 84.65,
+  focusFrom: 87.9,
+  cardIn: 84.2,
+  carryFrom: 84.4,
   carryEvery: 0.35,
   carryDuration: 1.1,
-  cursorFrom: 87.3,
+  cursorFrom: 88.2,
   click: CLICK90,
   cascadeEvery: 0.14,
   burst: 1.3,
-  outcomesAt: 91.2,
+  outcomesAt: 92.1,
 };
 
 /** The owner's day on a running clock. */
 export const DAY90 = {
-  titleAt: 94.9,
-  clockFrom: 95.4,
-  clockTo: 105.4,
-  summaryAt: 105.7,
+  titleAt: 95.8,
+  clockFrom: 96.3,
+  clockTo: 106.3,
+  summaryAt: 106.6,
 };
 
 /** The close: the bright world folds back into the dark, the ants return to the logo, name and address. */
 export const CLOSE90 = {
-  dimFrom: 107.7,
-  dark: 108.7,
-  logoIn: 109.3,
-  name: 109.5,
-  tagline: 110.9,
-  earlyAt: 113.3,
-  urlAt: 114.4,
+  dimFrom: 108.6,
+  dark: 109.6,
+  logoIn: 110.2,
+  name: 110.4,
+  tagline: 111.8,
+  earlyAt: 114.2,
+  urlAt: 115.3,
 };
 
 /** Scout, the chief of staff, hands out today's work. */
@@ -437,10 +446,10 @@ export const PANS: readonly { to: PanelId; start: number; end: number }[] = [
   { to: "scout", start: 39.4, end: 40.25 },
   { to: "blue", start: 47.2, end: 48.05 },
   { to: "amber", start: 56.1, end: 57.0 },
-  { to: "pink", start: 68.6, end: 69.45 },
-  { to: "green", start: 74.7, end: 75.55 },
-  { to: "yes", start: 82.1, end: 82.95 },
-  { to: "day", start: 93.9, end: 94.75 },
+  { to: "pink", start: 69.5, end: 70.35 },
+  { to: "green", start: 75.6, end: 76.45 },
+  { to: "yes", start: 83.0, end: 83.85 },
+  { to: "day", start: 94.8, end: 95.65 },
 ];
 
 /** When each panel's first thing appears. */

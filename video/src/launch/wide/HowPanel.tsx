@@ -6,17 +6,17 @@ import { GETTING_STARTED, TONES } from "./employees.ts";
 import {
   BUSINESS_CARD,
   CONTINUE_BUTTON,
+  FACTS,
+  factAt,
   type HowTiming,
   howCursorKeys,
   READ_BUTTON,
-  SUMMARY_TEXT,
   TEAM_ROWS,
   teamRowAt,
   teamRowY,
   WEBSITE,
   WEBSITE_FIELD,
 } from "./how.ts";
-import { typewriterAt } from "./typewriter.ts";
 
 const INK = "#17151f";
 const MUTED = "#6a6780";
@@ -37,33 +37,7 @@ function local(r: { x: number; y: number; w: number; h: number }) {
   };
 }
 
-const label: React.CSSProperties = {
-  position: "absolute",
-  left: 52,
-  fontSize: 22,
-  fontWeight: 600,
-  color: MUTED,
-};
-
-const field: React.CSSProperties = {
-  position: "absolute",
-  left: 52,
-  right: 52,
-  height: 76,
-  borderRadius: 16,
-  border: `1.5px solid ${LINE}`,
-  background: FIELD_BG,
-  display: "flex",
-  alignItems: "center",
-  padding: "0 24px",
-  fontSize: 30,
-  fontWeight: 500,
-  color: INK,
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-};
-
-/** The real "Your business" screen: paste the website, Colony reads it, then the team it hired. */
+/** Paste the website into one big field, see what Colony read, then the team it hired. */
 export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
   t,
   timing,
@@ -76,19 +50,16 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
     t,
   );
   const pasted = t >= timing.pasteAt;
-  const flash = pasted ? 1 - progress(t, timing.pasteAt, 0.6) : 0;
-  const reading =
-    t >= timing.readClick && t < timing.readClick + timing.readFor;
-  const readDone = t >= timing.readClick + timing.readFor;
-  const scan = progress(t, timing.readClick, timing.readFor);
-  const summary = typewriterAt([SUMMARY_TEXT], t, {
-    start: timing.readClick + timing.readFor,
-    cps: timing.summaryCps,
-    returnSeconds: 0,
-  }).typed[0];
+  const flash = pasted ? 1 - progress(t, timing.pasteAt, 0.7) : 0;
+  const lastFact = factAt(FACTS.length - 1, timing);
+  const reading = t >= timing.readClick && t < lastFact + 0.3;
+  const readDone = t >= lastFact + 0.3;
+  const scan = progress(t, timing.readClick, lastFact + 0.3 - timing.readClick);
   const pressRead = t >= timing.readClick && t < timing.readClick + 0.14;
   const pressContinue =
     t >= timing.continueClick && t < timing.continueClick + 0.14;
+  const field = local(WEBSITE_FIELD);
+  const read = local(READ_BUTTON);
   return (
     <div
       style={{
@@ -133,42 +104,107 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
               color: MUTED,
             }}
           >
-            Only the essentials. You can add more as you go.
-          </div>
-          <div style={{ ...label, top: 192 }}>Business name</div>
-          <div style={{ ...field, top: 226 }}>Bright Plumbing</div>
-          <div
-            style={{ ...label, top: WEBSITE_FIELD.y - BUSINESS_CARD.y - 36 }}
-          >
-            Website
+            Paste your website. Colony does the rest.
           </div>
           <div
             style={{
-              ...field,
-              ...local(WEBSITE_FIELD),
-              right: undefined,
-              borderColor: pasted && !readDone ? tint(VIOLET, 0.6) : LINE,
+              position: "absolute",
+              left: field.left,
+              top: field.top,
+              width: field.width,
+              height: field.height,
+              borderRadius: 26,
+              border: `2px solid ${pasted ? tint(VIOLET, 0.55) : LINE}`,
+              background: FIELD_BG,
+              boxShadow: pasted ? `0 0 0 6px ${tint(VIOLET, 0.1)}` : undefined,
+              display: "flex",
+              alignItems: "center",
+              gap: 20,
+              padding: "0 34px",
+              fontSize: 46,
+              fontWeight: 650,
+              letterSpacing: "-0.02em",
               color: pasted ? INK : "#b4b1c4",
+              whiteSpace: "nowrap",
             }}
           >
+            <svg aria-hidden="true" width="40" height="40" viewBox="0 0 24 24">
+              <circle
+                cx="12"
+                cy="12"
+                r="9.5"
+                fill="none"
+                stroke={pasted ? VIOLET : "#b4b1c4"}
+                strokeWidth="1.8"
+              />
+              <path
+                d="M2.5 12h19M12 2.5c3 3 3 16 0 19M12 2.5c-3 3-3 16 0 19"
+                fill="none"
+                stroke={pasted ? VIOLET : "#b4b1c4"}
+                strokeWidth="1.8"
+              />
+            </svg>
             <span
               style={{
-                background: flash > 0 ? tint(VIOLET, 0.25 * flash) : undefined,
-                borderRadius: 6,
+                background: flash > 0 ? tint(VIOLET, 0.22 * flash) : undefined,
+                borderRadius: 8,
+                padding: "0 4px",
               }}
             >
               {pasted ? WEBSITE : "yourbusiness.com"}
             </span>
           </div>
+          <div
+            style={{
+              position: "absolute",
+              left: read.left,
+              top: read.top,
+              width: read.width,
+              height: read.height,
+              borderRadius: 999,
+              background: reading || readDone ? tint(VIOLET, 0.12) : VIOLET,
+              color: reading || readDone ? GETTING_STARTED.deep : "#ffffff",
+              fontSize: 27,
+              fontWeight: 750,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              transform: `scale(${pressRead ? 0.95 : 1})`,
+            }}
+          >
+            {readDone ? (
+              <svg
+                aria-hidden="true"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  d="M5 12.5l4.2 4.2L19 7"
+                  fill="none"
+                  stroke={GETTING_STARTED.deep}
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : null}
+            {readDone
+              ? "Website read"
+              : reading
+                ? "Reading\u2026"
+                : "Read website"}
+          </div>
           {reading ? (
             <div
               style={{
                 position: "absolute",
-                left: WEBSITE_FIELD.x - BUSINESS_CARD.x,
-                top: WEBSITE_FIELD.y - BUSINESS_CARD.y + WEBSITE_FIELD.h + 10,
-                width: WEBSITE_FIELD.w * scan,
-                height: 4,
-                borderRadius: 2,
+                left: read.left + read.width + 28,
+                top: read.top + read.height / 2 - 3,
+                width: (field.width - read.width - 28) * scan,
+                height: 6,
+                borderRadius: 3,
                 background: VIOLET,
               }}
             />
@@ -176,35 +212,71 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
           <div
             style={{
               position: "absolute",
-              ...local(READ_BUTTON),
-              borderRadius: 999,
-              border: `1.5px solid ${reading ? tint(VIOLET, 0.5) : LINE}`,
-              background: reading ? tint(VIOLET, 0.08) : "#ffffff",
-              color: reading ? GETTING_STARTED.deep : INK,
-              fontSize: 24,
-              fontWeight: 650,
-              display: "grid",
-              placeItems: "center",
-              transform: `scale(${pressRead ? 0.96 : 1})`,
+              left: 52,
+              top: read.top + read.height + 22,
+              fontSize: 22,
+              fontWeight: 600,
+              color: MUTED,
+              opacity: smoothstep(
+                factAt(0, timing) - 0.2,
+                factAt(0, timing),
+                t,
+              ),
             }}
           >
-            {reading ? "Reading…" : readDone ? "Read again" : "Read website"}
+            What Colony found
           </div>
-          <div style={{ ...label, top: 456 }}>Business summary</div>
           <div
             style={{
-              ...field,
-              top: 490,
-              height: 132,
-              alignItems: "flex-start",
-              paddingTop: 22,
-              whiteSpace: "normal",
-              lineHeight: 1.35,
-              fontSize: 27,
-              color: summary ? INK : "#b4b1c4",
+              position: "absolute",
+              left: 52,
+              right: 52,
+              top: read.top + read.height + 58,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 16,
             }}
           >
-            {summary || "We help…"}
+            {FACTS.map((fact, i) => {
+              const e = easeOutExpo(progress(t, factAt(i, timing), 0.45));
+              return (
+                <span
+                  key={fact}
+                  style={{
+                    height: 62,
+                    padding: "0 28px 0 20px",
+                    borderRadius: 999,
+                    background: "#f6f4fb",
+                    border: `1.5px solid ${LINE}`,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 12,
+                    fontSize: 29,
+                    fontWeight: 650,
+                    opacity: e,
+                    transform: `translateY(${((1 - e) * 16).toFixed(2)}px) scale(${(0.9 + 0.1 * e).toFixed(4)})`,
+                  }}
+                >
+                  <svg
+                    aria-hidden="true"
+                    width="26"
+                    height="26"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle cx="12" cy="12" r="11" fill={tint(VIOLET, 0.16)} />
+                    <path
+                      d="M7 12.5l3.2 3.2L17 9"
+                      fill="none"
+                      stroke={GETTING_STARTED.deep}
+                      strokeWidth="2.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  {fact}
+                </span>
+              );
+            })}
           </div>
           <div
             style={{
@@ -219,9 +291,10 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
               placeItems: "center",
               boxShadow: `0 18px 36px -16px ${tint(VIOLET, 0.8)}`,
               transform: `scale(${pressContinue ? 0.95 : 1})`,
+              opacity: smoothstep(lastFact, lastFact + 0.3, t),
             }}
           >
-            Continue
+            Hire my team
           </div>
         </div>
       ) : null}
@@ -263,7 +336,7 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
                   left: 0,
                   right: 0,
                   top,
-                  height: 92,
+                  height: 104,
                   opacity: e,
                   transform: `translateY(${((1 - e) * 24).toFixed(2)}px)`,
                 }}
@@ -272,21 +345,22 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
                   style={{
                     position: "absolute",
                     left: 52,
-                    top: 6,
-                    width: 80,
-                    height: 80,
-                    borderRadius: 40,
+                    top: 4,
+                    width: 96,
+                    height: 96,
+                    borderRadius: 48,
                     background: tone.color,
                     display: "grid",
                     placeItems: "center",
+                    boxShadow: `0 14px 30px -14px ${tint(tone.color, 0.8)}`,
                     transform: `scale(${(0.6 + 0.4 * e).toFixed(4)})`,
                   }}
                 >
                   <span
                     style={{
                       display: "flex",
-                      width: 52,
-                      height: 34,
+                      width: 60,
+                      height: 40,
                       color: "#ffffff",
                     }}
                   >
@@ -296,11 +370,11 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
                 <div
                   style={{
                     position: "absolute",
-                    left: 156,
-                    top: 8,
-                    fontSize: 34,
-                    fontWeight: 700,
-                    letterSpacing: "-0.01em",
+                    left: 176,
+                    top: 12,
+                    fontSize: 40,
+                    fontWeight: 750,
+                    letterSpacing: "-0.02em",
                   }}
                 >
                   {row.job}
@@ -308,9 +382,9 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
                 <div
                   style={{
                     position: "absolute",
-                    left: 156,
-                    top: 54,
-                    fontSize: 22,
+                    left: 176,
+                    top: 62,
+                    fontSize: 24,
                     color: MUTED,
                   }}
                 >
@@ -320,13 +394,13 @@ export const BusinessCard: React.FC<{ t: number; timing: HowTiming }> = ({
                   style={{
                     position: "absolute",
                     right: 52,
-                    top: 24,
-                    height: 44,
-                    padding: "0 18px",
+                    top: 28,
+                    height: 50,
+                    padding: "0 22px",
                     borderRadius: 999,
                     background: tint(tone.color, 0.14),
                     color: tone.deep,
-                    fontSize: 21,
+                    fontSize: 25,
                     fontWeight: 700,
                     display: "flex",
                     alignItems: "center",
