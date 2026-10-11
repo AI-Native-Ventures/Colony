@@ -26,6 +26,8 @@
     "render:film90:intro": "remotion render src/index.ts Film90 out/film90-intro.mp4 --frames=0-1019 --jpeg-quality=95 --crf=16 --timeout=120000",
     "render:ex01": "remotion render src/index.ts Explainer01 out/explainer01.mp4 --jpeg-quality=95 --crf=16 --timeout=120000",
     "master:ex01": "ffmpeg -hide_banner -loglevel error -y -i out/explainer01.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/explainer01-master.mp4",
+    "render:ex02": "remotion render src/index.ts Explainer02 out/explainer02.mp4 --jpeg-quality=95 --crf=16 --timeout=120000",
+    "master:ex02": "ffmpeg -hide_banner -loglevel error -y -i out/explainer02.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/explainer02-master.mp4",
     "render:ex05": "remotion render src/index.ts Explainer05 out/explainer05.mp4 --jpeg-quality=95 --crf=16 --timeout=120000",
     "master:ex05": "ffmpeg -hide_banner -loglevel error -y -i out/explainer05.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/explainer05-master.mp4",
     "render:film90:close": "remotion render src/index.ts Film90 out/film90-close.mp4 --frames=3210-3569 --jpeg-quality=95 --crf=16 --timeout=120000"
