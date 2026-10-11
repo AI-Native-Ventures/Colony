@@ -1,6 +1,6 @@
 import { INTER } from "../fonts";
 import { easeOutExpo, progress, smoothstep } from "../math.ts";
-import { CALL, type CallTiming, callClock } from "./call.ts";
+import { CALL, type Call, type CallTiming, callClock } from "./call.ts";
 import { EMAIL_CARD } from "./email.ts";
 import { TONES } from "./employees.ts";
 
@@ -30,9 +30,20 @@ function heard(
 }
 
 /** The sales employee on a call for the business: live timer, voice bars, what is said, a booked meeting. */
-export const CallCard: React.FC<{ t: number; timing: CallTiming }> = ({
+export const CallCard: React.FC<{
+  t: number;
+  timing: CallTiming;
+  /** Defaults are the launch film's call for Bright Plumbing. */
+  call?: Call;
+  business?: string;
+  /** The timer stops when the meeting is booked; the film's runs on. */
+  clockStops?: boolean;
+}> = ({
   t,
   timing,
+  call = CALL,
+  business = "Bright Plumbing",
+  clockStops = false,
 }) => {
   const enter = easeOutExpo(progress(t, timing.callIn, 0.7));
   if (enter <= 0) return null;
@@ -138,10 +149,10 @@ export const CallCard: React.FC<{ t: number; timing: CallTiming }> = ({
               : `0 0 0 ${(10 * ring).toFixed(1)}px ${tint(0.25)}`,
           }}
         >
-          {CALL.name[0]}
+          {call.name[0]}
         </span>
-        <span style={{ fontSize: 30, fontWeight: 650 }}>{CALL.name}</span>
-        <span style={{ fontSize: 26, color: MUTED }}>at {CALL.company}</span>
+        <span style={{ fontSize: 30, fontWeight: 650 }}>{call.name}</span>
+        <span style={{ fontSize: 26, color: MUTED }}>at {call.company}</span>
         <span style={{ flex: 1 }} />
         <span
           style={{
@@ -168,7 +179,9 @@ export const CallCard: React.FC<{ t: number; timing: CallTiming }> = ({
             textAlign: "right",
           }}
         >
-          {connected ? callClock(t, timing) : "Calling…"}
+          {connected
+            ? callClock(clockStops ? Math.min(t, timing.bookedAt) : t, timing)
+            : "Calling…"}
         </span>
       </div>
       <div
@@ -215,7 +228,7 @@ export const CallCard: React.FC<{ t: number; timing: CallTiming }> = ({
           );
         })}
       </div>
-      {CALL.lines.map((line, i) => {
+      {call.lines.map((line, i) => {
         const at = i === 0 ? timing.bubble1At : timing.bubble2At;
         const shown = heard(line.text, t, at);
         if (!shown) return null;
@@ -243,7 +256,7 @@ export const CallCard: React.FC<{ t: number; timing: CallTiming }> = ({
                 textAlign: ours ? "left" : "right",
               }}
             >
-              {ours ? "Bright Plumbing" : CALL.name}
+              {ours ? business : call.name}
             </div>
             <div
               style={{
@@ -300,7 +313,7 @@ export const CallCard: React.FC<{ t: number; timing: CallTiming }> = ({
               strokeLinecap="round"
             />
           </svg>
-          {CALL.booked}
+          {call.booked}
         </div>
       ) : null}
       <div

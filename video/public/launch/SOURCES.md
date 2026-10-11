@@ -134,3 +134,8 @@ plucks and marimba. The 90 s music is decided in milestone C.
 - Episode 3 (Bright Plumbing, "Finds customers"): one 28.9 s read, cut at
   the measured pauses (cut points in `video/src/explainers/ep03.ts`); the
   nine clips joined read back in order (`gemini-2.5-flash-lite`).
+- Episode 4 (Golden Hour Photography, "Sells for you"): one 22.4 s read, cut
+  at the measured pauses (cut points in `video/src/explainers/ep04.ts`; "When
+  one replies," and "it calls and books the meeting." cut apart at their
+  0.16 s pause); the eight clips joined read back in order
+  (`gemini-2.5-flash-lite`).

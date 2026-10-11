@@ -1,6 +1,14 @@
 import { easeInOutCubic, progress } from "../math.ts";
 import { typewriterEnd } from "./typewriter.ts";
 
+/** An email the sales employee writes, as the Outreach card shows it. */
+export type Email = {
+  to: string;
+  company: string;
+  subject: string;
+  lines: readonly string[];
+};
+
 /**
  * The draft the sales employee writes, an example for Bright Plumbing: a
  * partnership pitch to an office park, not a one-off repair (owner, 2026-10-11).
@@ -42,18 +50,25 @@ export type DraftCountTiming = {
   countRush: number;
 };
 
-/** When the last letter of Thabo's email is typed. */
-export function emailTypedAt(timing: DraftCountTiming): number {
-  return typewriterEnd([...EMAIL.lines], {
+/** When the last letter of the email (Thabo's unless given) is typed. */
+export function emailTypedAt(
+  timing: DraftCountTiming,
+  lines: readonly string[] = EMAIL.lines,
+): number {
+  return typewriterEnd([...lines], {
     start: timing.typeFrom,
     cps: timing.typeCps,
     returnSeconds: timing.returnSeconds,
   });
 }
 
-/** Drafts ready: none while typing, one when Thabo's is done, then a quick count to 20. */
-export function draftsReady(t: number, timing: DraftCountTiming): number {
-  if (t < emailTypedAt(timing) + 0.1) return 0;
+/** Drafts ready: none while typing, one when the email is done, then a quick count to 20. */
+export function draftsReady(
+  t: number,
+  timing: DraftCountTiming,
+  lines: readonly string[] = EMAIL.lines,
+): number {
+  if (t < emailTypedAt(timing, lines) + 0.1) return 0;
   const rush = easeInOutCubic(
     progress(t, timing.countRushFrom, timing.countRush),
   );
