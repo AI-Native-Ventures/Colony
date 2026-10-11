@@ -77,7 +77,9 @@ export const CloseScene: React.FC<{
   t: number;
   timing: typeof CLOSE90;
   ants: Ant[] | null;
-}> = ({ t, timing, ants }) => {
+  /** No shadow under the logo and no glow left after the flash (owner note on the intro, cut 4). */
+  plain?: boolean;
+}> = ({ t, timing, ants, plain = false }) => {
   if (t < timing.dimFrom) return null;
   const swarm = ants ? <CloseSwarm ants={ants} t={t} timing={timing} /> : null;
   if (t < timing.logoIn - 0.4) return swarm;
@@ -86,7 +88,7 @@ export const CloseScene: React.FC<{
   const ring = easeOutExpo(pulse);
   const glow =
     0.55 * Math.sin(Math.PI * Math.min(1, pulse * 1.4)) +
-    0.22 * smoothstep(timing.logoIn, timing.logoIn + 0.6, t);
+    (plain ? 0 : 0.22 * smoothstep(timing.logoIn, timing.logoIn + 0.6, t));
   const L = CLOSE_LOGO;
   return (
     <>
@@ -114,7 +116,9 @@ export const CloseScene: React.FC<{
           height: L.height,
           color: INK,
           opacity: logoIn,
-          filter: `drop-shadow(0 18px 30px rgb(23 21 31 / ${(0.18 * logoIn).toFixed(3)}))`,
+          filter: plain
+            ? undefined
+            : `drop-shadow(0 18px 30px rgb(23 21 31 / ${(0.18 * logoIn).toFixed(3)}))`,
         }}
       >
         <AntMark />

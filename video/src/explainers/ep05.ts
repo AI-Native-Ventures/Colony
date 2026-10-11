@@ -26,6 +26,7 @@ export const EP05_LINES: EpisodeLine[] = [
     [0.27, 2.85],
     [0.397, 2.705],
     0.35,
+    false,
   ),
   line(
     "ep05",
@@ -96,10 +97,10 @@ export const EP05_LINES: EpisodeLine[] = [
 
 /** Every moment on screen, set against the line it serves. */
 export const EP05 = {
-  hookWordsAt: 0.1,
+  hookWordsAt: -0.3,
   hookHonestAt: 2.05,
-  swarmFrom: 0,
-  swarmBuilt: 2.3,
+  swarmFrom: -0.5,
+  swarmBuilt: 1.75,
   stageFrom: 2.75,
   stageTo: 3.45,
   avatarAt: 3.45,

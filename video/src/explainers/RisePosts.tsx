@@ -1,5 +1,6 @@
 import { CAVEAT, POPPINS, SCRIPT, SERIF } from "../launch/fonts";
 import { POST_SIZE } from "../launch/wide/posts.ts";
+import { CROISSANT_SEGMENTS } from "./croissantShape.ts";
 import { RISE, RISE_COLORS as C, type RisePostId } from "./rise.ts";
 
 /**
@@ -64,14 +65,6 @@ export function Loaf({ width }: { width: number }) {
   );
 }
 
-const CROISSANT_SEGMENTS = [
-  { cx: 34, cy: 76, rx: 22, ry: 12, rot: -38 },
-  { cx: 166, cy: 76, rx: 22, ry: 12, rot: 38 },
-  { cx: 64, cy: 58, rx: 28, ry: 21, rot: -20 },
-  { cx: 136, cy: 58, rx: 28, ry: 21, rot: 20 },
-  { cx: 100, cy: 52, rx: 33, ry: 28, rot: 0 },
-];
-
 /** A croissant: five golden segments on a curve, the middle one on top. */
 export function Croissant({ width }: { width: number }) {
   return (
@@ -119,10 +112,11 @@ export function Croissant({ width }: { width: number }) {
   );
 }
 
+const STRIPES = [0, 1, 2, 3, 4, 5, 6, 7];
+
 /** Red and cream stripes with a scalloped edge, like a market stall. */
 function Awning() {
-  const stripes = 8;
-  const w = S / stripes;
+  const w = S / STRIPES.length;
   return (
     <svg
       aria-hidden="true"
@@ -131,7 +125,7 @@ function Awning() {
       viewBox={`0 0 ${S} 48`}
       style={{ position: "absolute", left: 0, top: 0 }}
     >
-      {Array.from({ length: stripes }, (_, k) => (
+      {STRIPES.map((k) => (
         <g key={k}>
           <rect
             x={k * w}
