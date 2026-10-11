@@ -38,6 +38,8 @@
     "master:ex06": "ffmpeg -hide_banner -loglevel error -y -i out/explainer06.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/explainer06-master.mp4",
     "render:ex07": "remotion render src/index.ts Explainer07 out/explainer07.mp4 --jpeg-quality=95 --crf=16 --timeout=120000",
     "master:ex07": "ffmpeg -hide_banner -loglevel error -y -i out/explainer07.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/explainer07-master.mp4",
+    "render:ex08": "remotion render src/index.ts Explainer08 out/explainer08.mp4 --jpeg-quality=95 --crf=16 --timeout=120000",
+    "master:ex08": "ffmpeg -hide_banner -loglevel error -y -i out/explainer08.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 256k out/explainer08-master.mp4",
     "render:film90:close": "remotion render src/index.ts Film90 out/film90-close.mp4 --frames=3210-3569 --jpeg-quality=95 --crf=16 --timeout=120000"
   },
   "dependencies": {

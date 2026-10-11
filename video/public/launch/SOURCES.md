@@ -149,3 +149,10 @@ plucks and marimba. The 90 s music is decided in milestone C.
   29.5 s read, cut at the measured pauses (cut points in
   `video/src/explainers/ep07.ts`); the nine clips joined read back in order
   (`gemini-2.5-flash-lite`).
+- Episode 8 (Thandi's Kitchen, "Talk to your team"): one 28.7 s read, cut at
+  the measured pauses (cut points in `video/src/explainers/ep08.ts`); the
+  eight clips joined read back in order (`gemini-2.5-flash-lite`; "Want a
+  change?" is heard as "wanna change", how it sounds said quickly). The
+  wedding menu follows menu cards on Pinterest (2026-10-12), logged out,
+  looked at only: an ivory card, a gold script "Menu", a sage sprig, spaced
+  capitals per course. Drawn in code; no pins used.
