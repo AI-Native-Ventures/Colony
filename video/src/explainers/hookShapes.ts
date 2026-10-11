@@ -69,21 +69,21 @@ function gaps(
   }
 }
 
-/** A builder's hard hat: dome, ridge and brim, in a 200 by 120 box. */
+/** A builder's hard hat from the side: dome, ridge and a long front brim, in a 200 by 120 box. */
 function hardHat(ctx: CanvasRenderingContext2D): void {
   ctx.beginPath();
-  ctx.ellipse(100, 84, 70, 66, 0, Math.PI, Math.PI * 2);
+  ctx.ellipse(86, 88, 62, 68, 0, Math.PI, Math.PI * 2);
   ctx.closePath();
   ctx.fill();
   ctx.beginPath();
-  ctx.roundRect(12, 80, 176, 22, 11);
+  ctx.roundRect(14, 84, 180, 18, 9);
   ctx.fill();
   gaps(
     ctx,
     [
-      [84, 30, 82, 78],
-      [116, 30, 118, 78],
-      [24, 82, 176, 82],
+      [72, 26, 70, 84],
+      [100, 26, 102, 84],
+      [24, 86, 150, 86],
     ],
     4,
   );
