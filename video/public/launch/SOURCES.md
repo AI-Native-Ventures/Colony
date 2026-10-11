@@ -115,3 +115,13 @@ plucks and marimba. The 90 s music is decided in milestone C.
   call to action, tall capitals, a phone number and a booking button.
 - Fonts: Poppins, Anton and Caveat from Google Fonts (SIL Open Font License),
   loaded with `@remotion/google-fonts`.
+
+## Explainer voices: `public/explainers/ep05-*.mp3` (2026-10-11)
+
+- Episode 5 (Rise Bakery, "Makes your posts"): one read of the eight lines on
+  `gemini-3.8-flash-tts`, voice `Aoede`, through the Gemini API; 25.9 s,
+  normalised to -16 LUFS, cut at the measured pauses (cut points are the
+  `cut` values in `video/src/explainers/ep05.ts`), 40 ms fade in, 60 ms out.
+- Checked by transcribing the eight clips joined with a second of silence
+  between them (`gemini-2.5-flash`): every line in order; the market line
+  checked on its own reads "New sourdough and the Saturday market."
