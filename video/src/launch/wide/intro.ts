@@ -25,6 +25,15 @@ export const INTRO = {
   brightTo: 32.3,
 };
 
+/**
+ * What an AI employee is, on screen while the voice says it. The owner's
+ * wording (2026-10-11): AI employees are AI agents.
+ */
+export const DEFINITION = {
+  title: "AI employees",
+  body: "AI agents that do office work for you, like people on your team.",
+} as const;
+
 export type TimedWord = { text: string; at: number };
 
 /** "The work you love": a few trades, each long enough to read. */

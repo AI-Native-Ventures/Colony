@@ -7,7 +7,13 @@ import { easeInOutCubic, easeOutExpo, progress, smoothstep } from "../math.ts";
 import { type Ant, antState } from "../swarm.ts";
 import { WIDE_H, WIDE_W } from "./beat.ts";
 import { TEAM, TONES } from "./employees.ts";
-import { INTRO, TOWER_WORDS, TRADE_WORDS, WIDE_LOGO_RECT } from "./intro.ts";
+import {
+  DEFINITION,
+  INTRO,
+  TOWER_WORDS,
+  TRADE_WORDS,
+  WIDE_LOGO_RECT,
+} from "./intro.ts";
 import { drawTower } from "./towerDraw.ts";
 import { WorkerAnt } from "./WorkerAnt";
 
@@ -283,7 +289,7 @@ const Definition: React.FC<{ t: number }> = ({ t }) => {
             ...rise(t, INTRO.defineFrom + 0.25),
           }}
         >
-          AI employee
+          {DEFINITION.title}
         </div>
         <div
           style={{
@@ -297,7 +303,7 @@ const Definition: React.FC<{ t: number }> = ({ t }) => {
             ...rise(t, INTRO.defineFrom + 0.55),
           }}
         >
-          Software that does office work for you, like a person on your team.
+          {DEFINITION.body}
         </div>
       </div>
       {TEAM.map((who, k) => {

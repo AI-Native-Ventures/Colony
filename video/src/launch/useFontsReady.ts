@@ -1,17 +1,17 @@
 import { useEffect, useState } from "react";
 import { cancelRender, continueRender, delayRender } from "remotion";
-import { interReady } from "./fonts";
+import { fontsReady } from "./fonts";
 
 /**
- * Holds the frame until Inter has loaded, so no frame paints a fallback font.
- * Returns true once it has, and the re-render it causes lets anything that
- * measures text measure it in Inter.
+ * Holds the frame until every face has loaded, so no frame paints a fallback
+ * font. Returns true once they have, and the re-render it causes lets anything
+ * that measures text measure it in Inter.
  */
 export function useFontsReady(): boolean {
-  const [handle] = useState(() => delayRender("Loading Inter"));
+  const [handle] = useState(() => delayRender("Loading fonts"));
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    interReady
+    fontsReady
       .then(() => setReady(true))
       .catch((err: unknown) => cancelRender(err));
   }, []);

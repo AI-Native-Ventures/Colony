@@ -6,6 +6,8 @@ import {
   progress,
   smoothstep,
 } from "../math.ts";
+import { BRIGHT, PAGE_H, PAINT_Y, SITE_BAR, SITE_CARD } from "./bright.ts";
+import { NewPage, OldPage } from "./BrightSite";
 import { TONES } from "./employees.ts";
 import { type Path, walkState } from "./walk.ts";
 import { WorkerAnt } from "./WorkerAnt";
@@ -21,16 +23,9 @@ const GREEN = TONES.green;
 const INK = "#17151f";
 const MUTED = "#6a6780";
 const LINE = "#ece9f4";
-const NAVY = "#13284a";
-const AQUA = "hsl(190 85% 52%)";
 
-/** The website card, in panel pixels; the page sits under a 64 px browser bar. */
-export const SITE_CARD = { x: 860, y: 150, w: 940, h: 760 };
-const BAR = 64;
-const PAGE_H = SITE_CARD.h - BAR;
+const BAR = SITE_BAR;
 const PAINTER_SIZE = 64;
-/** The painter walks along the bottom of the page, just inside it. */
-const PAINT_Y = SITE_CARD.y + SITE_CARD.h - 44;
 
 function tint(alpha: number): string {
   return GREEN.color.replace(")", ` / ${alpha})`);
@@ -71,303 +66,6 @@ function painter(t: number, timing: SiteTiming) {
 function painted(t: number, timing: SiteTiming): number {
   if (t < timing.paintFrom) return 0;
   return clamp01((painter(t, timing).x + LEAD - SITE_CARD.x) / SITE_CARD.w);
-}
-
-/** The site as it was: grey, vague, last touched years ago. */
-function OldPage() {
-  return (
-    <div style={{ position: "absolute", inset: 0, background: "#eceef1" }}>
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: 0,
-          height: 64,
-          background: "#dfe2e6",
-          display: "flex",
-          alignItems: "center",
-          padding: "0 40px",
-          gap: 30,
-          fontSize: 20,
-          color: "#9aa0aa",
-        }}
-      >
-        <span
-          style={{
-            fontWeight: 700,
-            letterSpacing: "0.12em",
-            color: "#8a8f99",
-          }}
-        >
-          BRIGHT PLUMBING
-        </span>
-        <span style={{ flex: 1 }} />
-        <span>Home</span>
-        <span>About</span>
-        <span>Contact</span>
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          top: 130,
-          width: 480,
-          fontSize: 46,
-          fontWeight: 700,
-          lineHeight: 1.1,
-          color: "#7a808a",
-        }}
-      >
-        Welcome to our website!
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          top: 260,
-          width: 470,
-          fontSize: 24,
-          lineHeight: 1.45,
-          color: "#9aa0aa",
-        }}
-      >
-        We are a plumbing company. Call us for all your plumbing needs.
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          top: 380,
-          height: 54,
-          padding: "0 26px",
-          borderRadius: 6,
-          background: "#c4c8cf",
-          color: "#ffffff",
-          fontSize: 22,
-          fontWeight: 600,
-          display: "flex",
-          alignItems: "center",
-        }}
-      >
-        Contact us
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 570,
-          top: 120,
-          width: 320,
-          height: 300,
-          borderRadius: 6,
-          background: "#d9dce1",
-        }}
-      >
-        <svg
-          aria-hidden="true"
-          width="320"
-          height="300"
-          style={{ position: "absolute", inset: 0 }}
-        >
-          <path
-            d="M0 0 L320 300 M320 0 L0 300"
-            stroke="#c9cdd3"
-            strokeWidth={3}
-          />
-        </svg>
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          bottom: 86,
-          fontSize: 20,
-          color: "#a6abb3",
-        }}
-      >
-        Last updated: March 2019
-      </div>
-    </div>
-  );
-}
-
-/** The repainted site: clear offer, a real button, proof from customers. */
-function NewPage() {
-  return (
-    <div style={{ position: "absolute", inset: 0, background: "#ffffff" }}>
-      <div
-        style={{
-          position: "absolute",
-          right: -160,
-          top: -180,
-          width: 640,
-          height: 560,
-          background:
-            "radial-gradient(closest-side, hsl(190 85% 70% / 0.35), transparent)",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: 0,
-          height: 72,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 40px",
-          gap: 26,
-          fontSize: 20,
-          color: MUTED,
-        }}
-      >
-        <span
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 17,
-            background: AQUA,
-            display: "grid",
-            placeItems: "center",
-          }}
-        >
-          <svg aria-hidden="true" width="16" height="21" viewBox="0 0 40 52">
-            <path
-              d="M20 2 C20 2 4 22 4 33 a16 16 0 0 0 32 0 C36 22 20 2 20 2 Z"
-              fill="#ffffff"
-            />
-          </svg>
-        </span>
-        <span style={{ fontWeight: 800, color: NAVY, fontSize: 22 }}>
-          Bright Plumbing
-        </span>
-        <span style={{ flex: 1 }} />
-        <span>Services</span>
-        <span>Reviews</span>
-        <span
-          style={{
-            height: 42,
-            padding: "0 18px",
-            borderRadius: 999,
-            background: NAVY,
-            color: "#ffffff",
-            fontWeight: 700,
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          Book now
-        </span>
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          top: 112,
-          height: 38,
-          padding: "0 16px",
-          borderRadius: 999,
-          background: "hsl(160 60% 45% / 0.12)",
-          color: "hsl(160 64% 28%)",
-          fontSize: 20,
-          fontWeight: 700,
-          display: "flex",
-          alignItems: "center",
-        }}
-      >
-        Open today until 18:00
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          top: 172,
-          fontSize: 56,
-          fontWeight: 800,
-          letterSpacing: "-0.035em",
-          lineHeight: 1.04,
-          color: NAVY,
-        }}
-      >
-        Same-day plumber
-        <br />
-        in Sandton.
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          top: 318,
-          fontSize: 26,
-          color: MUTED,
-        }}
-      >
-        Leaks, drains and geysers, fixed fast.
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          top: 384,
-          display: "flex",
-          alignItems: "center",
-          gap: 22,
-        }}
-      >
-        <span
-          style={{
-            height: 60,
-            padding: "0 30px",
-            borderRadius: 999,
-            background: NAVY,
-            color: "#ffffff",
-            fontSize: 24,
-            fontWeight: 700,
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          Book a visit
-        </span>
-        <span style={{ fontSize: 22, fontWeight: 600, color: INK }}>
-          4.9 stars from 212 reviews
-        </span>
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 610,
-          top: 110,
-          width: 290,
-          height: 330,
-          borderRadius: 28,
-          background: `linear-gradient(160deg, hsl(190 85% 60%), hsl(212 80% 48%))`,
-          boxShadow: "0 30px 60px -30px hsl(212 80% 30% / 0.55)",
-          display: "grid",
-          placeItems: "center",
-        }}
-      >
-        <svg aria-hidden="true" width="150" height="150" viewBox="0 0 24 24">
-          <path
-            d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3.6 17.4a1.6 1.6 0 1 0 2.3 2.3l5.7-5.7a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.1-.4-.4-2.1z"
-            fill="#ffffff"
-          />
-        </svg>
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 40,
-          bottom: 86,
-          fontSize: 20,
-          fontWeight: 600,
-          color: GREEN.deep,
-        }}
-      >
-        Updated today
-      </div>
-    </div>
-  );
 }
 
 /** The website card: the old page repainted by a green ant walking across it. */
@@ -443,7 +141,7 @@ export const WebsiteCard: React.FC<{ t: number; timing: SiteTiming }> = ({
             justifyContent: "center",
           }}
         >
-          brightplumbing.co.za
+          {BRIGHT.domain}
         </span>
         <span style={{ flex: 1 }} />
         <span

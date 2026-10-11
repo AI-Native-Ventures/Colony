@@ -74,7 +74,7 @@ function line(
   cut: readonly [number, number],
   spoken: readonly [number, number],
   startsAt: number,
-  read: "f90" | "f130" | "f140" = "f90",
+  read: "f90" | "f130" | "f140" | "f150" = "f90",
   caption?: string,
 ): Line90 {
   const lead = spoken[0] - cut[0];
@@ -93,7 +93,8 @@ function line(
 /**
  * `spoken` is where the words sit in the source read; the last number is
  * where they land in the film. "f130" lines are the 2026-10-11 Aoede read
- * through the Gemini API; "f90" lines are the earlier read.
+ * through the Gemini API; "f140" re-reads the sales lines and "f150" the
+ * AI agents definition; "f90" lines are the earlier read.
  */
 export const LINES: Line90[] = [
   line(
@@ -144,11 +145,11 @@ export const LINES: Line90[] = [
   line(
     "n06",
     "colony",
-    "An AI employee is software that does office work for you, like a person on your team.",
-    [15.55, 19.7],
-    [15.673, 19.55],
+    "AI employees are AI agents that do office work for you, like people on your team.",
+    [3.95, 8.85],
+    [4.098, 8.608],
     25.8,
-    "f130",
+    "f150",
   ),
   line(
     "n07",

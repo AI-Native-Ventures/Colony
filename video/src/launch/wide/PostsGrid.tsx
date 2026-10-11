@@ -1,8 +1,7 @@
 import { INTER } from "../fonts";
 import { easeOutExpo, lerp, lerpAngle, progress, smoothstep } from "../math.ts";
 import { TONES } from "./employees.ts";
-import { MeshGradient } from "./MeshGradient";
-import { PALETTES, type PaletteId } from "./mesh.ts";
+import { PostArt } from "./BrightPosts";
 import {
   POST_SIZE,
   POSTS,
@@ -31,110 +30,6 @@ const CARRY_LIFT = 74;
 function tint(alpha: number): string {
   return PINK.color.replace(")", ` / ${alpha})`);
 }
-
-/** Bright Plumbing's mark: a small water drop, the way the posts carry Colony's ant. */
-function Drop({ size }: { size: number }) {
-  return (
-    <svg
-      aria-hidden="true"
-      width={size}
-      height={size * 1.3}
-      viewBox="0 0 40 52"
-    >
-      <path
-        d="M20 2 C20 2 4 22 4 33 a16 16 0 0 0 32 0 C36 22 20 2 20 2 Z"
-        fill={INK}
-      />
-    </svg>
-  );
-}
-
-type PostLook = {
-  palette: PaletteId;
-  lines: readonly [string, string];
-  note?: string;
-};
-
-/** Three example posts for Bright Plumbing, in the soft gradient style of Colony's own posts. */
-const POST_LOOKS: Record<string, PostLook> = {
-  leak: { palette: "sea", lines: ["Leaks fixed", "the same day."] },
-  geyser: {
-    palette: "sunset",
-    lines: ["Geyser check", "before winter."],
-    note: "From R450",
-  },
-  review: {
-    palette: "lilac",
-    lines: ["\u201cFast, clean", "and friendly.\u201d"],
-    note: "Lerato, Rosebank",
-  },
-};
-
-/** One example Instagram post, drawn in code at full size. */
-export const PostArt: React.FC<{ id: string }> = ({ id }) => {
-  const look = POST_LOOKS[id];
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        borderRadius: 24,
-        overflow: "hidden",
-        fontFamily: INTER,
-      }}
-    >
-      <MeshGradient
-        palette={PALETTES[look.palette]}
-        t={0}
-        width={POST_SIZE}
-        height={POST_SIZE}
-      />
-      <div
-        style={{
-          position: "absolute",
-          left: 14,
-          right: 14,
-          top: look.note ? 78 : 92,
-          textAlign: "center",
-          fontSize: 27,
-          fontWeight: 800,
-          letterSpacing: "-0.04em",
-          lineHeight: 1.06,
-          color: INK,
-        }}
-      >
-        {look.lines[0]}
-        <br />
-        {look.lines[1]}
-        {look.note ? (
-          <div
-            style={{
-              marginTop: 12,
-              fontSize: 20,
-              fontWeight: 600,
-              letterSpacing: "-0.01em",
-              color: "rgb(23 21 31 / 0.72)",
-            }}
-          >
-            {look.note}
-          </div>
-        ) : null}
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          bottom: 18,
-          display: "flex",
-          justifyContent: "center",
-        }}
-      >
-        <Drop size={15} />
-      </div>
-    </div>
-  );
-};
 
 /** Posts card: three example posts carried in by pink ants, ready for Instagram. */
 export const PostsGrid: React.FC<{ t: number; timing: PostsTiming }> = ({

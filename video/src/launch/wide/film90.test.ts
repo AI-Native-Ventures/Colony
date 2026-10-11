@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { foundCount } from "./beat.ts";
 import { HOW } from "./how.ts";
 import { SCOUT_TASKS, taskLandsAt } from "./scout.ts";
-import { INTRO, TOWER_WORDS, TRADE_WORDS } from "./intro.ts";
+import { DEFINITION, INTRO, TOWER_WORDS, TRADE_WORDS } from "./intro.ts";
 import { EMAIL } from "./email.ts";
 import { TEAM } from "./employees.ts";
 import {
@@ -199,6 +199,13 @@ test("'AI employee' is defined on screen as it is said", () => {
   const [start] = spoken("n06");
   assert.ok(INTRO.defineFrom <= start && start <= INTRO.defineFrom + 0.5);
   assert.ok(INTRO.brightFrom >= spoken("n06")[1] + 0.8, "bright too soon");
+});
+
+test("the screen shows what the voice says: AI employees are AI agents", () => {
+  const n06 = LINES.find((l) => l.id === "n06");
+  assert.equal(n06?.text, `${DEFINITION.title} are ${DEFINITION.body}`);
+  assert.match(DEFINITION.body, /^AI agents that do office work for you/);
+  assert.equal(n06?.file, "launch/f150-n06.mp3");
 });
 
 test("the bright app world is open before 'Paste your website'", () => {

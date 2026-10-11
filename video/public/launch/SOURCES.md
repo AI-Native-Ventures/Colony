@@ -98,3 +98,20 @@ plucks and marimba. The 90 s music is decided in milestone C.
   `aevalsrc`; no third-party audio.
 - Music: Lyria 3 on the same key refused (free tier limit 0), so draft B is
   re-cut into four overlapping cues as a stand-in.
+
+## Definition re-read: `f150-n06.mp3` (2026-10-11)
+
+- The owner asked for AI employees to be defined as AI agents. Same model and
+  voice (`gemini-3.8-flash-tts`, `Aoede`), read together with the line before
+  and after it so the intonation matches, normalised to -16 LUFS and cut at
+  the measured pauses (3.95 s to 8.85 s of that read).
+- Transcribed with `gemini-2.5-flash`: "AI employees are AI agents that do
+  office work for you like people on your team".
+
+## Bright Plumbing's posts and website (2026-10-11)
+
+- Drawn in code, no photos, after plumbing Instagram posts and plumbing
+  websites the owner pointed to on Pinterest: navy and royal blue, an orange
+  call to action, tall capitals, a phone number and a booking button.
+- Fonts: Poppins, Anton and Caveat from Google Fonts (SIL Open Font License),
+  loaded with `@remotion/google-fonts`.
