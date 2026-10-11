@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cancelRender, continueRender, delayRender } from "remotion";
 import { antShapes, drawAnt } from "../launch/antShape";
-import { antColorOnLight } from "../launch/colors.ts";
 import { INTER } from "../launch/fonts";
 import {
   easeOutExpo,
+  lerp,
   mulberry32,
   progress,
   smoothstep,
@@ -12,18 +12,36 @@ import {
 import { pickPoints, sampleAlphaPoints } from "../launch/points.ts";
 import { type Ant, antState, createAnts } from "../launch/swarm.ts";
 import { WIDE_H, WIDE_W } from "../launch/wide/beat.ts";
-import { TONES } from "../launch/wide/employees.ts";
-import { drawCroissantSilhouette } from "./croissantShape.ts";
-import { EP05 } from "./ep05.ts";
+import type { Tone } from "../launch/wide/employees.ts";
+import {
+  drawHookShape,
+  HOOK_SHAPE_WIDTH,
+  type HookShapeId,
+} from "./hookShapes.ts";
 import { edgeStarts } from "./swarmShape.ts";
 
+/** One explainer's hook: the question in big words, and the trade's tool built by ants. */
+export type HookConfig = {
+  lines: readonly [string, string];
+  subline: string;
+  shape: HookShapeId;
+  seed: number;
+  /** When the first line rises; may be before 0 so frame 0 already shows it. */
+  wordsAt: number;
+  sublineAt: number;
+  /** When the ants leave the edges; may be before 0 so they are already in view. */
+  swarmFrom: number;
+  /** The bright stage covers the hook between these; the ants take the employee's colour first. */
+  stageFrom: number;
+  stageTo: number;
+  tone: Tone;
+};
+
 const INK = "#17151f";
+const INK_RGB = [23, 21, 31] as const;
 const ANT_COUNT = 700;
-const SEED = 20261105;
-/** Where the croissant of ants sits: right of the words. */
-const SHAPE = { cx: 1350, cy: 560, width: 780 };
-/** colors.ts group index for pink, the posts employee. */
-const PINK_GROUP = 3;
+/** Where the tool of ants sits: right of the words. */
+const SHAPE_AT = { cx: 1350, cy: 560 };
 const TRAIL_DT = 0.022;
 const TRAIL_ALPHA = [1, 0.42, 0.22, 0.1];
 
@@ -35,13 +53,26 @@ const layer: React.CSSProperties = {
   height: WIDE_H,
 };
 
-function silhouettePoints(): ReturnType<typeof sampleAlphaPoints> {
+function rgbOf(tone: Tone): [number, number, number] {
+  const [r, g, b] = (tone.rgb.match(/\d+/g) ?? ["0", "0", "0"]).map(Number);
+  return [r, g, b];
+}
+
+/** Ink turning into `rgb` as `k` goes 0 to 1, rounded like colors.ts. */
+function inkTo(rgb: readonly [number, number, number], k: number): string {
+  const [r, g, b] = INK_RGB.map((c, i) => Math.round(lerp(c, rgb[i], k)));
+  return `rgb(${r} ${g} ${b})`;
+}
+
+function silhouettePoints(
+  shape: HookShapeId,
+): ReturnType<typeof sampleAlphaPoints> {
   const canvas = document.createElement("canvas");
   canvas.width = WIDE_W;
   canvas.height = WIDE_H;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) throw new Error("2D canvas unavailable");
-  drawCroissantSilhouette(ctx, SHAPE.cx, SHAPE.cy, SHAPE.width);
+  drawHookShape(shape, ctx, SHAPE_AT.cx, SHAPE_AT.cy, HOOK_SHAPE_WIDTH[shape]);
   return sampleAlphaPoints(
     ctx.getImageData(0, 0, WIDE_W, WIDE_H).data,
     WIDE_W,
@@ -50,14 +81,15 @@ function silhouettePoints(): ReturnType<typeof sampleAlphaPoints> {
   );
 }
 
-/** Builds the hook's swarm once: ants from the top, right and bottom edges into a croissant. */
-function useCroissantSwarm(): Ant[] | null {
-  const [handle] = useState(() => delayRender("Building the croissant swarm"));
+/** Builds the hook's swarm once: ants from the top, right and bottom edges into the shape. */
+function useShapeSwarm(hook: HookConfig): Ant[] | null {
+  const [handle] = useState(() => delayRender("Building the hook swarm"));
   const [ants, setAnts] = useState<Ant[] | null>(null);
+  const { shape, seed, swarmFrom } = hook;
   useEffect(() => {
     try {
-      const rand = mulberry32(SEED);
-      const ends = pickPoints(silhouettePoints(), ANT_COUNT, rand);
+      const rand = mulberry32(seed);
+      const ends = pickPoints(silhouettePoints(shape), ANT_COUNT, rand);
       const starts = edgeStarts(
         ANT_COUNT,
         rand,
@@ -71,8 +103,8 @@ function useCroissantSwarm(): Ant[] | null {
           ends,
           [{ c1: { x: 1620, y: 260 }, c2: { x: 1180, y: 820 }, spread: 260 }],
           {
-            seed: SEED + 1,
-            releaseAt: EP05.swarmFrom,
+            seed: seed + 1,
+            releaseAt: swarmFrom,
             sweep: 0.3,
             frameWidth: WIDE_W,
             flight: { min: 1.25, spread: 0.55 },
@@ -83,20 +115,25 @@ function useCroissantSwarm(): Ant[] | null {
     } catch (err: unknown) {
       cancelRender(err);
     }
-  }, [handle]);
+  }, [handle, shape, seed, swarmFrom]);
   return ants;
 }
 
-const CroissantSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
+const ShapeSwarm: React.FC<{ ants: Ant[]; t: number; hook: HookConfig }> = ({
+  ants,
+  t,
+  hook,
+}) => {
   const ref = useRef<HTMLCanvasElement>(null);
   const shapes = useMemo(() => antShapes(), []);
+  const own = useMemo(() => rgbOf(hook.tone), [hook.tone]);
   useLayoutEffect(() => {
     const ctx = ref.current?.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.clearRect(0, 0, WIDE_W, WIDE_H);
-    const toPink = smoothstep(EP05.stageFrom - 0.45, EP05.stageFrom, t);
+    const toTone = smoothstep(hook.stageFrom - 0.45, hook.stageFrom, t);
     for (let k = TRAIL_ALPHA.length - 1; k >= 0; k--) {
       const tk = t - k * TRAIL_DT;
       for (const ant of ants) {
@@ -111,12 +148,12 @@ const CroissantSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
           s.y,
           s.angle,
           s.size * (1 - 0.12 * k),
-          antColorOnLight(PINK_GROUP, toPink, 0),
+          inkTo(own, toTone),
           alpha,
         );
       }
     }
-  }, [ants, shapes, t]);
+  }, [ants, shapes, own, hook.stageFrom, t]);
   return <canvas ref={ref} width={WIDE_W} height={WIDE_H} style={layer} />;
 };
 
@@ -129,13 +166,16 @@ function rise(t: number, at: number, seconds = 0.6): React.CSSProperties {
   };
 }
 
-/** The hook: the question in big words, and ants flying in to build a croissant. */
-export const HookScene: React.FC<{ t: number }> = ({ t }) => {
-  const ants = useCroissantSwarm();
-  if (t > EP05.stageTo + 0.1) return null;
+/** The hook: the question in big words, and ants flying in to build the trade's tool. */
+export const HookScene: React.FC<{ t: number; hook: HookConfig }> = ({
+  t,
+  hook,
+}) => {
+  const ants = useShapeSwarm(hook);
+  if (t > hook.stageTo + 0.1) return null;
   return (
     <>
-      {ants ? <CroissantSwarm ants={ants} t={t} /> : null}
+      {ants ? <ShapeSwarm ants={ants} t={t} hook={hook} /> : null}
       <div
         style={{
           position: "absolute",
@@ -153,8 +193,8 @@ export const HookScene: React.FC<{ t: number }> = ({ t }) => {
             lineHeight: 1.02,
           }}
         >
-          <div style={rise(t, EP05.hookWordsAt)}>When did you</div>
-          <div style={rise(t, EP05.hookWordsAt + 0.12)}>last post?</div>
+          <div style={rise(t, hook.wordsAt)}>{hook.lines[0]}</div>
+          <div style={rise(t, hook.wordsAt + 0.12)}>{hook.lines[1]}</div>
         </div>
         <div
           style={{
@@ -162,11 +202,11 @@ export const HookScene: React.FC<{ t: number }> = ({ t }) => {
             fontSize: 60,
             fontWeight: 700,
             letterSpacing: "-0.03em",
-            color: TONES.pink.deep,
-            ...rise(t, EP05.hookHonestAt),
+            color: hook.tone.deep,
+            ...rise(t, hook.sublineAt),
           }}
         >
-          Be honest.
+          {hook.subline}
         </div>
       </div>
     </>

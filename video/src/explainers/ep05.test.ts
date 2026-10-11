@@ -9,6 +9,7 @@ import {
   EP05_SECONDS,
 } from "./ep05.ts";
 import { timelineProblems } from "./episode.ts";
+import { assertEpisodeShape } from "./episodeChecks.test.ts";
 import { RISE_POSTS } from "./rise.ts";
 
 const spoken = (id: string) => {
@@ -75,4 +76,22 @@ test("the end card shows the address while it is said, with no spoken-form capti
 
 test("captions never cover the posts card", () => {
   assert.ok(POSTS_CARD.y + POSTS_CARD.h <= 940);
+});
+
+test("episode 5 keeps the season's shared rules", () => {
+  assertEpisodeShape({
+    seconds: EP05_SECONDS,
+    beats: EP05_BEATS,
+    lines: EP05_LINES,
+    hook: {
+      wordsAt: EP05.hookWordsAt,
+      swarmFrom: EP05.swarmFrom,
+      stageFrom: EP05.stageFrom,
+      stageTo: EP05.stageTo,
+    },
+    avatarAt: EP05.avatarAt,
+    click: EP05.click,
+    close: { dimFrom: EP05.closeFrom, urlAt: EP05.urlAt },
+    doneAt: EP05.scheduledAt,
+  });
 });
