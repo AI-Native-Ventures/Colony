@@ -188,7 +188,7 @@ export function timelineProblems(beats: Beats, lines: readonly EpisodeLine[], se
 }
 ```
 
-- [ ] **Step 4:** Move `bannedWord` into `src/launch/banned.ts` (export), import it in `film.test.ts`; add `src/explainers/copy.test.ts` that scans `src/explainers` (non-test `.ts`/`.tsx`) with `bannedWord` and asserts none, plus asserts no `—` in those files.
+- [ ] **Step 4:** Move `bannedWord` into `src/launch/banned.ts` (export), import it in `film.test.ts`; add `src/explainers/copy.test.ts` that scans `src/explainers` (non-test `.ts`/`.tsx`) with `bannedWord` and asserts none, plus asserts no em dash (U+2014) in those files.
 - [ ] **Step 5:** Run `node --test src/launch/*.test.ts src/launch/wide/*.test.ts src/explainers/*.test.ts`; expect all PASS. Commit `video(explainers): episode timeline kit with checks`.
 
 ### Task 3: Voice for episode 5
