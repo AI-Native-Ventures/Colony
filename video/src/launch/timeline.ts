@@ -6,9 +6,13 @@ export const FRAME_H = 1920;
 export const SEED = 20261010;
 export const ANT_COUNT = 900;
 
-/** The tower stands complete from about 3.7 s; it trembles, then breaks into ants. */
-export const T_TREMBLE = 4.0;
-export const T_RELEASE = 4.4;
+/**
+ * The tower stands complete from about 3.7 s; it trembles, then breaks into
+ * ants. The break is placed so the logo flash (T_LOGO_IN) lands on the music
+ * lift at 7.0 s (film.ts MUSIC_LIFT).
+ */
+export const T_TREMBLE = 4.35;
+export const T_RELEASE = 4.75;
 /** Seconds from the first ant leaving (left edge) to the last (right edge). */
 export const RELEASE_SWEEP = 0.45;
 /** Everything after the break is timed from it, so the words can be retimed alone. */
