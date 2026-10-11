@@ -10,6 +10,7 @@ import { TEAM, TONES } from "./employees.ts";
 import {
   DEFINITION,
   INTRO,
+  swarmFade,
   TOWER_WORDS,
   TRADE_WORDS,
   WIDE_LOGO_RECT,
@@ -117,7 +118,7 @@ const TowerLayer: React.FC<{ t: number }> = ({ t }) => {
 const WideSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
   const sharpRef = useRef<HTMLCanvasElement>(null);
   const shapes = useMemo(() => antShapes(), []);
-  const active = t >= INTRO.release - 0.2 && t <= INTRO.defineFrom + 0.2;
+  const active = t >= INTRO.release - 0.2 && swarmFade(t) > 0;
   useLayoutEffect(() => {
     const sharpCanvas = sharpRef.current;
     const sharp = sharpCanvas?.getContext("2d");
@@ -126,9 +127,7 @@ const WideSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
     sharp.globalAlpha = 1;
     sharp.clearRect(0, 0, WIDE_W, WIDE_H);
     if (!active) return;
-    const settle =
-      (1 - 0.85 * progress(t, INTRO.logoIn, 0.45)) *
-      (1 - smoothstep(INTRO.defineFrom - 0.4, INTRO.defineFrom, t));
+    const settle = swarmFade(t);
     const unite = smoothstep(INTRO.logoIn - 0.2, INTRO.logoIn + 0.15, t);
     for (let k = TRAIL_ALPHA.length - 1; k >= 0; k--) {
       const tk = t - k * TRAIL_DT;
@@ -159,9 +158,7 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
   const logoIn = smoothstep(INTRO.logoIn, INTRO.logoIn + 0.4, t);
   const pulse = progress(t, INTRO.logoIn + 0.05, 1.1);
   const ring = easeOutExpo(pulse);
-  const glow =
-    0.55 * Math.sin(Math.PI * Math.min(1, pulse * 1.4)) +
-    0.22 * smoothstep(INTRO.logoIn, INTRO.logoIn + 0.6, t);
+  const glow = 0.55 * Math.sin(Math.PI * Math.min(1, pulse * 1.4));
   const ringAlpha = pulse > 0 ? 0.45 * (1 - ring) : 0;
   const step = easeInOutCubic(progress(t, INTRO.defineFrom, 0.9));
   const nameOut = smoothstep(INTRO.defineFrom - 0.1, INTRO.defineFrom + 0.4, t);
@@ -207,7 +204,6 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
           color: INK,
           opacity: logoIn,
           transform: `translateY(${logoShift.toFixed(2)}px) scale(${logoScale.toFixed(4)})`,
-          filter: `drop-shadow(0 18px 30px rgb(23 21 31 / ${(0.18 * logoIn).toFixed(3)}))`,
         }}
       >
         <AntMark />

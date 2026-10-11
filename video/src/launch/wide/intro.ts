@@ -1,3 +1,4 @@
+import { smoothstep } from "../math.ts";
 import type { StackOptions } from "../stack.ts";
 import type { Lane } from "../swarm.ts";
 
@@ -33,6 +34,15 @@ export const DEFINITION = {
   title: "AI employees",
   body: "AI agents that do office work for you, like people on your team.",
 } as const;
+
+/**
+ * How visible the swarm is: whole until the logo flashes in, then gone as the
+ * solid logo lands, so no ants are left fuzzing its edge (the owner saw that
+ * as a "weird shadow", 2026-10-11).
+ */
+export function swarmFade(t: number): number {
+  return 1 - smoothstep(INTRO.logoIn, INTRO.logoIn + 0.45, t);
+}
 
 export type TimedWord = { text: string; at: number };
 

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { stackY } from "../stack.ts";
 import {
   INTRO,
+  swarmFade,
   TOWER_MAX_WIDTH,
   TOWER_STACK,
   TOWER_WORDS,
@@ -59,4 +60,10 @@ test("the logo lands 2.25 s after the break, like the approved opening", () => {
 
 test("the logo sits in the top half, leaving room for the name under it", () => {
   assert.ok(WIDE_LOGO_RECT.cy + WIDE_LOGO_RECT.height / 2 <= 560);
+});
+
+test("the swarm is gone once the logo has landed, so no ants fuzz its edge", () => {
+  assert.equal(swarmFade(INTRO.logoIn - 0.3), 1);
+  assert.equal(swarmFade(INTRO.logoIn + 0.5), 0);
+  assert.equal(swarmFade(INTRO.tagline), 0);
 });
