@@ -13,6 +13,9 @@ export const BEAT = {
   brightFrom: 1.7,
   brightTo: 2.7,
   avatarAt: 2.3,
+  headlineAt: 2.5,
+  sublineAt: 3.05,
+  focusFrom: 4.8,
   boardIn: 3.6,
   carryFrom: 5.2,
   carryEvery: 0.58,
@@ -20,6 +23,9 @@ export const BEAT = {
   countRushFrom: 10.3,
   countRush: 1.3,
 };
+
+/** Timing of a "finds customers" beat; the film uses its own (film90.ts BLUE90). */
+export type BlueTiming = typeof BEAT;
 
 export type BeatLine = {
   id: string;
@@ -92,19 +98,21 @@ export function carryPath(i: number): Path {
   ];
 }
 
-export function carryStart(i: number): number {
-  return BEAT.carryFrom + i * BEAT.carryEvery;
+export function carryStart(i: number, timing: BlueTiming = BEAT): number {
+  return timing.carryFrom + i * timing.carryEvery;
 }
 
-export function landsAt(i: number): number {
-  return carryStart(i) + BEAT.carryDuration;
+export function landsAt(i: number, timing: BlueTiming = BEAT): number {
+  return carryStart(i, timing) + timing.carryDuration;
 }
 
 /** Leads found so far: one per landed carrier, then a quick count up to 20. */
-export function foundCount(t: number): number {
-  const landed = LEADS.filter((_, i) => t >= landsAt(i)).length;
+export function foundCount(t: number, timing: BlueTiming = BEAT): number {
+  const landed = LEADS.filter((_, i) => t >= landsAt(i, timing)).length;
   if (landed < LEADS.length) return landed;
-  const rush = easeInOutCubic(progress(t, BEAT.countRushFrom, BEAT.countRush));
+  const rush = easeInOutCubic(
+    progress(t, timing.countRushFrom, timing.countRush),
+  );
   return landed + Math.round((20 - LEADS.length) * rush);
 }
 
@@ -119,12 +127,15 @@ export const CAMERA = {
   outTo: 11.4,
 };
 
-export function cameraScale(t: number): number {
-  const zoomIn = easeInOutCubic(
-    progress(t, CAMERA.inFrom, CAMERA.inTo - CAMERA.inFrom),
-  );
+export type CameraTiming = Pick<
+  typeof CAMERA,
+  "inFrom" | "inTo" | "outFrom" | "outTo"
+>;
+
+export function cameraScale(t: number, cam: CameraTiming = CAMERA): number {
+  const zoomIn = easeInOutCubic(progress(t, cam.inFrom, cam.inTo - cam.inFrom));
   const zoomOut = easeInOutCubic(
-    progress(t, CAMERA.outFrom, CAMERA.outTo - CAMERA.outFrom),
+    progress(t, cam.outFrom, cam.outTo - cam.outFrom),
   );
   return 1 + (CAMERA.close - 1) * (zoomIn - zoomOut);
 }

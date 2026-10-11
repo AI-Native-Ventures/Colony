@@ -2,6 +2,7 @@ import { INTER } from "../fonts";
 import { easeOutExpo, lerpAngle, progress, smoothstep } from "../math.ts";
 import {
   BEAT,
+  type BlueTiming,
   BOARD,
   carryPath,
   carryStart,
@@ -24,14 +25,17 @@ const COLS = {
 };
 
 /** The real Leads screen as one big flat card, its rows filling as carriers land. */
-export const LeadsBoard: React.FC<{ t: number }> = ({ t }) => {
-  const enter = easeOutExpo(progress(t, BEAT.boardIn, 0.9));
+export const LeadsBoard: React.FC<{ t: number; timing?: BlueTiming }> = ({
+  t,
+  timing = BEAT,
+}) => {
+  const enter = easeOutExpo(progress(t, timing.boardIn, 0.9));
   if (enter <= 0) return null;
-  const count = foundCount(t);
+  const count = foundCount(t, timing);
   const bump = Math.max(
     0,
     ...LEADS.map((_, i) =>
-      t >= landsAt(i) ? 1 - progress(t, landsAt(i), 0.28) : 0,
+      t >= landsAt(i, timing) ? 1 - progress(t, landsAt(i, timing), 0.28) : 0,
     ),
   );
   return (
@@ -120,7 +124,7 @@ export const LeadsBoard: React.FC<{ t: number }> = ({ t }) => {
       ))}
       {LEADS.map((lead, i) => {
         const top = rowY(i) - BOARD.y;
-        const e = easeOutExpo(progress(t, landsAt(i), 0.45));
+        const e = easeOutExpo(progress(t, landsAt(i, timing), 0.45));
         return (
           <div
             key={lead.name}
@@ -221,14 +225,19 @@ export const LeadsBoard: React.FC<{ t: number }> = ({ t }) => {
 };
 
 /** Blue ants carrying each lead in like leaf-cutters, then settling as the row's owner. */
-export const Carriers: React.FC<{ t: number }> = ({ t }) => (
+export const Carriers: React.FC<{ t: number; timing?: BlueTiming }> = ({
+  t,
+  timing = BEAT,
+}) => (
   <>
     {LEADS.map((lead, i) => {
-      if (t < carryStart(i)) return null;
-      const s = walkState(carryPath(i), t, carryStart(i), BEAT.carryDuration);
-      const settle = smoothstep(landsAt(i), landsAt(i) + 0.35, t);
+      const start = carryStart(i, timing);
+      if (t < start) return null;
+      const s = walkState(carryPath(i), t, start, timing.carryDuration);
+      const land = landsAt(i, timing);
+      const settle = smoothstep(land, land + 0.35, t);
       const angle = lerpAngle(s.angle, 0, settle);
-      const tagGone = smoothstep(landsAt(i) - 0.05, landsAt(i) + 0.22, t);
+      const tagGone = smoothstep(land - 0.05, land + 0.22, t);
       const sway = 2.2 * Math.sin(s.phase * Math.PI * 2) * s.amp;
       return (
         <div key={lead.name}>

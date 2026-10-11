@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { foundCount } from "./beat.ts";
 import {
   ACT_ORDER,
   ACTS,
   BEAT_DONE,
+  BLUE90,
   CLICK90,
   FILM90_SECONDS,
   LINES,
@@ -74,4 +76,9 @@ test("each employee finishes its work before the next one speaks", () => {
       `${beat} still working when ${after} speaks`,
     );
   }
+});
+
+test("the film's blue beat has found all 20 before amber speaks", () => {
+  assert.equal(foundCount(ACTS.amber.start, BLUE90), 20);
+  assert.equal(foundCount(ACTS.blue.start, BLUE90), 0);
 });

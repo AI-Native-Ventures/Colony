@@ -1,4 +1,5 @@
 import type { Span } from "../film.ts";
+import type { BlueTiming, CameraTiming } from "./beat.ts";
 
 /**
  * The 90 second wide launch film, in film seconds. Voice: one Aoede read of
@@ -203,7 +204,7 @@ export const LINES: Line90[] = [
 export const CLICK90 = 61.0;
 
 /** Blue beat timing in film seconds (same fields as the proof beat's BEAT). */
-export const BLUE90 = {
+export const BLUE90: BlueTiming = {
   riverFrom: 24.9,
   brightFrom: 25.6,
   brightTo: 26.6,
@@ -219,7 +220,7 @@ export const BLUE90 = {
   countRush: 1.0,
 };
 
-export const BLUE90_CAMERA = {
+export const BLUE90_CAMERA: CameraTiming = {
   inFrom: 28.4,
   inTo: 29.4,
   outFrom: 31.6,
