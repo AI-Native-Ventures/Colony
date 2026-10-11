@@ -1,15 +1,21 @@
 import { easeInOutCubic, progress } from "../math.ts";
 import { typewriterEnd } from "./typewriter.ts";
 
-/** The draft the amber employee writes, an example for Bright Plumbing. */
+/**
+ * The draft the sales employee writes, an example for Bright Plumbing: a
+ * partnership pitch to an office park, not a one-off repair (owner, 2026-10-11).
+ */
 export const EMAIL = {
   to: "Thabo",
-  company: "Rosebank Auto Care",
-  subject: "Leaky pipes at the workshop?",
+  company: "Grayston Office Park",
+  subject: "A plumbing partner for Grayston Office Park",
   lines: [
     "Hi Thabo,",
-    "We fix leaks and blocked drains for workshops",
-    "in Rosebank. Can we take a look this week?",
+    "Bright Plumbing looks after office parks",
+    "across Sandton. We would like to be your",
+    "on-call plumber: one contract, same-day",
+    "call-outs. Could we meet for 15 minutes",
+    "next week?",
   ],
 } as const;
 
@@ -20,7 +26,7 @@ export const MAX_LINE_CHARS = 46;
 export const EMAIL_CARD = { x: 860, y: 150, w: 940, h: 760 };
 
 /** Body text inside the card. */
-export const BODY = { x: 52, top: 430, lineHeight: 54, gapAfterGreeting: 14 };
+export const BODY = { x: 52, top: 404, lineHeight: 50, gapAfterGreeting: 12 };
 export const BODY_FONT_SIZE = 30;
 
 /** Top of body line `i`, card pixels. */

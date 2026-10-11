@@ -82,3 +82,19 @@ plucks and marimba. The 90 s music is decided in milestone C.
 - `sfx-click.mp3` (0.22 s, the Approve press) is synthesised with ffmpeg
   `aevalsrc` (2.3 kHz and 4.6 kHz ticks over a 150 Hz thump, fast decay),
   normalised to -20 LUFS. No third-party audio.
+
+## Second read for the longer film: `f130-*.mp3` (2026-10-11)
+
+- Model `gemini-3.8-flash-tts`, voice `Aoede`, called directly on the Gemini
+  API with the owner's key (OpenRouter was out of credits). One 39.8 s read
+  of the new opening, how-it-works, Scout, sales and close lines (script in
+  `video/src/launch/wide/film90.ts`, the `f130` lines), normalised to -16 LUFS
+  and cut at measured pauses; the cut points are the `cut` values there. The
+  sales line is cut at its comma so "and calls to book a meeting" lands on the
+  call.
+- Every piece was transcribed with `gemini-2.5-flash` and matched the script
+  ("colony dot global" comes back as colony.global).
+- `sfx-ring.mp3` (0.82 s ringback, 440 and 480 Hz) is synthesised with ffmpeg
+  `aevalsrc`; no third-party audio.
+- Music: Lyria 3 on the same key refused (free tier limit 0), so draft B is
+  re-cut into four overlapping cues as a stand-in.

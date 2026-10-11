@@ -70,9 +70,9 @@ export const TEAM_CHIPS: TeamChip[] = [
   { who: "amber", at: 9.75, text: "6 emails sent" },
   { who: "pink", at: 11.0, text: "Posted on Instagram" },
   { who: "green", at: 12.0, text: "Prices updated" },
-  { who: "amber", at: 12.5, text: "Thabo replied" },
+  { who: "amber", at: 12.5, text: "4 calls made" },
   { who: "blue", at: 14.0, text: "5 more customers" },
-  { who: "amber", at: 15.5, text: "2 visits booked" },
+  { who: "amber", at: 15.5, text: "2 meetings booked" },
   { who: "pink", at: 16.25, text: "Next week planned" },
   { who: "green", at: 17.25, text: "New reviews added" },
 ];

@@ -201,7 +201,7 @@ export const CloseScene: React.FC<{
             ...rise(t, timing.urlAt),
           }}
         >
-          colony.ainative.ventures
+          colony.global
         </div>
       </div>
     </>

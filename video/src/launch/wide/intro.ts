@@ -16,13 +16,13 @@ export const INTRO = {
   logoIn: 17.0,
   introducing: 17.2,
   name: 17.37,
-  tagline: 22.4,
+  tagline: 22.3,
   /** The name steps back and "AI employee" is defined. */
   defineFrom: 25.6,
-  teamWalkFrom: 27.2,
+  teamWalkFrom: 27.0,
   /** The bright product world opens from the centre. */
-  brightFrom: 32.4,
-  brightTo: 33.4,
+  brightFrom: 31.3,
+  brightTo: 32.3,
 };
 
 export type TimedWord = { text: string; at: number };
@@ -40,15 +40,15 @@ export type TowerWord = TimedWord & { size: number };
 
 /** "Then came everything else": the jobs said aloud land as they are said, then the rest pile on. */
 export const TOWER_WORDS: TowerWord[] = [
-  { text: "Find customers", at: 6.4, size: 96 },
-  { text: "Reply to emails", at: 7.3, size: 104 },
-  { text: "Post on Instagram", at: 8.1, size: 88 },
-  { text: "Update the website", at: 8.9, size: 86 },
-  { text: "Send quotes", at: 9.6, size: 102 },
-  { text: "Chase invoices", at: 10.15, size: 94 },
-  { text: "Do the books", at: 10.65, size: 104 },
-  { text: "Answer the phone", at: 11.05, size: 90 },
-  { text: "Write the newsletter", at: 11.4, size: 84 },
+  { text: "Find customers", at: 7.0, size: 96 },
+  { text: "Reply to emails", at: 7.9, size: 104 },
+  { text: "Post on Instagram", at: 8.6, size: 88 },
+  { text: "Update the website", at: 9.55, size: 86 },
+  { text: "Send quotes", at: 10.3, size: 102 },
+  { text: "Chase invoices", at: 10.8, size: 94 },
+  { text: "Do the books", at: 11.25, size: 104 },
+  { text: "Answer the phone", at: 11.6, size: 90 },
+  { text: "Write the newsletter", at: 11.9, size: 84 },
 ];
 
 export const TOWER_STACK: StackOptions = {

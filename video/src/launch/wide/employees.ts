@@ -43,8 +43,8 @@ export const LOOKS: Record<EmployeeId, HeroLook> = {
   },
   amber: {
     ...TONES.amber,
-    title: ["Writes", "your emails."],
-    subline: "Writes to each new customer, in your words.",
+    title: ["Sells", "for you."],
+    subline: "Emails and calls new customers, in your words.",
   },
   pink: {
     ...TONES.pink,
@@ -74,4 +74,13 @@ export const GETTING_STARTED: HeroLook = {
   subline: "Colony reads it and hires your team.",
   badge: "Getting started",
   avatar: "person",
+};
+
+/** Scout, the chief of staff: plans the work, hands it out, checks it. */
+export const SCOUT_LOOK: HeroLook = {
+  ...tone(258, 90, 66, "hsl(258 70% 46%)"),
+  title: ["Scout leads", "the team."],
+  subline: "Your chief of staff. Plans the work, hands it out, checks it.",
+  badge: "Chief of staff",
+  avatar: "ant",
 };

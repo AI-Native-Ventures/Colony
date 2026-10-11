@@ -5,19 +5,19 @@ import { typewriterEnd } from "./typewriter.ts";
 
 /** How it works, in film seconds: paste a website, Colony reads it, the team is hired. */
 export const HOW = {
-  avatarAt: 33.6,
-  headlineAt: 35.0,
-  sublineAt: 36.3,
-  focusFrom: 37.6,
-  cardIn: 33.9,
-  cursorFrom: 34.4,
-  pasteAt: 35.3,
-  readClick: 36.0,
+  avatarAt: 32.5,
+  headlineAt: 33.9,
+  sublineAt: 35.2,
+  focusFrom: 36.5,
+  cardIn: 32.8,
+  cursorFrom: 33.3,
+  pasteAt: 34.2,
+  readClick: 34.9,
   /** Seconds "Reading your website…" shows before the summary starts. */
-  readFor: 1.2,
-  summaryCps: 62,
-  continueClick: 39.0,
-  teamAt: 39.4,
+  readFor: 1.0,
+  summaryCps: 70,
+  continueClick: 37.25,
+  teamAt: 37.55,
   teamEvery: 0.28,
 };
 

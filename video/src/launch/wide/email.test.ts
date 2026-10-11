@@ -8,9 +8,17 @@ test("every email line fits the card", () => {
   }
 });
 
-test("the email greets Thabo at Rosebank Auto Care", () => {
+test("the email greets Thabo at Grayston Office Park", () => {
   assert.equal(EMAIL.lines[0], "Hi Thabo,");
-  assert.equal(EMAIL.company, "Rosebank Auto Care");
+  assert.equal(EMAIL.company, "Grayston Office Park");
+});
+
+test("the email offers a partnership, not a one-off repair", () => {
+  const body = EMAIL.lines.join(" ");
+  assert.match(body, /on-call plumber/);
+  assert.match(body, /contract/);
+  assert.match(body, /meet/);
+  assert.doesNotMatch(`${EMAIL.subject} ${body}`, /leak|burst|fix your/i);
 });
 
 test("body lines go down the card without touching", () => {
@@ -21,9 +29,9 @@ test("body lines go down the card without touching", () => {
 
 const timing = {
   typeFrom: 10,
-  typeCps: 40,
+  typeCps: 55,
   returnSeconds: 0.3,
-  countRushFrom: 14,
+  countRushFrom: 15.5,
   countRush: 0.6,
 };
 
@@ -34,7 +42,7 @@ test("no drafts are ready while the email is still being typed", () => {
 test("drafts ready goes 0, then 1, then up to 20, never down", () => {
   let prev = 0;
   let sawOne = false;
-  for (let t = 9; t <= 16; t += 1 / 30) {
+  for (let t = 9; t <= 17; t += 1 / 30) {
     const n = draftsReady(t, timing);
     assert.ok(n >= prev, `went down at ${t}`);
     if (n === 1) sawOne = true;

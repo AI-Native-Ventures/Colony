@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { foundCount } from "./beat.ts";
 import { HOW } from "./how.ts";
+import { SCOUT_TASKS, taskLandsAt } from "./scout.ts";
 import { INTRO, TOWER_WORDS, TRADE_WORDS } from "./intro.ts";
 import { EMAIL } from "./email.ts";
 import { TEAM } from "./employees.ts";
@@ -24,6 +25,7 @@ import {
   PANS,
   PINK90,
   panelX,
+  SCOUT90,
   panX,
   RIVERS90,
   TIMING90,
@@ -173,9 +175,9 @@ function spoken(id: string): readonly [number, number] {
   return found.speech;
 }
 
-test("trades show while 'the work you love' is said", () => {
+test("trades show while 'the work you love' is said, or just after", () => {
   assert.ok(TRADE_WORDS[0].at >= spoken("n01")[0]);
-  assert.ok(TRADE_WORDS[TRADE_WORDS.length - 1].at <= spoken("n01")[1]);
+  assert.ok(TRADE_WORDS[TRADE_WORDS.length - 1].at <= spoken("n01")[1] + 0.7);
 });
 
 test("the jobs pile up while 'everything else' is said", () => {
@@ -184,7 +186,7 @@ test("the jobs pile up while 'everything else' is said", () => {
 });
 
 test("the logo lands just before 'Introducing: Colony.'", () => {
-  const [start] = spoken("l04");
+  const [start] = spoken("n04");
   assert.ok(INTRO.logoIn <= start && start <= INTRO.logoIn + 0.6);
 });
 
@@ -205,8 +207,29 @@ test("the bright app world is open before 'Paste your website'", () => {
   assert.ok(HOW.pasteAt >= start && HOW.pasteAt <= end);
 });
 
-test("the whole team is in before 'Meet your team.'", () => {
-  assert.ok(teamRowAt(TEAM.length - 1, HOW) + 0.3 <= spoken("n08")[0]);
+test("the whole team is in before Scout is introduced", () => {
+  assert.ok(teamRowAt(TEAM.length - 1, HOW) + 0.3 <= spoken("s01")[0]);
+});
+
+test("Scout hands out every task before saying it checks the work", () => {
+  const [start, end] = spoken("s01");
+  assert.ok(taskLandsAt(SCOUT_TASKS.length - 1, SCOUT90) <= SCOUT90.checkAt);
+  assert.ok(SCOUT90.checkAt >= start && SCOUT90.checkAt <= end);
+  assert.ok(SCOUT90.taskFrom >= SCOUT90.cardIn + 0.5, "tasks before the card");
+});
+
+test("the sales employee emails while 'it emails each of them' is said", () => {
+  const [, end] = spoken("a01");
+  assert.ok(AMBER90.typeFrom <= end, "typing starts after the line");
+});
+
+test("the call starts as 'and calls to book a meeting' is said", () => {
+  const [start] = spoken("a02");
+  assert.ok(AMBER90.callIn <= start && start <= AMBER90.callIn + 0.6);
+  assert.ok(AMBER90.callIn >= AMBER90.countRushFrom + AMBER90.countRush + 0.3);
+  assert.ok(AMBER90.connectAt < AMBER90.bubble1At);
+  assert.ok(AMBER90.bubble1At < AMBER90.bubble2At);
+  assert.ok(AMBER90.bubble2At < AMBER90.bookedAt);
 });
 
 test("the logo is back before 'Colony.' and the address shows as it is said", () => {

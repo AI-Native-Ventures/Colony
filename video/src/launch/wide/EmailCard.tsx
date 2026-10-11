@@ -7,7 +7,6 @@ import {
   progress,
   smoothstep,
 } from "../math.ts";
-import { LEADS } from "./beat.ts";
 import {
   BODY,
   BODY_FONT_SIZE,
@@ -24,6 +23,8 @@ import { WorkerAnt } from "./WorkerAnt";
 
 export type EmailTiming = {
   cardIn: number;
+  /** The call card takes over the same spot from here. */
+  callIn: number;
   walkFrom: number;
   typeFrom: number;
   typeCps: number;
@@ -149,7 +150,8 @@ export const EmailCard: React.FC<{ t: number; timing: EmailTiming }> = ({
   timing,
 }) => {
   const enter = easeOutExpo(progress(t, timing.cardIn, 0.9));
-  if (enter <= 0) return null;
+  const handOver = smoothstep(timing.callIn - 0.05, timing.callIn + 0.35, t);
+  if (enter <= 0 || handOver >= 1) return null;
   const state = typewriterAt([...EMAIL.lines], t, options(timing));
   const typing = t >= timing.typeFrom && !state.done;
   const ready = draftsReady(t, timing);
@@ -160,7 +162,6 @@ export const EmailCard: React.FC<{ t: number; timing: EmailTiming }> = ({
     t >= rushEnd ? 1 - progress(t, rushEnd, 0.35) : 0,
   );
   const caretX = bodyWidth(state.typed[state.line]);
-  const others = [LEADS[1].name, LEADS[2].name, "+17 more"];
   return (
     <div
       style={{
@@ -175,8 +176,8 @@ export const EmailCard: React.FC<{ t: number; timing: EmailTiming }> = ({
         boxShadow: "0 50px 100px -50px hsl(30 60% 30% / 0.4)",
         fontFamily: INTER,
         color: INK,
-        opacity: enter,
-        transform: `translateX(${((1 - enter) * 90).toFixed(2)}px)`,
+        opacity: enter * (1 - handOver),
+        transform: `translateX(${((1 - enter) * 90).toFixed(2)}px) translateY(${(-30 * handOver).toFixed(2)}px)`,
         filter:
           enter < 1 ? `blur(${((1 - enter) * 10).toFixed(2)}px)` : undefined,
       }}
@@ -314,65 +315,6 @@ export const EmailCard: React.FC<{ t: number; timing: EmailTiming }> = ({
           }}
         />
       ) : null}
-      {t >= timing.countRushFrom ? (
-        <div
-          style={{
-            position: "absolute",
-            left: 52,
-            right: 48,
-            top: 630,
-            fontSize: 22,
-          }}
-        >
-          <div
-            style={{
-              color: MUTED,
-              opacity: smoothstep(
-                timing.countRushFrom,
-                timing.countRushFrom + 0.25,
-                t,
-              ),
-            }}
-          >
-            Also written for
-          </div>
-          <div style={{ display: "flex", gap: 12, marginTop: 14 }}>
-            {others.map((name, k) => {
-              const e = easeOutExpo(
-                progress(t, timing.countRushFrom + 0.1 + k * 0.12, 0.45),
-              );
-              return (
-                <span
-                  key={name}
-                  style={{
-                    height: 46,
-                    padding: "0 18px",
-                    borderRadius: 999,
-                    border: `1.5px solid ${LINE}`,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 10,
-                    fontWeight: 600,
-                    color: INK,
-                    opacity: e,
-                    transform: `translateY(${((1 - e) * 16).toFixed(2)}px)`,
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: 5,
-                      background: AMBER.color,
-                    }}
-                  />
-                  {name}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 };
@@ -382,7 +324,8 @@ export const PenAnt: React.FC<{ t: number; timing: EmailTiming }> = ({
   t,
   timing,
 }) => {
-  if (t < timing.walkFrom) return null;
+  const leave = smoothstep(timing.callIn - 0.1, timing.callIn + 0.25, t);
+  if (t < timing.walkFrom || leave >= 1) return null;
   const s = penState(t, timing);
   return (
     <WorkerAnt
@@ -393,7 +336,9 @@ export const PenAnt: React.FC<{ t: number; timing: EmailTiming }> = ({
       color={AMBER.color}
       phase={s.phase}
       amp={s.amp}
-      opacity={smoothstep(timing.walkFrom, timing.walkFrom + 0.25, t)}
+      opacity={
+        smoothstep(timing.walkFrom, timing.walkFrom + 0.25, t) * (1 - leave)
+      }
     />
   );
 };

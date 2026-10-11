@@ -22,7 +22,7 @@ export const YES_ROWS: YesRow[] = [
   },
   {
     who: "amber",
-    title: "20 emails in your words",
+    title: "Emails and calls to 20 offices",
     kind: "Outreach",
     outcome: "Sending",
   },

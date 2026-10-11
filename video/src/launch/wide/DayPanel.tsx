@@ -84,7 +84,7 @@ function AntBadge({ color, size }: { color: string; size: number }) {
 
 const SUMMARY = [
   { who: "blue", text: "11 new customers" },
-  { who: "amber", text: "2 visits booked" },
+  { who: "amber", text: "2 meetings booked" },
   { who: "pink", text: "4 posts" },
   { who: "green", text: "Website updated" },
 ] as const;

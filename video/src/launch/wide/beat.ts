@@ -69,15 +69,18 @@ export const BOARD = {
 
 export type Lead = { name: string; area: string; score: number };
 
-/** Example businesses near Sandton, Johannesburg, that could need a plumber. */
+/**
+ * Example businesses near Sandton, Johannesburg, that could sign a plumbing
+ * contract: office parks, builders and property managers (owner, 2026-10-11).
+ */
 export const LEADS: Lead[] = [
-  { name: "Rosebank Auto Care", area: "Rosebank", score: 94 },
-  { name: "Sandton Medical Suites", area: "Sandton", score: 92 },
-  { name: "Grayston Office Park", area: "Sandton", score: 90 },
-  { name: "Illovo Dental Studio", area: "Illovo", score: 88 },
-  { name: "Morningside Clinic", area: "Morningside", score: 87 },
-  { name: "Bryanston Fitness Club", area: "Bryanston", score: 85 },
-  { name: "Rivonia Vet Hospital", area: "Rivonia", score: 83 },
+  { name: "Grayston Office Park", area: "Sandton", score: 94 },
+  { name: "Atlas Construction", area: "Rivonia", score: 92 },
+  { name: "Melrose Property Group", area: "Melrose", score: 90 },
+  { name: "Illovo Square Offices", area: "Illovo", score: 88 },
+  { name: "Morningside Medical Centre", area: "Morningside", score: 87 },
+  { name: "Bryanston Business Park", area: "Bryanston", score: 85 },
+  { name: "Rosebank Towers", area: "Rosebank", score: 83 },
 ];
 
 export function rowY(i: number): number {

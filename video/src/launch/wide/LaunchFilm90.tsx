@@ -12,6 +12,7 @@ import { easeInOutCubic, progress, smoothstep } from "../math.ts";
 import { useFontsReady } from "../useFontsReady";
 import { CAMERA, cameraScale, LEADS, landsAt, WIDE_H, WIDE_W } from "./beat.ts";
 import { BrightStage } from "./BrightStage";
+import { CallCard } from "./CallCard";
 import { CloseScene } from "./CloseScene";
 import { CornerLogo } from "./CornerLogo";
 import { DayPanel } from "./DayPanel";
@@ -24,6 +25,7 @@ import {
   GETTING_STARTED,
   LOOKS,
   OWNER,
+  SCOUT_LOOK,
   TEAM,
   type Tone,
   TONES,
@@ -45,6 +47,7 @@ import {
   panelX,
   panX,
   RIVERS90,
+  SCOUT90,
   YES90,
 } from "./film90.ts";
 import { BusinessCard, HowCursor } from "./HowPanel";
@@ -56,6 +59,8 @@ import { PanelBlooms } from "./PanelBlooms";
 import { PostCarriers, PostsGrid } from "./PostsGrid";
 import { POSTS, postLandsAt } from "./posts.ts";
 import { River } from "./River";
+import { PlanCard } from "./ScoutPanel";
+import { SCOUT_TASKS, taskLandsAt } from "./scout.ts";
 import { type Highlight, Subtitles } from "./Subtitles";
 import { useWideAnts } from "./useWideAnts";
 import { Painter, WebsiteCard } from "./WebsiteCard";
@@ -63,17 +68,22 @@ import { WideOpening } from "./WideOpening";
 import { approvedAt, YES_ROWS, yesLandsAt } from "./yes.ts";
 
 /**
- * Music draft B stands in until the full-length track. It plays three times,
- * each placed so its lift at 7 s lands on a big moment: the logo (17 s),
- * "20 found" (48 s) and the Approve click (78 s).
+ * Music draft B stands in until a full-length track can be made. Four cuts of
+ * it, each lifting at its 7 s mark on a big moment: the logo (17 s), Scout
+ * handing out work (44.5 s), the posts (73 s) and the Approve click (89 s).
+ * Each fades out as the next one starts.
  */
-const MUSIC_CUES = [10.0, 41.0, 71.0];
-const MUSIC_SECONDS = 30.04;
+const MUSIC_CUES = [
+  { from: 10.0, until: 40.0 },
+  { from: 37.5, until: 67.5 },
+  { from: 66.0, until: 83.5 },
+  { from: 82.0, until: 112.0 },
+];
 const DUCK = { base: 0.5, ducked: 0.18, attack: 0.25, release: 0.4 };
 const WINDOWS = LINES.map((line) => line.speech);
 
 /** Lines whose words are already on screen as big type get no subtitle. */
-const CAPTION_OFF = new Set(["l04", "n06", "c01", "c02"]);
+const CAPTION_OFF = new Set(["n04", "n06", "c01", "c02"]);
 const SHOWN_LINES = LINES.filter((line) => !CAPTION_OFF.has(line.id));
 /** Lines said over the dark world get light subtitles. */
 const DARK_ACTS = new Set(["weight", "colony", "close"]);
@@ -98,13 +108,14 @@ function toneOf(panel: PanelId): Tone {
 const KEYWORDS: Record<string, ReadonlySet<string>> = {
   n01: new Set(["love."]),
   n02: new Set(["everything", "else."]),
-  l02: new Set(["never", "enough"]),
+  n03: new Set(["never", "enough"]),
   n05: new Set(["app", "AI", "employees."]),
   n07: new Set(["Paste", "website.", "hires"]),
-  n08: new Set(["team."]),
+  s01: new Set(["Scout,", "chief", "staff."]),
+  a01: new Set(["sells", "emails"]),
+  a02: new Set(["calls", "meeting."]),
   l08: new Set(["finds", "customers."]),
   l09: new Set(["Twenty", "offices", "plumber,", "first", "coffee."]),
-  l10: new Set(["writes", "your", "words."]),
   l11: new Set(["posts.", "Three,", "Instagram."]),
   l12: new Set(["keeps", "website"]),
   l13: new Set(["first."]),
@@ -127,6 +138,8 @@ const HIGHLIGHTS: Record<string, Highlight> = Object.fromEntries(
 const POPS = [
   HOW.pasteAt,
   ...TEAM_ROWS.map((_, i) => teamRowAt(i, HOW)),
+  ...SCOUT_TASKS.map((_, i) => taskLandsAt(i, SCOUT90)),
+  AMBER90.bookedAt,
   ...LEADS.map((_, i) => landsAt(i, BLUE90)),
   emailTypedAt(AMBER90) + 0.1,
   ...POSTS.map((_, i) => postLandsAt(i, PINK90)),
@@ -171,6 +184,14 @@ const Panel: React.FC<{ id: PanelId; children: React.ReactNode }> = ({
 );
 
 function panelContent(id: PanelId, t: number): React.ReactNode {
+  if (id === "scout") {
+    return (
+      <>
+        <EmployeeHero t={t} look={SCOUT_LOOK} timing={SCOUT90} />
+        <PlanCard t={t} timing={SCOUT90} />
+      </>
+    );
+  }
   if (id === "how") {
     return (
       <>
@@ -213,6 +234,7 @@ function panelContent(id: PanelId, t: number): React.ReactNode {
         <EmployeeHero t={t} look={LOOKS.amber} timing={AMBER90} />
         <EmailCard t={t} timing={AMBER90} />
         <PenAnt t={t} timing={AMBER90} />
+        <CallCard t={t} timing={AMBER90} />
       </>
     );
   }
@@ -331,24 +353,20 @@ export const Film90: React.FC = () => {
         height={WIDE_H}
         opacity={0.06 - 0.03 * reveal}
       />
-      {MUSIC_CUES.map((from) => (
+      {MUSIC_CUES.map((cue) => (
         <Sequence
-          key={`music-${from}`}
-          from={Math.round(from * fps)}
+          key={`music-${cue.from}`}
+          from={Math.round(cue.from * fps)}
+          durationInFrames={Math.round((cue.until - cue.from) * fps)}
           layout="none"
         >
           <Audio
             src={staticFile("launch/music-b.mp3")}
             volume={(f) => {
-              const s = from + f / fps;
+              const s = cue.from + f / fps;
               return (
                 musicVolume(s, WINDOWS, DUCK) *
-                (1 -
-                  smoothstep(
-                    from + MUSIC_SECONDS - 1.5,
-                    from + MUSIC_SECONDS,
-                    s,
-                  ))
+                (1 - smoothstep(cue.until - 1.5, cue.until, s))
               );
             }}
           />
@@ -393,10 +411,13 @@ export const Film90: React.FC = () => {
       <Sequence from={Math.round(approvedAt(0, YES90) * fps)} layout="none">
         <Audio src={staticFile("launch/sfx-whoosh.mp3")} volume={0.6} />
       </Sequence>
+      <Sequence from={Math.round(AMBER90.callIn * fps)} layout="none">
+        <Audio src={staticFile("launch/sfx-ring.mp3")} volume={0.35} />
+      </Sequence>
       <Sequence from={Math.round(GREEN90.paintFrom * fps)} layout="none">
         <Audio src={staticFile("launch/sfx-shimmer.mp3")} volume={0.32} />
       </Sequence>
-      {LINES.filter((line) => !line.pending).map((line) => (
+      {LINES.map((line) => (
         <Sequence key={line.id} from={Math.round(line.at * fps)} layout="none">
           <Audio src={staticFile(line.file)} />
         </Sequence>
