@@ -2,7 +2,6 @@ import type { MockOpenRouterConfig } from "../../src/testing/e2eBridgeOpenRouter
 import type { Page } from "@playwright/test";
 import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
 import type { SubscriptionScan } from "../../src/shared/api/tauriSubscriptions";
-import type { MockCompanyWebsiteScan } from "../../src/testing/e2eBridgeWebsiteScan";
 import type {
   MockSubscriptionConnectionsConfig,
   MockSubscriptionScanResult,
@@ -323,8 +322,6 @@ type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   openRouterConnection?: MockOpenRouterConfig["openRouterConnection"];
   openRouterQuotaSequence?: MockOpenRouterConfig["openRouterQuotaSequence"];
   subscriptionScan?: SubscriptionScan;
-  /** The onboarding website read; unset keeps it an unsupported command. */
-  companyWebsiteScan?: MockCompanyWebsiteScan;
   /** Success/error responses per scan; the last response repeats on retry. */
   subscriptionScanSequence?: MockSubscriptionScanResult[];
   acpRuntimesCatalog?: Record<string, unknown>[];
