@@ -103,7 +103,10 @@ export const START_HERE: readonly UserBeat[] = [
         id: "sh-business-2",
         text: "Type its name and website, then press Read website.",
       },
-      { id: "sh-business-3", text: "Colony writes a short summary." },
+      {
+        id: "sh-business-3",
+        text: "Colony reads the site and sums up your business.",
+      },
       {
         id: "sh-business-4",
         text: "Check it, and change anything that's wrong.",
@@ -146,7 +149,7 @@ export const START_HERE: readonly UserBeat[] = [
       },
       {
         id: "sh-power-3",
-        text: "Or use an account you already pay for: Claude Code or Codex, signed in on this computer.",
+        text: "Or use an account you already pay for: Codex or Claude Code, signed in on this computer.",
       },
       { id: "sh-power-4", text: "Then Colony checks that your agent replies." },
     ],
@@ -254,7 +257,7 @@ export const START_HERE: readonly UserBeat[] = [
     lines: [
       {
         id: "sh-priority-1",
-        text: "Tell Scout what matters first, like getting more customers.",
+        text: "Then pick what matters first, like getting more customers.",
       },
       { id: "sh-priority-2", text: "Scout writes down what it understood." },
       { id: "sh-priority-3", text: "You can edit every line." },
@@ -320,10 +323,8 @@ export const START_HERE: readonly UserBeat[] = [
         id: "sh-job-2",
         text: "Edit the brief if you like, and press Approve team and start.",
       },
-      {
-        id: "sh-job-3",
-        text: "On Colony Credits, add credits first. Your brief stays where it is.",
-      },
+      { id: "sh-job-3", text: "On Colony Credits, add credits first." },
+      { id: "sh-job-4", text: "Your brief stays where it is." },
     ],
     moves: [
       {
