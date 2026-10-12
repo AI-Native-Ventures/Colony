@@ -33,6 +33,8 @@ import { EP05_SECONDS } from "./explainers/ep05.ts";
 import { EP06_SECONDS } from "./explainers/ep06.ts";
 import { EP07_SECONDS } from "./explainers/ep07.ts";
 import { EP08_SECONDS } from "./explainers/ep08.ts";
+import { InterviewVideo, interviewFrames } from "./interviews/InterviewVideo";
+import { SCOUT_INTERVIEW } from "./interviews/scout.ts";
 import { LaunchFilm } from "./launch/LaunchFilm";
 import { LaunchProof } from "./launch/LaunchProof";
 import { PROOF_SECONDS } from "./launch/timeline.ts";
@@ -672,6 +674,15 @@ export const Root = () => {
         fps={30}
         width={1920}
         height={1080}
+      />
+      <Composition
+        id="InterviewScout"
+        component={InterviewVideo}
+        durationInFrames={interviewFrames(SCOUT_INTERVIEW)}
+        fps={30}
+        width={1080}
+        height={1920}
+        defaultProps={{ script: SCOUT_INTERVIEW }}
       />
       <Composition
         id="Explainer01Tall"
