@@ -1,3 +1,4 @@
+import { AntMark } from "../brand/AntMark";
 import { Cursor } from "../launch/app/Cursor";
 import {
   easeInOutCubic,
@@ -291,3 +292,33 @@ export const PhonePush: React.FC<{
     </>
   );
 };
+
+/** An employee's round avatar: the ant on its colour, with a soft shadow. */
+export const PhoneAvatar: React.FC<{ color: string; size: number }> = ({
+  color,
+  size,
+}) => (
+  <span
+    style={{
+      width: size,
+      height: size,
+      borderRadius: size / 2,
+      background: color,
+      display: "grid",
+      placeItems: "center",
+      boxShadow: `0 14px 30px -14px ${tint(color, 0.8)}`,
+      flexShrink: 0,
+    }}
+  >
+    <span
+      style={{
+        display: "flex",
+        width: size * 0.62,
+        height: size * 0.41,
+        color: "#ffffff",
+      }}
+    >
+      <AntMark />
+    </span>
+  </span>
+);
