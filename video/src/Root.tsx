@@ -17,6 +17,7 @@ import { Explainer05 } from "./explainers/Explainer05";
 import { Explainer05Tall } from "./explainers/Explainer05Tall";
 import { Explainer06 } from "./explainers/Explainer06";
 import { Explainer07 } from "./explainers/Explainer07";
+import { Explainer07Tall } from "./explainers/Explainer07Tall";
 import { Explainer08 } from "./explainers/Explainer08";
 import { Explainer08Tall } from "./explainers/Explainer08Tall";
 import { EP01_SECONDS } from "./explainers/ep01.ts";
@@ -722,6 +723,14 @@ export const Root = () => {
         fps={30}
         width={1920}
         height={1080}
+      />
+      <Composition
+        id="Explainer07Tall"
+        component={Explainer07Tall}
+        durationInFrames={Math.round(EP07_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
       />
       <Composition
         id="Explainer08"

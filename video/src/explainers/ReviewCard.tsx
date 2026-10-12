@@ -26,11 +26,16 @@ function tint(color: string, alpha: number): string {
   return color.replace(")", ` / ${alpha})`);
 }
 
-function typedCount(t: number, from: number, cps: number, length: number) {
+export function typedCount(
+  t: number,
+  from: number,
+  cps: number,
+  length: number,
+) {
   return Math.max(0, Math.min(length, Math.floor((t - from) * cps)));
 }
 
-function Caret({ color }: { color: string }) {
+export function Caret({ color }: { color: string }) {
   return (
     <span
       style={{
@@ -77,7 +82,7 @@ function Pill({
 }
 
 /** The rewrite typed in seconds, with the part the owner asked for marked once it is there. */
-function Rewrite({ n, tone }: { n: number; tone: Tone }) {
+export function Rewrite({ n, tone }: { n: number; tone: Tone }) {
   const at = D.after.indexOf(D.added);
   const pre = D.after.slice(0, at);
   const post = D.after.slice(at + D.added.length);
