@@ -6,22 +6,33 @@ import {
   progress,
   smoothstep,
 } from "../launch/math.ts";
-import { callClock } from "../launch/wide/call.ts";
-import { draftsReady, emailTypedAt } from "../launch/wide/email.ts";
+import {
+  type Call as CallData,
+  type CallTiming,
+  callClock,
+} from "../launch/wide/call.ts";
+import {
+  type DraftCountTiming,
+  draftsReady,
+  type Email as EmailData,
+  emailTypedAt,
+} from "../launch/wide/email.ts";
 import { TONES } from "../launch/wide/employees.ts";
 import { typewriterAt } from "../launch/wide/typewriter.ts";
 import { WorkerAnt } from "../launch/wide/WorkerAnt";
 import { EP04, EP04_CALL, EP04_EMAIL, EP04_NEXT, EP04_REPLY } from "./ep04.ts";
 import {
   CALL_PHONE as C,
+  CALL_STACK_GAP,
   DIVIDER_TOP,
   PHONE_BODY,
   phoneBodyLineTop,
-  PUSH_AT,
+  phoneBodyTop,
   PUSH_SECONDS,
   RECIPIENT_TOP,
   REPLY_PHONE,
   SHEET,
+  SUBJECT_LINE,
   SUBJECT_TOP,
 } from "./ep04Phone.ts";
 import { PhoneCard } from "./PhoneCard";
@@ -48,7 +59,36 @@ const PEN_REACH = PEN_SIZE * 0.42;
 const PEN_DROP = 60;
 const DIP = 18;
 
-type Timing = typeof EP04;
+/** The episode's timing; the film's sales beat has the email and the call only (no reply, sheet or yes). */
+type Timing = DraftCountTiming &
+  CallTiming & {
+    cardIn: number;
+    walkFrom: number;
+    sentAt?: number;
+    replyAt?: number;
+    yesCardIn?: number;
+    approveIn?: number;
+    click?: number;
+    approvedAt?: number;
+  };
+
+/** What the sales employee writes and says: the email (its subject in lines when one line is too long), the call, and episode 4's reply and next emails. */
+export type SalesSetup = {
+  email: EmailData;
+  subjectLines?: readonly string[];
+  call: CallData;
+  /** Stack the call's bubbles and the booking by their height, for lines too long for the fixed slots. */
+  stackCall?: boolean;
+  reply?: { label: string; text: string };
+  next?: { title: string; subtitle: string };
+};
+
+const EP04_SETUP: SalesSetup = {
+  email: EP04_EMAIL,
+  call: EP04_CALL,
+  reply: EP04_REPLY,
+  next: EP04_NEXT,
+};
 
 let measureCtx: CanvasRenderingContext2D | null = null;
 
@@ -61,8 +101,6 @@ function bodyWidth(text: string): number {
   return measureCtx.measureText(text).width;
 }
 
-const lines = [...EP04_EMAIL.lines];
-
 function writer(timing: Timing) {
   return {
     start: timing.typeFrom,
@@ -72,9 +110,9 @@ function writer(timing: Timing) {
 }
 
 /** Where the pen ant is, card pixels: walking in, writing under a line, or hopping back for the next. */
-function penState(t: number, timing: Timing) {
+function penState(t: number, timing: Timing, lines: string[], bodyTop: number) {
   const startX = PHONE_PAD - PEN_REACH;
-  const lineY = (i: number) => phoneBodyLineTop(i) + PEN_DROP;
+  const lineY = (i: number) => phoneBodyLineTop(i, bodyTop) + PEN_DROP;
   if (t < timing.typeFrom) {
     const k = easeInOutCubic(
       progress(t, timing.walkFrom, timing.typeFrom - timing.walkFrom),
@@ -105,8 +143,19 @@ function penState(t: number, timing: Timing) {
   return { x: endX, y: lineY(i), angle: 0, amp: state.done ? 0 : 1, phase };
 }
 
-/** "Outreach.": the email to the venue writing itself, sent, and the venue's answer. */
-function Email({ t, timing }: { t: number; timing: Timing }) {
+/** "Outreach.": the email writing itself, sent, and the answer (episode 4). */
+function Email({
+  t,
+  timing,
+  setup,
+}: {
+  t: number;
+  timing: Timing;
+  setup: SalesSetup;
+}) {
+  const { email } = setup;
+  const lines = [...email.lines];
+  const bodyTop = phoneBodyTop(setup.subjectLines?.length ?? 1);
   const state = typewriterAt(lines, t, writer(timing));
   const typing = t >= timing.typeFrom && !state.done;
   const ready = draftsReady(t, timing, lines);
@@ -116,9 +165,12 @@ function Email({ t, timing }: { t: number; timing: Timing }) {
     t >= firstAt ? 1 - progress(t, firstAt, 0.28) : 0,
     t >= rushEnd ? 1 - progress(t, rushEnd, 0.35) : 0,
   );
-  const sent = t >= timing.sentAt;
-  const reply = easeOutExpo(progress(t, timing.replyAt, 0.5));
-  const pen = penState(t, timing);
+  const sent = timing.sentAt !== undefined && t >= timing.sentAt;
+  const reply =
+    setup.reply && timing.replyAt !== undefined
+      ? easeOutExpo(progress(t, timing.replyAt, 0.5))
+      : 0;
+  const pen = penState(t, timing, lines, bodyTop);
   const penIn = smoothstep(timing.walkFrom, timing.walkFrom + 0.25, t);
   return (
     <>
@@ -159,15 +211,13 @@ function Email({ t, timing }: { t: number; timing: Timing }) {
             flexShrink: 0,
           }}
         >
-          {EP04_EMAIL.to[0]}
+          {email.to[0]}
         </span>
         <div style={{ display: "grid", gap: 2 }}>
           <span style={{ fontSize: 30, fontWeight: 700, color: INK }}>
-            {EP04_EMAIL.to}
+            {email.to}
           </span>
-          <span style={{ fontSize: 24, color: MUTED }}>
-            {EP04_EMAIL.company}
-          </span>
+          <span style={{ fontSize: 24, color: MUTED }}>{email.company}</span>
         </div>
         <span style={{ flex: 1 }} />
         <span
@@ -198,29 +248,51 @@ function Email({ t, timing }: { t: number; timing: Timing }) {
           background: LINE,
         }}
       />
-      <div
-        style={{
-          position: "absolute",
-          left: PHONE_PAD,
-          top: SUBJECT_TOP,
-          width: W,
-          fontSize: 36,
-          fontWeight: 800,
-          letterSpacing: "-0.02em",
-          color: INK,
-          whiteSpace: "nowrap",
-        }}
-      >
-        {EP04_EMAIL.subject}
-      </div>
+      {setup.subjectLines ? (
+        <div
+          style={{
+            position: "absolute",
+            left: PHONE_PAD,
+            top: SUBJECT_TOP,
+            width: W,
+            fontSize: 36,
+            fontWeight: 800,
+            letterSpacing: "-0.02em",
+            lineHeight: `${SUBJECT_LINE}px`,
+            color: INK,
+          }}
+        >
+          {setup.subjectLines.map((line) => (
+            <div key={line} style={{ whiteSpace: "nowrap" }}>
+              {line}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div
+          style={{
+            position: "absolute",
+            left: PHONE_PAD,
+            top: SUBJECT_TOP,
+            width: W,
+            fontSize: 36,
+            fontWeight: 800,
+            letterSpacing: "-0.02em",
+            color: INK,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {email.subject}
+        </div>
+      )}
       {state.typed.map((text, i) =>
         text.length > 0 || (typing && i === state.line) ? (
           <div
-            key={EP04_EMAIL.lines[i]}
+            key={lines[i]}
             style={{
               position: "absolute",
               left: PHONE_PAD,
-              top: phoneBodyLineTop(i),
+              top: phoneBodyLineTop(i, bodyTop),
               fontSize: PHONE_BODY.size,
               fontWeight: 500,
               lineHeight: `${PHONE_BODY.lineHeight}px`,
@@ -232,7 +304,7 @@ function Email({ t, timing }: { t: number; timing: Timing }) {
           </div>
         ) : null,
       )}
-      {t >= timing.walkFrom && t < PUSH_AT + 0.1 ? (
+      {t >= timing.walkFrom && t < timing.callIn + 0.1 ? (
         <div style={{ opacity: penIn }}>
           <WorkerAnt
             x={pen.x}
@@ -245,7 +317,7 @@ function Email({ t, timing }: { t: number; timing: Timing }) {
           />
         </div>
       ) : null}
-      {reply > 0 ? (
+      {setup.reply && reply > 0 ? (
         <div
           style={{
             position: "absolute",
@@ -263,7 +335,7 @@ function Email({ t, timing }: { t: number; timing: Timing }) {
           }}
         >
           <div style={{ fontSize: 22, fontWeight: 700, color: AMBER.deep }}>
-            {EP04_REPLY.label}
+            {setup.reply.label}
           </div>
           <div
             style={{
@@ -274,7 +346,7 @@ function Email({ t, timing }: { t: number; timing: Timing }) {
               color: INK,
             }}
           >
-            {EP04_REPLY.text}
+            {setup.reply.text}
           </div>
         </div>
       ) : null}
@@ -282,8 +354,58 @@ function Email({ t, timing }: { t: number; timing: Timing }) {
   );
 }
 
-/** The call: the venue's avatar, the timer, the voice, what each side says, the booking. */
-function Call({ t, timing }: { t: number; timing: Timing }) {
+/** One side's speech bubble on the call, without its place. */
+function bubble(who: "us" | "them", e: number): React.CSSProperties {
+  return {
+    maxWidth: C.bubbleW,
+    padding: "16px 24px",
+    borderRadius: who === "us" ? "26px 26px 26px 8px" : "26px 26px 8px 26px",
+    background: who === "us" ? tint(AMBER.color, 0.14) : "#f2f1f6",
+    color: INK,
+    fontSize: 28,
+    fontWeight: 600,
+    lineHeight: 1.3,
+    opacity: e,
+    transform: `translateY(${((1 - e) * 14).toFixed(2)}px)`,
+  };
+}
+
+/** "Meeting booked", the pill inside its row. */
+function BookedPill({ text }: { text: string }) {
+  return (
+    <span
+      style={{
+        height: C.bookedH,
+        padding: "0 30px",
+        borderRadius: 999,
+        background: AMBER.color,
+        color: "#ffffff",
+        fontSize: 28,
+        fontWeight: 750,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 12,
+        boxShadow: `0 18px 34px -16px ${tint(AMBER.color, 0.9)}`,
+      }}
+    >
+      <Tick size={26} color="#ffffff" />
+      {text}
+    </span>
+  );
+}
+
+/** The call: the other side's avatar, the timer, the voice, what each side says, the booking. */
+function Call({
+  t,
+  timing,
+  call,
+  stack,
+}: {
+  t: number;
+  timing: Timing;
+  call: CallData;
+  stack: boolean;
+}) {
   const connected = t >= timing.connectAt;
   const stop = Math.min(t, timing.bookedAt);
   const ring = connected ? 0 : (t * 1.6) % 1;
@@ -333,7 +455,7 @@ function Call({ t, timing }: { t: number; timing: Timing }) {
           boxShadow: `0 24px 50px -24px ${tint(AMBER.color, 0.9)}`,
         }}
       >
-        {EP04_CALL.name[0]}
+        {call.name[0]}
       </span>
       <div
         style={{
@@ -345,10 +467,10 @@ function Call({ t, timing }: { t: number; timing: Timing }) {
           color: INK,
         }}
       >
-        {EP04_CALL.name}
+        {call.name}
       </div>
       <div style={{ ...center, top: C.companyTop, fontSize: 26, color: MUTED }}>
-        {EP04_CALL.company}
+        {call.company}
       </div>
       <div
         style={{
@@ -393,89 +515,96 @@ function Call({ t, timing }: { t: number; timing: Timing }) {
           );
         })}
       </div>
-      {us > 0 ? (
+      {stack ? (
         <div
           style={{
             position: "absolute",
             left: PHONE_PAD,
-            top: C.usTop,
-            maxWidth: C.bubbleW,
-            padding: "16px 24px",
-            borderRadius: "26px 26px 26px 8px",
-            background: tint(AMBER.color, 0.14),
-            color: INK,
-            fontSize: 28,
-            fontWeight: 600,
-            lineHeight: 1.3,
-            opacity: us,
-            transform: `translateY(${((1 - us) * 14).toFixed(2)}px)`,
-          }}
-        >
-          {EP04_CALL.lines[0].text}
-        </div>
-      ) : null}
-      {them > 0 ? (
-        <div
-          style={{
-            position: "absolute",
             right: PHONE_PAD,
-            top: C.themTop,
-            maxWidth: C.bubbleW,
-            padding: "16px 24px",
-            borderRadius: "26px 26px 8px 26px",
-            background: "#f2f1f6",
-            color: INK,
-            fontSize: 28,
-            fontWeight: 600,
-            lineHeight: 1.3,
-            opacity: them,
-            transform: `translateY(${((1 - them) * 14).toFixed(2)}px)`,
-          }}
-        >
-          {EP04_CALL.lines[1].text}
-        </div>
-      ) : null}
-      {booked > 0 ? (
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            top: C.bookedTop,
-            height: C.bookedH,
+            top: C.usTop,
             display: "flex",
-            justifyContent: "center",
-            opacity: booked,
-            transform: `scale(${(0.85 + 0.15 * booked).toFixed(4)})`,
+            flexDirection: "column",
+            gap: CALL_STACK_GAP,
           }}
         >
-          <span
+          <div style={{ alignSelf: "flex-start", ...bubble("us", us) }}>
+            {call.lines[0].text}
+          </div>
+          <div style={{ alignSelf: "flex-end", ...bubble("them", them) }}>
+            {call.lines[1].text}
+          </div>
+          <div
             style={{
               height: C.bookedH,
-              padding: "0 30px",
-              borderRadius: 999,
-              background: AMBER.color,
-              color: "#ffffff",
-              fontSize: 28,
-              fontWeight: 750,
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 12,
-              boxShadow: `0 18px 34px -16px ${tint(AMBER.color, 0.9)}`,
+              display: "flex",
+              justifyContent: "center",
+              opacity: booked,
+              transform: `scale(${(0.85 + 0.15 * booked).toFixed(4)})`,
             }}
           >
-            <Tick size={26} color="#ffffff" />
-            {EP04_CALL.booked}
-          </span>
+            <BookedPill text={call.booked} />
+          </div>
         </div>
-      ) : null}
+      ) : (
+        <>
+          {us > 0 ? (
+            <div
+              style={{
+                position: "absolute",
+                left: PHONE_PAD,
+                top: C.usTop,
+                ...bubble("us", us),
+              }}
+            >
+              {call.lines[0].text}
+            </div>
+          ) : null}
+          {them > 0 ? (
+            <div
+              style={{
+                position: "absolute",
+                right: PHONE_PAD,
+                top: C.themTop,
+                ...bubble("them", them),
+              }}
+            >
+              {call.lines[1].text}
+            </div>
+          ) : null}
+          {booked > 0 ? (
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: C.bookedTop,
+                height: C.bookedH,
+                display: "flex",
+                justifyContent: "center",
+                opacity: booked,
+                transform: `scale(${(0.85 + 0.15 * booked).toFixed(4)})`,
+              }}
+            >
+              <BookedPill text={call.booked} />
+            </div>
+          ) : null}
+        </>
+      )}
     </>
   );
 }
 
 /** The sheet that slides up for your yes: the next emails, Approve at its foot. */
-function NextSheet({ t, timing }: { t: number; timing: Timing }) {
-  const e = easeOutExpo(progress(t, timing.yesCardIn, 0.55));
+function NextSheet({
+  t,
+  at,
+  next,
+}: {
+  t: number;
+  at: number;
+  next: { title: string; subtitle: string };
+}) {
+  const e = easeOutExpo(progress(t, at, 0.55));
   if (e <= 0) return null;
   return (
     <div
@@ -504,7 +633,7 @@ function NextSheet({ t, timing }: { t: number; timing: Timing }) {
           color: INK,
         }}
       >
-        {EP04_NEXT.title}
+        {next.title}
       </div>
       <div
         style={{
@@ -515,36 +644,50 @@ function NextSheet({ t, timing }: { t: number; timing: Timing }) {
           color: MUTED,
         }}
       >
-        {EP04_NEXT.subtitle}
+        {next.subtitle}
       </div>
     </div>
   );
 }
 
-/** Episode 4's work on the phone card: the email, the reply, the call, the next emails for your yes. */
-export const SalesPhone: React.FC<{ t: number; timing?: Timing }> = ({
-  t,
-  timing = EP04,
-}) => (
+/** Episode 4's work on the phone card: the email, the reply, the call, the next emails for your yes; the film's has the email and the call. */
+export const SalesPhone: React.FC<{
+  t: number;
+  timing?: Timing;
+  setup?: SalesSetup;
+}> = ({ t, timing = EP04, setup = EP04_SETUP }) => (
   <PhoneCard t={t} enterAt={timing.cardIn} glow="hsl(30 60% 30% / 0.4)">
     <PhonePush
       t={t}
-      at={PUSH_AT}
+      at={timing.callIn}
       seconds={PUSH_SECONDS}
-      first={<Email t={t} timing={timing} />}
-      second={<Call t={t} timing={timing} />}
+      first={<Email t={t} timing={timing} setup={setup} />}
+      second={
+        <Call
+          t={t}
+          timing={timing}
+          call={setup.call}
+          stack={setup.stackCall ?? false}
+        />
+      }
     />
-    <NextSheet t={t} timing={timing} />
-    <PinnedButton
-      t={t}
-      tone={AMBER}
-      idle="Approve"
-      done="Approved"
-      timing={{
-        approveIn: timing.approveIn,
-        click: timing.click,
-        doneAt: timing.approvedAt,
-      }}
-    />
+    {setup.next && timing.yesCardIn !== undefined ? (
+      <NextSheet t={t} at={timing.yesCardIn} next={setup.next} />
+    ) : null}
+    {timing.approveIn !== undefined &&
+    timing.click !== undefined &&
+    timing.approvedAt !== undefined ? (
+      <PinnedButton
+        t={t}
+        tone={AMBER}
+        idle="Approve"
+        done="Approved"
+        timing={{
+          approveIn: timing.approveIn,
+          click: timing.click,
+          doneAt: timing.approvedAt,
+        }}
+      />
+    ) : null}
   </PhoneCard>
 );

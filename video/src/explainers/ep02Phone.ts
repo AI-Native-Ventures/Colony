@@ -9,8 +9,9 @@ export const FIELD = { top: 186, h: 110 } as const;
 export const READ = { top: 318, h: 84 } as const;
 export const FACT_ROWS = { top: 486, step: 88, h: 74 } as const;
 
-/** The card turns to the team when Colony is done reading. */
-export const PUSH_AT = EP02.continueClick + 0.1;
+/** The card turns to the team just after Continue, when Colony is done reading. */
+export const PUSH_DELAY = 0.1;
+export const PUSH_AT = EP02.continueClick + PUSH_DELAY;
 export const PUSH_SECONDS = 0.45;
 
 /** "Your team.": a row per employee, then Scout. */

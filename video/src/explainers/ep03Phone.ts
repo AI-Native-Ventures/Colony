@@ -27,9 +27,9 @@ export function tickBox(row: number): Box {
   };
 }
 
-/** A carrier's walk into row `i`: in from the card's left edge, along the row to its owner spot. */
-export function leadCarryPath(i: number): Path {
-  const y = LEAD_ROWS.top + i * LEAD_ROWS.step + LEAD_ROWS.h / 2;
+/** A carrier's walk into row `i` (rows from `top`): in from the card's left edge, along the row to its owner spot. */
+export function leadCarryPath(i: number, top: number = LEAD_ROWS.top): Path {
+  const y = top + i * LEAD_ROWS.step + LEAD_ROWS.h / 2;
   return [
     { x: -70 - i * 12, y: y + 34 },
     { x: 10, y: y + 12 },
