@@ -62,7 +62,10 @@ export const MeshGradient: React.FC<{
 export const LightWorld: React.FC<{
   t: number;
   stops?: readonly PaletteStop[];
-}> = ({ t, stops = LIGHT_WORLD }) => (
+  /** The frame; the wide film's unless given. */
+  width?: number;
+  height?: number;
+}> = ({ t, stops = LIGHT_WORLD, width, height }) => (
   <>
     {paletteWeights(t, stops).map(({ id, weight }, i) => (
       <MeshGradient
@@ -70,6 +73,8 @@ export const LightWorld: React.FC<{
         palette={PALETTES[id]}
         t={t}
         opacity={i === 0 ? 1 : weight}
+        width={width}
+        height={height}
       />
     ))}
   </>
