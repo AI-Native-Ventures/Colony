@@ -86,6 +86,9 @@ export const PhoneRequest: React.FC<{
   tone: Tone;
   top?: number;
   label?: string;
+  /** Where the chip and the words start, and how wide the words run. */
+  left?: number;
+  width?: number;
 }> = ({
   t,
   text,
@@ -95,6 +98,8 @@ export const PhoneRequest: React.FC<{
   tone,
   top = 124,
   label = "You asked",
+  left = PHONE_PAD,
+  width = PHONE_CARD.w - 2 * PHONE_PAD,
 }) => {
   const shown = easeOutExpo(progress(t, showFrom, 0.4));
   if (shown <= 0) return null;
@@ -110,7 +115,7 @@ export const PhoneRequest: React.FC<{
       <div
         style={{
           position: "absolute",
-          left: PHONE_PAD,
+          left,
           top,
           height: 40,
           padding: "0 18px",
@@ -128,9 +133,9 @@ export const PhoneRequest: React.FC<{
       <div
         style={{
           position: "absolute",
-          left: PHONE_PAD,
+          left,
           top: top + 52,
-          width: PHONE_CARD.w - 2 * PHONE_PAD,
+          width,
           fontSize: 30,
           fontWeight: 600,
           lineHeight: 1.3,
