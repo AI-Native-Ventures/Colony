@@ -75,3 +75,34 @@
 
 - Tasks 4 to 10: one per remaining episode (1, 2, 3, 4, 6, 7, 8). Each: a `ExplainerNNTall` on `TallShell`; stills at every beat; tall placements where the wide work scene used the left column (the hand-off in 3, the owner's line card in 6), each as an optional prop with the wide default and a frame gate; full render with the pilot's gates.
 - Task 11: all 8 on one watch page, Desktop copies, one PR into develop.
+
+## Pilot v2 (owner's notes on the pilot, 2026-10-12)
+
+The owner watched the pilot: "the illustrations can be more mobile like vertical instead of horizontal ... so it fits well" and "the captions are only on a small part of the screen". Asked how far to go, the owner chose "Whole card = phone screen": each card redrawn as a tall phone-style screen filling the middle of the frame, the employee shrinking to a slim header once the card arrives, the posts big and stacked one under the other, the captions about 1.6x bigger. Episode 5 is redone first; the other seven follow the same way. The launch film keeps the look the owner approved.
+
+### Task 4: Bigger captions and a slim header (shared)
+
+**Files:** Modify `video/src/launch/tall/captions.ts` (`CaptionStyle`, `FILM_CAPTIONS` = the film's 46 px in `CAPTION_BOX`, 26 a row; `BIG_CAPTIONS` = 74 px in x 132 to 948, y 1322 to 1512, 20 a row), `TallCaptions.tsx` (a `look` prop, default `FILM_CAPTIONS`), `hero.ts` (`SLIM`: avatar 56 px at x 140, the title at 46 px beside it, y 296 to 356), `TallHero.tsx` (an optional `compactAt`: from then the avatar shrinks, the title slides up beside it and shrinks, the badge and the subline fade). Tests: the big caption box and the slim header are clear of the covers and inside the feed crop; every explainer line chunks into rows of at most 20 characters and never leaves a lone word. Gate: Film90Tall frames unchanged.
+
+### Task 5: The phone card and episode 5's feed
+
+**Files:** Create `video/src/explainers/phone.ts` (`PHONE_CARD`: x 140, y 376, 800 x 924, under the slim header and above the big captions), `PhoneCard.tsx` (the frame: white, rounded, enters like the film's cards), `ep05Phone.ts` (the feed: posts 460 px square, each with its time under it, 564 px apart; the scroll down as the posts arrive and back up as the times appear; the carriers' paths from below the card; the sticky Approve button and the pointer), `ep05Phone.test.ts`, `RisePostsPhone.tsx`; modify `TallShell.tsx` (children in tall pixels, `compactAt`, big captions) and `Explainer05Tall.tsx`.
+
+Tests: the card is clear of the covers, the slim header and the captions; each post's slot is fully in view when its ant lands; each time chip is in view when it pops; the feed never scrolls past the first or the last post; the Approve button sits inside the card and the pointer ends on it.
+
+Gate: stills at every beat; full render with the pilot's gates; audio equal to the wide episode 5; the owner watches pilot v2.
+
+## The other seven (owner approved pilot v2, 2026-10-12: "Looks right, do other 7")
+
+Shared first (Task 6): `phoneKit.tsx` with the pieces every phone screen uses: the screen title, the status pill, "You asked" with the typed request, the Approve button pinned to the card's foot (and the pointer onto it), and a push from one screen to the next (the first slides out left, the second in from the right, like a phone app). `APPROVE` and the pointer keys move from `ep05Phone.ts` into `phone.ts`; episode 5 stays byte-identical.
+
+Then one task per episode, each with its own geometry module and tests (what must be in view when the voice names it, the scroll range, the pointer ending on its button), its phone component, stills at every beat, and the full render with the pilot's gates (audio equal to the wide episode's, the wide episode and the film unchanged):
+
+- Task 7, episode 8 (chats): the chat list (Weddings, Office lunches, Website, each lit as it is named), a tap into Weddings, the thread with Scout's menu, your reply typed on it, the new menu coming back, Approve under it.
+- Task 8, episode 7 (your yes): the "To review" list filling, a tap into the quote reply, your note typed under it, the reply rewritten shorter, Approve pinned, then "Sent" with the paper plane.
+- Task 9, episode 1 (Scout): "This month's plan.", the request typed, the four jobs dealt as big rows one under the other, each checked, "Approve plan" pinned.
+- Task 10, episode 2 (your team): "Your business." with the website pasted and read, the facts as big rows, then a push to "Your team." with the four employees and Scout, "Hire my team" pinned.
+- Task 11, episode 4 (sales): a phone email being written by the pen ant, sent, the reply as a banner, a push to the call screen (timer, the two lines spoken, "Meeting booked"), then the next step card with Approve pinned.
+- Task 12, episode 3 (customers): the leads as big rows (company, why it fits, tick box), twenty found, your picks ticked; the slim header hands over to the sales employee and a push to "Emails to your 5 picks" with the picks flying in and the pointer resting on Approve.
+- Task 13, episode 6 (website): Mo's Auto Repairs redrawn as a mobile page, the request typed on top, the painter repainting it top to bottom, Before and After in the bar, Approve, then "Live".
+- Task 14: all eight on the watch page, Desktop copies, one PR into develop.

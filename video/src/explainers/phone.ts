@@ -1,3 +1,4 @@
+import type { CursorKey } from "../launch/app/cursorPath.ts";
 import type { Box } from "../launch/tall/frame.ts";
 
 /**
@@ -9,3 +10,25 @@ export const PHONE_CARD: Box = { x: 140, y: 376, w: 800, h: 924 };
 
 /** Space inside the card's edges. */
 export const PHONE_PAD = 44;
+
+/** The button pinned to the card's foot (Approve and the like), frame pixels. */
+export const PINNED: Box = {
+  x: PHONE_CARD.x + PHONE_PAD,
+  y: PHONE_CARD.y + PHONE_CARD.h - 28 - 76,
+  w: PHONE_CARD.w - 2 * PHONE_PAD,
+  h: 76,
+};
+
+/** The owner's pointer, frame pixels: in from the lower right, onto the pinned button, a short rest after the click. */
+export function pinnedCursorKeys(timing: {
+  cursorFrom: number;
+  click: number;
+}): CursorKey[] {
+  const x = PINNED.x + PINNED.w * 0.56;
+  const y = PINNED.y + PINNED.h * 0.58;
+  return [
+    { at: timing.cursorFrom, x: 1110, y: 1640 },
+    { at: timing.click - 0.15, x, y },
+    { at: timing.click + 0.7, x: x + 10, y: y + 8 },
+  ];
+}

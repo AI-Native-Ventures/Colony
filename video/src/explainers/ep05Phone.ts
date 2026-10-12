@@ -1,8 +1,7 @@
-import type { CursorKey } from "../launch/app/cursorPath.ts";
 import { easeInOutCubic, progress } from "../launch/math.ts";
 import type { Box } from "../launch/tall/frame.ts";
 import type { Path } from "../launch/wide/walk.ts";
-import { PHONE_CARD, PHONE_PAD } from "./phone.ts";
+import { PHONE_CARD, PINNED, pinnedCursorKeys } from "./phone.ts";
 
 /**
  * Episode 5's posts on the phone card: a feed of big posts, each with its
@@ -73,23 +72,7 @@ export function phoneCarryPath(i: number): Path {
 }
 
 /** The pinned Approve button at the card's foot, below the first post's time, frame pixels. */
-export const APPROVE: Box = {
-  x: PHONE_CARD.x + PHONE_PAD,
-  y: PHONE_CARD.y + PHONE_CARD.h - 28 - 76,
-  w: PHONE_CARD.w - 2 * PHONE_PAD,
-  h: 76,
-};
+export const APPROVE: Box = PINNED;
 
-/** The owner's pointer, frame pixels: in from the lower right, onto Approve, a short rest after the click. */
-export function phoneCursorKeys(timing: {
-  cursorFrom: number;
-  click: number;
-}): CursorKey[] {
-  const x = APPROVE.x + APPROVE.w * 0.56;
-  const y = APPROVE.y + APPROVE.h * 0.58;
-  return [
-    { at: timing.cursorFrom, x: 1110, y: 1640 },
-    { at: timing.click - 0.15, x, y },
-    { at: timing.click + 0.7, x: x + 10, y: y + 8 },
-  ];
-}
+/** The owner's pointer onto Approve, frame pixels. */
+export const phoneCursorKeys = pinnedCursorKeys;
