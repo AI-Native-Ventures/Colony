@@ -5,7 +5,9 @@ import { TALL_H } from "./frame.ts";
 import { panelY, scrollY } from "./scroll.ts";
 
 test("each scene is one tall frame below the last", () => {
-  PANEL_ORDER.forEach((id, i) => assert.equal(panelY(id), i * TALL_H));
+  PANEL_ORDER.forEach((id, i) => {
+    assert.equal(panelY(id), i * TALL_H);
+  });
 });
 
 test("the camera stays on the first scene until the first scroll", () => {

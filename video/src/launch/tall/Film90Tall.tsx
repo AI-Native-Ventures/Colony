@@ -3,9 +3,27 @@ import { Grain } from "../Backdrop";
 import { easeInOutCubic, progress } from "../math.ts";
 import { useFontsReady } from "../useFontsReady";
 import { BrightStage } from "../wide/BrightStage";
-import { GETTING_STARTED, SCOUT_LOOK } from "../wide/employees.ts";
+import { CallCard } from "../wide/CallCard";
+import { EmailCard, PenAnt } from "../wide/EmailCard";
+import {
+  GETTING_STARTED,
+  LOOKS,
+  OWNER,
+  SCOUT_LOOK,
+  TEAM,
+} from "../wide/employees.ts";
 import { FilmSound } from "../wide/FilmSound";
-import { CLOSE90, PANEL_ORDER, type PanelId, SCOUT90 } from "../wide/film90.ts";
+import {
+  AMBER90,
+  BLUE90,
+  CLOSE90,
+  GREEN90,
+  PANEL_ORDER,
+  type PanelId,
+  PINK90,
+  SCOUT90,
+  YES90,
+} from "../wide/film90.ts";
 import {
   HIGHLIGHTS,
   KEYWORDS,
@@ -14,14 +32,21 @@ import {
 } from "../wide/film90Captions.ts";
 import { BusinessCard, HowCursor } from "../wide/HowPanel";
 import { HOW } from "../wide/how.ts";
+import { InboxCard, InboxCarriers, InboxCursor } from "../wide/InboxCard";
 import { INTRO } from "../wide/intro.ts";
+import { Carriers, LeadsBoard } from "../wide/LeadsBoard";
 import { LightWorld } from "../wide/MeshGradient";
 import { PanelBlooms } from "../wide/PanelBlooms";
+import { PostCarriers, PostsGrid } from "../wide/PostsGrid";
+import { River } from "../wide/River";
 import { PlanCard } from "../wide/ScoutPanel";
 import { useOpeningAnts } from "../wide/useWideAnts";
+import { Painter, WebsiteCard } from "../wide/WebsiteCard";
 import { WideOpening } from "../wide/WideOpening";
+import { tallCarryPath, tallYesCarryPath } from "./carriers.ts";
 import { PANEL_TRANSFORM, TALL_H, TALL_W } from "./frame.ts";
 import { TALL_OPENING } from "./opening.ts";
+import { TALL_BURSTS, TALL_RIVERS } from "./rivers.ts";
 import { panelY, scrollY } from "./scroll.ts";
 import { TallCaptions } from "./TallCaptions";
 import { TallHero } from "./TallHero";
@@ -62,6 +87,63 @@ function page(id: PanelId, t: number): React.ReactNode {
         <TallHero t={t} look={SCOUT_LOOK} timing={SCOUT90} />
         <Cards>
           <PlanCard t={t} timing={SCOUT90} />
+        </Cards>
+      </>
+    );
+  }
+  if (id === "blue") {
+    return (
+      <>
+        <TallHero t={t} look={LOOKS.blue} timing={BLUE90} />
+        <Cards>
+          <LeadsBoard t={t} timing={BLUE90} />
+          <Carriers t={t} timing={BLUE90} path={tallCarryPath} />
+        </Cards>
+      </>
+    );
+  }
+  if (id === "amber") {
+    return (
+      <>
+        <TallHero t={t} look={LOOKS.amber} timing={AMBER90} />
+        <Cards>
+          <EmailCard t={t} timing={AMBER90} />
+          <PenAnt t={t} timing={AMBER90} />
+          <CallCard t={t} timing={AMBER90} />
+        </Cards>
+      </>
+    );
+  }
+  if (id === "pink") {
+    return (
+      <>
+        <TallHero t={t} look={LOOKS.pink} timing={PINK90} />
+        <Cards>
+          <PostsGrid t={t} timing={PINK90} />
+          <PostCarriers t={t} timing={PINK90} />
+        </Cards>
+      </>
+    );
+  }
+  if (id === "green") {
+    return (
+      <>
+        <TallHero t={t} look={LOOKS.green} timing={GREEN90} />
+        <Cards>
+          <WebsiteCard t={t} timing={GREEN90} />
+          <Painter t={t} timing={GREEN90} />
+        </Cards>
+      </>
+    );
+  }
+  if (id === "yes") {
+    return (
+      <>
+        <TallHero t={t} look={OWNER} timing={YES90} />
+        <Cards>
+          <InboxCard t={t} timing={YES90} />
+          <InboxCarriers t={t} timing={YES90} path={tallYesCarryPath} />
+          <InboxCursor t={t} timing={YES90} />
         </Cards>
       </>
     );
@@ -150,6 +232,26 @@ export const Film90Tall: React.FC = () => {
           ))}
         </div>
       </BrightStage>
+      {TEAM.map((id) => (
+        <River
+          key={id}
+          t={t}
+          spec={TALL_RIVERS[id]}
+          offsetY={camY}
+          width={TALL_W}
+          height={TALL_H}
+        />
+      ))}
+      {TALL_BURSTS.map((spec) => (
+        <River
+          key={spec.seed}
+          t={t}
+          spec={spec}
+          offsetY={camY}
+          width={TALL_W}
+          height={TALL_H}
+        />
+      ))}
       <TallCaptions
         t={t}
         lines={SHOWN_LINES}

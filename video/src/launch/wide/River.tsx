@@ -10,14 +10,25 @@ const TRAIL_ALPHA = [1, 0.42, 0.22, 0.1];
 
 /**
  * A river of one employee's ants curling into its avatar. Positions are on
- * the long canvas; `offsetX` is where the camera is on it, so the trails stay
- * put in the world while the camera glides.
+ * the long canvas; `offsetX` and `offsetY` are where the camera is on it, so
+ * the trails stay put in the world while the camera glides. `width` and
+ * `height` are the frame's (the wide film's unless given).
  */
 export const River: React.FC<{
   t: number;
   spec: RiverSpec;
   offsetX?: number;
-}> = ({ t, spec, offsetX = 0 }) => {
+  offsetY?: number;
+  width?: number;
+  height?: number;
+}> = ({
+  t,
+  spec,
+  offsetX = 0,
+  offsetY = 0,
+  width = WIDE_W,
+  height = WIDE_H,
+}) => {
   const ref = useRef<HTMLCanvasElement>(null);
   const ants = useMemo(() => riverAnts(spec), [spec]);
   const shapes = useMemo(() => antShapes(), []);
@@ -29,7 +40,7 @@ export const River: React.FC<{
     if (!canvas || !ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
-    ctx.clearRect(0, 0, WIDE_W, WIDE_H);
+    ctx.clearRect(0, 0, width, height);
     if (!active) return;
     for (let k = TRAIL_ALPHA.length - 1; k >= 0; k--) {
       const tk = t - k * TRAIL_DT;
@@ -42,7 +53,7 @@ export const River: React.FC<{
           ctx,
           shapes,
           s.x - offsetX,
-          s.y,
+          s.y - offsetY,
           s.angle,
           s.size * (1 - 0.12 * k),
           spec.color,
@@ -50,19 +61,30 @@ export const River: React.FC<{
         );
       }
     }
-  }, [active, ants, shapes, spec.color, t, fade, offsetX]);
+  }, [
+    active,
+    ants,
+    shapes,
+    spec.color,
+    t,
+    fade,
+    offsetX,
+    offsetY,
+    width,
+    height,
+  ]);
   if (!active) return null;
   return (
     <canvas
       ref={ref}
-      width={WIDE_W}
-      height={WIDE_H}
+      width={width}
+      height={height}
       style={{
         position: "absolute",
         left: 0,
         top: 0,
-        width: WIDE_W,
-        height: WIDE_H,
+        width,
+        height,
       }}
     />
   );
