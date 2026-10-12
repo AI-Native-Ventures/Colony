@@ -2,10 +2,16 @@ import type { Point } from "../points.ts";
 import { type EmployeeId, TONES } from "../wide/employees.ts";
 import { type PanelId, TIMING90, YES90 } from "../wide/film90.ts";
 import type { RiverSpec } from "../wide/riverAnts.ts";
-import { employeeNode } from "../wide/scout.ts";
-import { approvedAt, YES_CARD, YES_ROWS, yesRowY } from "../wide/yes.ts";
-import { TALL_H, TALL_W, toTall } from "./frame.ts";
-import { HERO } from "./hero.ts";
+import { PHONE_CARD } from "../../explainers/phone.ts";
+import { approvedAt, YES_ROWS } from "../wide/yes.ts";
+import { TALL_H, TALL_W } from "./frame.ts";
+import {
+  FILM_COMPACT_AT,
+  filmPlanAvatar,
+  INBOX_ROWS,
+  inboxRowTop,
+} from "./filmPages.ts";
+import { heroAvatarAt } from "./hero.ts";
 import { panelY } from "./scroll.ts";
 
 /** A point on page `id`, in strip pixels (the pages stacked top to bottom). */
@@ -13,12 +19,13 @@ function onPage(id: PanelId, p: Point): Point {
   return { x: p.x, y: panelY(id) + p.y };
 }
 
-/** A film card point on page `id`, in strip pixels. */
-function cardPoint(id: PanelId, p: Point): Point {
-  return onPage(id, toTall(p));
-}
-
 type Shape = Pick<RiverSpec, "from" | "lane">;
+
+/** Where employee `id`'s avatar is when its river lands, strip pixels. */
+function avatarTarget(id: EmployeeId, landAt: number): Point {
+  const at = heroAvatarAt(landAt, FILM_COMPACT_AT[id]);
+  return onPage(id, at);
+}
 
 /** One employee's river, its shape given in its own page's pixels. */
 function employeeRiver(id: EmployeeId, seed: number, shape: Shape): RiverSpec {
@@ -39,7 +46,7 @@ function employeeRiver(id: EmployeeId, seed: number, shape: Shape): RiverSpec {
       c2: onPage(id, shape.lane.c2),
       spread: shape.lane.spread,
     },
-    target: onPage(id, HERO.avatar),
+    target: avatarTarget(id, timing.avatarAt),
     startAt: timing.riverFrom,
     landAt: timing.avatarAt,
     sweep: 0,
@@ -47,7 +54,7 @@ function employeeRiver(id: EmployeeId, seed: number, shape: Shape): RiverSpec {
   };
 }
 
-const node = cardPoint("scout", employeeNode(0));
+const node = onPage("scout", filmPlanAvatar(0));
 
 /**
  * Each employee arrives as a river of its color curling into its avatar,
@@ -68,11 +75,11 @@ export const TALL_RIVERS: Record<EmployeeId, RiverSpec> = {
       y1: node.y + 30,
     },
     lane: {
-      c1: onPage("blue", { x: 900, y: 420 }),
-      c2: onPage("blue", { x: 150, y: 660 }),
+      c1: onPage("blue", { x: 950, y: 760 }),
+      c2: onPage("blue", { x: 300, y: 820 }),
       spread: 130,
     },
-    target: onPage("blue", HERO.avatar),
+    target: avatarTarget("blue", TIMING90.blue.avatarAt),
     startAt: TIMING90.blue.riverFrom,
     landAt: TIMING90.blue.avatarAt,
     sweep: 0,
@@ -92,23 +99,30 @@ export const TALL_RIVERS: Record<EmployeeId, RiverSpec> = {
   }),
 };
 
-/** On Approve, each inbox row's work streams out to the right as a burst of its employee's ants. */
+/** On Approve, each inbox row's work streams out of its phone row to the right as a burst of its employee's ants. */
 export const TALL_BURSTS: RiverSpec[] = YES_ROWS.map((row, i) => {
-  const y = yesRowY(i);
+  const top = PHONE_CARD.y + inboxRowTop(i);
+  const y = top + INBOX_ROWS.h / 2;
   const start = approvedAt(i, YES90) + 0.02;
-  const a = cardPoint("yes", { x: YES_CARD.x + 110, y: y + 14 });
-  const b = cardPoint("yes", { x: YES_CARD.x + 700, y: y + 78 });
+  const a = onPage("yes", {
+    x: PHONE_CARD.x + INBOX_ROWS.textLeft + 20,
+    y: top + 20,
+  });
+  const b = onPage("yes", {
+    x: PHONE_CARD.x + 640,
+    y: top + INBOX_ROWS.h - 20,
+  });
   return {
     color: TONES[row.who].rgb,
     seed: 7901 + i * 17,
     count: 56,
     from: { x0: a.x, x1: b.x, y0: a.y, y1: b.y },
     lane: {
-      c1: cardPoint("yes", { x: 1560, y: y - 140 }),
-      c2: cardPoint("yes", { x: 2060, y: y - 60 }),
+      c1: onPage("yes", { x: 1000, y: y - 150 }),
+      c2: onPage("yes", { x: 1300, y: y - 70 }),
       spread: 110,
     },
-    target: cardPoint("yes", { x: 2400, y: y - 110 }),
+    target: onPage("yes", { x: 1500, y: y - 120 }),
     startAt: start,
     landAt: start + 1.05,
     sweep: 0,

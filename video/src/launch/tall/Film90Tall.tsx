@@ -3,9 +3,7 @@ import { Grain } from "../Backdrop";
 import { easeInOutCubic, progress } from "../math.ts";
 import { useFontsReady } from "../useFontsReady";
 import { BrightStage } from "../wide/BrightStage";
-import { CallCard } from "../wide/CallCard";
 import { CloseScene } from "../wide/CloseScene";
-import { EmailCard, PenAnt } from "../wide/EmailCard";
 import {
   GETTING_STARTED,
   LOOKS,
@@ -32,26 +30,33 @@ import {
   SHOWN_LINES,
   toneOf,
 } from "../wide/film90Captions.ts";
-import { BusinessCard, HowCursor } from "../wide/HowPanel";
-import { HOW } from "../wide/how.ts";
-import { InboxCard, InboxCarriers, InboxCursor } from "../wide/InboxCard";
+import { FACTS, HOW, WEBSITE } from "../wide/how.ts";
 import { INTRO } from "../wide/intro.ts";
-import { Carriers, LeadsBoard } from "../wide/LeadsBoard";
 import { LightWorld } from "../wide/MeshGradient";
 import { PanelBlooms } from "../wide/PanelBlooms";
-import { PostCarriers, PostsGrid } from "../wide/PostsGrid";
 import { River } from "../wide/River";
-import { PlanCard } from "../wide/ScoutPanel";
 import { useCloseAnts, useOpeningAnts } from "../wide/useWideAnts";
-import { Painter, WebsiteCard } from "../wide/WebsiteCard";
 import { WideOpening } from "../wide/WideOpening";
-import { tallCarryPath, tallYesCarryPath } from "./carriers.ts";
+import { LeadsOnlyPhone } from "../../explainers/LeadsPhone";
+import { PlanPhone } from "../../explainers/PlanPhone";
+import { SalesPhone } from "../../explainers/SalesPhone";
+import { SiteUpdatePhone } from "../../explainers/SitePhone";
+import { ReadCursor, TeamPhone } from "../../explainers/TeamPhone";
+import { BRIGHT_SITE } from "./BrightPhonePages";
 import { TALL_CLOSE, TALL_CLOSE_SWARM } from "./close.ts";
-import { Cards } from "./Cards";
+import {
+  FILM_COMPACT_AT,
+  FILM_LEADS,
+  FILM_PLAN,
+  FILM_SALES,
+} from "./filmPages.ts";
 import { TALL_H, TALL_W } from "./frame.ts";
+import { InboxPhone, InboxPhoneCursor } from "./InboxPhone";
 import { TALL_OPENING } from "./opening.ts";
+import { PostsPhone } from "./PostsPhone";
 import { TALL_BURSTS, TALL_RIVERS } from "./rivers.ts";
 import { panelY, scrollY } from "./scroll.ts";
+import { BIG_CAPTIONS } from "./captions.ts";
 import { TallCaptions } from "./TallCaptions";
 import { TallDay } from "./TallDay";
 import { TallHero } from "./TallHero";
@@ -61,78 +66,97 @@ function page(id: PanelId, t: number): React.ReactNode {
   if (id === "how") {
     return (
       <>
-        <TallHero t={t} look={GETTING_STARTED} timing={HOW} />
-        <Cards>
-          <BusinessCard t={t} timing={HOW} />
-          <HowCursor t={t} timing={HOW} />
-        </Cards>
+        <TallHero
+          t={t}
+          look={GETTING_STARTED}
+          timing={HOW}
+          compactAt={FILM_COMPACT_AT.how}
+        />
+        <TeamPhone
+          t={t}
+          timing={HOW}
+          business={{ website: WEBSITE, facts: FACTS }}
+        />
+        <ReadCursor t={t} timing={HOW} />
       </>
     );
   }
   if (id === "scout") {
     return (
       <>
-        <TallHero t={t} look={SCOUT_LOOK} timing={SCOUT90} />
-        <Cards>
-          <PlanCard t={t} timing={SCOUT90} />
-        </Cards>
+        <TallHero
+          t={t}
+          look={SCOUT_LOOK}
+          timing={SCOUT90}
+          compactAt={FILM_COMPACT_AT.scout}
+        />
+        <PlanPhone t={t} timing={SCOUT90} plan={FILM_PLAN} />
       </>
     );
   }
   if (id === "blue") {
     return (
       <>
-        <TallHero t={t} look={LOOKS.blue} timing={BLUE90} />
-        <Cards>
-          <LeadsBoard t={t} timing={BLUE90} />
-          <Carriers t={t} timing={BLUE90} path={tallCarryPath} />
-        </Cards>
+        <TallHero
+          t={t}
+          look={LOOKS.blue}
+          timing={BLUE90}
+          compactAt={FILM_COMPACT_AT.blue}
+        />
+        <LeadsOnlyPhone t={t} timing={BLUE90} setup={FILM_LEADS} />
       </>
     );
   }
   if (id === "amber") {
     return (
       <>
-        <TallHero t={t} look={LOOKS.amber} timing={AMBER90} />
-        <Cards>
-          <EmailCard t={t} timing={AMBER90} />
-          <PenAnt t={t} timing={AMBER90} />
-          <CallCard t={t} timing={AMBER90} />
-        </Cards>
+        <TallHero
+          t={t}
+          look={LOOKS.amber}
+          timing={AMBER90}
+          compactAt={FILM_COMPACT_AT.amber}
+        />
+        <SalesPhone t={t} timing={AMBER90} setup={FILM_SALES} />
       </>
     );
   }
   if (id === "pink") {
     return (
       <>
-        <TallHero t={t} look={LOOKS.pink} timing={PINK90} />
-        <Cards>
-          <PostsGrid t={t} timing={PINK90} />
-          <PostCarriers t={t} timing={PINK90} />
-        </Cards>
+        <TallHero
+          t={t}
+          look={LOOKS.pink}
+          timing={PINK90}
+          compactAt={FILM_COMPACT_AT.pink}
+        />
+        <PostsPhone t={t} timing={PINK90} />
       </>
     );
   }
   if (id === "green") {
     return (
       <>
-        <TallHero t={t} look={LOOKS.green} timing={GREEN90} />
-        <Cards>
-          <WebsiteCard t={t} timing={GREEN90} />
-          <Painter t={t} timing={GREEN90} />
-        </Cards>
+        <TallHero
+          t={t}
+          look={LOOKS.green}
+          timing={GREEN90}
+          compactAt={FILM_COMPACT_AT.green}
+        />
+        <SiteUpdatePhone t={t} timing={GREEN90} site={BRIGHT_SITE} />
       </>
     );
   }
   if (id === "yes") {
     return (
       <>
-        <TallHero t={t} look={OWNER} timing={YES90} />
-        <Cards>
-          <InboxCard t={t} timing={YES90} />
-          <InboxCarriers t={t} timing={YES90} path={tallYesCarryPath} />
-          <InboxCursor t={t} timing={YES90} />
-        </Cards>
+        <TallHero
+          t={t}
+          look={OWNER}
+          timing={YES90}
+          compactAt={FILM_COMPACT_AT.yes}
+        />
+        <InboxPhone t={t} timing={YES90} />
+        <InboxPhoneCursor t={t} timing={YES90} />
       </>
     );
   }
@@ -250,6 +274,7 @@ export const Film90Tall: React.FC = () => {
         lines={SHOWN_LINES}
         keywords={KEYWORDS}
         highlights={HIGHLIGHTS}
+        look={BIG_CAPTIONS}
       />
       <Grain t={t} width={TALL_W} height={TALL_H} opacity={0.05} />
       <FilmSound />

@@ -7,6 +7,7 @@ import {
 } from "../launch/wide/employees.ts";
 import {
   factAt,
+  type HowTiming,
   TEAM_ROWS,
   teamRowAt,
   WORKING_EVERY,
@@ -15,7 +16,7 @@ import { EP02, EP02_FACTS, EP02_WEBSITE } from "./ep02.ts";
 import {
   FACT_ROWS,
   FIELD,
-  PUSH_AT,
+  PUSH_DELAY,
   PUSH_SECONDS,
   READ,
   readCursorKeys,
@@ -39,7 +40,16 @@ const LINE = "#ece9f4";
 const VIOLET = GETTING_STARTED.color;
 const W = PHONE_CARD.w - 2 * PHONE_PAD;
 
-type Timing = typeof EP02;
+/** The film's how timing, and what the episode adds: Scout's row and the owner's yes. */
+type Timing = HowTiming & {
+  scoutAt?: number;
+  approveIn?: number;
+  click?: number;
+  approvedAt?: number;
+};
+
+type Business = { website: string; facts: readonly string[] };
+const EP02_BUSINESS: Business = { website: EP02_WEBSITE, facts: EP02_FACTS };
 
 function Subtitle({ text }: { text: string }) {
   return (
@@ -59,10 +69,18 @@ function Subtitle({ text }: { text: string }) {
 }
 
 /** "Your business.": the website pasted, Colony reading it, what it found. */
-function Business({ t, timing }: { t: number; timing: Timing }) {
+function Business({
+  t,
+  timing,
+  business,
+}: {
+  t: number;
+  timing: Timing;
+  business: Business;
+}) {
   const pasted = t >= timing.pasteAt;
   const flash = pasted ? 1 - progress(t, timing.pasteAt, 0.7) : 0;
-  const lastFact = factAt(EP02_FACTS.length - 1, timing);
+  const lastFact = factAt(business.facts.length - 1, timing);
   const reading = t >= timing.readClick && t < lastFact + 0.3;
   const readDone = t >= lastFact + 0.3;
   const scan = progress(t, timing.readClick, lastFact + 0.3 - timing.readClick);
@@ -118,7 +136,7 @@ function Business({ t, timing }: { t: number; timing: Timing }) {
             padding: "0 4px",
           }}
         >
-          {pasted ? EP02_WEBSITE : "yourbusiness.com"}
+          {pasted ? business.website : "yourbusiness.com"}
         </span>
       </div>
       <div
@@ -171,7 +189,7 @@ function Business({ t, timing }: { t: number; timing: Timing }) {
       >
         What Colony found
       </div>
-      {EP02_FACTS.map((fact, i) => {
+      {business.facts.map((fact, i) => {
         const e = easeOutExpo(progress(t, factAt(i, timing), 0.45));
         if (e <= 0) return null;
         return (
@@ -252,7 +270,10 @@ function StatusChip({
 
 /** "Your team.": an employee per row as the voice names them, then Scout to lead them. */
 function Team({ t, timing }: { t: number; timing: Timing }) {
-  const scout = easeOutExpo(progress(t, timing.scoutAt, 0.5));
+  const scout =
+    timing.scoutAt === undefined
+      ? 0
+      : easeOutExpo(progress(t, timing.scoutAt, 0.5));
   return (
     <>
       <PhoneTitle text="Your team." />
@@ -296,7 +317,10 @@ function Team({ t, timing }: { t: number; timing: Timing }) {
               {row.job}
             </div>
             <StatusChip
-              working={t >= timing.approvedAt + i * WORKING_EVERY}
+              working={
+                timing.approvedAt !== undefined &&
+                t >= timing.approvedAt + i * WORKING_EVERY
+              }
               color={tone.color}
               deep={tone.deep}
             />
@@ -358,32 +382,47 @@ function Team({ t, timing }: { t: number; timing: Timing }) {
   );
 }
 
-/** Episode 2's work on the phone card: your website read, the team hired, your yes. */
-export const TeamPhone: React.FC<{ t: number; timing?: Timing }> = ({
-  t,
-  timing = EP02,
-}) => (
-  <PhoneCard t={t} enterAt={timing.cardIn} glow="hsl(258 60% 40% / 0.45)">
-    <PhonePush
-      t={t}
-      at={PUSH_AT}
-      seconds={PUSH_SECONDS}
-      first={<Business t={t} timing={timing} />}
-      second={<Team t={t} timing={timing} />}
-    />
-    <PinnedButton
-      t={t}
-      tone={GETTING_STARTED}
-      idle="Hire my team"
-      done="Team hired"
-      timing={{
-        approveIn: timing.approveIn,
-        click: timing.click,
-        doneAt: timing.approvedAt,
-      }}
-    />
-  </PhoneCard>
-);
+/**
+ * Episode 2's work on the phone card (or the film's, given its business and
+ * timing): your website read, the team hired, and your yes when the timing
+ * has one.
+ */
+export const TeamPhone: React.FC<{
+  t: number;
+  timing?: Timing;
+  business?: Business;
+}> = ({ t, timing = EP02, business = EP02_BUSINESS }) => {
+  const yes =
+    timing.approveIn !== undefined &&
+    timing.click !== undefined &&
+    timing.approvedAt !== undefined
+      ? {
+          approveIn: timing.approveIn,
+          click: timing.click,
+          doneAt: timing.approvedAt,
+        }
+      : null;
+  return (
+    <PhoneCard t={t} enterAt={timing.cardIn} glow="hsl(258 60% 40% / 0.45)">
+      <PhonePush
+        t={t}
+        at={timing.continueClick + PUSH_DELAY}
+        seconds={PUSH_SECONDS}
+        first={<Business t={t} timing={timing} business={business} />}
+        second={<Team t={t} timing={timing} />}
+      />
+      {yes ? (
+        <PinnedButton
+          t={t}
+          tone={GETTING_STARTED}
+          idle="Hire my team"
+          done="Team hired"
+          timing={yes}
+        />
+      ) : null}
+    </PhoneCard>
+  );
+};
 
 /** The pointer onto Read website. Frame pixels. */
 export const ReadCursor: React.FC<{ t: number; timing?: Timing }> = ({

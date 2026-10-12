@@ -7,7 +7,11 @@ import {
 } from "../launch/math.ts";
 import { SCOUT_LOOK, TONES } from "../launch/wide/employees.ts";
 import { TEAM_ROWS } from "../launch/wide/how.ts";
-import { taskLandsAt, taskStartsAt } from "../launch/wide/scout.ts";
+import {
+  type ScoutTask,
+  taskLandsAt,
+  taskStartsAt,
+} from "../launch/wide/scout.ts";
 import { EP01, EP01_BEATS, EP01_REQUEST, EP01_TASKS } from "./ep01.ts";
 import {
   NOTE_TOP,
@@ -33,7 +37,34 @@ const LINE = "#ece9f4";
 const VIOLET = SCOUT_LOOK.color;
 const JOB_OF = Object.fromEntries(TEAM_ROWS.map((row) => [row.who, row.job]));
 
-type Timing = typeof EP01;
+/** What a plan needs of the timing: the dealing, the checks, and (in the episode) the request and the yes. */
+type Timing = {
+  cardIn: number;
+  taskFrom: number;
+  taskEvery: number;
+  taskDuration: number;
+  checkAt: number;
+  requestFrom?: number;
+  requestCps?: number;
+  approveIn?: number;
+  click?: number;
+  approvedAt?: number;
+};
+
+/** The plan on the card: its title, the jobs, where their rows sit, and the owner's request if there is one. */
+export type Plan = {
+  title: string;
+  tasks: readonly ScoutTask[];
+  rows: { top: number; step: number; h: number };
+  request?: { text: string; showFrom: number };
+};
+
+const EP01_PLAN: Plan = {
+  title: "This month's plan.",
+  tasks: EP01_TASKS,
+  rows: ROWS,
+  request: { text: EP01_REQUEST, showFrom: EP01_BEATS.work.start },
+};
 
 /** Scout's row under the title: the avatar the jobs are dealt from. */
 function ScoutRow({ t, timing }: { t: number; timing: Timing }) {
@@ -63,8 +94,19 @@ function ScoutRow({ t, timing }: { t: number; timing: Timing }) {
 }
 
 /** One job, dealt from Scout into its row: the employee, its job, the task, Assigned then Checked. */
-function JobRow({ t, i, timing }: { t: number; i: number; timing: Timing }) {
-  const task = EP01_TASKS[i];
+function JobRow({
+  t,
+  i,
+  timing,
+  plan,
+}: {
+  t: number;
+  i: number;
+  timing: Timing;
+  plan: Plan;
+}) {
+  const task = plan.tasks[i];
+  const ROWS = plan.rows;
   const tone = TONES[task.who];
   const u = progress(t, taskStartsAt(i, timing), timing.taskDuration);
   if (u <= 0) return null;
@@ -151,26 +193,46 @@ function JobRow({ t, i, timing }: { t: number; i: number; timing: Timing }) {
   );
 }
 
-/** Episode 1's work on the phone card: your request, Scout's plan dealt as jobs, the checks, your yes. */
-export const PlanPhone: React.FC<{ t: number; timing?: Timing }> = ({
-  t,
-  timing = EP01,
-}) => {
+/**
+ * Episode 1's work on the phone card (or the film's, given its plan and
+ * timing): your request if there is one, Scout's plan dealt as jobs, the
+ * checks, and your yes when the timing has one.
+ */
+export const PlanPhone: React.FC<{
+  t: number;
+  timing?: Timing;
+  plan?: Plan;
+}> = ({ t, timing = EP01, plan = EP01_PLAN }) => {
   const note = smoothstep(timing.checkAt, timing.checkAt + 0.4, t);
+  const ROWS = plan.rows;
+  const yes =
+    timing.approveIn !== undefined &&
+    timing.click !== undefined &&
+    timing.approvedAt !== undefined
+      ? {
+          approveIn: timing.approveIn,
+          click: timing.click,
+          doneAt: timing.approvedAt,
+        }
+      : null;
   return (
     <PhoneCard t={t} enterAt={timing.cardIn} glow="hsl(258 60% 40% / 0.45)">
-      <PhoneTitle text="This month's plan." />
+      <PhoneTitle text={plan.title} />
       <ScoutRow t={t} timing={timing} />
-      <PhoneRequest
-        t={t}
-        text={EP01_REQUEST}
-        from={timing.requestFrom}
-        cps={timing.requestCps}
-        showFrom={EP01_BEATS.work.start}
-        tone={SCOUT_LOOK}
-        top={REQUEST_TOP}
-      />
-      {EP01_TASKS.map((task, i) => {
+      {plan.request &&
+      timing.requestFrom !== undefined &&
+      timing.requestCps !== undefined ? (
+        <PhoneRequest
+          t={t}
+          text={plan.request.text}
+          from={timing.requestFrom}
+          cps={timing.requestCps}
+          showFrom={plan.request.showFrom}
+          tone={SCOUT_LOOK}
+          top={REQUEST_TOP}
+        />
+      ) : null}
+      {plan.tasks.map((task, i) => {
         const slot = easeOutExpo(
           progress(t, timing.cardIn + 0.6 + i * 0.12, 0.5),
         );
@@ -194,8 +256,14 @@ export const PlanPhone: React.FC<{ t: number; timing?: Timing }> = ({
         );
       })}
       {/* Last row first, so a job being dealt passes under the rows already in place. */}
-      {[...EP01_TASKS.keys()].reverse().map((i) => (
-        <JobRow key={EP01_TASKS[i].who} t={t} i={i} timing={timing} />
+      {[...plan.tasks.keys()].reverse().map((i) => (
+        <JobRow
+          key={plan.tasks[i].who}
+          t={t}
+          i={i}
+          timing={timing}
+          plan={plan}
+        />
       ))}
       <div
         style={{
@@ -217,17 +285,15 @@ export const PlanPhone: React.FC<{ t: number; timing?: Timing }> = ({
         />
         Scout checks every piece before it reaches you.
       </div>
-      <PinnedButton
-        t={t}
-        tone={SCOUT_LOOK}
-        idle="Approve plan"
-        done="Plan approved"
-        timing={{
-          approveIn: timing.approveIn,
-          click: timing.click,
-          doneAt: timing.approvedAt,
-        }}
-      />
+      {yes ? (
+        <PinnedButton
+          t={t}
+          tone={SCOUT_LOOK}
+          idle="Approve plan"
+          done="Plan approved"
+          timing={yes}
+        />
+      ) : null}
     </PhoneCard>
   );
 };

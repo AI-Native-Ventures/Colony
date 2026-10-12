@@ -4,35 +4,32 @@ import { antState } from "../swarm.ts";
 import { TEAM, TONES } from "../wide/employees.ts";
 import { TIMING90, YES90 } from "../wide/film90.ts";
 import { riverAnts } from "../wide/riverAnts.ts";
-import { employeeNode } from "../wide/scout.ts";
+import { PHONE_CARD } from "../../explainers/phone.ts";
+import { approvedAt, YES_ROWS } from "../wide/yes.ts";
+import { TALL_H, TALL_W } from "./frame.ts";
 import {
-  approvedAt,
-  YES_CARD,
-  YES_ROW_H,
-  YES_ROWS,
-  yesRowY,
-} from "../wide/yes.ts";
-import { TALL_H, TALL_W, toTall } from "./frame.ts";
-import { HERO } from "./hero.ts";
+  FILM_COMPACT_AT,
+  filmPlanAvatar,
+  INBOX_ROWS,
+  inboxRowTop,
+} from "./filmPages.ts";
+import { heroAvatarAt } from "./hero.ts";
 import { TALL_BURSTS, TALL_RIVERS } from "./rivers.ts";
 import { panelY, scrollY } from "./scroll.ts";
 
-test("each employee's river lands on its avatar at the film's times", () => {
+test("each employee's river lands on its avatar, where the avatar is when it lands, at the film's times", () => {
   for (const id of TEAM) {
     const river = TALL_RIVERS[id];
-    assert.deepEqual(
-      river.target,
-      { x: HERO.avatar.x, y: panelY(id) + HERO.avatar.y },
-      id,
-    );
+    const at = heroAvatarAt(river.landAt, FILM_COMPACT_AT[id]);
+    assert.deepEqual(river.target, { x: at.x, y: panelY(id) + at.y }, id);
     assert.equal(river.startAt, TIMING90[id].riverFrom, id);
     assert.equal(river.landAt, TIMING90[id].avatarAt, id);
     assert.equal(river.color, TONES[id].rgb, id);
   }
 });
 
-test("blue's river leaves Scout's plan from the blue row", () => {
-  const node = toTall(employeeNode(0));
+test("blue's river leaves Scout's plan from the blue job's avatar on the phone card", () => {
+  const node = filmPlanAvatar(0);
   const { from } = TALL_RIVERS.blue;
   assert.equal((from.x0 + from.x1) / 2, node.x);
   assert.equal((from.y0 + from.y1) / 2, panelY("scout") + node.y);
@@ -67,15 +64,18 @@ test("the other rivers start off the screen, so no ant appears from nothing", ()
   }
 });
 
-test("on Approve, each inbox row's work streams out past the right edge", () => {
+test("on Approve, each inbox row's work streams out of its phone row past the right edge", () => {
   assert.equal(TALL_BURSTS.length, YES_ROWS.length);
+  const page = panelY("yes");
   TALL_BURSTS.forEach((burst, i) => {
-    const a = toTall({ x: YES_CARD.x, y: yesRowY(i) });
-    const b = toTall({ x: YES_CARD.x + YES_CARD.w, y: yesRowY(i) + YES_ROW_H });
-    const y = panelY("yes");
-    assert.ok(burst.from.x0 >= a.x && burst.from.x1 <= b.x, `row ${i} x`);
+    const top = page + PHONE_CARD.y + inboxRowTop(i);
     assert.ok(
-      burst.from.y0 >= y + a.y && burst.from.y1 <= y + b.y,
+      burst.from.x0 >= PHONE_CARD.x + INBOX_ROWS.textLeft &&
+        burst.from.x1 <= PHONE_CARD.x + PHONE_CARD.w - 40,
+      `row ${i} x`,
+    );
+    assert.ok(
+      burst.from.y0 >= top && burst.from.y1 <= top + INBOX_ROWS.h,
       `row ${i} y`,
     );
     assert.ok(burst.target.x > TALL_W, `row ${i} stays on screen`);

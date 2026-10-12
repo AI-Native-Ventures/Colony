@@ -6,7 +6,13 @@ import {
   smoothstep,
 } from "../launch/math.ts";
 import { easeOutBack } from "../launch/wide/EmployeeHero";
-import { carryStart, foundCount, landsAt } from "../launch/wide/beat.ts";
+import {
+  type BoardTiming,
+  carryStart,
+  foundCount,
+  type Lead,
+  landsAt,
+} from "../launch/wide/beat.ts";
 import { TONES } from "../launch/wide/employees.ts";
 import { walkState } from "../launch/wide/walk.ts";
 import { WorkerAnt } from "../launch/wide/WorkerAnt";
@@ -48,17 +54,57 @@ const MUTED = "#6a6780";
 const LINE = "#ece9f4";
 const W = PHONE_CARD.w - 2 * PHONE_PAD;
 
-type Timing = typeof EP03;
+/** The episode's timing; the film's leads beat has only the board's part (no reasons, request or hand-over). */
+type Timing = BoardTiming & {
+  boardIn: number;
+  reasonsAt?: number;
+  reasonsEvery?: number;
+  requestFrom?: number;
+  requestCps?: number;
+};
 
-/** One lead's row: its name once its ant lands, why it fits, the tick box, ticked if picked. */
-function LeadRow({ t, i, timing }: { t: number; i: number; timing: Timing }) {
-  const lead = EP03_LEADS[i];
-  const top = LEAD_ROWS.top + i * LEAD_ROWS.step;
+/** The leads on the card: which, a line under the title, where the rows start, the owner's request, and the picks (with the hand-over to sales). */
+export type LeadsSetup = {
+  leads: readonly Lead[];
+  subline?: string;
+  rowsTop: number;
+  request?: { text: string; showFrom: number };
+  picks?: readonly { row: number; at: number }[];
+};
+
+const EP03_SETUP: LeadsSetup = {
+  leads: EP03_LEADS,
+  rowsTop: LEAD_ROWS.top,
+  request: { text: EP03_REQUEST, showFrom: EP03_BEATS.work.start },
+  picks: EP03_PICKS,
+};
+
+/** One lead's row: its name once its ant lands, why it fits (or where it is, with its score), the tick box, ticked if picked. */
+function LeadRow({
+  t,
+  i,
+  timing,
+  setup,
+}: {
+  t: number;
+  i: number;
+  timing: Timing;
+  setup: LeadsSetup;
+}) {
+  const lead = setup.leads[i];
+  const top = setup.rowsTop + i * LEAD_ROWS.step;
   const name = easeOutExpo(progress(t, landsAt(i, timing) - 0.05, 0.35));
-  const why = easeOutExpo(
-    progress(t, timing.reasonsAt + i * timing.reasonsEvery, 0.4),
-  );
-  const pick = EP03_PICKS.find((p) => p.row === i);
+  const reasons = timing.reasonsAt !== undefined;
+  const why = reasons
+    ? easeOutExpo(
+        progress(
+          t,
+          (timing.reasonsAt ?? 0) + i * (timing.reasonsEvery ?? 0),
+          0.4,
+        ),
+      )
+    : name;
+  const pick = setup.picks?.find((p) => p.row === i);
   const ticked = pick ? smoothstep(pick.at, pick.at + 0.2, t) : 0;
   return (
     <div
@@ -115,10 +161,34 @@ function LeadRow({ t, i, timing }: { t: number; i: number; timing: Timing }) {
             whiteSpace: "nowrap",
           }}
         >
-          {lead.why}
+          {reasons ? lead.why : lead.area}
         </div>
       ) : null}
-      {why > 0 ? (
+      {!reasons && name > 0 ? (
+        <div
+          style={{
+            position: "absolute",
+            right: PHONE_PAD - 20,
+            top: (LEAD_ROWS.h - 44) / 2,
+            height: 44,
+            minWidth: 64,
+            padding: "0 14px",
+            borderRadius: 999,
+            boxSizing: "border-box",
+            background: tint(BLUE.color, 0.12),
+            color: BLUE.deep,
+            fontSize: 24,
+            fontWeight: 750,
+            display: "grid",
+            placeItems: "center",
+            fontVariantNumeric: "tabular-nums",
+            opacity: name,
+          }}
+        >
+          {lead.score}
+        </div>
+      ) : null}
+      {setup.picks && why > 0 ? (
         <div
           style={{
             position: "absolute",
@@ -144,13 +214,26 @@ function LeadRow({ t, i, timing }: { t: number; i: number; timing: Timing }) {
 }
 
 /** Blue ants carrying each lead in on a little tag; each settles at its row's left. Card pixels. */
-function LeadCarriers({ t, timing }: { t: number; timing: Timing }) {
+function LeadCarriers({
+  t,
+  timing,
+  setup,
+}: {
+  t: number;
+  timing: Timing;
+  setup: LeadsSetup;
+}) {
   return (
     <>
-      {EP03_LEADS.map((lead, i) => {
+      {setup.leads.map((lead, i) => {
         const start = carryStart(i, timing);
         if (t < start) return null;
-        const s = walkState(leadCarryPath(i), t, start, timing.carryDuration);
+        const s = walkState(
+          leadCarryPath(i, setup.rowsTop),
+          t,
+          start,
+          timing.carryDuration,
+        );
         const land = landsAt(i, timing);
         const settle = smoothstep(land, land + 0.35, t);
         const tagGone = smoothstep(land - 0.05, land + 0.22, t);
@@ -207,38 +290,64 @@ function LeadCarriers({ t, timing }: { t: number; timing: Timing }) {
 }
 
 /** "Leads.": your request, the leads carried in, why each fits, your picks. */
-function Leads({ t, timing }: { t: number; timing: Timing }) {
-  const found = foundCount(t, timing, EP03_LEADS.length);
+function Leads({
+  t,
+  timing,
+  setup,
+}: {
+  t: number;
+  timing: Timing;
+  setup: LeadsSetup;
+}) {
+  const found = foundCount(t, timing, setup.leads.length);
   const shown = smoothstep(timing.carryFrom, timing.carryFrom + 0.3, t);
   const rushEnd = timing.countRushFrom + timing.countRush;
   const bump = t >= rushEnd ? 1 - progress(t, rushEnd, 0.4) : 0;
   return (
     <>
       <PhoneTitle text="Leads." />
+      {setup.subline ? (
+        <div
+          style={{
+            position: "absolute",
+            left: PHONE_PAD,
+            top: 108,
+            fontSize: 26,
+            color: MUTED,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {setup.subline}
+        </div>
+      ) : null}
       <PhonePill
         label={`${found} found`}
         tone={BLUE}
         opacity={shown}
         bump={bump}
       />
-      <PhoneRequest
-        t={t}
-        text={EP03_REQUEST}
-        from={timing.requestFrom}
-        cps={timing.requestCps}
-        showFrom={EP03_BEATS.work.start}
-        tone={BLUE}
-      />
-      {EP03_LEADS.map((lead, i) => (
-        <LeadRow key={lead.name} t={t} i={i} timing={timing} />
+      {setup.request &&
+      timing.requestFrom !== undefined &&
+      timing.requestCps !== undefined ? (
+        <PhoneRequest
+          t={t}
+          text={setup.request.text}
+          from={timing.requestFrom}
+          cps={timing.requestCps}
+          showFrom={setup.request.showFrom}
+          tone={BLUE}
+        />
+      ) : null}
+      {setup.leads.map((lead, i) => (
+        <LeadRow key={lead.name} t={t} i={i} timing={timing} setup={setup} />
       ))}
-      <LeadCarriers t={t} timing={timing} />
+      <LeadCarriers t={t} timing={timing} setup={setup} />
     </>
   );
 }
 
 /** "Outreach.": the five picks, handed to the sales employee, one row each. */
-function Picks({ t, timing }: { t: number; timing: Timing }) {
+function Picks({ t, timing }: { t: number; timing: typeof EP03 }) {
   return (
     <>
       <PhoneTitle text="Outreach." />
@@ -344,17 +453,14 @@ function Picks({ t, timing }: { t: number; timing: Timing }) {
 }
 
 /** Episode 3's work on the phone card: the leads, your picks, then the sales employee's list waiting for your yes. */
-export const LeadsPhone: React.FC<{ t: number; timing?: Timing }> = ({
-  t,
-  timing = EP03,
-}) => (
-  <PhoneCard t={t} enterAt={timing.boardIn} glow="hsl(217 60% 35% / 0.4)">
+export const LeadsPhone: React.FC<{ t: number }> = ({ t }) => (
+  <PhoneCard t={t} enterAt={EP03.boardIn} glow="hsl(217 60% 35% / 0.4)">
     <PhonePush
       t={t}
       at={PUSH_AT}
       seconds={PUSH_SECONDS}
-      first={<Leads t={t} timing={timing} />}
-      second={<Picks t={t} timing={timing} />}
+      first={<Leads t={t} timing={EP03} setup={EP03_SETUP} />}
+      second={<Picks t={t} timing={EP03} />}
     />
     <PinnedButton
       t={t}
@@ -362,7 +468,7 @@ export const LeadsPhone: React.FC<{ t: number; timing?: Timing }> = ({
       idle="Approve"
       done="Approved"
       timing={{
-        approveIn: timing.approveIn,
+        approveIn: EP03.approveIn,
         click: Number.POSITIVE_INFINITY,
         doneAt: Number.POSITIVE_INFINITY,
       }}
@@ -371,8 +477,19 @@ export const LeadsPhone: React.FC<{ t: number; timing?: Timing }> = ({
   </PhoneCard>
 );
 
+/** The leads alone on the phone card, for the film's blue beat: carried in, counted to twenty. */
+export const LeadsOnlyPhone: React.FC<{
+  t: number;
+  timing: Timing;
+  setup: LeadsSetup;
+}> = ({ t, timing, setup }) => (
+  <PhoneCard t={t} enterAt={timing.boardIn} glow="hsl(217 60% 35% / 0.4)">
+    <Leads t={t} timing={timing} setup={setup} />
+  </PhoneCard>
+);
+
 /** The pointer ticking the picks. Frame pixels. */
-export const TickCursor: React.FC<{ t: number; timing?: Timing }> = ({
+export const TickCursor: React.FC<{ t: number; timing?: typeof EP03 }> = ({
   t,
   timing = EP03,
 }) => {
@@ -394,7 +511,7 @@ export const TickCursor: React.FC<{ t: number; timing?: Timing }> = ({
 };
 
 /** The pointer coming to rest on Approve, unpressed. Frame pixels. */
-export const RestCursor: React.FC<{ t: number; timing?: Timing }> = ({
+export const RestCursor: React.FC<{ t: number; timing?: typeof EP03 }> = ({
   t,
   timing = EP03,
 }) => {

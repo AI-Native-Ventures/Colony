@@ -1,6 +1,6 @@
 import { AntMark } from "../../brand/AntMark";
 import { INTER } from "../fonts";
-import { easeInOutCubic, progress, smoothstep } from "../math.ts";
+import { progress, smoothstep } from "../math.ts";
 import { fitFontSize } from "../points.ts";
 import {
   easeOutBack,
@@ -9,7 +9,7 @@ import {
   wordIn,
 } from "../wide/EmployeeHero";
 import type { HeroLook } from "../wide/employees.ts";
-import { HERO, SLIM, slimTitleSize } from "./hero.ts";
+import { compactProgress, HERO, SLIM, slimTitleSize } from "./hero.ts";
 
 const INK = "#17151f";
 const MUTED = "#5d5a6b";
@@ -44,9 +44,6 @@ function fadeOut(style: React.CSSProperties, c: number): React.CSSProperties {
   return { ...style, opacity: Number(style.opacity ?? 1) * (1 - c) };
 }
 
-/** Seconds the employee row takes to shrink into the slim header. */
-const COMPACT_SECONDS = 0.6;
-
 /**
  * The employee steps forward on a tall frame: avatar and badge, the job on
  * one line, one plain sentence. From `compactAt` (when given) it shrinks
@@ -61,10 +58,7 @@ export const TallHero: React.FC<{
 }> = ({ t, look, timing, compactAt }) => {
   const pop = progress(t, timing.avatarAt - 0.05, 0.55);
   if (pop <= 0) return null;
-  const c =
-    compactAt === undefined
-      ? 0
-      : easeInOutCubic(progress(t, compactAt, COMPACT_SECONDS));
+  const c = compactProgress(t, compactAt);
   const scale =
     easeOutBack(pop) * (1 + (SLIM.avatar.r / HERO.avatar.r - 1) * c);
   const ring = progress(t, timing.avatarAt, 1.1);

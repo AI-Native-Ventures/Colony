@@ -13,12 +13,21 @@ export const PHONE_BODY = {
   size: 30,
 } as const;
 
-/** Top of body line `i`. */
-export function phoneBodyLineTop(i: number): number {
+/** A second line of subject pushes the body down by one subject line. */
+export const SUBJECT_LINE = 44;
+
+/** Where the body starts under a subject of `lines` lines. */
+export function phoneBodyTop(lines = 1): number {
+  return PHONE_BODY.top + (lines - 1) * SUBJECT_LINE;
+}
+
+/** Top of body line `i`, the body starting at `top`. */
+export function phoneBodyLineTop(
+  i: number,
+  top: number = PHONE_BODY.top,
+): number {
   return (
-    PHONE_BODY.top +
-    i * PHONE_BODY.lineHeight +
-    (i > 0 ? PHONE_BODY.gapAfterGreeting : 0)
+    top + i * PHONE_BODY.lineHeight + (i > 0 ? PHONE_BODY.gapAfterGreeting : 0)
   );
 }
 
@@ -45,6 +54,9 @@ export const CALL_PHONE = {
   bookedTop: 620,
   bookedH: 60,
 } as const;
+
+/** The gap between the call's bubbles and the booking when they stack by their height. */
+export const CALL_STACK_GAP = 22;
 
 /** The sheet that slides up for your yes: the next emails, and Approve at its foot. */
 export const SHEET = { top: 700, titleTop: 728, subTop: 776 } as const;

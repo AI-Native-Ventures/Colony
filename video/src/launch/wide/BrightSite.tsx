@@ -199,7 +199,7 @@ export function OldPage() {
 }
 
 /** A white panel van with the business on its side and a ladder on the roof. */
-function Van() {
+export function Van() {
   return (
     <svg aria-hidden="true" width="300" height="160" viewBox="0 0 300 160">
       <ellipse cx="152" cy="148" rx="138" ry="7" fill="#020b2a" opacity="0.3" />

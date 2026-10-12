@@ -1,5 +1,6 @@
 import { easeOutExpo, progress, smoothstep } from "../launch/math.ts";
 import { TONES } from "../launch/wide/employees.ts";
+import type { SiteTiming } from "../launch/wide/WebsiteCard";
 import { WorkerAnt } from "../launch/wide/WorkerAnt";
 import { EP06, EP06_REQUEST } from "./ep06.ts";
 import { BAR_H, PAGE_H, REQUEST_BUBBLE, wipeY } from "./ep06Phone.ts";
@@ -17,12 +18,41 @@ const LINE = "#ece9f4";
 const PAINTER_X = 690;
 
 type Timing = typeof EP06;
+type Paint = { paintFrom: number; paintDuration: number };
 
-/** The browser bar: the address (Live once it is), then Before and After. */
-function Bar({ t, timing }: { t: number; timing: Timing }) {
-  const toggle = easeOutExpo(progress(t, timing.toggleIn, 0.45));
-  const before = t >= timing.beforeFrom && t < timing.beforeUntil;
-  const live = easeOutExpo(progress(t, timing.liveAt, 0.4));
+/** A site in the phone browser: its address, its old and new pages, and the chip once the new one is up. */
+export type SiteSetup = {
+  domain: string;
+  chip: string;
+  Old: React.FC;
+  New: React.FC;
+};
+
+const EP06_SITE: SiteSetup = {
+  domain: MO.domain,
+  chip: "Live",
+  Old: MoOldPhonePage,
+  New: MoNewPhonePage,
+};
+
+/** Episode 6's Before and After toggle: when it shows, and while Before is on. */
+type Toggle = { at: number; beforeFrom: number; beforeUntil: number };
+
+/** The browser bar: the address (with the chip once the new page is up), then Before and After when there is a toggle. */
+function Bar({
+  t,
+  site,
+  chipAt,
+  toggle: tg,
+}: {
+  t: number;
+  site: SiteSetup;
+  chipAt: number;
+  toggle?: Toggle;
+}) {
+  const toggle = tg ? easeOutExpo(progress(t, tg.at, 0.45)) : 0;
+  const before = tg ? t >= tg.beforeFrom && t < tg.beforeUntil : false;
+  const live = easeOutExpo(progress(t, chipAt, 0.4));
   const segment = (on: boolean): React.CSSProperties => ({
     flex: 1,
     height: 40,
@@ -80,7 +110,7 @@ function Bar({ t, timing }: { t: number; timing: Timing }) {
             strokeWidth="2"
           />
         </svg>
-        {MO.domain}
+        {site.domain}
         {live > 0 ? (
           <span
             style={{
@@ -99,7 +129,7 @@ function Bar({ t, timing }: { t: number; timing: Timing }) {
             }}
           >
             <Tick size={18} color={GREEN.deep} />
-            Live
+            {site.chip}
           </span>
         ) : null}
       </div>
@@ -128,13 +158,25 @@ function Bar({ t, timing }: { t: number; timing: Timing }) {
   );
 }
 
-/** The page: the old one, repainted top to bottom into the new one, with Before showing the old one again. */
-function Page({ t, timing }: { t: number; timing: Timing }) {
-  const wipe = wipeY(t, timing);
-  const painting = t >= timing.paintFrom && wipe < PAGE_H;
-  const before =
-    smoothstep(timing.beforeFrom, timing.beforeFrom + 0.25, t) *
-    (1 - smoothstep(timing.beforeUntil, timing.beforeUntil + 0.25, t));
+/** The page: the old one, repainted top to bottom into the new one, with Before (episode 6) showing the old one again. */
+function Page({
+  t,
+  paint,
+  site,
+  before: b,
+}: {
+  t: number;
+  paint: Paint;
+  site: SiteSetup;
+  before?: { from: number; until: number };
+}) {
+  const { Old, New } = site;
+  const wipe = wipeY(t, paint);
+  const painting = t >= paint.paintFrom && wipe < PAGE_H;
+  const before = b
+    ? smoothstep(b.from, b.from + 0.25, t) *
+      (1 - smoothstep(b.until, b.until + 0.25, t))
+    : 0;
   const edge = painting ? 1 - smoothstep(PAGE_H - 40, PAGE_H, wipe) : 0;
   return (
     <div
@@ -147,8 +189,8 @@ function Page({ t, timing }: { t: number; timing: Timing }) {
         overflow: "hidden",
       }}
     >
-      <MoOldPhonePage />
-      {t >= timing.paintFrom ? (
+      <Old />
+      {t >= paint.paintFrom ? (
         <div
           style={{
             position: "absolute",
@@ -157,7 +199,7 @@ function Page({ t, timing }: { t: number; timing: Timing }) {
             opacity: 1 - before,
           }}
         >
-          <MoNewPhonePage />
+          <New />
         </div>
       ) : null}
       {edge > 0 ? (
@@ -179,7 +221,7 @@ function Page({ t, timing }: { t: number; timing: Timing }) {
 }
 
 /** The green painter walking down the page as it repaints it. Card pixels. */
-function Painter({ t, timing }: { t: number; timing: Timing }) {
+function Painter({ t, paint: timing }: { t: number; paint: Paint }) {
   const walkIn = timing.paintFrom - 0.6;
   const end = timing.paintFrom + timing.paintDuration;
   if (t < walkIn || t > end + 0.6) return null;
@@ -246,9 +288,23 @@ export const SitePhone: React.FC<{ t: number; timing?: Timing }> = ({
   timing = EP06,
 }) => (
   <PhoneCard t={t} enterAt={timing.siteIn} glow="hsl(150 50% 25% / 0.4)">
-    <Page t={t} timing={timing} />
-    <Bar t={t} timing={timing} />
-    <Painter t={t} timing={timing} />
+    <Page
+      t={t}
+      paint={timing}
+      site={EP06_SITE}
+      before={{ from: timing.beforeFrom, until: timing.beforeUntil }}
+    />
+    <Bar
+      t={t}
+      site={EP06_SITE}
+      chipAt={timing.liveAt}
+      toggle={{
+        at: timing.toggleIn,
+        beforeFrom: timing.beforeFrom,
+        beforeUntil: timing.beforeUntil,
+      }}
+    />
+    <Painter t={t} paint={timing} />
     <RequestBubble t={t} timing={timing} />
     <PinnedButton
       t={t}
@@ -261,5 +317,18 @@ export const SitePhone: React.FC<{ t: number; timing?: Timing }> = ({
         doneAt: timing.liveAt,
       }}
     />
+  </PhoneCard>
+);
+
+/** The film's website beat on the phone card: the old page repainted top to bottom into the new one, the chip once it is up. */
+export const SiteUpdatePhone: React.FC<{
+  t: number;
+  timing: SiteTiming;
+  site: SiteSetup;
+}> = ({ t, timing, site }) => (
+  <PhoneCard t={t} enterAt={timing.siteIn} glow="hsl(150 50% 25% / 0.4)">
+    <Page t={t} paint={timing} site={site} />
+    <Bar t={t} site={site} chipAt={timing.chipAt} />
+    <Painter t={t} paint={timing} />
   </PhoneCard>
 );
