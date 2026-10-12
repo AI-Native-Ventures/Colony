@@ -15,13 +15,13 @@ export type HeroTiming = {
   focusFrom?: number;
 };
 
-function easeOutBack(x: number): number {
+export function easeOutBack(x: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
   return 1 + c3 * (x - 1) ** 3 + c1 * (x - 1) ** 2;
 }
 
-function wordIn(t: number, at: number): React.CSSProperties {
+export function wordIn(t: number, at: number): React.CSSProperties {
   const e = easeOutExpo(progress(t, at, 0.6));
   return {
     display: "inline-block",
