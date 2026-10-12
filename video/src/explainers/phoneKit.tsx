@@ -165,9 +165,13 @@ export const PinnedButton: React.FC<{
   idle: string;
   done: string;
   timing: PinnedTiming;
-}> = ({ t, tone, idle, done: doneLabel, timing }) => {
+  /** A ring that keeps pulsing while the button waits for the owner. */
+  pulse?: boolean;
+}> = ({ t, tone, idle, done: doneLabel, timing, pulse = false }) => {
   const show = easeOutExpo(progress(t, timing.approveIn, 0.5));
   if (show <= 0) return null;
+  const wait = t - timing.approveIn - 0.5;
+  const ring = pulse && wait > 0 ? (wait % 1.4) / 1.4 : 0;
   const pressed = t >= timing.click && t < timing.click + 0.14 ? 0.97 : 1;
   const done = t >= timing.doneAt;
   const left = PINNED.x - PHONE_CARD.x;
@@ -198,7 +202,9 @@ export const PinnedButton: React.FC<{
           color: done ? tone.deep : "#ffffff",
           boxShadow: done
             ? undefined
-            : `0 22px 40px -20px ${tint(tone.color, 0.9)}`,
+            : ring > 0
+              ? `0 0 0 ${(14 * ring).toFixed(2)}px ${tint(tone.color, 0.3 * (1 - ring))}, 0 22px 40px -20px ${tint(tone.color, 0.9)}`
+              : `0 22px 40px -20px ${tint(tone.color, 0.9)}`,
           fontSize: 32,
           fontWeight: 750,
           display: "flex",
