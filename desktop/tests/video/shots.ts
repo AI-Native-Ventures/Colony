@@ -19,6 +19,9 @@ type Shot = {
   boxes: Record<string, Box>;
 };
 
+/** A target measured around its words alone, for a cell much wider than its text. */
+export type Words = { words: Locator };
+
 /** The fixtures' own names, which must never share a shot with the sample business. */
 const LEFTOVERS = /horizon|tyler/i;
 
@@ -33,7 +36,7 @@ export async function shoot(
   page: Page,
   id: string,
   check: Locator,
-  targets: Record<string, Locator> = {},
+  targets: Record<string, Locator | Words> = {},
 ): Promise<void> {
   await expect(check).toBeVisible();
   const text = await page.locator("body").innerText();
@@ -47,9 +50,11 @@ export async function shoot(
   await page.mouse.move(1, 1);
   await waitForAnimations(page);
   const boxes: Record<string, Box> = {};
-  for (const [name, locator] of Object.entries(targets)) {
+  for (const [name, target] of Object.entries(targets)) {
+    const locator = "words" in target ? target.words : target;
     await expect(locator).toBeVisible();
-    const box = await locator.boundingBox();
+    const box =
+      "words" in target ? await wordsBox(locator) : await locator.boundingBox();
     if (!box) throw new Error(`${id}: ${name} has no box on screen`);
     const view = page.viewportSize() ?? { width: 0, height: 0 };
     if (
@@ -59,6 +64,8 @@ export async function shoot(
       box.y + box.height > view.height
     )
       throw new Error(`${id}: ${name} is not wholly on screen`);
+    const cover = await coveredAt(locator);
+    if (cover) throw new Error(`${id}: ${name} is covered at ${cover}`);
     boxes[name] = { x: box.x, y: box.y, w: box.width, h: box.height };
   }
   mkdirSync(SHOT_DIR, { recursive: true });
@@ -71,6 +78,49 @@ export async function shoot(
     height: viewport?.height ?? 0,
     boxes,
   };
+}
+
+/** The box around an element's words, rather than the element. */
+async function wordsBox(
+  locator: Locator,
+): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  return locator.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const r = range.getBoundingClientRect();
+    return r.width > 0
+      ? { x: r.x, y: r.y, width: r.width, height: r.height }
+      : null;
+  });
+}
+
+/**
+ * Where something else sits on top of the target (its middle and near each
+ * corner), or null when nothing does. A box inside the viewport can still be
+ * hidden under the composer or a pill.
+ */
+async function coveredAt(locator: Locator): Promise<string | null> {
+  return locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const inset = Math.min(12, r.width / 4, r.height / 4);
+    const points = [
+      [r.left + r.width / 2, r.top + r.height / 2],
+      [r.left + inset, r.top + inset],
+      [r.right - inset, r.top + inset],
+      [r.left + inset, r.bottom - inset],
+      [r.right - inset, r.bottom - inset],
+    ];
+    for (const [x, y] of points) {
+      const hit = document.elementFromPoint(x, y);
+      if (hit && !el.contains(hit) && !hit.contains(el)) {
+        const testId = hit
+          .closest("[data-testid]")
+          ?.getAttribute("data-testid");
+        return `${Math.round(x)},${Math.round(y)} by ${hit.tagName.toLowerCase()}${testId ? ` in [data-testid="${testId}"]` : ""}`;
+      }
+    }
+    return null;
+  });
 }
 
 /** Add this run's shots to the manifest, keeping shots from scenes not re-run. */

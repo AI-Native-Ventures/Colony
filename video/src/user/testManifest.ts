@@ -1,4 +1,4 @@
-import { type Box, SHOT_BOXES, SHOT_IDS } from "./manifest.ts";
+import { type Box, SHOT_BOXES, SHOT_IDS, viewportOf } from "./manifest.ts";
 
 const MID: Box = { x: 620, y: 420, w: 200, h: 40 };
 
@@ -14,8 +14,8 @@ export function fixtureManifest(
         id,
         {
           file: `${id}.png`,
-          width: 1440,
-          height: 900,
+          width: viewportOf(id).w,
+          height: viewportOf(id).h,
           boxes: Object.fromEntries(
             SHOT_BOXES[id].map((name) => [name, box(id, name)]),
           ),

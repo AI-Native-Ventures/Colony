@@ -37,7 +37,9 @@ export const UserCard: React.FC<{
   opacity: number;
   headline: string;
   subline: string;
-}> = ({ opacity, headline, subline }) =>
+  /** A small last line, such as the address. */
+  footer?: string;
+}> = ({ opacity, headline, subline, footer }) =>
   opacity <= 0 ? null : (
     <div
       style={{
@@ -70,5 +72,18 @@ export const UserCard: React.FC<{
       <div style={{ fontSize: 40, fontWeight: 500, color: MUTED }}>
         {subline}
       </div>
+      {footer ? (
+        <div
+          style={{
+            marginTop: 10,
+            fontSize: 30,
+            fontWeight: 700,
+            color: INK,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          {footer}
+        </div>
+      ) : null}
     </div>
   );

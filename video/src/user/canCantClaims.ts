@@ -11,7 +11,10 @@ export type Claim = {
   line: string;
   lines: readonly VoiceLine[];
   shot?: ShotId;
-  focus?: readonly string[] | "window";
+  /** The boxes whose outline is the part of the screen shown. */
+  region?: readonly string[];
+  /** The boxes pointed at inside that part; none shows the part as a whole. */
+  focus?: readonly string[];
   proof: string;
   minSeconds: number;
 };
@@ -34,6 +37,7 @@ export const CAN_CANT: readonly Claim[] = [
       },
     ],
     shot: "find-clients",
+    region: ["examples", "outputs", "brief"],
     focus: ["outputs"],
     proof:
       'desktop/src/features/onboarding/firstJobStarters.ts:29-34 ("do not contact anyone")',
@@ -50,6 +54,7 @@ export const CAN_CANT: readonly Claim[] = [
       },
     ],
     shot: "first-job",
+    region: ["examples", "outputs", "brief"],
     focus: ["outputs"],
     proof:
       'desktop/src/features/onboarding/firstJobStarters.ts:19-24 ("do not create images or publish posts")',
@@ -66,7 +71,7 @@ export const CAN_CANT: readonly Claim[] = [
       },
     ],
     shot: "outreach-card",
-    focus: ["card"],
+    region: ["card"],
     proof: "crates/buzz-relay/src/core_blocks/composites/outreach-email.json",
     minSeconds: 5,
   },
@@ -82,6 +87,7 @@ export const CAN_CANT: readonly Claim[] = [
       },
     ],
     shot: "outreach-card",
+    region: ["card"],
     focus: ["approve"],
     proof:
       "desktop/src/shared/api/outreachSend.ts:22-25; crates/buzz-browser/src/mcp.rs:35-38 (sending is off for agents)",
@@ -95,7 +101,8 @@ export const CAN_CANT: readonly Claim[] = [
       { id: "cc-closed", text: "It can't send emails while Colony is closed." },
     ],
     shot: "outreach-sent",
-    focus: ["status"],
+    region: ["card"],
+    focus: ["from"],
     proof:
       "desktop/src/shared/api/outreachSend.ts:22 (the send runs in your open Gmail tab, in the app)",
     minSeconds: 4.5,
@@ -111,6 +118,7 @@ export const CAN_CANT: readonly Claim[] = [
       },
     ],
     shot: "understanding",
+    region: ["still", "nothingYet", "looksRight"],
     focus: ["nothingYet"],
     proof:
       "desktop/src/features/onboarding/channelOnboarding/UnderstandingStage.tsx:102, 253; ArrivalStage.tsx:41; FirstJobSuggestionView.tsx:366",
@@ -127,7 +135,8 @@ export const CAN_CANT: readonly Claim[] = [
       },
     ],
     shot: "history",
-    focus: "window",
+    region: ["dialog"],
+    focus: ["choose"],
     proof:
       "desktop/src/features/onboarding/ui/new/screens/HistoryScreen.tsx:94-104 (only reviewed memories leave the computer)",
     minSeconds: 5,

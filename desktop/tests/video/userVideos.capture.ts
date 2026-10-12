@@ -256,7 +256,11 @@ test("sign-up: account, recovery code, business, power, history", async ({
   });
   await credits.click();
   const testButton = page.getByRole("button", { name: "Test connection" });
-  await testButton.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  // The panel can still be settling after the switch back: scroll until it holds.
+  await expect(async () => {
+    await testButton.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await expect(testButton).toBeInViewport({ ratio: 1, timeout: 500 });
+  }).toPass();
   await shoot(page, "power-test", testButton, {
     model: page.getByLabel("Default model"),
     test: testButton,
@@ -278,7 +282,13 @@ test("sign-up: account, recovery code, business, power, history", async ({
     page,
     "history",
     page.getByRole("heading", { name: "Let Colony get to know you" }),
-    { skip },
+    {
+      skip,
+      choose: page.getByText(
+        "Colony can find previous AI conversations on this computer. You choose what to keep.",
+      ),
+      dialog: page.getByTestId("onboarding-history-form"),
+    },
   );
 });
 
@@ -373,6 +383,7 @@ test("Welcome: Scout, the existing business, the setup", async ({ page }) => {
     nothingYet: surface().getByText(
       "Nothing has been created, staffed, or started.",
     ),
+    still: surface().getByText("Still to understand").locator(".."),
   });
   await looksRight.click();
   const approve = page
@@ -525,14 +536,19 @@ test("first job: starting examples, approve team and start, the thread", async (
     name: "Find potential clients",
   });
   await findClients.click();
+  const examples = card.getByText(
+    "Start with an example, or write your own brief",
+  );
   await shoot(page, "find-clients", card.getByText("10 potential clients"), {
     findClients,
+    examples,
     brief: card.getByLabel("The brief", { exact: true }),
     outputs: card.getByTestId("first-job-outputs"),
   });
   await card.getByRole("button", { name: "Draft Instagram captions" }).click();
   const start = card.getByRole("button", { name: "Approve team and start" });
   await shoot(page, "first-job", start, {
+    examples,
     brief: card.getByLabel("The brief", { exact: true }),
     outputs: card.getByTestId("first-job-outputs"),
     start,
@@ -643,20 +659,39 @@ async function outreachCard(page: Page, sent: boolean) {
     .locator(`[data-message-id="${instance.id}"]`)
     .locator('[data-block-handle="outreach-email"]');
   await expect(block).toBeVisible();
+  // The card arrives unread: jump to it, which also clears the "new message"
+  // pill, then let the jump's two-second highlight pass and return to the end.
+  const pill = page.getByTestId("message-unread-pill");
+  await pill.click();
+  await expect(pill).toHaveCount(0);
+  const row = page.locator(`[data-message-id="${instance.id}"]`).first();
+  await expect(row).not.toHaveClass(/route-target-highlight/, {
+    timeout: 5_000,
+  });
+  const latest = page.getByTestId("message-scroll-to-latest");
+  if (await latest.isVisible()) await latest.click();
+  await expect(latest).toHaveCount(0);
   await block.scrollIntoViewIfNeeded();
   return block;
 }
 
-test("outreach email waiting for your yes", async ({ page }) => {
-  const block = await outreachCard(page, false);
-  const approve = block.getByRole("button", { name: "Approve" });
-  await shoot(page, "outreach-card", approve, { card: block, approve });
-});
+// Narrower than the other shots, so the email's words are larger in the
+// video, and taller, so the whole card sits above the composer.
+test.describe("outreach", () => {
+  test.use({ viewport: { width: 1080, height: 1200 } });
 
-test("outreach email after your yes", async ({ page }) => {
-  const block = await outreachCard(page, true);
-  await shoot(page, "outreach-sent", block.getByText("Sent."), {
-    card: block,
-    status: block.locator('[data-block-primitive="status"]'),
+  test("outreach email waiting for your yes", async ({ page }) => {
+    const block = await outreachCard(page, false);
+    const approve = block.getByRole("button", { name: "Approve" });
+    await shoot(page, "outreach-card", approve, { card: block, approve });
+  });
+
+  test("outreach email after your yes", async ({ page }) => {
+    const block = await outreachCard(page, true);
+    await shoot(page, "outreach-sent", block.getByText("Sent."), {
+      card: block,
+      from: { words: block.getByText(`${OWNER.email}, your Gmail`) },
+      status: block.locator('[data-block-primitive="status"]'),
+    });
   });
 });

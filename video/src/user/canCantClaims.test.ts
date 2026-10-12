@@ -18,13 +18,13 @@ test("can lines come first, then can't lines, and the close is last", () => {
   assert.equal(kinds.filter((k) => k === "close").length, 1);
 });
 
-test("every claim with a screen names a captured shot and its boxes", () => {
+test("every claim with a screen shows a captured part of it, and points inside that part", () => {
   for (const claim of CAN_CANT) {
-    if (!claim.shot) continue;
+    if (claim.kind === "close") continue;
+    assert.ok(claim.shot && claim.region?.length, claim.id);
     const boxes: readonly string[] = SHOT_BOXES[claim.shot];
-    if (claim.focus && claim.focus !== "window")
-      for (const name of claim.focus)
-        assert.ok(boxes.includes(name), `${claim.id}: no "${name}"`);
+    for (const name of [...claim.region, ...(claim.focus ?? [])])
+      assert.ok(boxes.includes(name), `${claim.id}: no "${name}"`);
   }
 });
 

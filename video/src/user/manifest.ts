@@ -15,18 +15,18 @@ export const SHOT_BOXES = {
   "power-subscriptions": ["list", "subscriptions"],
   "power-test": ["model", "test"],
   "power-replied": ["continue", "replied"],
-  history: ["skip"],
+  history: ["choose", "dialog", "skip"],
   "welcome-routes": ["deciding", "existing", "new", "question"],
   "welcome-confirm": ["details", "yes"],
   "welcome-priority": ["customers", "delivery", "next", "other"],
-  understanding: ["looksRight", "nothingYet"],
+  understanding: ["looksRight", "nothingYet", "still"],
   setup: ["approve", "keep"],
-  "find-clients": ["brief", "findClients", "outputs"],
-  "first-job": ["brief", "outputs", "start"],
+  "find-clients": ["brief", "examples", "findClients", "outputs"],
+  "first-job": ["brief", "examples", "outputs", "start"],
   "first-job-started": ["status"],
   "job-thread": ["drafts", "instruction"],
   "outreach-card": ["approve", "card"],
-  "outreach-sent": ["card", "status"],
+  "outreach-sent": ["card", "from", "status"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type ShotId = keyof typeof SHOT_BOXES;
@@ -49,6 +49,17 @@ export type Manifest = {
 /** The app window size the capture runs at, CSS pixels. */
 export const APP_VIEWPORT = { w: 1440, h: 900 } as const;
 
+/** Shots taken in a narrower window, so their words are larger once cropped (and taller, so the email fits above the composer). */
+const NARROW: Partial<Record<ShotId, { w: number; h: number }>> = {
+  "outreach-card": { w: 1080, h: 1200 },
+  "outreach-sent": { w: 1080, h: 1200 },
+};
+
+/** The window size a shot is taken at, CSS pixels. */
+export function viewportOf(id: ShotId): { w: number; h: number } {
+  return NARROW[id] ?? APP_VIEWPORT;
+}
+
 /** The manifest, or an error that names every missing shot and box. */
 export function checkManifest(raw: unknown): Manifest {
   const shots =
@@ -60,9 +71,10 @@ export function checkManifest(raw: unknown): Manifest {
       problems.push(`${id}: missing`);
       continue;
     }
-    if (shot.width !== APP_VIEWPORT.w || shot.height !== APP_VIEWPORT.h)
+    const size = viewportOf(id);
+    if (shot.width !== size.w || shot.height !== size.h)
       problems.push(
-        `${id}: ${shot.width} x ${shot.height}, expected ${APP_VIEWPORT.w} x ${APP_VIEWPORT.h}`,
+        `${id}: ${shot.width} x ${shot.height}, expected ${size.w} x ${size.h}`,
       );
     for (const name of SHOT_BOXES[id])
       if (!shot.boxes?.[name]) problems.push(`${id}: no box "${name}"`);
