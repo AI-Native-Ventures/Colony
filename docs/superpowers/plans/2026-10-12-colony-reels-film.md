@@ -265,3 +265,27 @@ export const TALL_OPENING: OpeningLayout;
 - [ ] **Step 5: Gate**: Film90 frames 3300, 3420 and 3540 byte-identical to frames rendered before the change.
 - [ ] **Step 6: Full render** (119 s) with the Task 5 gates over the whole film (loudness, peak, darkest frame, three frames twice, the tall audio equal to the wide film's over all 119 s, a 16-frame sheet).
 - [ ] **Step 7: Deliver**: the watch page with the full film, the Desktop copy, the execution record in this plan, one PR into develop with auto-merge armed, bound to the session.
+
+## Execution record (2026-10-12)
+
+The whole 1:59 film plays on the tall frame. The wide film is unchanged.
+
+**Gates on the full tall film.** 1080 x 1920, 3570 frames (119.1 s); loudness -16.3 LUFS, true peak -1.8 dBFS; darkest frame YAVG 189 (no dark frames); frames 1500, 2700 and 3300 render byte-identical twice. The tall film's audio PCM, the wide film's audio PCM now, and the wide film's audio PCM before this branch are the same hash (28892e89...). Suite 279/279, typecheck and lint clean. A 16-frame contact sheet and stills at every beat were checked by eye.
+
+**The wide film is unchanged.** Each shared piece took an optional prop whose default is the wide film's value, and each change was checked on the frames it could touch, before and after. At the end, 30 Film90 frames across the whole film (60 to 3540) were rendered from a bundle of the branch's base commit and from the branch head: all 30 are byte-identical.
+
+**Rulings, in the order they were made** (each with what it costs if wrong, from the ledger):
+
+1. Tasks 6 to 8 outlined until the pilot gate, then written step by step. Cost: one more planning pass.
+2. PanelBlooms reused as is on the tall pages. Cost: one small component.
+3. No corner Colony mark in the tall film: it crowded the employee row; the account name and the end card carry the name. Cost: one line to add back.
+4. Captions centred (box x 140 to 940, 26 characters a row) and chunked evenly, after stills showed off-centre lines and lone last words. Cost: none.
+5. Rivers mirror the wide film (blue from Scout's plan row, the others from off the screen) instead of starting on the previous page as this plan said. Cost: river specs only.
+6. Lead and inbox carriers get tall walk paths (in from the left edge, up the margin beside the card). Cost: two small path functions.
+7. Blue's river bends sit low on the strip so it stays on screen while the page scrolls under it (21% of its ants on screen at the worst frame before, 95% or more after; pinned by a test). Cost: none.
+8. The team's chips stack in one column (each ending at its own time, pushed up when the next would touch it) instead of four lanes, which are too narrow on the tall frame. The four ants keep their own lanes. Cost: layout only.
+9. The blue camera zoom is dropped on the tall frame (spec): the card already fills the phone. Cost: one camera move.
+
+**Final review.** Self-review against the whole branch (the owner does not use subagents). No Critical or Important findings. One minor, deferred: `closeRows` estimates the close's layout with its own copy of the gaps and sizes (26, 14, 54, 18; 32, 44, 84) rather than sharing them with `CloseScene`, so a margin changed in one place would not move the test's estimate.
+
+**Not verified.** How the film sits inside the Instagram app on a phone: the covered areas come from third-party guides; a private test upload would confirm them.
