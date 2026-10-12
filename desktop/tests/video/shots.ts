@@ -47,6 +47,8 @@ export async function shoot(
       `${id}: a fixture name is on screen: "${text.slice(Math.max(0, at - 80), at + 40).replace(/\s+/g, " ")}"`,
     );
   }
+  const loading = /Loading[^\n]{0,40}…/.exec(text);
+  if (loading) throw new Error(`${id}: still loading: "${loading[0]}"`);
   await page.mouse.move(1, 1);
   await waitForAnimations(page);
   const boxes: Record<string, Box> = {};

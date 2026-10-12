@@ -255,6 +255,9 @@ test("sign-up: account, recovery code, business, power, history", async ({
     list: page.getByLabel("Your subscriptions"),
   });
   await credits.click();
+  // Switching back reloads the model list: wait for it before scrolling.
+  await expect(page.getByLabel("Default model")).toBeVisible();
+  await expect(page.getByText("Loading models…")).toHaveCount(0);
   const testButton = page.getByRole("button", { name: "Test connection" });
   // The panel can still be settling after the switch back: scroll until it holds.
   await expect(async () => {
@@ -559,6 +562,15 @@ test("first job: starting examples, approve team and start, the thread", async (
   await shoot(page, "first-job-started", status, { status });
 
   await openThread(page, root.id);
+  // Starting the job posts its own messages a moment later: let them land,
+  // then the drafts come back a minute after, so they always read last.
+  const panel = page.getByTestId("message-thread-panel");
+  await expect(
+    panel.getByText(/^Coordinate this job in this thread/),
+  ).toBeVisible();
+  await expect(
+    panel.getByText(/^Lerato is ready to work with Scout/),
+  ).toBeVisible();
   const reply = await page.evaluate(
     (input) =>
       (
@@ -568,9 +580,13 @@ test("first job: starting examples, approve team and start, the thread", async (
             content: string;
             parentEventId?: string;
             pubkey?: string;
+            createdAt?: number;
           }) => RelayEvent;
         }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.(input),
+      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        ...input,
+        createdAt: Math.floor(Date.now() / 1000) + 60,
+      }),
     {
       channelName: "Welcome",
       content: DRAFTS_REPLY,
@@ -579,12 +595,29 @@ test("first job: starting examples, approve team and start, the thread", async (
     },
   );
   if (!reply) throw new Error("The drafts reply was not emitted");
-  const thread = page.getByTestId("message-thread-panel");
+  const thread = panel;
   const drafts = thread.locator(`[data-message-id="${reply.id}"]`);
-  await shoot(page, "job-thread", drafts, {
-    instruction: thread.getByText(/^Coordinate this job in this thread/),
-    drafts,
-  });
+  // The job's own messages share a second, so their order differs run to
+  // run; the video points at the job's title instead, always at the top.
+  const title = thread.getByTestId("thread-open-task-title");
+  // The reply lands while the panel is still scrolling: take it to the
+  // bottom, as when you are reading along, until the reply holds still there.
+  const latest = thread.getByTestId("thread-scroll-to-latest");
+  await expect(async () => {
+    if (await latest.isVisible()) await latest.click();
+    await drafts.evaluate((el) => {
+      let box = el.parentElement;
+      while (box && box.scrollHeight <= box.clientHeight + 1)
+        box = box.parentElement;
+      box?.scrollTo({ top: box.scrollHeight });
+    });
+    await expect(latest).toHaveCount(0, { timeout: 500 });
+    await expect(drafts).toBeInViewport({ ratio: 1, timeout: 500 });
+    const before = await drafts.boundingBox();
+    await page.waitForTimeout(400);
+    expect(await drafts.boundingBox()).toEqual(before);
+  }).toPass({ timeout: 10_000 });
+  await shoot(page, "job-thread", drafts, { title, drafts });
 });
 
 /** Bright Plumbing's email to Thabo as an outreach card, pending or sent. */

@@ -355,7 +355,7 @@ export const START_HERE: readonly UserBeat[] = [
       },
     ],
     moves: [
-      { at: 0, shot: "job-thread", focus: ["instruction"], zoom: 1.5 },
+      { at: 0, shot: "job-thread", focus: ["title"], zoom: 1.5 },
       { at: 0.4, shot: "job-thread", focus: ["drafts"], zoom: 1.6 },
     ],
   },

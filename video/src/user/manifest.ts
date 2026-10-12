@@ -24,7 +24,7 @@ export const SHOT_BOXES = {
   "find-clients": ["brief", "examples", "findClients", "outputs"],
   "first-job": ["brief", "examples", "outputs", "start"],
   "first-job-started": ["status"],
-  "job-thread": ["drafts", "instruction"],
+  "job-thread": ["drafts", "title"],
   "outreach-card": ["approve", "card"],
   "outreach-sent": ["card", "from", "status"],
 } as const satisfies Record<string, readonly string[]>;
