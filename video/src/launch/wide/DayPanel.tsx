@@ -55,7 +55,7 @@ function tint(color: string, alpha: number): string {
   return color.replace(")", ` / ${alpha})`);
 }
 
-function AntBadge({ color, size }: { color: string; size: number }) {
+export function AntBadge({ color, size }: { color: string; size: number }) {
   return (
     <span
       style={{

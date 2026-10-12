@@ -17,6 +17,7 @@ import {
   AMBER90,
   BLUE90,
   CLOSE90,
+  DAY90,
   GREEN90,
   PANEL_ORDER,
   type PanelId,
@@ -49,6 +50,7 @@ import { TALL_OPENING } from "./opening.ts";
 import { TALL_BURSTS, TALL_RIVERS } from "./rivers.ts";
 import { panelY, scrollY } from "./scroll.ts";
 import { TallCaptions } from "./TallCaptions";
+import { TallDay } from "./TallDay";
 import { TallHero } from "./TallHero";
 
 /** The film's cards for a scene, drawn in its panel pixels, placed into the tall card box. */
@@ -147,6 +149,9 @@ function page(id: PanelId, t: number): React.ReactNode {
         </Cards>
       </>
     );
+  }
+  if (id === "day") {
+    return <TallDay t={t} timing={DAY90} />;
   }
   return null;
 }
