@@ -106,3 +106,36 @@ Then one task per episode, each with its own geometry module and tests (what mus
 - Task 12, episode 3 (customers): the leads as big rows (company, why it fits, tick box), twenty found, your picks ticked; the slim header hands over to the sales employee and a push to "Emails to your 5 picks" with the picks flying in and the pointer resting on Approve.
 - Task 13, episode 6 (website): Mo's Auto Repairs redrawn as a mobile page, the request typed on top, the painter repainting it top to bottom, Before and After in the bar, Approve, then "Live".
 - Task 14: all eight on the watch page, Desktop copies, one PR into develop.
+
+## Execution record (2026-10-12)
+
+All eight explainers play upright, each work scene as its own phone screen, with big captions and the employee shrinking to a slim header when the card arrives. The owner approved pilot 2 (episode 5) before the other seven were built.
+
+**Gates on each tall episode.** 1080 x 1920; the same frame renders the same twice; each episode's audio PCM equals its wide episode's.
+
+| Episode | Length | Loudness | True peak | Darkest frame |
+|---|---|---|---|---|
+| 1 Meet Scout | 37.6 s | -16.5 LUFS | -2.0 dBFS | 202 |
+| 2 Your team in a minute | 36.8 s | -16.1 LUFS | -3.0 dBFS | 198 |
+| 3 Finds customers | 33.4 s | -16.2 LUFS | -1.6 dBFS | 202 |
+| 4 Sells for you | 33.3 s | -16.5 LUFS | -2.3 dBFS | 191 |
+| 5 Makes your posts | 33.1 s | -16.3 LUFS | -2.6 dBFS | 192 |
+| 6 Keeps your website fresh | 33.1 s | -16.5 LUFS | -1.8 dBFS | 181 |
+| 7 Nothing goes out without your yes | 37.1 s | -16.4 LUFS | -1.5 dBFS | 202 |
+| 8 Talk to your team | 33.4 s | -16.1 LUFS | -1.7 dBFS | 197 |
+
+**Nothing else changed.** For the whole branch, 65 frames (seven of each wide explainer, five of the wide film, four of the Reels film) rendered from a bundle of the branch's base and from its head are byte-identical, and all eight wide explainers' audio PCM is unchanged. Each shared change was also gated on its own frames as it went in. Suite 324/324, typecheck and lint clean.
+
+**Rulings, in the order they were made** (each with what it costs if wrong, from the ledger):
+
+1. Pilot episode 5: its work sits wholly in the card area, so the pilot tests the shell. Cost: one more pilot.
+2. The caption set-up moved into `shellCaptions.ts` for both shells. Cost: none (gated).
+3. Episode 5's posts 2 and 3 land below the fold and are scrolled into view while the voice describes them: the shared pop sounds are 0.5 s apart, too short to scroll each into view first. Cost: feed timing only.
+4. Every employee row shrinks at its card's entrance minus 0.6 s; in episode 7 the subline is barely seen. Cost: one timing per episode.
+5. Approve is pinned to the phone card's foot in every episode. Cost: one button per episode.
+6. Episode 4's next emails slide up as a sheet; episode 3's hand-over is a push to the five picks as rows, the pointer resting unpressed; episode 6's request types in a bubble over the page and the painter repaints top to bottom. Reason: the phone has no left column. Cost: one screen each.
+7. The launch film keeps the look the owner approved. Cost: the film would need the same pass.
+
+**Final review.** Self-review (the owner does not use subagents). No Critical or Important findings. Minor, deferred: the pointer paths onto a button (`pinnedCursorKeys`, `readCursorKeys`, `restCursorKeys`) repeat one shape and could share a helper; each tall episode repeats `compactAt={cardIn - 0.6}`.
+
+**Not verified.** How the episodes sit inside the Instagram app on a phone: the covered areas come from third-party guides.
