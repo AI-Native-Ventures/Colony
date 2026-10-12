@@ -1,6 +1,6 @@
 import { AntMark } from "../../brand/AntMark";
 import { INTER } from "../fonts";
-import { progress, smoothstep } from "../math.ts";
+import { easeInOutCubic, progress, smoothstep } from "../math.ts";
 import { fitFontSize } from "../points.ts";
 import {
   easeOutBack,
@@ -9,7 +9,7 @@ import {
   wordIn,
 } from "../wide/EmployeeHero";
 import type { HeroLook } from "../wide/employees.ts";
-import { HERO } from "./hero.ts";
+import { HERO, SLIM, slimTitleSize } from "./hero.ts";
 
 const INK = "#17151f";
 const MUTED = "#5d5a6b";
@@ -38,22 +38,52 @@ function titleSize(text: string): number {
   );
 }
 
-/** The employee steps forward on a tall frame: avatar and badge, the job on one line, one plain sentence. */
+/** A word's entrance, faded out by `c` (0 keeps it as it is). */
+function fadeOut(style: React.CSSProperties, c: number): React.CSSProperties {
+  if (c <= 0) return style;
+  return { ...style, opacity: Number(style.opacity ?? 1) * (1 - c) };
+}
+
+/** Seconds the employee row takes to shrink into the slim header. */
+const COMPACT_SECONDS = 0.6;
+
+/**
+ * The employee steps forward on a tall frame: avatar and badge, the job on
+ * one line, one plain sentence. From `compactAt` (when given) it shrinks
+ * into the slim header: the avatar small at the card's edge, the title
+ * beside it, the badge and the sentence gone.
+ */
 export const TallHero: React.FC<{
   t: number;
   look: HeroLook;
   timing: HeroTiming;
-}> = ({ t, look, timing }) => {
+  compactAt?: number;
+}> = ({ t, look, timing, compactAt }) => {
   const pop = progress(t, timing.avatarAt - 0.05, 0.55);
   if (pop <= 0) return null;
-  const scale = easeOutBack(pop);
+  const c =
+    compactAt === undefined
+      ? 0
+      : easeInOutCubic(progress(t, compactAt, COMPACT_SECONDS));
+  const scale =
+    easeOutBack(pop) * (1 + (SLIM.avatar.r / HERO.avatar.r - 1) * c);
   const ring = progress(t, timing.avatarAt, 1.1);
   const focusAway =
-    timing.focusFrom === undefined
+    (timing.focusFrom === undefined
       ? 0
-      : smoothstep(timing.focusFrom, timing.focusFrom + 0.8, t);
+      : smoothstep(timing.focusFrom, timing.focusFrom + 0.8, t)) *
+    (1 - c);
   const { x, y, r } = HERO.avatar;
   const size = titleSize(`${look.title[0]} ${look.title[1]}`);
+  const titleScale = 1 + (slimTitleSize(size) / size - 1) * c;
+  const titleShift = {
+    x: (SLIM.titleLeft - (x - r)) * c,
+    y: (SLIM.titleTop - HERO.titleTop) * c,
+  };
+  const avatarShift = {
+    x: (SLIM.avatar.x - x) * c,
+    y: (SLIM.avatar.y - y) * c,
+  };
   return (
     <div
       style={{
@@ -65,7 +95,7 @@ export const TallHero: React.FC<{
         opacity: 1 - 0.18 * focusAway,
       }}
     >
-      {ring > 0 && ring < 1 ? (
+      {ring > 0 && ring < 1 && c === 0 ? (
         <div
           style={{
             position: "absolute",
@@ -92,7 +122,10 @@ export const TallHero: React.FC<{
           display: "grid",
           placeItems: "center",
           color: "#fff",
-          transform: `scale(${scale.toFixed(4)})`,
+          transform:
+            c > 0
+              ? `translate(${avatarShift.x.toFixed(2)}px, ${avatarShift.y.toFixed(2)}px) scale(${scale.toFixed(4)})`
+              : `scale(${scale.toFixed(4)})`,
         }}
       >
         {look.avatar === "person" ? (
@@ -118,7 +151,7 @@ export const TallHero: React.FC<{
           display: "flex",
           alignItems: "center",
           gap: 10,
-          ...wordIn(t, timing.avatarAt + 0.25),
+          ...fadeOut(wordIn(t, timing.avatarAt + 0.25), c),
         }}
       >
         <span
@@ -143,6 +176,12 @@ export const TallHero: React.FC<{
           lineHeight: 1,
           color: INK,
           whiteSpace: "nowrap",
+          ...(c > 0
+            ? {
+                transform: `translate(${titleShift.x.toFixed(2)}px, ${titleShift.y.toFixed(2)}px) scale(${titleScale.toFixed(4)})`,
+                transformOrigin: "0 0",
+              }
+            : {}),
         }}
       >
         <span style={wordIn(t, timing.headlineAt)}>{look.title[0]}</span>{" "}
@@ -159,7 +198,7 @@ export const TallHero: React.FC<{
           lineHeight: 1.3,
           color: MUTED,
           textWrap: "balance",
-          ...wordIn(t, timing.sublineAt),
+          ...fadeOut(wordIn(t, timing.sublineAt), c),
         }}
       >
         {look.subline}

@@ -1,9 +1,9 @@
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import { Grain } from "../launch/Backdrop";
 import { easeInOutCubic, progress, smoothstep } from "../launch/math.ts";
-import { Cards } from "../launch/tall/Cards";
 import { TALL_CLOSE } from "../launch/tall/close.ts";
 import { TALL_H, TALL_W } from "../launch/tall/frame.ts";
+import { BIG_CAPTIONS } from "../launch/tall/captions.ts";
 import { TallCaptions } from "../launch/tall/TallCaptions";
 import { TallHero } from "../launch/tall/TallHero";
 import { useFontsReady } from "../launch/useFontsReady";
@@ -19,14 +19,17 @@ import { TALL_HOOK } from "./tallHook.ts";
 
 /**
  * An explainer on the Reels frame: the hook with its words on top, the
- * employee row over the episode's own work scene (drawn in its wide panel
- * pixels, placed into the card box), the plain end card above Instagram's
- * caption, two-row captions, and the same sound as the wide episode.
+ * employee row that shrinks into a slim header at `compactAt` as the
+ * episode's phone card comes in (children are frame pixels), the plain end
+ * card above Instagram's caption, big captions a few words at a time, and
+ * the same sound as the wide episode.
  */
 export const TallShell: React.FC<{
   config: ShellConfig;
+  /** When the employee row shrinks to the slim header, just before the card arrives. */
+  compactAt: number;
   children: (t: number) => React.ReactNode;
-}> = ({ config, children }) => {
+}> = ({ config, compactAt, children }) => {
   useFontsReady();
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -70,10 +73,11 @@ export const TallShell: React.FC<{
               t={t}
               look={config.hero.look}
               timing={config.hero.timing}
+              compactAt={compactAt}
             />
           </div>
         ) : null}
-        <Cards>{children(t)}</Cards>
+        {children(t)}
       </BrightStage>
       <CloseScene t={t} timing={close} ants={null} plain layout={TALL_CLOSE} />
       <TallCaptions
@@ -82,6 +86,7 @@ export const TallShell: React.FC<{
         keywords={config.keywords}
         highlights={highlights}
         until={until}
+        look={BIG_CAPTIONS}
       />
       <Grain t={t} width={TALL_W} height={TALL_H} opacity={0.05} />
       <ExplainerSound config={config} />

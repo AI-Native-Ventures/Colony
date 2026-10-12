@@ -27,3 +27,21 @@ export function estimatedTitleSize(title: string): number {
     ? HERO.titleSize
     : Math.floor(HERO.titleSize * (HERO.titleWidth / width));
 }
+
+/**
+ * The slim header an employee shrinks to once its card arrives: a small
+ * avatar at the card's left edge and the title beside it, half the size.
+ */
+export const SLIM = {
+  avatar: { x: 168, y: 326, r: 28 },
+  titleLeft: 212,
+  titleTop: 303,
+  titleSize: 46,
+  /** The card's right edge: the title never runs past it. */
+  right: 940,
+} as const;
+
+/** The slim title's size for a title shown at `heroSize` in the full row. */
+export function slimTitleSize(heroSize: number): number {
+  return (heroSize * SLIM.titleSize) / HERO.titleSize;
+}
