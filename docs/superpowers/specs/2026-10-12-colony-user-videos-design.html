@@ -1,0 +1,203 @@
+<title>Colony User Videos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<style>
+:root {
+  --bg: #fbf8fc;
+  --panel: #ffffff;
+  --ink: #17151f;
+  --muted: #5d5a6e;
+  --line: #ebe6f2;
+  --violet: #6d3fd0;
+  --violet-soft: #efe8fc;
+  --green: #0f7a52;
+  --green-soft: #e3f5ec;
+  --amber: #9a5a00;
+  --amber-soft: #fdf1dc;
+  --glow-a: #ffd9c2;
+  --glow-b: #ffd3e8;
+  --glow-c: #e3dcff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141118; --panel: #1d1922; --ink: #f4f1f8; --muted: #b9b4c6; --line: #302a39;
+    --violet: #b79bff; --violet-soft: #2c2342; --green: #6fd8a8; --green-soft: #173327;
+    --amber: #f2c06b; --amber-soft: #3a2c14;
+    --glow-a: #3a2620; --glow-b: #3a1f31; --glow-c: #2a2547;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141118; --panel: #1d1922; --ink: #f4f1f8; --muted: #b9b4c6; --line: #302a39;
+  --violet: #b79bff; --violet-soft: #2c2342; --green: #6fd8a8; --green-soft: #173327;
+  --amber: #f2c06b; --amber-soft: #3a2c14;
+  --glow-a: #3a2620; --glow-b: #3a1f31; --glow-c: #2a2547;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 Inter, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.room { max-width: 1040px; margin: 0 auto; padding-inline: 18px; padding-block: 0 72px; }
+header { position: relative; padding-block: 44px 18px; }
+header::before {
+  content: ""; position: absolute; inset: -30% -20% auto -20%; height: 320px; z-index: -1;
+  background:
+    radial-gradient(40% 60% at 18% 40%, var(--glow-a), transparent 70%),
+    radial-gradient(35% 55% at 60% 30%, var(--glow-b), transparent 70%),
+    radial-gradient(30% 50% at 92% 60%, var(--glow-c), transparent 70%);
+}
+.eyebrow { margin: 0 0 8px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--violet); }
+h1 { margin: 0 0 12px; font-size: clamp(1.9rem, 4.2vw, 2.7rem); line-height: 1.06; letter-spacing: -0.035em; text-wrap: balance; }
+h2 { margin: 38px 0 6px; font-size: 1.35rem; letter-spacing: -0.02em; text-wrap: balance; }
+h3 { margin: 0 0 8px; font-size: 1.02rem; letter-spacing: -0.01em; }
+p { margin: 0 0 10px; max-width: 72ch; }
+.lede { font-size: 1.08rem; color: var(--muted); }
+.lede strong { color: var(--ink); }
+.sub { color: var(--muted); margin-bottom: 14px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; min-width: 0; }
+.card ul { margin: 0; padding-left: 18px; }
+.card li { margin: 4px 0; }
+.scroll { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; font-size: 0.82rem; letter-spacing: 0.02em; background: var(--bg); position: sticky; top: 0; }
+tr:last-child td { border-bottom: 0; }
+td.t { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--violet); font-weight: 700; }
+td.say { font-weight: 500; }
+code { font: 0.84em/1.4 ui-monospace, "SF Mono", Menlo, monospace; background: var(--violet-soft); color: var(--ink); padding: 1px 5px; border-radius: 6px; word-break: break-word; }
+.tag { display: inline-block; font-size: 0.74rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.ok { background: var(--green-soft); color: var(--green); }
+.check { background: var(--amber-soft); color: var(--amber); }
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }
+.step { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; min-width: 0; }
+.step b { display: block; margin-bottom: 4px; }
+.step span { color: var(--muted); font-size: 0.93rem; }
+.num { display: inline-grid; place-items: center; width: 1.6em; height: 1.6em; border-radius: 50%; background: var(--violet-soft); color: var(--violet); font-size: 0.78rem; font-weight: 800; margin-right: 6px; vertical-align: 1px; }
+.calls { background: var(--violet-soft); border-radius: 16px; padding: 16px 20px; margin-top: 12px; }
+.calls ol { margin: 0; padding-left: 20px; }
+.calls li { margin: 6px 0; }
+</style>
+<main class="room">
+  <header>
+    <p class="eyebrow">Spec · 12 Oct 2026 · for Basheer to approve</p>
+    <h1>Two videos for people becoming users</h1>
+    <p class="lede"><strong>"Start here"</strong> walks a new owner through setting up Colony on the real app. <strong>"What your AI team can and can't do"</strong> answers the fears that stop owners signing up. Both live where people already are (welcome email, colony.global, help), so nobody has to reply to comments.</p>
+  </header>
+
+  <section>
+    <h2>Rules every frame follows</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>True to the app people download</h3>
+        <ul>
+          <li>Screens come from the real app (production, <code>main</code>), not drawings.</li>
+          <li>Every on-screen word is the app's own word.</li>
+          <li>Every claim has a proof line in the code, listed below.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>No promises</h3>
+        <ul>
+          <li>Show the work, never results: no customers, sales or meetings promised.</li>
+          <li>No "free". No phone calls (not in the app).</li>
+          <li>Prices stay out of the voice; the app shows its own.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Written for strangers</h3>
+        <ul>
+          <li>Each line makes sense to a plumber who has never heard of Colony.</li>
+          <li>Same voice as the films (Aoede), big captions, calm music.</li>
+          <li>16:9, 1920 x 1080. No em dashes anywhere.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Video 1: "Start here" (about 2:40)</h2>
+    <p class="sub">The example business on screen is Bright Plumbing (brightplumbing.co.za), the same sample business as the launch film. The video follows the existing-business route, the one most owners take.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>When</th><th>Screen (real app)</th><th>Voice</th><th>Proof on <code>main</code></th></tr></thead>
+        <tbody>
+          <tr><td class="t">0:00</td><td>Title: "Start here"</td><td class="say">Here's how to set up Colony, step by step.</td><td>None needed</td></tr>
+          <tr><td class="t">0:06</td><td>"Create your account": name, email, password, Create account</td><td class="say">First, create your account. Add your name, your email and a password.</td><td><code>onboarding/ui/new/screens/AccountScreen.tsx:100-154</code></td></tr>
+          <tr><td class="t">0:16</td><td>"Save your recovery code"</td><td class="say">Colony gives you a recovery code. If you forget your password, you'll need it to get back in. Colony can't recover it for you, so save it somewhere private.</td><td><code>RecoveryScreen.tsx:82-86, 123</code></td></tr>
+          <tr><td class="t">0:30</td><td>"Your business": name, website, Read website, summary, Continue</td><td class="say">Next, tell Colony about your business. Type its name and website, then press Read website. Colony writes a short summary. Check it, and change anything that's wrong.</td><td><code>CompanyScreen.tsx:127-222</code></td></tr>
+          <tr><td class="t">0:48</td><td>"Connect and test": the three ways to power agents, then "Your agent replied"</td><td class="say">Now choose what powers your team. With Colony Credits, you pay as you go and pick a model. Or use an account you already pay for: Claude Code or Codex, signed in on this computer. Then Colony checks that your agent replies.</td><td><code>PowerScreen.tsx:255-278, 451</code></td></tr>
+          <tr><td class="t">1:12</td><td>"Let Colony get to know you", then Open my Colony</td><td class="say">If you've used other AI apps on this computer, Colony can learn from those chats. You choose what to keep, or skip it.</td><td><code>HistoryScreen.tsx:97-104, 334</code></td></tr>
+          <tr><td class="t">1:22</td><td>Welcome: "Where should we begin?", then "Is this the business we're setting up?"</td><td class="say">Scout, your chief of staff, meets you in Welcome. Pick where to begin. For a business you already run, choose Help with my existing business, and check the details.</td><td><code>ArrivalStage.tsx:41-44</code>, <code>ExistingRouteStages.tsx:158</code>, <code>welcomeKickoff.ts</code> ("your Chief of Staff")</td></tr>
+          <tr><td class="t">1:38</td><td>"Get more customers", then "What I understand so far"</td><td class="say">Tell Scout what matters first, like getting more customers. Scout writes down what it understood. You can edit every line.</td><td><code>ExistingRouteStages.tsx:25</code>, <code>UnderstandingStage.tsx:92-105</code></td></tr>
+          <tr><td class="t">1:52</td><td>"Keep the workspace simple.", Approve this workspace setup</td><td class="say">Scout suggests the simplest setup. Nothing is created until you approve it.</td><td><code>SetupStages.tsx:115-122, 185</code></td></tr>
+          <tr><td class="t">2:02</td><td>First job card: "Draft Instagram captions", the brief, Approve team and start, then "In progress"</td><td class="say">Then Scout suggests a first job, like drafting five Instagram captions. Edit the brief if you like, and press Approve team and start. On Colony Credits, add credits first. Your brief stays where it is.</td><td><code>firstJobStarters.ts:19-24</code>, <code>FirstJobSuggestionView.tsx:69, 274-300, 366</code></td></tr>
+          <tr><td class="t">2:24</td><td>The job's thread, the drafts "Ready for your review"</td><td class="say">Your team works in the job's thread, and everything comes back ready for your review.</td><td><code>firstJobStarters.ts:24</code>, <code>SetupStages.tsx:211-212</code> <span class="tag check">confirm in capture</span></td></tr>
+          <tr><td class="t">2:34</td><td>End card: colony.global</td><td class="say">That's it. Your team is set up.</td><td>None needed</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Video 2: "What your AI team can and can't do" (about 60 s)</h2>
+    <p class="sub">Film style (brand gradient, big type), each line next to the real screen that proves it. Strike any line you don't want; the video is built from what's left.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Line on screen and in the voice</th><th>Screen shown</th><th>Proof on <code>main</code></th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="say"><b>Can:</b> find potential clients, with notes on why each may be a good fit.</td><td>First job card "Find potential clients"</td><td><code>firstJobStarters.ts:29-34</code> ("do not contact anyone")</td><td><span class="tag ok">verified</span></td></tr>
+          <tr><td class="say"><b>Can:</b> draft Instagram captions and matching visual briefs.</td><td>First job card "Draft Instagram captions"</td><td><code>firstJobStarters.ts:19-24</code> ("do not create images or publish posts")</td><td><span class="tag ok">verified</span></td></tr>
+          <tr><td class="say"><b>Can:</b> write sales emails, one card per email, for you to review.</td><td>Outreach email card</td><td><code>shared/api/outreachSend.ts</code>; card composite</td><td><span class="tag check">confirm card on main</span></td></tr>
+          <tr><td class="say"><b>Can't:</b> send an email without your yes. What you read on the card is exactly what goes out, from your own Gmail.</td><td>Card with Approve, then Sent</td><td><code>outreachSend.ts:22-25</code>; <code>crates/buzz-browser/src/mcp.rs:35-38</code>, <code>README.md:158</code> (sending is off for agents)</td><td><span class="tag ok">verified</span></td></tr>
+          <tr><td class="say"><b>Can't:</b> send emails while Colony is closed.</td><td>Same card</td><td><code>outreachSend.ts</code> (the send runs in the owner's open Gmail tab in the app)</td><td><span class="tag ok">verified</span></td></tr>
+          <tr><td class="say"><b>Can't:</b> hire anyone or start work until you approve.</td><td>"Where should we begin?", Approve team and start</td><td><code>ArrivalStage.tsx:41</code>, <code>UnderstandingStage.tsx:102</code>, <code>FirstJobSuggestionView.tsx:366</code></td><td><span class="tag ok">verified</span></td></tr>
+          <tr><td class="say"><b>Can't:</b> keep anything from your old AI chats that you didn't choose.</td><td>"Review your memories"</td><td><code>HistoryScreen.tsx:94-104</code> and its note: only reviewed memories leave the computer, encrypted</td><td><span class="tag ok">verified</span></td></tr>
+          <tr><td class="say"><b>Optional:</b> your team brings its questions to Scout first; only decisions reach you.</td><td>A question in Needs action</td><td><code>crates/buzz-relay/src/ask_broker.rs:695-715</code> (workers ask their leader, leaders ask the top, only the top asks you)</td><td><span class="tag check">confirm Scout is the top</span></td></tr>
+          <tr><td class="say">Close: You stay in charge. Nothing goes out without your yes.</td><td>End card: colony.global</td><td>The lines above</td><td><span class="tag ok">verified</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it's made</h2>
+    <div class="flow">
+      <div class="step"><b><span class="num">1</span>Capture</b><span>A Playwright script drives the real app in its test mode with Bright Plumbing's sample data, the way the existing first-run, Welcome and first-job tests already do. At each beat it checks the screen's heading, then saves a sharp screenshot and the position of every button and field it will point at.</span></div>
+      <div class="step"><b><span class="num">2</span>Compose</b><span>Two new compositions in <code>video/</code>, <code>StartHere</code> and <code>CanCant</code>: the app in a clean window on the brand gradient, the camera easing to what matters, a pointer that clicks the real button positions, a ring on the thing being explained, big captions, voice per beat, a calm music bed.</span></div>
+      <div class="step"><b><span class="num">3</span>Check</b><span>Tests pin the beat timing (voice fits its screen, captions on screen long enough to read) and that every video 2 line has a proof entry. Then the usual gates: 1920 x 1080, -16 LUFS, no dark frames, the same frame renders the same twice.</span></div>
+      <div class="step"><b><span class="num">4</span>Re-make</b><span>When the app changes, run the capture again and re-render. A renamed screen fails the capture loudly instead of shipping an out-of-date tutorial.</span></div>
+    </div>
+    <p class="sub" style="margin-top:12px">The capture script lives with the app's tests but runs only on demand, never in CI. Screenshots are generated, not committed.</p>
+  </section>
+
+  <section>
+    <h2>Before you watch</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Done means</h3>
+        <ul>
+          <li>Both videos on one watch page, with every check above passed.</li>
+          <li>Full-size files on your Desktop in "Colony video tests".</li>
+          <li>A PR into develop with the capture script and both compositions.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Not checked by me</h3>
+        <ul>
+          <li>Live payment, live Gmail and live AI replies: the capture uses the app's test mode, which stands in for them.</li>
+          <li>Where you place the videos (welcome email, site, help page) stays with you.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Your calls</h2>
+    <div class="calls">
+      <ol>
+        <li><b>Phone calls in video 2.</b> Calling isn't in the app. My pick: leave calling out completely rather than say "can't call yet", so it doesn't clash with the launch film.</li>
+        <li><b>Anything to strike</b> from the video 2 table before I build.</li>
+      </ol>
+    </div>
+  </section>
+</main>
