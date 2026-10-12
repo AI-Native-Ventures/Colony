@@ -1,3 +1,4 @@
+import { easeInOutCubic, progress } from "../math.ts";
 import type { HeroLook } from "../wide/employees.ts";
 import { HERO_BOX } from "./frame.ts";
 
@@ -44,4 +45,27 @@ export const SLIM = {
 /** The slim title's size for a title shown at `heroSize` in the full row. */
 export function slimTitleSize(heroSize: number): number {
   return (heroSize * SLIM.titleSize) / HERO.titleSize;
+}
+
+/** Seconds the employee row takes to shrink into the slim header. */
+export const COMPACT_SECONDS = 0.6;
+
+/** How far the row has shrunk at `t`: 0 full, 1 slim; 0 when it never shrinks. */
+export function compactProgress(t: number, compactAt?: number): number {
+  return compactAt === undefined
+    ? 0
+    : easeInOutCubic(progress(t, compactAt, COMPACT_SECONDS));
+}
+
+/** Where the employee's avatar is at `t` (its centre and radius), as it shrinks from the full row to the slim header. */
+export function heroAvatarAt(
+  t: number,
+  compactAt?: number,
+): { x: number; y: number; r: number } {
+  const c = compactProgress(t, compactAt);
+  return {
+    x: HERO.avatar.x + (SLIM.avatar.x - HERO.avatar.x) * c,
+    y: HERO.avatar.y + (SLIM.avatar.y - HERO.avatar.y) * c,
+    r: HERO.avatar.r + (SLIM.avatar.r - HERO.avatar.r) * c,
+  };
 }
