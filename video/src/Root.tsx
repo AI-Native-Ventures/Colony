@@ -42,6 +42,7 @@ import { Film90 } from "./launch/wide/LaunchFilm90";
 import { FILM90_SECONDS } from "./launch/wide/film90.ts";
 import { TeamBeatProof } from "./launch/wide/TeamBeatProof";
 import { t1Schema, type T1Props } from "./t1/schema";
+import { StartHere, startHereMetadata } from "./user/StartHere";
 
 const fontHandle = delayRender("Loading Inter font");
 loadFont("normal", { weights: ["400", "700"], subsets: ["latin"] })
@@ -792,6 +793,16 @@ export const Root = () => {
         fps={30}
         width={1080}
         height={1920}
+      />
+      <Composition
+        id="StartHere"
+        component={StartHere}
+        durationInFrames={30}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={{ manifest: null }}
+        calculateMetadata={startHereMetadata}
       />
       <Composition
         id="Film90Tall"
