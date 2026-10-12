@@ -6,7 +6,8 @@ const ALL: readonly Side[] = ["top", "right", "bottom", "left"];
 /**
  * `n` points just outside the frame (30 to 120 px out), spread along the
  * chosen sides by length, so a swarm can fly in from off screen. `minX`
- * keeps starts on the top and bottom edges right of a column of words.
+ * keeps starts on the top and bottom edges right of a column of words;
+ * `minY` keeps starts on the left and right edges below a block of words.
  */
 export function edgeStarts(
   n: number,
@@ -14,9 +15,10 @@ export function edgeStarts(
   frame: { w: number; h: number },
   sides: readonly Side[] = ALL,
   minX = 0,
+  minY = 0,
 ): Point[] {
   const span = (s: Side) =>
-    s === "top" || s === "bottom" ? frame.w - minX : frame.h;
+    s === "top" || s === "bottom" ? frame.w - minX : frame.h - minY;
   const total = sides.reduce((sum, s) => sum + span(s), 0);
   const out: Point[] = [];
   for (let i = 0; i < n; i++) {
@@ -32,8 +34,8 @@ export function edgeStarts(
     }
     if (side === "top") out.push({ x: minX + d, y: -off });
     else if (side === "bottom") out.push({ x: minX + d, y: frame.h + off });
-    else if (side === "right") out.push({ x: frame.w + off, y: d });
-    else out.push({ x: -off, y: d });
+    else if (side === "right") out.push({ x: frame.w + off, y: minY + d });
+    else out.push({ x: -off, y: minY + d });
   }
   return out;
 }

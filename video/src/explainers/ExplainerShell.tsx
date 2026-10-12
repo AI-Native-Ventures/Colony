@@ -1,13 +1,5 @@
-import {
-  AbsoluteFill,
-  Audio,
-  Sequence,
-  staticFile,
-  useCurrentFrame,
-  useVideoConfig,
-} from "remotion";
+import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import { Grain } from "../launch/Backdrop";
-import { musicVolume } from "../launch/duck.ts";
 import { easeInOutCubic, progress, smoothstep } from "../launch/math.ts";
 import { useFontsReady } from "../launch/useFontsReady";
 import { BrightStage } from "../launch/wide/BrightStage";
@@ -20,9 +12,11 @@ import type { CLOSE90 } from "../launch/wide/film90.ts";
 import { LightWorld } from "../launch/wide/MeshGradient";
 import type { PaletteStop } from "../launch/wide/mesh.ts";
 import { PanelBlooms } from "../launch/wide/PanelBlooms";
-import { type Highlight, Subtitles } from "../launch/wide/Subtitles";
-import { captionUntil, type EpisodeLine } from "./episode.ts";
+import { Subtitles } from "../launch/wide/Subtitles";
+import type { EpisodeLine } from "./episode.ts";
+import { ExplainerSound } from "./ExplainerSound";
 import { type HookConfig, HookScene } from "./HookScene";
+import { shellCaptions } from "./shellCaptions.ts";
 
 /** Everything one explainer needs beyond its work scene. */
 export type ShellConfig = {
@@ -43,12 +37,6 @@ export type ShellConfig = {
   scribbles: readonly { from: number; until: number }[];
   extras?: readonly { at: number; file: string; volume: number }[];
 };
-
-const BRAND: Highlight = {
-  bg: "hsl(258 90% 66% / 0.18)",
-  fg: "hsl(258 70% 40%)",
-};
-const DUCK = { base: 0.5, ducked: 0.18, attack: 0.25, release: 0.4 };
 
 /**
  * The world every explainer lives in: the hook on the light gradient, the
@@ -71,18 +59,7 @@ export const ExplainerShell: React.FC<{
     progress(t, close.dimFrom, close.dark - close.dimFrom),
   );
   const reveal = opened * (1 - closed);
-  const shown = lines.filter((l) => l.captioned);
-  const until = Object.fromEntries(
-    lines.map((l, i) => [l.id, captionUntil(lines, i)]),
-  );
-  const toneHighlight: Highlight = {
-    bg: tone.color.replace(")", " / 0.16)"),
-    fg: tone.deep,
-  };
-  const highlights = Object.fromEntries(
-    shown.map((l) => [l.id, l.beat === "hook" ? BRAND : toneHighlight]),
-  );
-  const windows = lines.map((l) => l.speech);
+  const { shown, until, highlights } = shellCaptions(lines, tone);
   return (
     <AbsoluteFill style={{ backgroundColor: "#f6eee4" }}>
       {reveal < 1 ? <LightWorld t={t} stops={config.world} /> : null}
@@ -130,72 +107,7 @@ export const ExplainerShell: React.FC<{
         until={until}
       />
       <Grain t={t} width={WIDE_W} height={WIDE_H} opacity={0.05} />
-      {config.music.map((cue) => (
-        <Sequence
-          key={`music-${cue.from}`}
-          from={Math.round(cue.from * fps)}
-          durationInFrames={Math.round((cue.until - cue.from) * fps)}
-          layout="none"
-        >
-          <Audio
-            src={staticFile("launch/music-b.mp3")}
-            trimBefore={Math.round(cue.trackAt * fps)}
-            volume={(f) => {
-              const s = cue.from + f / fps;
-              const fadeIn =
-                cue.from > 0 ? smoothstep(cue.from, cue.from + 1.5, s) : 1;
-              return (
-                musicVolume(s, windows, DUCK) *
-                fadeIn *
-                (1 - smoothstep(cue.until - 1.5, cue.until, s))
-              );
-            }}
-          />
-        </Sequence>
-      ))}
-      {config.whooshes.map((at) => (
-        <Sequence
-          key={`whoosh-${at}`}
-          from={Math.round(at * fps)}
-          layout="none"
-        >
-          <Audio src={staticFile("launch/sfx-whoosh.mp3")} volume={0.5} />
-        </Sequence>
-      ))}
-      {config.pops.map((at) => (
-        <Sequence key={`pop-${at}`} from={Math.round(at * fps)} layout="none">
-          <Audio src={staticFile("launch/sfx-pop.mp3")} volume={0.45} />
-        </Sequence>
-      ))}
-      {config.scribbles.map((s) => (
-        <Sequence
-          key={`scribble-${s.from}`}
-          from={Math.round(s.from * fps)}
-          durationInFrames={Math.round((s.until - s.from) * fps)}
-          layout="none"
-        >
-          <Audio src={staticFile("launch/sfx-scribble.mp3")} volume={0.3} />
-        </Sequence>
-      ))}
-      {config.clicks.map((at) => (
-        <Sequence key={`click-${at}`} from={Math.round(at * fps)} layout="none">
-          <Audio src={staticFile("launch/sfx-click.mp3")} volume={0.8} />
-        </Sequence>
-      ))}
-      {(config.extras ?? []).map((x) => (
-        <Sequence
-          key={`extra-${x.file}-${x.at}`}
-          from={Math.round(x.at * fps)}
-          layout="none"
-        >
-          <Audio src={staticFile(x.file)} volume={x.volume} />
-        </Sequence>
-      ))}
-      {lines.map((l) => (
-        <Sequence key={l.id} from={Math.round(l.at * fps)} layout="none">
-          <Audio src={staticFile(l.file)} />
-        </Sequence>
-      ))}
+      <ExplainerSound config={config} />
     </AbsoluteFill>
   );
 };

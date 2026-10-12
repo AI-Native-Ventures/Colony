@@ -40,6 +40,24 @@ const ICONS: Partial<Record<HookShapeId, string>> = {
 };
 
 /** Sets up a box of `boxW` by `boxH` units so its centre lands on (cx, cy) and it is `width` px wide. */
+/** Each shape's drawing box (width, height) before it is scaled to its width. */
+const HOOK_SHAPE_BOX: Record<HookShapeId, readonly [number, number]> = {
+  croissant: [200, 120],
+  hardHat: [200, 120],
+  scissors: [24, 24],
+  wrench: [24, 24],
+  camera: [24, 24],
+  car: [24, 24],
+  sprayBottle: [160, 200],
+  chefHat: [200, 160],
+};
+
+/** How tall shape `id` is drawn at `width`. */
+export function hookShapeHeight(id: HookShapeId, width: number): number {
+  const [w, h] = HOOK_SHAPE_BOX[id];
+  return (width * h) / w;
+}
+
 function enterBox(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -158,9 +176,9 @@ export function drawHookShape(
   }
   ctx.save();
   ctx.fillStyle = "#000";
+  enterBox(ctx, cx, cy, width, ...HOOK_SHAPE_BOX[id]);
   const icon = ICONS[id];
   if (icon) {
-    enterBox(ctx, cx, cy, width, 24, 24);
     ctx.fill(new Path2D(icon));
     if (id === "camera") {
       // The icon's lens, inside the ring: without it the camera reads as a frame.
@@ -169,13 +187,10 @@ export function drawHookShape(
       ctx.fill();
     }
   } else if (id === "hardHat") {
-    enterBox(ctx, cx, cy, width, 200, 120);
     hardHat(ctx);
   } else if (id === "sprayBottle") {
-    enterBox(ctx, cx, cy, width, 160, 200);
     sprayBottle(ctx);
   } else {
-    enterBox(ctx, cx, cy, width, 200, 160);
     chefHat(ctx);
   }
   ctx.restore();
