@@ -36,6 +36,10 @@ import {
   handleSaveCustomHarness,
   handleDeleteCustomHarness,
 } from "./e2eBridgeCustomHarnesses.ts";
+import {
+  type MockCompanyWebsiteScan,
+  websiteScanResponse,
+} from "./e2eBridgeWebsiteScan";
 
 import {
   createNativeFactoryApi,
@@ -366,6 +370,8 @@ type E2eConfig = {
     openRouterConnection?: MockOpenRouterConfig["openRouterConnection"];
     openRouterQuotaSequence?: MockOpenRouterConfig["openRouterQuotaSequence"];
     subscriptionScan?: SubscriptionScan;
+    /** The onboarding website read; unset keeps it an unsupported command. */
+    companyWebsiteScan?: MockCompanyWebsiteScan;
     /** Success/error responses per scan; the last response repeats on retry. */
     subscriptionScanSequence?: MockSubscriptionScanResult[];
     acpRuntimesCatalog?: RawAcpRuntimeCatalogEntry[];
@@ -13538,6 +13544,8 @@ export function maybeInstallE2eTauriMocks() {
         return activeConfig?.mock?.relayRequiresMembership ?? false;
       case "discover_acp_providers":
         return handleDiscoverAcpRuntimes(activeConfig);
+      case "scan_onboarding_company_website":
+        return websiteScanResponse(activeConfig?.mock, command);
       case "scan_agent_subscriptions":
         return scanSubscriptions();
       case "get_subscription_connections":
