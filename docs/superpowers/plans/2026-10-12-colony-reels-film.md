@@ -219,18 +219,49 @@ export const TALL_OPENING: OpeningLayout;
 - [ ] **Step 7: Deliver**: a watch page with the pilot in a phone-shaped player, the Desktop copy as the next number, commit, push.
 - [ ] **GATE: the owner watches the pilot.** Stop here until he says how it looks.
 
-## After the pilot
+## After the pilot (owner approved the pilot on 2026-10-12: "Looks right, build the rest")
 
-Tasks 6 to 8 are outlined here and written out step by step after the pilot gate, because the owner's notes on the pilot can change them (the employee row, the captions and the scroll are all settled by the pilot).
+### Task 6: The team scenes and the rivers
 
-### Task 6: The team panels
+**Files:**
+- Modify: `video/src/launch/wide/River.tsx` (`offsetY`, `width`, `height` props; defaults keep the film: 0, 1920, 1080)
+- Create: `video/src/launch/tall/rivers.ts` (`TALL_RIVERS: Record<EmployeeId, RiverSpec>`, `TALL_BURSTS: RiverSpec[]`), `video/src/launch/tall/rivers.test.ts`
+- Modify: `video/src/launch/tall/Film90Tall.tsx` (pages `blue`, `amber`, `pink`, `green`, `yes`; rivers and bursts drawn with `offsetY = scrollY(t)`)
 
-Pages for `blue`, `amber`, `pink`, `green` and `yes`, each `TallHero` plus the film's own card components inside `PANEL_TRANSFORM` (`LeadsBoard` and `Carriers`, `EmailCard`, `PenAnt` and `CallCard`, `PostsGrid` and `PostCarriers`, `WebsiteCard` and `Painter`, `InboxCard`, `InboxCarriers` and `InboxCursor`). The blue camera zoom is dropped (the card is already large). The rivers that bring each employee in flow down from the previous page instead of across: `tall/rivers.ts` maps each `RIVERS90` spec into tall page coordinates, tested so every river starts above its page and ends on the employee's avatar. Stills at every beat; any ant path that crosses the employee row is re-routed under the card.
+**Interfaces:**
+- Consumes: `RiverSpec`, `RIVERS90` timings (`TIMING90[id].riverFrom`, `avatarAt`), `YES_ROWS`, `yesRowY`, `approvedAt`, `YES90`, `employeeNode`, `HERO.avatar`, `toTall`, `panelY`.
+- Produces: `TALL_RIVERS`, `TALL_BURSTS`; pages use `TallHero` plus the film's card components inside `Cards`.
+
+- [ ] **Step 1: Failing test** (`rivers.test.ts`): every team river starts on the page before its employee's and lands on that employee's avatar (`panelY(id) + HERO.avatar`); it starts and lands at the film's times (`riverFrom`, `avatarAt`); every burst starts on an inbox row of the `yes` page and ends past the right edge (x > 1080).
+- [ ] **Step 2: Run, FAIL.**
+- [ ] **Step 3: Implement** the river props, `rivers.ts` (blue leaves from Scout's blue task row on the plan card, the others from the middle of the previous scene's card, each curving down to its avatar; bursts leave each inbox row to the right), and the five pages: `LeadsBoard` and `Carriers` (blue, no camera zoom), `EmailCard`, `PenAnt` and `CallCard` (amber), `PostsGrid` and `PostCarriers` (pink), `WebsiteCard` and `Painter` (green), `InboxCard`, `InboxCarriers` and `InboxCursor` (`OWNER` hero, yes).
+- [ ] **Step 4: Run, PASS**; typecheck, lint.
+- [ ] **Step 5: Gate**: Film90 frames 1430, 1700, 2100, 2280 and 2710 (rivers and bursts) byte-identical to frames rendered before the River change.
+- [ ] **Step 6: Stills** at every beat (50, 53, 55, 59, 63, 67, 72, 74, 79, 82, 86, 90, 93 s); re-route any ant path that crosses an employee row or a caption; commit.
 
 ### Task 7: The day, running down the screen
 
-`tall/TallDay.tsx`: the clock on top (y 300), two columns below (You on the left, Your team on the right), the hours running down from y 520 to y 1480, the same items and chips as `DayPanel` at the same times (`day.ts`), tested so every item's box sits inside the content area and in its own column.
+**Files:**
+- Create: `video/src/launch/tall/day.ts` (layout), `video/src/launch/tall/TallDay.tsx`, `video/src/launch/tall/day.test.ts`
+- Modify: `video/src/launch/tall/Film90Tall.tsx` (page `day`)
 
-### Task 8: The close, the full render and the PR
+**Interfaces:**
+- Produces: `TALL_DAY = { clock: { x, y }, ruler: { x, top, bottom }, you: { x, w }, team: { x, w }, summary: { y } }`, `hourY(h) -> number`, `chipTops(chips) -> number[]` (each chip's top: at its hour, pushed down so no two overlap), `tallDayAntSpot(k, hour) -> Point`.
 
-The close swarm aimed at a tall logo (`tall/close.ts` with the logo at x 540, y 820), the full 119 s render, the same gates as Task 5 over the whole film, the watch page and Desktop, the execution record appended to this plan, and one PR into develop with auto-merge armed.
+- [ ] **Step 1: Failing test** (`day.test.ts`): the clock, the ruler, both columns and the summary lie between y 250 and y 1520 and clear of the right buttons; `hourY` runs down from 07:00 to 18:00; chip boxes never overlap and none ends below 18:00; each chip shows no later than 0.2 hours after its time; the "You" blocks fit their column.
+- [ ] **Step 2: Run, FAIL.**
+- [ ] **Step 3: Implement** `day.ts` and `TallDay.tsx`: the clock (136 px) and "Tuesday" on top; hours down the left (odd hours labelled); "You" blocks growing down as the clock runs; "Your team" chips popping at their times, stacked without overlap; the now line across both columns with the four ants walking down under it; the sun glow following the time; the "Today" summary as a 2 by 2 grid under 18:00. Same times as `DayPanel` (`DAY90`, `TEAM_CHIPS`, `YOU_BLOCKS`).
+- [ ] **Step 4: Run, PASS**; stills at 97, 100, 103, 106, 108 s; commit.
+
+### Task 8: The end card, the full film and the PR
+
+**Files:**
+- Modify: `video/src/launch/wide/CloseScene.tsx` (a `layout` prop: frame size and logo; default the film's), `video/src/launch/wide/closeSwarm.ts` (starts, lanes and frame width as arguments; defaults the film's)
+- Create: `video/src/launch/tall/close.ts` (`TALL_CLOSE`, tall close lanes), `video/src/launch/tall/close.test.ts`, `useTallCloseAnts` in `tall/`
+- Modify: `video/src/launch/tall/Film90Tall.tsx` (`CloseScene` with the tall layout and swarm)
+
+- [ ] **Step 1: Failing test** (`close.test.ts`): the logo, the name, the tagline, "Early access is open" and the address pill lie between y 250 and y 1520; every close lane flies from the day's ant spots into the logo.
+- [ ] **Step 2: Run, FAIL.** **Step 3: Implement.** **Step 4: Run, PASS.**
+- [ ] **Step 5: Gate**: Film90 frames 3300, 3420 and 3540 byte-identical to frames rendered before the change.
+- [ ] **Step 6: Full render** (119 s) with the Task 5 gates over the whole film (loudness, peak, darkest frame, three frames twice, the tall audio equal to the wide film's over all 119 s, a 16-frame sheet).
+- [ ] **Step 7: Deliver**: the watch page with the full film, the Desktop copy, the execution record in this plan, one PR into develop with auto-merge armed, bound to the session.
