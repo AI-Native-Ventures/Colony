@@ -3,7 +3,7 @@ import { Cursor } from "../app/Cursor";
 import { INTER } from "../fonts";
 import { easeOutExpo, lerpAngle, progress, smoothstep } from "../math.ts";
 import { OWNER, TONES } from "./employees.ts";
-import { walkState } from "./walk.ts";
+import { type Path, walkState } from "./walk.ts";
 import { WorkerAnt } from "./WorkerAnt";
 import {
   APPROVE_BUTTON,
@@ -318,15 +318,17 @@ export const InboxCard: React.FC<{ t: number; timing: InboxTiming }> = ({
 };
 
 /** Each employee walks its work into the inbox, then stays beside it. */
-export const InboxCarriers: React.FC<{ t: number; timing: InboxTiming }> = ({
-  t,
-  timing,
-}) => (
+export const InboxCarriers: React.FC<{
+  t: number;
+  timing: InboxTiming;
+  /** The walk to row `i` (the wide film's unless given). */
+  path?: (i: number) => Path;
+}> = ({ t, timing, path = yesCarryPath }) => (
   <>
     {YES_ROWS.map((row, i) => {
       const start = yesCarryStart(i, timing);
       if (t < start) return null;
-      const s = walkState(yesCarryPath(i), t, start, timing.carryDuration);
+      const s = walkState(path(i), t, start, timing.carryDuration);
       const land = yesLandsAt(i, timing);
       const settle = smoothstep(land, land + 0.35, t);
       const angle = lerpAngle(s.angle, 0, settle);

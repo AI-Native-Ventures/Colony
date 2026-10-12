@@ -99,3 +99,32 @@ export const WIDE_LANES: Lane[] = [
   { c1: { x: 1660, y: 1220 }, c2: { x: 2080, y: 380 }, spread: 130 },
   { c1: { x: 2140, y: 760 }, c2: { x: 1660, y: 40 }, spread: 120 },
 ];
+
+/** Where the opening puts things: the wide film's numbers, or the Reels film's. */
+export type OpeningLayout = {
+  w: number;
+  h: number;
+  /** One trade at a time: the top of the line and the size. */
+  trade: { top: number; size: number };
+  tower: { centerY: number; maxWidth: number };
+  logo: { cx: number; cy: number; width: number; height: number };
+  /** How far the logo glides up when the definition takes over. */
+  logoShift: number;
+  define: { top: number; width: number };
+  /** The four ants that walk in under the definition. */
+  team: { y: number; gap: number };
+  lanes: Lane[];
+};
+
+/** The wide film's opening, exactly as it was drawn before layouts existed. */
+export const WIDE_OPENING: OpeningLayout = {
+  w: 1920,
+  h: 1080,
+  trade: { top: 1080 / 2 - 100, size: 168 },
+  tower: { centerY: TOWER_STACK.centerY, maxWidth: TOWER_MAX_WIDTH },
+  logo: WIDE_LOGO_RECT,
+  logoShift: -200,
+  define: { top: 400, width: 1100 },
+  team: { y: 860, gap: 130 },
+  lanes: WIDE_LANES,
+};

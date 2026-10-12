@@ -5,15 +5,15 @@ import { antColorOnLight } from "../colors.ts";
 import { INTER } from "../fonts";
 import { easeInOutCubic, easeOutExpo, progress, smoothstep } from "../math.ts";
 import { type Ant, antState } from "../swarm.ts";
-import { WIDE_H, WIDE_W } from "./beat.ts";
 import { TEAM, TONES } from "./employees.ts";
 import {
   DEFINITION,
   INTRO,
+  type OpeningLayout,
   swarmFade,
   TOWER_WORDS,
   TRADE_WORDS,
-  WIDE_LOGO_RECT,
+  WIDE_OPENING,
 } from "./intro.ts";
 import { drawTower } from "./towerDraw.ts";
 import { WorkerAnt } from "./WorkerAnt";
@@ -22,13 +22,15 @@ const INK = "#17151f";
 const TRAIL_DT = 0.022;
 const TRAIL_ALPHA = [1, 0.42, 0.22, 0.1];
 
-const layer: React.CSSProperties = {
-  position: "absolute",
-  left: 0,
-  top: 0,
-  width: WIDE_W,
-  height: WIDE_H,
-};
+function layerOf(layout: OpeningLayout): React.CSSProperties {
+  return {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: layout.w,
+    height: layout.h,
+  };
+}
 
 function rise(t: number, at: number, seconds = 0.7): React.CSSProperties {
   const e = easeOutExpo(progress(t, at, seconds));
@@ -40,7 +42,10 @@ function rise(t: number, at: number, seconds = 0.7): React.CSSProperties {
 }
 
 /** The single glowing ant the film opens on. */
-const SoloAnt: React.FC<{ t: number }> = ({ t }) => {
+const SoloAnt: React.FC<{ t: number; layout: OpeningLayout }> = ({
+  t,
+  layout,
+}) => {
   const first = TRADE_WORDS[0].at;
   const fade = 1 - smoothstep(first - 0.1, first + 0.15, t);
   if (fade <= 0) return null;
@@ -51,8 +56,8 @@ const SoloAnt: React.FC<{ t: number }> = ({ t }) => {
     <div
       style={{
         position: "absolute",
-        left: WIDE_W / 2 - width / 2,
-        top: WIDE_H / 2 - height / 2,
+        left: layout.w / 2 - width / 2,
+        top: layout.h / 2 - height / 2,
         width,
         height,
         color: INK,
@@ -67,7 +72,10 @@ const SoloAnt: React.FC<{ t: number }> = ({ t }) => {
 };
 
 /** "The work you love": one trade at a time, big and centred. */
-const TradeWords: React.FC<{ t: number }> = ({ t }) => (
+const TradeWords: React.FC<{ t: number; layout: OpeningLayout }> = ({
+  t,
+  layout,
+}) => (
   <>
     {TRADE_WORDS.map((word, i) => {
       const next = TRADE_WORDS[i + 1]?.at ?? INTRO.tradesOut;
@@ -82,10 +90,10 @@ const TradeWords: React.FC<{ t: number }> = ({ t }) => (
             position: "absolute",
             left: 0,
             right: 0,
-            top: WIDE_H / 2 - 100,
+            top: layout.trade.top,
             textAlign: "center",
             fontFamily: INTER,
-            fontSize: 168,
+            fontSize: layout.trade.size,
             fontWeight: 800,
             letterSpacing: "-0.045em",
             color: INK,
@@ -101,21 +109,35 @@ const TradeWords: React.FC<{ t: number }> = ({ t }) => (
   </>
 );
 
-const TowerLayer: React.FC<{ t: number }> = ({ t }) => {
+const TowerLayer: React.FC<{ t: number; layout: OpeningLayout }> = ({
+  t,
+  layout,
+}) => {
   const ref = useRef<HTMLCanvasElement>(null);
   const visible = t >= TOWER_WORDS[0].at - 0.05 && t <= INTRO.release + 0.5;
   useLayoutEffect(() => {
     const ctx = ref.current?.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, WIDE_W, WIDE_H);
-    if (visible) drawTower(ctx, INTER, t, "film");
-  }, [t, visible]);
-  return <canvas ref={ref} width={WIDE_W} height={WIDE_H} style={layer} />;
+    ctx.clearRect(0, 0, layout.w, layout.h);
+    if (visible) drawTower(ctx, INTER, t, "film", layout);
+  }, [t, visible, layout]);
+  return (
+    <canvas
+      ref={ref}
+      width={layout.w}
+      height={layout.h}
+      style={layerOf(layout)}
+    />
+  );
 };
 
 /** The jobs break into four rivers of ants that build the logo, then fade as the name takes over. */
-const WideSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
+const WideSwarm: React.FC<{
+  ants: Ant[];
+  t: number;
+  layout: OpeningLayout;
+}> = ({ ants, t, layout }) => {
   const sharpRef = useRef<HTMLCanvasElement>(null);
   const shapes = useMemo(() => antShapes(), []);
   const active = t >= INTRO.release - 0.2 && swarmFade(t) > 0;
@@ -125,7 +147,7 @@ const WideSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
     if (!sharpCanvas || !sharp) return;
     sharp.setTransform(1, 0, 0, 1, 0, 0);
     sharp.globalAlpha = 1;
-    sharp.clearRect(0, 0, WIDE_W, WIDE_H);
+    sharp.clearRect(0, 0, layout.w, layout.h);
     if (!active) return;
     const settle = swarmFade(t);
     const unite = smoothstep(INTRO.logoIn - 0.2, INTRO.logoIn + 0.15, t);
@@ -148,12 +170,22 @@ const WideSwarm: React.FC<{ ants: Ant[]; t: number }> = ({ ants, t }) => {
         );
       }
     }
-  }, [active, ants, shapes, t]);
-  return <canvas ref={sharpRef} width={WIDE_W} height={WIDE_H} style={layer} />;
+  }, [active, ants, shapes, t, layout]);
+  return (
+    <canvas
+      ref={sharpRef}
+      width={layout.w}
+      height={layout.h}
+      style={layerOf(layout)}
+    />
+  );
 };
 
 /** The logo lands, "Introducing Colony.", what it is; then it steps back so "AI employee" can be defined. */
-const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
+const LogoAndName: React.FC<{ t: number; layout: OpeningLayout }> = ({
+  t,
+  layout,
+}) => {
   if (t < INTRO.logoIn - 0.3) return null;
   const logoIn = smoothstep(INTRO.logoIn, INTRO.logoIn + 0.4, t);
   const pulse = progress(t, INTRO.logoIn + 0.05, 1.1);
@@ -164,17 +196,20 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
   const nameOut = smoothstep(INTRO.defineFrom - 0.1, INTRO.defineFrom + 0.4, t);
   // The logo glides up and shrinks to make room for the definition.
   const logoScale = 1 - 0.55 * step;
-  const logoShift = -200 * step;
-  const L = WIDE_LOGO_RECT;
+  const logoShift = layout.logoShift * step;
+  const L = layout.logo;
+  // The glow is 2.3 logos wide and the ring 1.15; integer maths keeps the film's 920 and 460 exact.
+  const glow2 = (L.width * 23) / 10;
+  const ring2 = (L.width * 115) / 100;
   return (
     <>
       <div
         style={{
           position: "absolute",
-          left: L.cx - 460,
-          top: L.cy - 460,
-          width: 920,
-          height: 920,
+          left: L.cx - glow2 / 2,
+          top: L.cy - glow2 / 2,
+          width: glow2,
+          height: glow2,
           borderRadius: "50%",
           background:
             "radial-gradient(circle, rgb(255 255 255 / 0.6) 0%, rgb(255 255 255 / 0.18) 40%, transparent 70%)",
@@ -185,10 +220,10 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
       <div
         style={{
           position: "absolute",
-          left: L.cx - 230,
-          top: L.cy - 230,
-          width: 460,
-          height: 460,
+          left: L.cx - ring2 / 2,
+          top: L.cy - ring2 / 2,
+          width: ring2,
+          height: ring2,
           borderRadius: "50%",
           border: `3px solid rgb(23 21 31 / ${(ringAlpha * 0.5).toFixed(3)})`,
           transform: `scale(${(0.6 + 1.1 * ring).toFixed(4)})`,
@@ -259,7 +294,10 @@ const LogoAndName: React.FC<{ t: number }> = ({ t }) => {
 };
 
 /** "AI employee", defined in one plain sentence, while four ants walk in like a small team. */
-const Definition: React.FC<{ t: number }> = ({ t }) => {
+const Definition: React.FC<{ t: number; layout: OpeningLayout }> = ({
+  t,
+  layout,
+}) => {
   if (t < INTRO.defineFrom) return null;
   const walk = progress(t, INTRO.teamWalkFrom, 3.2);
   const pace = easeInOutCubic(walk);
@@ -271,7 +309,7 @@ const Definition: React.FC<{ t: number }> = ({ t }) => {
           position: "absolute",
           left: 0,
           right: 0,
-          top: 400,
+          top: layout.define.top,
           textAlign: "center",
           fontFamily: INTER,
         }}
@@ -289,7 +327,7 @@ const Definition: React.FC<{ t: number }> = ({ t }) => {
         </div>
         <div
           style={{
-            width: 1100,
+            width: layout.define.width,
             margin: "26px auto 0",
             fontSize: 48,
             fontWeight: 600,
@@ -303,13 +341,14 @@ const Definition: React.FC<{ t: number }> = ({ t }) => {
         </div>
       </div>
       {TEAM.map((who, k) => {
-        const endX = WIDE_W / 2 - 1.5 * 130 + k * 130;
-        const x = -160 - (3 - k) * 130 + (endX + 160 + (3 - k) * 130) * pace;
+        const gap = layout.team.gap;
+        const endX = layout.w / 2 - 1.5 * gap + k * gap;
+        const x = -160 - (3 - k) * gap + (endX + 160 + (3 - k) * gap) * pace;
         return (
           <WorkerAnt
             key={who}
             x={x}
-            y={860}
+            y={layout.team.y}
             angle={0}
             size={84}
             color={TONES[who].color}
@@ -328,19 +367,21 @@ const Definition: React.FC<{ t: number }> = ({ t }) => {
 };
 
 /** The dark opening: who it is for, the swarm, Colony, and what an AI employee is. */
-export const WideOpening: React.FC<{ t: number; ants: Ant[] | null }> = ({
-  t,
-  ants,
-}) => {
+export const WideOpening: React.FC<{
+  t: number;
+  ants: Ant[] | null;
+  /** The wide film's layout unless given. */
+  layout?: OpeningLayout;
+}> = ({ t, ants, layout = WIDE_OPENING }) => {
   if (t > INTRO.brightTo + 0.2) return null;
   return (
     <>
-      <SoloAnt t={t} />
-      <TradeWords t={t} />
-      <TowerLayer t={t} />
-      {ants ? <WideSwarm ants={ants} t={t} /> : null}
-      <LogoAndName t={t} />
-      <Definition t={t} />
+      <SoloAnt t={t} layout={layout} />
+      <TradeWords t={t} layout={layout} />
+      <TowerLayer t={t} layout={layout} />
+      {ants ? <WideSwarm ants={ants} t={t} layout={layout} /> : null}
+      <LogoAndName t={t} layout={layout} />
+      <Definition t={t} layout={layout} />
     </>
   );
 };

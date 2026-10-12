@@ -3,11 +3,14 @@ import { INTER } from "../fonts";
 import { smoothstep } from "../math.ts";
 
 /** A small Colony lockup in the top left corner, so every frame says whose film this is. */
-export const CornerLogo: React.FC<{ t: number; from: number; to: number }> = ({
-  t,
-  from,
-  to,
-}) => {
+export const CornerLogo: React.FC<{
+  t: number;
+  from: number;
+  to: number;
+  /** Top left of the lockup; the wide film's corner unless given. */
+  x?: number;
+  y?: number;
+}> = ({ t, from, to, x = 60, y = 42 }) => {
   const show =
     smoothstep(from, from + 0.5, t) * (1 - smoothstep(to - 0.4, to, t));
   if (show <= 0) return null;
@@ -15,8 +18,8 @@ export const CornerLogo: React.FC<{ t: number; from: number; to: number }> = ({
     <div
       style={{
         position: "absolute",
-        left: 60,
-        top: 42,
+        left: x,
+        top: y,
         display: "flex",
         alignItems: "center",
         gap: 12,

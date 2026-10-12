@@ -6,27 +6,69 @@ import { mulberry32 } from "../math.ts";
 import { pickPoints, sampleAlphaPoints } from "../points.ts";
 import { type Ant, createAnts } from "../swarm.ts";
 import { WIDE_H, WIDE_W } from "./beat.ts";
+import type { CloseLayout } from "./closeLayout.ts";
+import { type CloseSwarmOptions, closeSwarmAnts } from "./closeSwarm.ts";
+import { CLOSE_LOGO } from "./film90.ts";
 import {
   INTRO,
+  type OpeningLayout,
   WIDE_ANT_COUNT,
-  WIDE_LANES,
-  WIDE_LOGO_RECT,
+  WIDE_OPENING,
   WIDE_SEED,
 } from "./intro.ts";
-import { closeSwarmAnts } from "./closeSwarm.ts";
-import { CLOSE_LOGO } from "./film90.ts";
 import { drawTower } from "./towerDraw.ts";
 
 function rasterAlpha(
+  width: number,
+  height: number,
   draw: (ctx: CanvasRenderingContext2D) => void,
 ): Uint8ClampedArray {
   const canvas = document.createElement("canvas");
-  canvas.width = WIDE_W;
-  canvas.height = WIDE_H;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) throw new Error("2D canvas unavailable");
   draw(ctx);
-  return ctx.getImageData(0, 0, WIDE_W, WIDE_H).data;
+  return ctx.getImageData(0, 0, width, height).data;
+}
+
+function assertInter(): void {
+  if (!document.fonts.check(`800 100px "${INTER}"`)) {
+    throw new Error(
+      "Inter 800 is not loaded; refusing to sample a fallback font",
+    );
+  }
+}
+
+/** The opening swarm for a layout: ants from the pile of jobs to the logo, along its lanes. */
+function openingSwarm(layout: OpeningLayout): Ant[] {
+  const { w, h } = layout;
+  const rand = mulberry32(WIDE_SEED);
+  const letters = sampleAlphaPoints(
+    rasterAlpha(w, h, (ctx) =>
+      drawTower(ctx, INTER, INTRO.release, "rest", layout),
+    ),
+    w,
+    h,
+    4,
+  );
+  const logo = sampleAlphaPoints(
+    rasterAlpha(w, h, (ctx) => drawMarkSilhouette(ctx, layout.logo)),
+    w,
+    h,
+    4,
+  );
+  return createAnts(
+    pickPoints(letters, WIDE_ANT_COUNT, rand),
+    pickPoints(logo, WIDE_ANT_COUNT, rand),
+    layout.lanes,
+    {
+      seed: WIDE_SEED + 1,
+      releaseAt: INTRO.release,
+      sweep: INTRO.releaseSweep,
+      frameWidth: w,
+    },
+  );
 }
 
 export type WideSwarms = { opening: Ant[]; close: Ant[] };
@@ -43,37 +85,12 @@ export function useWideAnts(): WideSwarms | null {
     let live = true;
     interReady
       .then(() => {
-        if (!document.fonts.check(`800 100px "${INTER}"`)) {
-          throw new Error(
-            "Inter 800 is not loaded; refusing to sample a fallback font",
-          );
-        }
-        const rand = mulberry32(WIDE_SEED);
-        const letters = sampleAlphaPoints(
-          rasterAlpha((ctx) => drawTower(ctx, INTER, INTRO.release, "rest")),
-          WIDE_W,
-          WIDE_H,
-          4,
-        );
-        const logo = sampleAlphaPoints(
-          rasterAlpha((ctx) => drawMarkSilhouette(ctx, WIDE_LOGO_RECT)),
-          WIDE_W,
-          WIDE_H,
-          4,
-        );
-        const built = createAnts(
-          pickPoints(letters, WIDE_ANT_COUNT, rand),
-          pickPoints(logo, WIDE_ANT_COUNT, rand),
-          WIDE_LANES,
-          {
-            seed: WIDE_SEED + 1,
-            releaseAt: INTRO.release,
-            sweep: INTRO.releaseSweep,
-            frameWidth: WIDE_W,
-          },
-        );
+        assertInter();
+        const built = openingSwarm(WIDE_OPENING);
         const closeLogo = sampleAlphaPoints(
-          rasterAlpha((ctx) => drawMarkSilhouette(ctx, CLOSE_LOGO)),
+          rasterAlpha(WIDE_W, WIDE_H, (ctx) =>
+            drawMarkSilhouette(ctx, CLOSE_LOGO),
+          ),
           WIDE_W,
           WIDE_H,
           4,
@@ -88,5 +105,60 @@ export function useWideAnts(): WideSwarms | null {
       live = false;
     };
   }, [handle]);
+  return ants;
+}
+
+/** The opening swarm alone, for another layout (the Reels film's). Holds the frame until it is ready. */
+export function useOpeningAnts(layout: OpeningLayout): Ant[] | null {
+  const [handle] = useState(() => delayRender("Sampling the opening swarm"));
+  const [ants, setAnts] = useState<Ant[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    interReady
+      .then(() => {
+        assertInter();
+        const built = openingSwarm(layout);
+        if (live) {
+          setAnts(built);
+          continueRender(handle);
+        }
+      })
+      .catch((err: unknown) => cancelRender(err));
+    return () => {
+      live = false;
+    };
+  }, [handle, layout]);
+  return ants;
+}
+
+/** The close swarm for another layout (the Reels film's). Holds the frame until it is ready. */
+export function useCloseAnts(
+  layout: CloseLayout,
+  opts: CloseSwarmOptions,
+): Ant[] | null {
+  const [handle] = useState(() => delayRender("Sampling the close swarm"));
+  const [ants, setAnts] = useState<Ant[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    interReady
+      .then(() => {
+        const logo = sampleAlphaPoints(
+          rasterAlpha(layout.w, layout.h, (ctx) =>
+            drawMarkSilhouette(ctx, layout.logo),
+          ),
+          layout.w,
+          layout.h,
+          4,
+        );
+        if (live) {
+          setAnts(closeSwarmAnts(logo, opts));
+          continueRender(handle);
+        }
+      })
+      .catch((err: unknown) => cancelRender(err));
+    return () => {
+      live = false;
+    };
+  }, [handle, layout, opts]);
   return ants;
 }

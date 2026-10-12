@@ -13,7 +13,7 @@ import {
   rowY,
   TICK_BOX,
 } from "./beat.ts";
-import { walkState } from "./walk.ts";
+import { type Path, walkState } from "./walk.ts";
 import { WorkerAnt } from "./WorkerAnt";
 
 const INK = "#17151f";
@@ -340,17 +340,21 @@ export const LeadsBoard: React.FC<{
   );
 };
 
-/** Blue ants carrying each lead in like leaf-cutters, then settling as the row's owner. */
+/**
+ * Blue ants carrying each lead in like leaf-cutters, then settling as the
+ * row's owner. `path` is the walk to row `i` (the wide film's unless given).
+ */
 export const Carriers: React.FC<{
   t: number;
   timing?: BoardTiming;
   leads?: readonly Lead[];
-}> = ({ t, timing = BEAT, leads = LEADS }) => (
+  path?: (i: number) => Path;
+}> = ({ t, timing = BEAT, leads = LEADS, path = carryPath }) => (
   <>
     {leads.map((lead, i) => {
       const start = carryStart(i, timing);
       if (t < start) return null;
-      const s = walkState(carryPath(i), t, start, timing.carryDuration);
+      const s = walkState(path(i), t, start, timing.carryDuration);
       const land = landsAt(i, timing);
       const settle = smoothstep(land, land + 0.35, t);
       const angle = lerpAngle(s.angle, 0, settle);

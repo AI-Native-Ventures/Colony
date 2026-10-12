@@ -5,26 +5,20 @@ import { antColorOnLight } from "../colors.ts";
 import { INTER } from "../fonts";
 import { easeOutExpo, progress, smoothstep } from "../math.ts";
 import { type Ant, antState } from "../swarm.ts";
-import { WIDE_H, WIDE_W } from "./beat.ts";
-import { CLOSE_LOGO, type CLOSE90 } from "./film90.ts";
+import { CLOSE_WORDS, type CloseLayout, WIDE_CLOSE } from "./closeLayout.ts";
+import type { CLOSE90 } from "./film90.ts";
 
 const TRAIL_DT = 0.022;
 const TRAIL_ALPHA = [1, 0.42, 0.22, 0.1];
-
-const layer: React.CSSProperties = {
-  position: "absolute",
-  left: 0,
-  top: 0,
-  width: WIDE_W,
-  height: WIDE_H,
-};
 
 /** The four colors fly home and build the logo, then unite into violet, as in the opening. */
 const CloseSwarm: React.FC<{
   ants: Ant[];
   t: number;
   timing: typeof CLOSE90;
-}> = ({ ants, t, timing }) => {
+  width: number;
+  height: number;
+}> = ({ ants, t, timing, width, height }) => {
   const sharpRef = useRef<HTMLCanvasElement>(null);
   const shapes = useMemo(() => antShapes(), []);
   const active = t >= timing.dimFrom && t <= timing.logoIn + 1.2;
@@ -34,7 +28,7 @@ const CloseSwarm: React.FC<{
     if (!sharpCanvas || !sharp) return;
     sharp.setTransform(1, 0, 0, 1, 0, 0);
     sharp.globalAlpha = 1;
-    sharp.clearRect(0, 0, WIDE_W, WIDE_H);
+    sharp.clearRect(0, 0, width, height);
     if (!active) return;
     const settle = 1 - progress(t, timing.logoIn, 0.6);
     const unite = smoothstep(timing.logoIn - 0.2, timing.logoIn + 0.15, t);
@@ -57,8 +51,15 @@ const CloseSwarm: React.FC<{
         );
       }
     }
-  }, [active, ants, shapes, t, timing]);
-  return <canvas ref={sharpRef} width={WIDE_W} height={WIDE_H} style={layer} />;
+  }, [active, ants, shapes, t, timing, width, height]);
+  return (
+    <canvas
+      ref={sharpRef}
+      width={width}
+      height={height}
+      style={{ position: "absolute", left: 0, top: 0, width, height }}
+    />
+  );
 };
 
 const INK = "#17151f";
@@ -72,16 +73,29 @@ function rise(t: number, at: number, seconds = 0.7): React.CSSProperties {
   };
 }
 
-/** The close: the ants are home, the logo lands, then the name, what it is, and where to get it. */
+/**
+ * The close: the ants are home, the logo lands, then the name, what it is,
+ * and where to get it. `layout` is the frame and where the logo lands (the
+ * wide film's unless given).
+ */
 export const CloseScene: React.FC<{
   t: number;
   timing: typeof CLOSE90;
   ants: Ant[] | null;
   /** No shadow under the logo and no glow left after the flash (owner note on the intro, cut 4). */
   plain?: boolean;
-}> = ({ t, timing, ants, plain = false }) => {
+  layout?: CloseLayout;
+}> = ({ t, timing, ants, plain = false, layout = WIDE_CLOSE }) => {
   if (t < timing.dimFrom) return null;
-  const swarm = ants ? <CloseSwarm ants={ants} t={t} timing={timing} /> : null;
+  const swarm = ants ? (
+    <CloseSwarm
+      ants={ants}
+      t={t}
+      timing={timing}
+      width={layout.w}
+      height={layout.h}
+    />
+  ) : null;
   if (t < timing.logoIn - 0.4) return swarm;
   const logoIn = smoothstep(timing.logoIn, timing.logoIn + 0.4, t);
   const pulse = progress(t, timing.logoIn + 0.05, 1.1);
@@ -89,7 +103,7 @@ export const CloseScene: React.FC<{
   const glow =
     0.55 * Math.sin(Math.PI * Math.min(1, pulse * 1.4)) +
     (plain ? 0 : 0.22 * smoothstep(timing.logoIn, timing.logoIn + 0.6, t));
-  const L = CLOSE_LOGO;
+  const L = layout.logo;
   return (
     <>
       {swarm}
@@ -135,7 +149,7 @@ export const CloseScene: React.FC<{
       >
         <div
           style={{
-            fontSize: 140,
+            fontSize: layout.name,
             fontWeight: 800,
             color: INK,
             letterSpacing: "-0.045em",
@@ -143,18 +157,18 @@ export const CloseScene: React.FC<{
             ...rise(t, timing.name),
           }}
         >
-          Colony.
+          {CLOSE_WORDS.name}
         </div>
         <div
           style={{
-            fontSize: 50,
+            fontSize: layout.tagline,
             fontWeight: 600,
             color: "rgb(23 21 31 / 0.78)",
             marginTop: 14,
             ...rise(t, timing.tagline),
           }}
         >
-          AI employees for your business.
+          {CLOSE_WORDS.tagline}
         </div>
         <div
           style={{
@@ -165,7 +179,7 @@ export const CloseScene: React.FC<{
             ...rise(t, timing.earlyAt),
           }}
         >
-          Early access is open
+          {CLOSE_WORDS.early}
         </div>
         <div
           style={{
@@ -184,7 +198,7 @@ export const CloseScene: React.FC<{
             ...rise(t, timing.urlAt),
           }}
         >
-          colony.global
+          {CLOSE_WORDS.address}
         </div>
       </div>
     </>
