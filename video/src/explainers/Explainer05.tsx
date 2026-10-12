@@ -71,15 +71,18 @@ export const EP05_SHELL: ShellConfig = {
   ],
 };
 
+/** Explainer 5's work: the posts card, the ants carrying the posts in, the pointer on Approve. Panel pixels. */
+export function ep05Work(t: number): React.ReactNode {
+  return (
+    <>
+      <RisePostsCard t={t} />
+      <RisePostCarriers t={t} />
+      <ApproveCursor t={t} />
+    </>
+  );
+}
+
 /** Explainer 5, "Makes your posts", for Rise Bakery. */
 export const Explainer05: React.FC = () => (
-  <ExplainerShell config={EP05_SHELL}>
-    {(t) => (
-      <>
-        <RisePostsCard t={t} />
-        <RisePostCarriers t={t} />
-        <ApproveCursor t={t} />
-      </>
-    )}
-  </ExplainerShell>
+  <ExplainerShell config={EP05_SHELL}>{ep05Work}</ExplainerShell>
 );

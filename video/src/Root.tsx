@@ -10,13 +10,21 @@ import { loadFont } from "@remotion/google-fonts/Inter";
 import { AntMark } from "./brand/AntMark";
 import { FILM_SECONDS } from "./launch/film.ts";
 import { Explainer01 } from "./explainers/Explainer01";
+import { Explainer01Tall } from "./explainers/Explainer01Tall";
 import { Explainer02 } from "./explainers/Explainer02";
+import { Explainer02Tall } from "./explainers/Explainer02Tall";
 import { Explainer03 } from "./explainers/Explainer03";
+import { Explainer03Tall } from "./explainers/Explainer03Tall";
 import { Explainer04 } from "./explainers/Explainer04";
+import { Explainer04Tall } from "./explainers/Explainer04Tall";
 import { Explainer05 } from "./explainers/Explainer05";
+import { Explainer05Tall } from "./explainers/Explainer05Tall";
 import { Explainer06 } from "./explainers/Explainer06";
+import { Explainer06Tall } from "./explainers/Explainer06Tall";
 import { Explainer07 } from "./explainers/Explainer07";
+import { Explainer07Tall } from "./explainers/Explainer07Tall";
 import { Explainer08 } from "./explainers/Explainer08";
+import { Explainer08Tall } from "./explainers/Explainer08Tall";
 import { EP01_SECONDS } from "./explainers/ep01.ts";
 import { EP02_SECONDS } from "./explainers/ep02.ts";
 import { EP03_SECONDS } from "./explainers/ep03.ts";
@@ -666,12 +674,28 @@ export const Root = () => {
         height={1080}
       />
       <Composition
+        id="Explainer01Tall"
+        component={Explainer01Tall}
+        durationInFrames={Math.round(EP01_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
+      />
+      <Composition
         id="Explainer02"
         component={Explainer02}
         durationInFrames={Math.round(EP02_SECONDS * 30)}
         fps={30}
         width={1920}
         height={1080}
+      />
+      <Composition
+        id="Explainer02Tall"
+        component={Explainer02Tall}
+        durationInFrames={Math.round(EP02_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
       />
       <Composition
         id="Explainer03"
@@ -682,12 +706,28 @@ export const Root = () => {
         height={1080}
       />
       <Composition
+        id="Explainer03Tall"
+        component={Explainer03Tall}
+        durationInFrames={Math.round(EP03_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
+      />
+      <Composition
         id="Explainer04"
         component={Explainer04}
         durationInFrames={Math.round(EP04_SECONDS * 30)}
         fps={30}
         width={1920}
         height={1080}
+      />
+      <Composition
+        id="Explainer04Tall"
+        component={Explainer04Tall}
+        durationInFrames={Math.round(EP04_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
       />
       <Composition
         id="Explainer05"
@@ -698,12 +738,28 @@ export const Root = () => {
         height={1080}
       />
       <Composition
+        id="Explainer05Tall"
+        component={Explainer05Tall}
+        durationInFrames={Math.round(EP05_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
+      />
+      <Composition
         id="Explainer06"
         component={Explainer06}
         durationInFrames={Math.round(EP06_SECONDS * 30)}
         fps={30}
         width={1920}
         height={1080}
+      />
+      <Composition
+        id="Explainer06Tall"
+        component={Explainer06Tall}
+        durationInFrames={Math.round(EP06_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
       />
       <Composition
         id="Explainer07"
@@ -714,12 +770,28 @@ export const Root = () => {
         height={1080}
       />
       <Composition
+        id="Explainer07Tall"
+        component={Explainer07Tall}
+        durationInFrames={Math.round(EP07_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
+      />
+      <Composition
         id="Explainer08"
         component={Explainer08}
         durationInFrames={Math.round(EP08_SECONDS * 30)}
         fps={30}
         width={1920}
         height={1080}
+      />
+      <Composition
+        id="Explainer08Tall"
+        component={Explainer08Tall}
+        durationInFrames={Math.round(EP08_SECONDS * 30)}
+        fps={30}
+        width={1080}
+        height={1920}
       />
       <Composition
         id="Film90Tall"

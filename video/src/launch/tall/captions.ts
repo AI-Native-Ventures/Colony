@@ -1,5 +1,36 @@
+import { type Box, CAPTION_BOX } from "./frame.ts";
+
 /** Characters in one caption row at 46 px, keyword padding included, inside the caption box. */
 export const ROW_CHARS = 26;
+
+/** How a tall film's captions look: type size and weight, the box they sit in, characters in a row. */
+export type CaptionLook = {
+  size: number;
+  weight: number;
+  box: Box;
+  rowChars: number;
+};
+
+/** The Reels film's captions. */
+export const FILM_CAPTIONS: CaptionLook = {
+  size: 46,
+  weight: 700,
+  box: CAPTION_BOX,
+  rowChars: ROW_CHARS,
+};
+
+/**
+ * The explainers' captions on the Reels frame: about 1.6 times the film's,
+ * a few words at a time, centred above Instagram's caption and left of its
+ * buttons (owner, 2026-10-12: "the captions are only on a small part of the
+ * screen").
+ */
+export const BIG_CAPTIONS: CaptionLook = {
+  size: 74,
+  weight: 800,
+  box: { x: 132, y: 1322, w: 816, h: 190 },
+  rowChars: 16,
+};
 
 /** A piece of a caption: words `from` to `to` (exclusive), shown as one or two rows. */
 export type Chunk = { from: number; to: number; rows: string[] };

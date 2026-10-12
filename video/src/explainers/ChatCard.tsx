@@ -39,13 +39,13 @@ export function chatScroll(t: number, timing: ChatTiming): number {
   return THREAD.scroll * easeInOutCubic(progress(t, timing.backAt, 0.8));
 }
 
-const ICON_TONE: Record<ThreadIcon, Tone> = {
+export const ICON_TONE: Record<ThreadIcon, Tone> = {
   heart: TONES.pink,
   fork: TONES.amber,
   globe: TONES.green,
 };
 
-function ThreadGlyph({ icon }: { icon: ThreadIcon }) {
+export function ThreadGlyph({ icon }: { icon: ThreadIcon }) {
   const common = {
     fill: "none",
     stroke: "#ffffff",

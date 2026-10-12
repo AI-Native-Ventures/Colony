@@ -39,7 +39,7 @@ function tint(alpha: number): string {
 
 const landsAt = (i: number, timing: EpTiming) => postLandsAt(i, timing);
 
-function Tick({ size, color }: { size: number; color: string }) {
+export function Tick({ size, color }: { size: number; color: string }) {
   return (
     <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24">
       <path

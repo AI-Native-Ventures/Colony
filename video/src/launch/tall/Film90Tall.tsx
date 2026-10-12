@@ -47,30 +47,14 @@ import { Painter, WebsiteCard } from "../wide/WebsiteCard";
 import { WideOpening } from "../wide/WideOpening";
 import { tallCarryPath, tallYesCarryPath } from "./carriers.ts";
 import { TALL_CLOSE, TALL_CLOSE_SWARM } from "./close.ts";
-import { PANEL_TRANSFORM, TALL_H, TALL_W } from "./frame.ts";
+import { Cards } from "./Cards";
+import { TALL_H, TALL_W } from "./frame.ts";
 import { TALL_OPENING } from "./opening.ts";
 import { TALL_BURSTS, TALL_RIVERS } from "./rivers.ts";
 import { panelY, scrollY } from "./scroll.ts";
 import { TallCaptions } from "./TallCaptions";
 import { TallDay } from "./TallDay";
 import { TallHero } from "./TallHero";
-
-/** The film's cards for a scene, drawn in its panel pixels, placed into the tall card box. */
-const Cards: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div
-    style={{
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 1920,
-      height: 1080,
-      transform: PANEL_TRANSFORM,
-      transformOrigin: "0 0",
-    }}
-  >
-    {children}
-  </div>
-);
 
 /** What one tall page shows: the employee on top, the film's own card below. */
 function page(id: PanelId, t: number): React.ReactNode {

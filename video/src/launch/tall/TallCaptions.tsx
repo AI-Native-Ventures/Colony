@@ -3,8 +3,12 @@ import { smoothstep } from "../math.ts";
 import type { BeatLine } from "../wide/beat.ts";
 import { wordsShown } from "../wide/karaoke.ts";
 import type { Highlight } from "../wide/Subtitles";
-import { captionChunks, chunkAt, ROW_CHARS } from "./captions.ts";
-import { CAPTION_BOX } from "./frame.ts";
+import {
+  type CaptionLook,
+  captionChunks,
+  chunkAt,
+  FILM_CAPTIONS,
+} from "./captions.ts";
 
 const INK = "#17151f";
 const BLUE_HIGHLIGHT: Highlight = {
@@ -25,7 +29,16 @@ export const TallCaptions: React.FC<{
   highlights?: Readonly<Record<string, Highlight>>;
   /** When each line's caption leaves, by id; default 0.7 s after its words. */
   until?: Readonly<Record<string, number>>;
-}> = ({ t, lines, keywords, highlights, until: leaves }) => (
+  /** Type size, box and row length; the film's unless given. */
+  look?: CaptionLook;
+}> = ({
+  t,
+  lines,
+  keywords,
+  highlights,
+  until: leaves,
+  look = FILM_CAPTIONS,
+}) => (
   <>
     {lines.map((line) => {
       const until = leaves?.[line.id] ?? line.speech[1] + 0.7;
@@ -33,7 +46,7 @@ export const TallCaptions: React.FC<{
       const out = 1 - smoothstep(until - 0.25, until, t);
       const text = line.caption ?? line.text;
       const shown = wordsShown(text, line.speech, t);
-      const chunks = captionChunks(text, ROW_CHARS);
+      const chunks = captionChunks(text, look.rowChars);
       const chunk = chunks[chunkAt(chunks, shown)];
       const hot = keywords[line.id] ?? NONE;
       const tone = highlights?.[line.id] ?? BLUE_HIGHLIGHT;
@@ -43,13 +56,13 @@ export const TallCaptions: React.FC<{
           key={line.id}
           style={{
             position: "absolute",
-            left: CAPTION_BOX.x,
-            top: CAPTION_BOX.y,
-            width: CAPTION_BOX.w,
+            left: look.box.x,
+            top: look.box.y,
+            width: look.box.w,
             textAlign: "center",
             fontFamily: INTER,
-            fontSize: 46,
-            fontWeight: 700,
+            fontSize: look.size,
+            fontWeight: look.weight,
             lineHeight: 1.2,
             letterSpacing: "-0.01em",
             color: INK,
@@ -66,9 +79,11 @@ export const TallCaptions: React.FC<{
                     key={i}
                     style={{
                       opacity: i < shown ? 1 : 0,
-                      padding: isHot ? "2px 10px" : undefined,
+                      padding: isHot
+                        ? `${Math.round(look.size / 23)}px ${Math.round(look.size / 4.6)}px`
+                        : undefined,
                       margin: isHot ? "0 2px" : undefined,
-                      borderRadius: 12,
+                      borderRadius: Math.round((look.size * 12) / 46),
                       background: isHot ? tone.bg : undefined,
                       color: isHot ? tone.fg : undefined,
                     }}
