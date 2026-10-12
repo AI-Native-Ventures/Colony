@@ -32,8 +32,8 @@ export const CARD_BOX: Box = {
 /** The employee row, its one-line title and its subline. */
 export const HERO_BOX: Box = { x: 58, y: 296, w: 964, h: 344 };
 
-/** Captions: two rows at most, left of the like and comment buttons. */
-export const CAPTION_BOX: Box = { x: 58, y: 1392, w: 882, h: 120 };
+/** Captions: two rows at most, centred on the frame and left of the like and comment buttons. */
+export const CAPTION_BOX: Box = { x: 140, y: 1392, w: 800, h: 120 };
 
 /** The film's card origin, in its 1920 x 1080 panel pixels. */
 export const PANEL_CARD = { x: 860, y: 150 } as const;

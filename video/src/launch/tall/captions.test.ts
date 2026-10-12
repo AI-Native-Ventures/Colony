@@ -55,3 +55,18 @@ test("the chunk on screen is the one holding the word being said", () => {
     assert.ok(n - 1 >= chunks[k].from && n - 1 < chunks[k].to);
   }
 });
+
+test("no chunk is a lone word when the line has four words or more", () => {
+  for (const line of SHOWN_LINES) {
+    const text = textOf(line);
+    if (text.split(/\s+/).length < 4) continue;
+    for (const c of captionChunks(text, ROW_CHARS)) {
+      assert.ok(c.to - c.from >= 2, `${line.id}: lone "${c.rows.join(" ")}"`);
+    }
+  }
+});
+
+test("two rows are split evenly, not one long row and one stub", () => {
+  const [chunk] = captionChunks("And there is never enough of you.", 26);
+  assert.deepEqual(chunk.rows, ["And there is never", "enough of you."]);
+});

@@ -43,3 +43,7 @@ test("the boxes stack top to bottom without touching", () => {
   assert.ok(CAPTION_BOX.y + CAPTION_BOX.h <= TALL_H - COVERED.bottom);
   assert.ok(CARD_BOX.x + CARD_BOX.w <= TALL_W);
 });
+
+test("captions are centred on the frame", () => {
+  assert.equal(CAPTION_BOX.x + CAPTION_BOX.w / 2, TALL_W / 2);
+});
