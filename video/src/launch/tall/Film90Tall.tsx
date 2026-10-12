@@ -4,6 +4,7 @@ import { easeInOutCubic, progress } from "../math.ts";
 import { useFontsReady } from "../useFontsReady";
 import { BrightStage } from "../wide/BrightStage";
 import { CallCard } from "../wide/CallCard";
+import { CloseScene } from "../wide/CloseScene";
 import { EmailCard, PenAnt } from "../wide/EmailCard";
 import {
   GETTING_STARTED,
@@ -41,10 +42,11 @@ import { PanelBlooms } from "../wide/PanelBlooms";
 import { PostCarriers, PostsGrid } from "../wide/PostsGrid";
 import { River } from "../wide/River";
 import { PlanCard } from "../wide/ScoutPanel";
-import { useOpeningAnts } from "../wide/useWideAnts";
+import { useCloseAnts, useOpeningAnts } from "../wide/useWideAnts";
 import { Painter, WebsiteCard } from "../wide/WebsiteCard";
 import { WideOpening } from "../wide/WideOpening";
 import { tallCarryPath, tallYesCarryPath } from "./carriers.ts";
+import { TALL_CLOSE, TALL_CLOSE_SWARM } from "./close.ts";
 import { PANEL_TRANSFORM, TALL_H, TALL_W } from "./frame.ts";
 import { TALL_OPENING } from "./opening.ts";
 import { TALL_BURSTS, TALL_RIVERS } from "./rivers.ts";
@@ -165,6 +167,7 @@ function scrollSpeed(t: number, fps: number): number {
 export const Film90Tall: React.FC = () => {
   useFontsReady();
   const ants = useOpeningAnts(TALL_OPENING);
+  const closeAnts = useCloseAnts(TALL_CLOSE, TALL_CLOSE_SWARM);
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
@@ -257,6 +260,7 @@ export const Film90Tall: React.FC = () => {
           height={TALL_H}
         />
       ))}
+      <CloseScene t={t} timing={CLOSE90} ants={closeAnts} layout={TALL_CLOSE} />
       <TallCaptions
         t={t}
         lines={SHOWN_LINES}

@@ -6,7 +6,8 @@ import { mulberry32 } from "../math.ts";
 import { pickPoints, sampleAlphaPoints } from "../points.ts";
 import { type Ant, createAnts } from "../swarm.ts";
 import { WIDE_H, WIDE_W } from "./beat.ts";
-import { closeSwarmAnts } from "./closeSwarm.ts";
+import type { CloseLayout } from "./closeLayout.ts";
+import { type CloseSwarmOptions, closeSwarmAnts } from "./closeSwarm.ts";
 import { CLOSE_LOGO } from "./film90.ts";
 import {
   INTRO,
@@ -127,5 +128,37 @@ export function useOpeningAnts(layout: OpeningLayout): Ant[] | null {
       live = false;
     };
   }, [handle, layout]);
+  return ants;
+}
+
+/** The close swarm for another layout (the Reels film's). Holds the frame until it is ready. */
+export function useCloseAnts(
+  layout: CloseLayout,
+  opts: CloseSwarmOptions,
+): Ant[] | null {
+  const [handle] = useState(() => delayRender("Sampling the close swarm"));
+  const [ants, setAnts] = useState<Ant[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    interReady
+      .then(() => {
+        const logo = sampleAlphaPoints(
+          rasterAlpha(layout.w, layout.h, (ctx) =>
+            drawMarkSilhouette(ctx, layout.logo),
+          ),
+          layout.w,
+          layout.h,
+          4,
+        );
+        if (live) {
+          setAnts(closeSwarmAnts(logo, opts));
+          continueRender(handle);
+        }
+      })
+      .catch((err: unknown) => cancelRender(err));
+    return () => {
+      live = false;
+    };
+  }, [handle, layout, opts]);
   return ants;
 }

@@ -25,12 +25,31 @@ const CLOSE_LANES: Record<EmployeeId, Lane> = {
   pink: { c1: { x: 1720, y: 320 }, c2: { x: 1300, y: 80 }, spread: 110 },
 };
 
+/** Where each employee's ants leave from and how they fly home, on one film's frame. */
+export type CloseSwarmOptions = {
+  /** Where team member `k` stands when the day ends. */
+  home: (k: number) => Point;
+  lanes: Record<EmployeeId, Lane>;
+  frameWidth: number;
+};
+
+/** The wide film's: from the end of each day lane, up and over into the logo. */
+export const WIDE_CLOSE_SWARM: CloseSwarmOptions = {
+  home: (k) => dayAntSpot(k, DAY_END),
+  lanes: CLOSE_LANES,
+  frameWidth: WIDE_W,
+};
+
 /**
  * The close swarm, in screen pixels (the camera rests on the day panel): each
  * employee's ants leave from where it walked the day and build its own slice
- * of the logo, as in the opening. `logo` is the sampled mark at CLOSE_LOGO.
+ * of the logo, as in the opening. `logo` is the sampled mark where the close
+ * lands it (CLOSE_LOGO in the wide film).
  */
-export function closeSwarmAnts(logo: Point[]): Ant[] {
+export function closeSwarmAnts(
+  logo: Point[],
+  opts: CloseSwarmOptions = WIDE_CLOSE_SWARM,
+): Ant[] {
   const rand = mulberry32(CLOSE_SEED);
   const sorted = [...logo].sort((a, b) => a.x - b.x || a.y - b.y);
   const ants: Ant[] = [];
@@ -41,16 +60,16 @@ export function closeSwarmAnts(logo: Point[]): Ant[] {
       Math.floor(((g + 1) * sorted.length) / 4),
     );
     const ends = pickPoints(slice, PER_EMPLOYEE, rand);
-    const home = dayAntSpot(k, DAY_END);
+    const home = opts.home(k);
     const starts: Point[] = Array.from({ length: PER_EMPLOYEE }, () => ({
       x: home.x - 30 + rand() * 50,
       y: home.y - 22 + rand() * 44,
     }));
-    const made = createAnts(starts, ends, [CLOSE_LANES[who]], {
+    const made = createAnts(starts, ends, [opts.lanes[who]], {
       seed: CLOSE_SEED + 1 + g,
       releaseAt: CLOSE90.dimFrom + 0.1 + k * 0.08,
       sweep: 0,
-      frameWidth: WIDE_W,
+      frameWidth: opts.frameWidth,
       flight: { min: 1.15, spread: 0.3 },
     });
     for (const ant of made) ants.push({ ...ant, group: g });
