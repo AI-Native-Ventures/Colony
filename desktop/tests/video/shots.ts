@@ -51,6 +51,14 @@ export async function shoot(
     await expect(locator).toBeVisible();
     const box = await locator.boundingBox();
     if (!box) throw new Error(`${id}: ${name} has no box on screen`);
+    const view = page.viewportSize() ?? { width: 0, height: 0 };
+    if (
+      box.x < 0 ||
+      box.y < 0 ||
+      box.x + box.width > view.width ||
+      box.y + box.height > view.height
+    )
+      throw new Error(`${id}: ${name} is not wholly on screen`);
     boxes[name] = { x: box.x, y: box.y, w: box.width, h: box.height };
   }
   mkdirSync(SHOT_DIR, { recursive: true });

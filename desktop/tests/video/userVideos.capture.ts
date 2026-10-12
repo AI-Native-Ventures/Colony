@@ -211,7 +211,13 @@ test("sign-up: account, recovery code, business, power, history", async ({
   });
   await nameField.fill(BUSINESS.name);
   await websiteField.fill(BUSINESS.website);
-  await page.getByRole("button", { name: "Read website", exact: true }).click();
+  const read = page.getByRole("button", { name: "Read website", exact: true });
+  await shoot(page, "business-filled", businessHeading, {
+    name: nameField,
+    website: websiteField,
+    read,
+  });
+  await read.click();
   await expect(
     page.getByText(
       "Here is what we found. Edit the summary so it sounds like your business.",
@@ -242,7 +248,6 @@ test("sign-up: account, recovery code, business, power, history", async ({
     subscriptions,
     credits,
     free: page.getByRole("button", { name: /^OpenRouter free models/ }),
-    test: page.getByRole("button", { name: "Test connection" }),
   });
   await subscriptions.click();
   await shoot(page, "power-subscriptions", subscriptions, {
@@ -250,7 +255,13 @@ test("sign-up: account, recovery code, business, power, history", async ({
     list: page.getByLabel("Your subscriptions"),
   });
   await credits.click();
-  await page.getByRole("button", { name: "Test connection" }).click();
+  const testButton = page.getByRole("button", { name: "Test connection" });
+  await testButton.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await shoot(page, "power-test", testButton, {
+    model: page.getByLabel("Default model"),
+    test: testButton,
+  });
+  await testButton.click();
   const replied = page.getByText("Your agent replied", { exact: true }).last();
   await expect(replied).toBeVisible();
   await page
@@ -317,17 +328,19 @@ test("Welcome: Scout, the existing business, the setup", async ({ page }) => {
     "welcome-routes",
     surface().getByText("Where should we begin?"),
     {
-      surface: surface(),
+      question: surface().getByText("Where should we begin?"),
+      new: surface().getByTestId("scout-route-new"),
       existing: surface().getByTestId("scout-route-existing"),
+      deciding: surface().getByTestId("scout-route-deciding"),
     },
   );
   await surface().getByTestId("scout-route-existing").click();
   await shoot(
     page,
     "welcome-confirm",
-    surface().getByText("Is this the business we’re setting up?").last(),
+    surface().getByRole("button", { name: "Yes, this is the business" }),
     {
-      surface: surface(),
+      details: surface().getByText("Business details supplied earlier").last(),
       yes: surface().getByRole("button", { name: "Yes, this is the business" }),
     },
   );
@@ -341,8 +354,12 @@ test("Welcome: Scout, the existing business, the setup", async ({ page }) => {
     name: /^Get more customers/,
   });
   await shoot(page, "welcome-priority", customers, {
-    surface: surface(),
     customers,
+    delivery: surface().getByRole("button", { name: /^Make delivery easier/ }),
+    next: surface().getByRole("button", { name: /^Decide what to do next/ }),
+    other: surface().getByRole("button", {
+      name: /^Something else to discuss/,
+    }),
   });
   await customers.click();
   await surface()
@@ -352,7 +369,6 @@ test("Welcome: Scout, the existing business, the setup", async ({ page }) => {
     name: "This looks right",
   });
   await shoot(page, "understanding", looksRight, {
-    surface: surface(),
     looksRight,
     nothingYet: surface().getByText(
       "Nothing has been created, staffed, or started.",
@@ -367,7 +383,7 @@ test("Welcome: Scout, the existing business, the setup", async ({ page }) => {
     "setup",
     page.getByText("Keep the workspace simple.").last(),
     {
-      surface: surface(),
+      keep: surface().getByText("Keep #welcome for talking with Scout.").last(),
       approve,
     },
   );
@@ -510,7 +526,6 @@ test("first job: starting examples, approve team and start, the thread", async (
   });
   await findClients.click();
   await shoot(page, "find-clients", card.getByText("10 potential clients"), {
-    card,
     findClients,
     brief: card.getByLabel("The brief", { exact: true }),
     outputs: card.getByTestId("first-job-outputs"),
@@ -518,7 +533,6 @@ test("first job: starting examples, approve team and start, the thread", async (
   await card.getByRole("button", { name: "Draft Instagram captions" }).click();
   const start = card.getByRole("button", { name: "Approve team and start" });
   await shoot(page, "first-job", start, {
-    card,
     brief: card.getByLabel("The brief", { exact: true }),
     outputs: card.getByTestId("first-job-outputs"),
     start,
@@ -526,7 +540,7 @@ test("first job: starting examples, approve team and start, the thread", async (
   await start.click();
   const status = card.getByTestId("first-job-status");
   await expect(status).toHaveText("In progress");
-  await shoot(page, "first-job-started", status, { card, status });
+  await shoot(page, "first-job-started", status, { status });
 
   await openThread(page, root.id);
   const reply = await page.evaluate(
@@ -551,7 +565,10 @@ test("first job: starting examples, approve team and start, the thread", async (
   if (!reply) throw new Error("The drafts reply was not emitted");
   const thread = page.getByTestId("message-thread-panel");
   const drafts = thread.locator(`[data-message-id="${reply.id}"]`);
-  await shoot(page, "job-thread", drafts, { thread, drafts });
+  await shoot(page, "job-thread", drafts, {
+    instruction: thread.getByText(/^Coordinate this job in this thread/),
+    drafts,
+  });
 });
 
 /** Bright Plumbing's email to Thabo as an outreach card, pending or sent. */
